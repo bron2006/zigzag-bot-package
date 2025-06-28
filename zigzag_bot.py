@@ -10,10 +10,18 @@ from telegram.ext import (
     CommandHandler,
 )
 
-# === Твій токен ===
 TOKEN = '8036106554:AAElZ3Xwh8615qB_uuKzOKqVpJoxz6kAR1o'
 
-# === Меню ===
+# 30 топ-пар
+CRYPTO_PAIRS = [
+    "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
+    "ADAUSDT", "DOGEUSDT", "AVAXUSDT", "DOTUSDT", "TRXUSDT",
+    "MATICUSDT", "SHIBUSDT", "LTCUSDT", "LINKUSDT", "BCHUSDT",
+    "ATOMUSDT", "ETCUSDT", "XLMUSDT", "HBARUSDT", "ICPUSDT",
+    "FILUSDT", "SUIUSDT", "APTUSDT", "ARBUSDT", "NEARUSDT",
+    "STXUSDT", "INJUSDT", "RUNEUSDT", "TIAUSDT", "LDOUSDT"
+]
+
 def start(update: Update, context: CallbackContext):
     show_main_menu(update, context)
 
@@ -40,6 +48,29 @@ def show_crypto_menu(update: Update, context: CallbackContext):
     reply_markup = InlineKeyboardMarkup(keyboard)
     update.callback_query.edit_message_text("Виберіть таймфрейм:", reply_markup=reply_markup)
 
+def show_crypto_pairs(update: Update, context: CallbackContext, page: int = 0):
+    context.user_data['page'] = page
+    pairs_per_page = 6
+    start = page * pairs_per_page
+    end = start + pairs_per_page
+    pairs = CRYPTO_PAIRS[start:end]
+
+    keyboard = []
+    for i in range(0, len(pairs), 3):
+        row = [InlineKeyboardButton(p, callback_data=f'symbol_{p}') for p in pairs[i:i+3]]
+        keyboard.append(row)
+
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(InlineKeyboardButton("<<", callback_data='page_prev'))
+    nav_buttons.append(InlineKeyboardButton("НАЗАД", callback_data='menu_crypto'))
+    if end < len(CRYPTO_PAIRS):
+        nav_buttons.append(InlineKeyboardButton(">>", callback_data='page_next'))
+    keyboard.append(nav_buttons)
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    update.callback_query.edit_message_text("Виберіть пару:", reply_markup=reply_markup)
+
 def show_bot_menu(update: Update, context: CallbackContext):
     keyboard = [
         [InlineKeyboardButton("СТАТУС", callback_data='bot_status')],
@@ -62,18 +93,22 @@ def handle_callbacks(update: Update, context: CallbackContext):
         show_bot_menu(update, context)
     elif data.startswith('tf_'):
         tf = data.split('_')[1]
+        context.user_data['tf'] = tf
+        show_crypto_pairs(update, context)
+    elif data.startswith('symbol_'):
+        symbol = data.split('_')[1]
+        context.user_data['symbol'] = symbol
         query.answer()
-        query.edit_message_text(f"Вибраний таймфрейм: {tf.upper()}")
-    elif data.startswith('bot_'):
-        command = data.split('_')[1]
-        query.answer()
-        query.edit_message_text(f"Команда: {command.upper()}")
+        query.edit_message_text(f"✅ Обрано: {context.user_data['tf']} + {symbol}")
+    elif data == 'page_next':
+        page = context.user_data.get('page', 0) + 1
+        show_crypto_pairs(update, context, page)
+    elif data == 'page_prev':
+        page = max(0, context.user_data.get('page', 0) - 1)
+        show_crypto_pairs(update, context, page)
     elif data == 'back':
-        query.answer()
-        query.edit_message_text("Повернення назад...")
         show_main_menu(update, context)
 
-# === Запуск ===
 def main():
     updater = Updater(TOKEN, use_context=True)
     dp = updater.dispatcher
