@@ -1,69 +1,72 @@
+import logging
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, CallbackContext
+from telegram.ext import (
+    Updater,
+    CommandHandler,
+    CallbackQueryHandler,
+    CallbackContext,
+)
 
-TOKEN = "8036106554:AAElZ3Xwh8615qB_uuKzOKqVpJoxz6kAR1o"
+# Вставлено за твоїми умовами
+TELEGRAM_TOKEN = "bot8036106554:AAElZ3Xwh8615qB_uuKzOKqVpJoxz6kAR1o"
+CHAT_ID = 1064175237
 
-# === Фіксована кнопка МЕНЮ окремо внизу ===
-def fixed_menu():
-    return InlineKeyboardMarkup([[InlineKeyboardButton("МЕНЮ", callback_data='main_menu')]])
+# Логи
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# === Команда /start — просто кнопка МЕНЮ без тексту ===
-def start(update: Update, context: CallbackContext):
-    update.message.reply_text("‎", reply_markup=fixed_menu())  # невидимий пробіл
+# Кнопки
+def main_menu():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("КРИПТА", callback_data='crypto'),
+         InlineKeyboardButton("БОТ", callback_data='bot')],
+        [InlineKeyboardButton("НАЗАД", callback_data='back')],
+        [InlineKeyboardButton("МЕНЮ", callback_data='menu')],
+    ])
 
-# === Обробка натискань ===
-def handle_buttons(update: Update, context: CallbackContext):
+def start(update: Update, context: CallbackContext) -> None:
+    # Надсилаємо повідомлення один раз і показуємо меню
+    update.message.reply_text("Меню:", reply_markup=main_menu())
+
+def button_handler(update: Update, context: CallbackContext) -> None:
     query = update.callback_query
-    query.answer()
     data = query.data
 
-    if data == 'main_menu':
-        buttons = [
-            [InlineKeyboardButton("КРИПТА", callback_data='crypto'), InlineKeyboardButton("БОТ", callback_data='bot')],
-            [InlineKeyboardButton("НАЗАД", callback_data='back')]
-        ]
-        keyboard = InlineKeyboardMarkup(buttons + [[InlineKeyboardButton("МЕНЮ", callback_data='main_menu')]])
+    if data == "menu" or data == "back":
+        query.edit_message_reply_markup(reply_markup=main_menu())
+
+    elif data == "crypto":
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("1H", callback_data='tf_1h'),
+             InlineKeyboardButton("4H", callback_data='tf_4h')],
+            [InlineKeyboardButton("НАЗАД", callback_data='back')],
+            [InlineKeyboardButton("МЕНЮ", callback_data='menu')],
+        ])
         query.edit_message_reply_markup(reply_markup=keyboard)
 
-    elif data == 'back':
-        query.edit_message_reply_markup(reply_markup=fixed_menu())
+    elif data == "bot":
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("СТАТУС", callback_data='status'),
+             InlineKeyboardButton("СТАРТ", callback_data='start_bot'),
+             InlineKeyboardButton("СТОП", callback_data='stop_bot')],
+            [InlineKeyboardButton("НАЗАД", callback_data='back')],
+            [InlineKeyboardButton("МЕНЮ", callback_data='menu')],
+        ])
+        query.edit_message_reply_markup(reply_markup=keyboard)
 
-    elif data == 'crypto':
-        buttons = [
-            [InlineKeyboardButton("5М", callback_data='tf_5m'), InlineKeyboardButton("15М", callback_data='tf_15m')],
-            [InlineKeyboardButton("НАЗАД", callback_data='main_menu')]
-        ]
-        query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(buttons + [[InlineKeyboardButton("МЕНЮ", callback_data='main_menu')]]))
+    else:
+        # Просто ігноруємо інші callback
+        query.answer()
 
-    elif data == 'bot':
-        buttons = [
-            [InlineKeyboardButton("СТАРТ", callback_data='start_bot'), InlineKeyboardButton("СТОП", callback_data='stop_bot')],
-            [InlineKeyboardButton("СТАТУС", callback_data='status')],
-            [InlineKeyboardButton("НАЗАД", callback_data='main_menu')]
-        ]
-        query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(buttons + [[InlineKeyboardButton("МЕНЮ", callback_data='main_menu')]]))
-
-    elif data == 'start_bot':
-        query.edit_message_text("✅ Бот запущено", reply_markup=fixed_menu())
-
-    elif data == 'stop_bot':
-        query.edit_message_text("⛔ Бот зупинено", reply_markup=fixed_menu())
-
-    elif data == 'status':
-        query.edit_message_text("📊 Статус: бот очікує", reply_markup=fixed_menu())
-
-    elif data.startswith("tf_"):
-        tf = data.split("_")[1]
-        query.edit_message_text(f"🕒 Обрано таймфрейм: {tf}", reply_markup=fixed_menu())
-
-# === Запуск ===
-def main():
-    updater = Updater(TOKEN, use_context=True)
+def main() -> None:
+    updater = Updater(TELEGRAM_TOKEN, use_context=True)
     dp = updater.dispatcher
+
     dp.add_handler(CommandHandler("start", start))
-    dp.add_handler(CallbackQueryHandler(handle_buttons))
+    dp.add_handler(CallbackQueryHandler(button_handler))
+
     updater.start_polling()
     updater.idle()
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
