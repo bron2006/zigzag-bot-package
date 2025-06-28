@@ -66,3 +66,10 @@ def main():
 
 if __name__ == "__main__":
     main()
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+keyboard = [
+    [InlineKeyboardButton("КРИПТА", callback_data='crypto'), InlineKeyboardButton("БОТ", callback_data='bot')],
+    [InlineKeyboardButton("МЕНЮ", callback_data='main_menu')]
+]
+reply_markup = InlineKeyboardMarkup(keyboard)
