@@ -3,19 +3,18 @@ from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, Callback
 
 TOKEN = "8036106554:AAElZ3Xwh8615qB_uuKzOKqVpJoxz6kAR1o"
 
-# === Фіксована кнопка МЕНЮ ===
+# === Фіксована кнопка МЕНЮ окремо внизу ===
 def fixed_menu():
     return InlineKeyboardMarkup([[InlineKeyboardButton("МЕНЮ", callback_data='main_menu')]])
 
-# === Команда /start ===
+# === Команда /start — просто кнопка МЕНЮ без тексту ===
 def start(update: Update, context: CallbackContext):
-    update.message.reply_text("⬇️ Натисни МЕНЮ", reply_markup=fixed_menu())
+    update.message.reply_text("‎", reply_markup=fixed_menu())  # невидимий пробіл
 
-# === Обробка натискань кнопок ===
+# === Обробка натискань ===
 def handle_buttons(update: Update, context: CallbackContext):
     query = update.callback_query
     query.answer()
-    
     data = query.data
 
     if data == 'main_menu':
@@ -23,7 +22,8 @@ def handle_buttons(update: Update, context: CallbackContext):
             [InlineKeyboardButton("КРИПТА", callback_data='crypto'), InlineKeyboardButton("БОТ", callback_data='bot')],
             [InlineKeyboardButton("НАЗАД", callback_data='back')]
         ]
-        query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(buttons + [[InlineKeyboardButton("МЕНЮ", callback_data='main_menu')]]))
+        keyboard = InlineKeyboardMarkup(buttons + [[InlineKeyboardButton("МЕНЮ", callback_data='main_menu')]])
+        query.edit_message_reply_markup(reply_markup=keyboard)
 
     elif data == 'back':
         query.edit_message_reply_markup(reply_markup=fixed_menu())
