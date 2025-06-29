@@ -20,28 +20,37 @@ def handle_buttons(update: Update, context: CallbackContext):
 
     if data == 'main_menu':
         buttons = [
-            [InlineKeyboardButton("КРИПТА", callback_data='crypto'), InlineKeyboardButton("БОТ", callback_data='bot')],
+            [InlineKeyboardButton("КРИПТА", callback_data='crypto')],
+            [InlineKeyboardButton("БОТ", callback_data='bot')],
             [InlineKeyboardButton("НАЗАД", callback_data='back')]
         ]
-        query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(buttons + [[InlineKeyboardButton("МЕНЮ", callback_data='main_menu')]]))
+        query.edit_message_reply_markup(
+            reply_markup=InlineKeyboardMarkup(buttons + [[InlineKeyboardButton("МЕНЮ", callback_data='main_menu')]])
+        )
 
     elif data == 'back':
         query.edit_message_reply_markup(reply_markup=fixed_menu())
 
     elif data == 'crypto':
         buttons = [
-            [InlineKeyboardButton("5М", callback_data='tf_5m'), InlineKeyboardButton("15М", callback_data='tf_15m')],
+            [InlineKeyboardButton("5М", callback_data='tf_5m')],
+            [InlineKeyboardButton("15М", callback_data='tf_15m')],
             [InlineKeyboardButton("НАЗАД", callback_data='main_menu')]
         ]
-        query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(buttons + [[InlineKeyboardButton("МЕНЮ", callback_data='main_menu')]]))
+        query.edit_message_reply_markup(
+            reply_markup=InlineKeyboardMarkup(buttons + [[InlineKeyboardButton("МЕНЮ", callback_data='main_menu')]])
+        )
 
     elif data == 'bot':
         buttons = [
-            [InlineKeyboardButton("СТАРТ", callback_data='start_bot'), InlineKeyboardButton("СТОП", callback_data='stop_bot')],
+            [InlineKeyboardButton("СТАРТ", callback_data='start_bot')],
+            [InlineKeyboardButton("СТОП", callback_data='stop_bot')],
             [InlineKeyboardButton("СТАТУС", callback_data='status')],
             [InlineKeyboardButton("НАЗАД", callback_data='main_menu')]
         ]
-        query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(buttons + [[InlineKeyboardButton("МЕНЮ", callback_data='main_menu')]]))
+        query.edit_message_reply_markup(
+            reply_markup=InlineKeyboardMarkup(buttons + [[InlineKeyboardButton("МЕНЮ", callback_data='main_menu')]])
+        )
 
     elif data == 'start_bot':
         query.edit_message_text("✅ Бот запущено", reply_markup=fixed_menu())
@@ -56,14 +65,4 @@ def handle_buttons(update: Update, context: CallbackContext):
         tf = data.split("_")[1]
         query.edit_message_text(f"🕒 Обрано таймфрейм: {tf}", reply_markup=fixed_menu())
 
-# === Запуск ===
-def main():
-    updater = Updater(TOKEN, use_context=True)
-    dp = updater.dispatcher
-    dp.add_handler(CommandHandler("start", start))
-    dp.add_handler(CallbackQueryHandler(handle_buttons))
-    updater.start_polling()
-    updater.idle()
-
-if __name__ == '__main__':
     main()
