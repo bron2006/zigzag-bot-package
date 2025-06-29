@@ -8,7 +8,6 @@ from telegram.error import BadRequest
 # --- Налаштування ---
 TOKEN = os.environ.get("TOKEN")
 HEROKU_APP_NAME = os.environ.get("HEROKU_APP_NAME")
-PORT = int(os.environ.get("PORT", "8443"))
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO
@@ -17,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-# === Клавіатури ===
+# === Клавіатури (без змін) ===
 def get_main_menu_keyboard():
     keyboard = [
         [InlineKeyboardButton("КРИПТА", callback_data='crypto')],
@@ -40,7 +39,7 @@ def get_bot_menu_keyboard():
     ]
     return InlineKeyboardMarkup(keyboard)
 
-# === Обробники ===
+# === Обробники (без змін) ===
 def start(update: Update, context: CallbackContext):
     update.message.reply_text(
         text="Головне меню:",
@@ -89,18 +88,18 @@ def handle_buttons(update: Update, context: CallbackContext):
 
 # === Налаштування для Heroku (Webhook) ===
 
-# =========================================================
-# ВИПРАВЛЕННЯ №1: Додаємо "головні двері" для діагностики.
 @app.route('/')
 def index():
     return "OK"
-# =========================================================
 
-@app.route(f'/{TOKEN}', methods=['POST'])
+# =========================================================
+# ФІНАЛЬНЕ ВИПРАВЛЕННЯ №1: Використовуємо просту, статичну адресу '/webhook'
+@app.route('/webhook', methods=['POST'])
 def webhook_handler():
     update = Update.de_json(request.get_json(force=True), updater.bot)
     dp.process_update(update)
     return 'ok'
+# =========================================================
 
 updater = Updater(TOKEN, use_context=True)
 dp = updater.dispatcher
@@ -108,11 +107,11 @@ dp.add_handler(CommandHandler("start", start))
 dp.add_handler(CallbackQueryHandler(handle_buttons))
 
 def setup():
-    webhook_url = f'https://{HEROKU_APP_NAME}.herokuapp.com/{TOKEN}'
     # =========================================================
-    # ВИПРАВЛЕННЯ №2: Очищуємо "застряглі" повідомлення при старті.
+    # ФІНАЛЬНЕ ВИПРАВЛЕННЯ №2: Встановлюємо вебхук на нову статичну адресу
+    webhook_url = f'https://{HEROKU_APP_NAME}.herokuapp.com/webhook'
+    # =========================================================
     updater.bot.set_webhook(webhook_url, drop_pending_updates=True)
-    # =========================================================
     logger.info(f"Webhook has been set to {webhook_url}")
 
 setup()
