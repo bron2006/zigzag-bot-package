@@ -1,1 +1,1 @@
-worker: python zigzag_bot.py
+web: gunicorn zigzag_bot:app
