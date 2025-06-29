@@ -9,14 +9,13 @@ def fixed_menu():
 
 # === Команда /start ===
 def start(update: Update, context: CallbackContext):
-    # Відправляємо лише кнопку без тексту
-    update.message.reply_text(" ", reply_markup=fixed_menu())
+    update.message.reply_text("👇", reply_markup=fixed_menu())  # ← виправлено
 
 # === Обробка натискань кнопок ===
 def handle_buttons(update: Update, context: CallbackContext):
     query = update.callback_query
     query.answer()
-    
+
     data = query.data
 
     if data == 'main_menu':
