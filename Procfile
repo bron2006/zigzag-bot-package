@@ -1,1 +1,1 @@
-web: gunicorn zigzag_bot:app
+web: gunicorn --workers 1 zigzag_bot:app
