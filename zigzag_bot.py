@@ -8,8 +8,8 @@ def fixed_menu():
     return InlineKeyboardMarkup([[InlineKeyboardButton("МЕНЮ", callback_data='main_menu')]])
 
 # === Команда /start ===
-def start(update: Update, context: CallbackContext):
-    update.message.reply_text("👇", reply_markup=fixed_menu())
+def start(update, context):
+    update.message.reply_text("Меню:", reply_markup=fixed_menu())
 
 # === Обробка натискань кнопок ===
 def handle_buttons(update: Update, context: CallbackContext):
@@ -25,4 +25,6 @@ def handle_buttons(update: Update, context: CallbackContext):
             [InlineKeyboardButton("НАЗАД", callback_data='back')]
         ]
         query.edit_message_reply_markup(
-            reply_markup=InlineKeyboardMarkup(buttons + [[InlineKeyb]()]()_
+    reply_markup=InlineKeyboardMarkup(buttons + [[InlineKeyboardButton("МЕНЮ", callback_data='main_menu')]])
+)
+
