@@ -6,25 +6,19 @@ from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, Callback
 from telegram.error import BadRequest
 
 # --- Налаштування ---
-# Токен та інші налаштування тепер беремо з Heroku Config Vars (змінних середовища)
 TOKEN = os.environ.get("TOKEN")
 HEROKU_APP_NAME = os.environ.get("HEROKU_APP_NAME")
-# Порт, який Heroku надає для веб-застосунку
 PORT = int(os.environ.get("PORT", "8443"))
 
-# Вмикаємо логування для відстеження помилок на Heroku
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# Створюємо екземпляр веб-сервера Flask, який буде "слухати" Heroku
 app = Flask(__name__)
 
-# === Генератори клавіатур (для чистоти коду та центрування) ===
-
+# === Клавіатури ===
 def get_main_menu_keyboard():
-    """Повертає головне меню. Кнопки розташовані по центру."""
     keyboard = [
         [InlineKeyboardButton("КРИПТА", callback_data='crypto')],
         [InlineKeyboardButton("БОТ", callback_data='bot')]
@@ -32,7 +26,6 @@ def get_main_menu_keyboard():
     return InlineKeyboardMarkup(keyboard)
 
 def get_crypto_menu_keyboard():
-    """Повертає меню 'КРИПТА'."""
     keyboard = [
         [InlineKeyboardButton("5М", callback_data='tf_5m'), InlineKeyboardButton("15М", callback_data='tf_15m')],
         [InlineKeyboardButton("НАЗАД", callback_data='main_menu')]
@@ -40,7 +33,6 @@ def get_crypto_menu_keyboard():
     return InlineKeyboardMarkup(keyboard)
 
 def get_bot_menu_keyboard():
-    """Повертає меню 'БОТ'."""
     keyboard = [
         [InlineKeyboardButton("СТАРТ", callback_data='start_bot'), InlineKeyboardButton("СТОП", callback_data='stop_bot')],
         [InlineKeyboardButton("СТАТУС", callback_data='status')],
@@ -48,19 +40,15 @@ def get_bot_menu_keyboard():
     ]
     return InlineKeyboardMarkup(keyboard)
 
-# === Обробники команд та кнопок ===
-
+# === Обробники ===
 def start(update: Update, context: CallbackContext):
-    """Команда /start. Відразу показує головне меню без зайвого тексту."""
     update.message.reply_text(
         text="Головне меню:",
         reply_markup=get_main_menu_keyboard()
     )
 
 def handle_buttons(update: Update, context: CallbackContext):
-    """Обробляє всі натискання на inline-кнопки."""
     query = update.callback_query
-    # Важливо відповісти на запит, щоб кнопка перестала "завантажуватися"
     query.answer()
     
     data = query.data
@@ -78,55 +66,53 @@ def handle_buttons(update: Update, context: CallbackContext):
         reply_markup = get_bot_menu_keyboard()
     elif data == 'start_bot':
         text = "✅ Бот запущено"
-        reply_markup = get_main_menu_keyboard() # Повертаємо до головного меню
+        reply_markup = get_main_menu_keyboard()
     elif data == 'stop_bot':
         text = "⛔ Бот зупинено"
         reply_markup = get_main_menu_keyboard()
     elif data == 'status':
         text = "📊 Статус: бот очікує"
-        reply_markup = get_bot_menu_keyboard() # Залишаємось у меню бота
+        reply_markup = get_bot_menu_keyboard()
     elif data.startswith("tf_"):
         tf = data.split("_")[1]
         text = f"🕒 Обрано таймфрейм: {tf}"
         reply_markup = get_main_menu_keyboard()
 
-    # Намагаємося редагувати повідомлення
     try:
         if text:
              query.edit_message_text(text=text, reply_markup=reply_markup)
     except BadRequest as e:
         if "Message is not modified" in str(e):
-            # Ігноруємо помилку, якщо повідомлення не змінилося
             pass
         else:
-            # Інші помилки виводимо в лог
             logger.error(f"Error editing message: {e}")
 
 # === Налаштування для Heroku (Webhook) ===
 
-# Створюємо Updater та Dispatcher (без запуску)
-updater = Updater(TOKEN, use_context=True)
-dp = updater.dispatcher
-
-# Додаємо обробники
-dp.add_handler(CommandHandler("start", start))
-dp.add_handler(CallbackQueryHandler(handle_buttons))
+# =========================================================
+# ВИПРАВЛЕННЯ №1: Додаємо "головні двері" для діагностики.
+@app.route('/')
+def index():
+    return "OK"
+# =========================================================
 
 @app.route(f'/{TOKEN}', methods=['POST'])
 def webhook_handler():
-    """Обробляє вебхук від Telegram."""
     update = Update.de_json(request.get_json(force=True), updater.bot)
     dp.process_update(update)
     return 'ok'
 
-# Ця функція буде викликана один раз при старті, щоб зареєструвати вебхук
+updater = Updater(TOKEN, use_context=True)
+dp = updater.dispatcher
+dp.add_handler(CommandHandler("start", start))
+dp.add_handler(CallbackQueryHandler(handle_buttons))
+
 def setup():
     webhook_url = f'https://{HEROKU_APP_NAME}.herokuapp.com/{TOKEN}'
-    updater.bot.set_webhook(webhook_url)
+    # =========================================================
+    # ВИПРАВЛЕННЯ №2: Очищуємо "застряглі" повідомлення при старті.
+    updater.bot.set_webhook(webhook_url, drop_pending_updates=True)
+    # =========================================================
     logger.info(f"Webhook has been set to {webhook_url}")
 
-# Запускаємо налаштування вебхука
 setup()
-
-# Важливо! Не використовуйте if __name__ == '__main__' для Gunicorn.
-# Gunicorn сам імпортує змінну 'app' і запустить її.
