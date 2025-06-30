@@ -1,1 +1,1 @@
-web: gunicorn --workers 1 zigzag_bot:app
+web: gunicorn -b 0.0.0.0:8080 zigzag_bot:app

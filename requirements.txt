@@ -1,3 +1,8 @@
 python-telegram-bot==13.15
-flask
-gunicorn
+requests==2.31.0
+numpy==1.24.4
+pandas==2.0.3
+ta==0.11.0
+scipy==1.10.1
+Flask==2.3.3
+gunicorn==21.2.0
