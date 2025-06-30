@@ -42,4 +42,4 @@ def webhook():
 # 🔧 Тестовий ендпоінт (не обов’язковий)
 @app.route("/", methods=["GET"])
 def index():
-    return "ZigZa
+    return "ZigZag бот працює!"
