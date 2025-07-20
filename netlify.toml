@@ -1,3 +1,9 @@
+# Налаштування збірки: вказуємо, яку папку публікувати
+[build]
+  publish = "webapp"
+  command = "echo 'No build step required'"
+
+# Налаштування заголовків: вирішуємо проблему з Content Security Policy
 [[headers]]
   for = "/*"
   [headers.values]
