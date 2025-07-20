@@ -7,3 +7,4 @@ twelvedata
 gunicorn
 python-dotenv
 cachetools==4.2.2
+Flask-Cors
