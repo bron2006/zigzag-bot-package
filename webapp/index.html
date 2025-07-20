@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no"/>
+    <title>ZigZag WebApp</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+</head>
+<body>
+    <div class="container">
+        <h1>Термінал</h1>
+        
+        <div id="listsContainer">
+            </div>
+        
+        <div class="separator"></div>
+
+        <div id="signalContainer">
+            <div id="signalOutput">Виберіть актив для аналізу...</div>
+            <div id="chart"></div>
+        </div>
+
+        <div id="loader" class="hidden"></div>
+    </div>
+    <script src="script.js"></script>
+</body>
+</html>

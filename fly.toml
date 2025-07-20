@@ -1,24 +1,24 @@
 app = "zigzag-bot-package"
 
-[env]
-  PORT = "8080"
-
+# Вказуємо, що використовуємо Dockerfile для збірки
 [build]
-  builder = "paketobuildpacks/builder:base"
+  dockerfile = "Dockerfile"
 
-[[services]]
+# Налаштування HTTP-сервісу
+[http_service]
   internal_port = 8080
-  protocol = "tcp"
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
 
-  [[services.ports]]
-    port = 80
-    handlers = ["http"]
+# Налаштування віртуальної машини
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 512
 
-  [[services.ports]]
-    port = 443
-    handlers = ["tls", "http"]
-
-  [[services.tcp_checks]]
-    grace_period = "5s"
-    interval = "15s"
-    timeout = "2s"
+# Додаємо секцію для експериментальних функцій
+[experimental]
+  auto_rollback = true
