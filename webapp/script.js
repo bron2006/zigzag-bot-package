@@ -1,6 +1,8 @@
-const tg = window.Telegram.WebApp;
-tg.ready();
-tg.expand();
+// Повідомляємо Telegram, що Web App готовий до роботи
+Telegram.WebApp.ready();
+Telegram.WebApp.expand();
+
+console.log("WebApp script started.");
 
 const loader = document.getElementById("loader");
 const listsContainer = document.getElementById("listsContainer");
@@ -8,21 +10,34 @@ const signalOutput = document.getElementById("signalOutput");
 
 // Завантажуємо списки пар при відкритті
 document.addEventListener('DOMContentLoaded', function() {
+    console.log("DOM content loaded. Fetching pairs...");
     showLoader(true);
-    // Передаємо ініціалізаційні дані для отримання watchlist
-    fetch(`/api/get_pairs?initData=${tg.initDataUnsafe ? encodeURIComponent(tg.initData) : ''}`)
-        .then(res => res.json())
+    
+    const apiUrl = `/api/get_pairs?initData=${tg.initDataUnsafe ? encodeURIComponent(tg.initData) : ''}`;
+    console.log("Requesting URL:", apiUrl);
+
+    fetch(apiUrl)
+        .then(res => {
+            console.log("Received response for /api/get_pairs. Status:", res.status);
+            if (!res.ok) {
+                throw new Error(`Network response was not ok: ${res.statusText}`);
+            }
+            return res.json();
+        })
         .then(data => {
+            console.log("Received data for pairs:", data);
             populateLists(data);
             showLoader(false);
         })
         .catch(err => {
-            signalOutput.innerHTML = "❌ Не вдалося завантажити списки пар.";
+            console.error("Error fetching pair lists:", err);
+            signalOutput.innerHTML = "❌ Не вдалося завантажити списки пар. Перевірте консоль.";
             showLoader(false);
         });
 });
 
 function populateLists(data) {
+    console.log("Populating lists with data...");
     let html = '';
 
     // Список обраного
@@ -37,7 +52,7 @@ function populateLists(data) {
 
     // Криптовалюти
     html += '<div class="category"><div class="category-title">📈 Криптовалюти</div><div class="pair-list">';
-    data.crypto.slice(0, 12).forEach(pair => { // Показуємо перші 12
+    data.crypto.slice(0, 12).forEach(pair => {
         html += `<button class="pair-button" onclick="fetchSignal('${pair}', 'crypto')">${pair}</button>`;
     });
     html += '</div></div>';
@@ -50,16 +65,28 @@ function populateLists(data) {
     html += '</div></div>';
     
     listsContainer.innerHTML = html;
+    console.log("Lists populated.");
 }
 
 function fetchSignal(pair, assetType) {
+    console.log(`fetchSignal called for pair: ${pair}, asset: ${assetType}`);
     showLoader(true);
     signalOutput.innerHTML = `⏳ Отримую дані для ${pair}...`;
     Plotly.purge('chart');
 
-    fetch(`/api/signal?pair=${pair}`)
-        .then(res => res.json())
+    const signalApiUrl = `/api/signal?pair=${pair}`;
+    console.log("Requesting signal URL:", signalApiUrl);
+
+    fetch(signalApiUrl)
+        .then(res => {
+            console.log(`Received response for /api/signal for ${pair}. Status:`, res.status);
+            if (!res.ok) {
+                throw new Error(`Network response was not ok: ${res.statusText}`);
+            }
+            return res.json();
+        })
         .then(data => {
+            console.log(`Received signal data for ${pair}:`, data);
             if (data.error) {
                 signalOutput.innerHTML = `❌ Помилка: ${data.error}`;
                 showLoader(false);
@@ -77,12 +104,14 @@ function fetchSignal(pair, assetType) {
             showLoader(false);
         })
         .catch(err => {
-            signalOutput.innerHTML = `❌ Не вдалося отримати сигнал.`;
+            console.error(`Error fetching signal for ${pair}:`, err);
+            signalOutput.innerHTML = `❌ Не вдалося отримати сигнал. Перевірте консоль. Помилка: ${err.message}`;
             showLoader(false);
         });
 }
 
 function drawChart(pair, history) {
+    // ... (код цієї функції не змінюється)
     const trace = {
         x: history.dates, close: history.close, high: history.high,
         low: history.low, open: history.open, type: 'candlestick',
