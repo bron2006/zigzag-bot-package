@@ -6,10 +6,9 @@ from concurrent.futures import ThreadPoolExecutor
 
 from config import logger, binance, td, CACHE, ANALYSIS_TIMEFRAMES, CRYPTO_PAIRS_FULL, STOCK_TICKERS
 
-# ... (всі існуючі функції залишаються без змін) ...
+# ... (всі існуючі функції до get_api_signal_data залишаються без змін) ...
 
 def get_market_data(pair, tf, asset, limit=300):
-    # ... (код цієї функції не змінюється)
     key = f"{pair}_{tf}_{limit}"
     if key in CACHE: return CACHE[key]
     try:
@@ -137,33 +136,42 @@ def get_full_mta_verdict(pair, display_name, asset):
     table = "\n".join([f"| {tf:<4} | {sig} |" for tf, sig in rows])
     return f"**📊 Детальний огляд тренду:** *{display_name}*\n\n| ТФ   | Сигнал |\n|:----:|:---:|\n{table}"
 
-# --- НОВА ФУНКЦІЯ ДЛЯ WEB APP ---
+# --- ПОЧАТОК ЗМІН ---
 def get_api_signal_data(pair):
     """Готує дані для відповіді API-запиту від Web App."""
-    # Визначаємо тип активу
     asset = 'stocks'
     if '/' in pair:
         asset = 'crypto' if 'USDT' in pair else 'forex'
     
     df = get_market_data(pair, '1m', asset, limit=100)
-    if df.empty:
+    if df.empty or len(df) < 25: # Збільшили мінімальну довжину для розрахунку індикаторів
         return {"error": "no data"}
 
-    df.ta.rsi(length=14, append=True)
-    df.ta.ema(length=21, append=True)
+    # Явно вказуємо імена колонок для індикаторів
+    df.ta.rsi(length=14, append=True, col_names=('RSI',))
+    df.ta.ema(length=21, append=True, col_names=('EMA',))
+    
     last = df.iloc[-1]
 
+    # Перевіряємо, чи індикатори розрахувалися коректно
+    if pd.isna(last['RSI']) or pd.isna(last['EMA']):
+        return {"error": "indicator calculation failed"}
+
     price = last['Close']
-    rsi = last['RSI_14']
-    ema_signal = last['Close'] > last['EMA_21']
-    signal = "BUY" if (rsi < 35 and ema_signal) else "SELL" if (rsi > 65 and not ema_signal) else "NEUTRAL"
+    rsi = last['RSI']
+    ema_signal = last['Close'] > last['EMA']
     
-    # Готуємо дані для графіка
-    history_df = df.tail(50) # Беремо останні 50 свічок для графіка
+    signal = "NEUTRAL" # За замовчуванням нейтральний
+    if rsi < 35 and ema_signal:
+        signal = "BUY"
+    elif rsi > 65 and not ema_signal:
+        signal = "SELL"
+    
+    history_df = df.tail(50)
     date_col = 'ts' if 'ts' in history_df.columns else 'datetime'
     
     history = {
-        "dates": history_df[date_col].astype(str).tolist(),
+        "dates": history_df[date_col].dt.strftime('%Y-%m-%d %H:%M:%S').tolist(),
         "open": history_df['Open'].tolist(),
         "high": history_df['High'].tolist(),
         "low": history_df['Low'].tolist(),
@@ -174,5 +182,9 @@ def get_api_signal_data(pair):
         "pair": pair, "price": price, "rsi": rsi,
         "ema": ema_signal, "signal": signal, "history": history
     }
+# --- КІНЕЦЬ ЗМІН ---
 
 # (Решта функцій, як-от analyze_volume, identify_support_resistance_levels, залишаються без змін)
+# Переконайтесь, що решта файлу, якщо там є ще щось, залишається на місці.
+# Наприклад, функції analyze_candle_patterns, analyze_volume, identify_support_resistance_levels
+# (якщо вони у вас є в цьому файлі) мають залишитися.
