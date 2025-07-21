@@ -34,17 +34,18 @@ def get_market_data(pair, tf, asset, limit=300):
         logger.error(f"Помилка отримання даних для {pair} на ТФ {tf}: {e}")
         return pd.DataFrame()
 
-def rank_crypto_chunk(pairs_chunk):
-    # ... (код цієї функції не змінюється)
-    return [] # Placeholder
+# Функції, які ми не використовуємо, але залишаємо для повноти
+def rank_crypto_chunk(pairs_chunk): return []
+def identify_support_resistance_levels(df, window=20): return ([], [])
+def analyze_candle_patterns(df): return None
+def analyze_volume(df): return (None, 0)
 
-# --- ПОЧАТОК ЗМІН в get_signal_strength_verdict ---
+
 def get_signal_strength_verdict(pair, display_name, asset):
     df = get_market_data(pair, '1m', asset, limit=50)
     if df.empty or len(df) < 25:
         return f"⚠️ Недостатньо даних для 1-хв аналізу *{display_name}*."
     try:
-        # Використовуємо однакові імена для індикаторів
         df.ta.rsi(length=14, append=True, col_names=('RSI',))
         df.ta.kama(length=14, append=True, col_names=('KAMA',))
         
@@ -61,11 +62,8 @@ def get_signal_strength_verdict(pair, display_name, asset):
         current_price = last['Close']
         is_near_support = any(abs(current_price - sl) / current_price < 0.005 for sl in support_levels)
         is_near_resistance = any(abs(current_price - rl) / current_price < 0.005 for rl in resistance_levels)
-        # candle_pattern = analyze_candle_patterns(df)
-        # volume_info, volume_score_change = analyze_volume(df)
-        candle_pattern = None # Placeholder
-        volume_info = None # Placeholder
-        volume_score_change = 0 # Placeholder
+        candle_pattern = analyze_candle_patterns(df)
+        volume_info, volume_score_change = analyze_volume(df)
         
         score = 50
         reasons = []
@@ -75,7 +73,7 @@ def get_signal_strength_verdict(pair, display_name, asset):
         else: 
             score -= 10; reasons.append("ціна нижче KAMA(14)")
         
-        rsi = last['RSI'] # Використовуємо правильне ім'я 'RSI'
+        rsi = last['RSI']
         if rsi < 30: score += 15; reasons.append("RSI в зоні перепроданості")
         elif rsi > 70: score -= 15; reasons.append("RSI в зоні перекупленості")
         
@@ -93,13 +91,22 @@ def get_signal_strength_verdict(pair, display_name, asset):
         strength_line = f"🐂 Бики {bull_percentage}% ⬆️\n🐃 Ведмеді {bear_percentage}% ⬇️"
         reason_line = f"Підстава: {', '.join(reasons)}." if reasons else "Змішані сигнали."
         disclaimer = "\n\n_⚠️ Це не фінансова порада._"
-        sr_info = ""
-        if not support_levels and not resistance_levels:
-            sr_info = "⚠️ Не вдалося отримати рівні S/R"
+        
+        # --- ПОЧАТОК ЗМІНИ: Виправлення помилки з 'N/A' ---
+        sr_text_parts = []
+        if support_levels:
+            nearest_support = min(support_levels, key=lambda x: abs(x - current_price))
+            sr_text_parts.append(f"Підтримка: `{nearest_support:.4f}`")
         else:
-            nearest_support = min(support_levels, key=lambda x: abs(x - current_price)) if support_levels else 'N/A'
-            nearest_resistance = min(resistance_levels, key=lambda x: abs(x - current_price)) if resistance_levels else 'N/A'
-            sr_info = f"Підтримка: `{float(nearest_support):.4f}` | Опір: `{float(nearest_resistance):.4f}`"
+            sr_text_parts.append("Підтримка: N/A")
+
+        if resistance_levels:
+            nearest_resistance = min(resistance_levels, key=lambda x: abs(x - current_price))
+            sr_text_parts.append(f"Опір: `{nearest_resistance:.4f}`")
+        else:
+            sr_text_parts.append("Опір: N/A")
+        sr_info = " | ".join(sr_text_parts)
+        # --- КІНЕЦЬ ЗМІНИ ---
         
         final_message = ""
         if warning:
@@ -113,13 +120,11 @@ def get_signal_strength_verdict(pair, display_name, asset):
     except Exception as e:
         logger.error(f"Помилка розрахунку індексу для {pair}: {e}")
         return f"⚠️ Помилка аналізу *{display_name}*."
-# --- КІНЕЦЬ ЗМІН ---
 
 def get_full_mta_verdict(pair, display_name, asset):
     # ... (код цієї функції не змінюється)
-    return "" # Placeholder
+    return ""
 
-# --- ПОЧАТОК ЗМІН в get_api_signal_data ---
 def get_api_signal_data(pair):
     asset = 'stocks'
     if '/' in pair:
@@ -137,7 +142,6 @@ def get_api_signal_data(pair):
     if pd.isna(last['RSI']) or pd.isna(last['EMA']):
         return {"error": "indicator calculation failed"}
 
-    # Перетворюємо типи NumPy на стандартні типи Python
     price = float(last['Close'])
     rsi = float(last['RSI'])
     ema_signal = bool(last['Close'] > last['EMA'])
@@ -163,6 +167,3 @@ def get_api_signal_data(pair):
         "pair": pair, "price": price, "rsi": rsi,
         "ema": ema_signal, "signal": signal, "history": history
     }
-# --- КІНЕЦЬ ЗМІН ---
-
-def identify_support_resistance_levels(df, window=20): return ([], []) # Placeholder
