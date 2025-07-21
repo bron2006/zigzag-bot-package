@@ -27,19 +27,29 @@ def webhook_handler():
         logger.error(f"Webhook error: {e}\n{traceback.format_exc()}")
     return "OK", 200
 
+# --- ПОЧАТОК ЗМІН ---
 @app.route("/api/signal", methods=["GET"])
 def api_signal():
     pair = request.args.get("pair")
     if not pair:
-        return jsonify({"error": "pair is required"}), 400
+        return jsonify({"error": "Параметр 'pair' є обов'язковим"}), 400
     try:
         data = get_api_signal_data(pair)
+        # Якщо функція аналізу повернула помилку...
         if "error" in data:
-            return jsonify(data), 404
+            # ...ми все одно повертаємо статус 200 OK,
+            # але в тілі відповіді буде сама помилка.
+            # Це дозволить фронтенду її коректно обробити.
+            logger.warning(f"Could not get data for API signal: {pair}. Reason: {data['error']}")
+            return jsonify({"error": f"Не вдалося отримати дані для {pair}. Можливо, ринок закритий або актив тимчасово недоступний."})
+        
+        # Якщо все добре, повертаємо дані
         return jsonify(data)
     except Exception as e:
-        logger.error(f"API error for pair {pair}: {e}")
-        return jsonify({"error": str(e)}), 500
+        logger.error(f"API error for pair {pair}: {e}\n{traceback.format_exc()}")
+        # Те саме робимо для критичних помилок сервера
+        return jsonify({"error": f"Внутрішня помилка сервера при аналізі {pair}"})
+# --- КІНЕЦЬ ЗМІН ---
 
 @app.route("/api/get_pairs", methods=["GET"])
 def api_get_pairs():
@@ -55,7 +65,6 @@ def api_get_pairs():
                     pass
     watchlist = get_watchlist(user_id) if user_id else []
     
-    # --- ВИПРАВЛЕНО: Повертаємо реальні списки, а не порожні ---
     return jsonify({
         "watchlist": watchlist,
         "crypto": CRYPTO_PAIRS_FULL,
