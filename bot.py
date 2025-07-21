@@ -1,12 +1,20 @@
 # bot.py
 import traceback
 from flask import request, jsonify
+from flask_cors import CORS # <-- 1. ОСЬ ПОТРІБНИЙ ІМПОРТ
 from telegram import Update
 
-from config import app, bot, dp, WEBHOOK_SECRET, logger, CRYPTO_PAIRS_FULL, FOREX_SESSIONS, STOCK_TICKERS
-from db import init_db, get_watchlist
+# Імпортуємо головні об'єкти з конфігурації
+from config import app, bot, dp, WEBHOOK_SECRET, logger
+# Імпортуємо ініціалізацію БД
+from db import init_db
+# Імпортуємо аналітичну функцію для API
 from analysis import get_api_signal_data
+# Імпортуємо обробники, щоб Python "побачив" їх
 import telegram_ui
+
+# --- 2. ІНІЦІАЛІЗАЦІЯ CORS ---
+CORS(app) # <-- ОСЬ ЦЕЙ ВАЖЛИВИЙ РЯДОК
 
 @app.route(f"/{WEBHOOK_SECRET}", methods=["POST"])
 def webhook_handler():
@@ -31,13 +39,12 @@ def api_signal():
         logger.error(f"API error for pair {pair}: {e}")
         return jsonify({"error": str(e)}), 500
 
-# --- НОВИЙ МАРШРУТ ДЛЯ ОТРИМАННЯ СПИСКІВ ПАР ---
 @app.route("/api/get_pairs", methods=["GET"])
 def api_get_pairs():
-    # Telegram передає дані про користувача в ініціалізаційному рядку
+    import json
+    import urllib.parse
     init_data = request.args.get("initData")
     user_id = None
-    # Проста (небезпечна для продакшену) перевірка ID, для нашого випадку підійде
     if init_data:
         for item in init_data.split('&'):
             if item.startswith('user='):
@@ -46,22 +53,18 @@ def api_get_pairs():
                     user_id = user_info.get('id')
                 except:
                     pass
-
     watchlist = get_watchlist(user_id) if user_id else []
-
+    # Повертаємо пусті списки для економії трафіку, оскільки вони вже є в JS
     return jsonify({
         "watchlist": watchlist,
-        "crypto": CRYPTO_PAIRS_FULL,
-        "forex": FOREX_SESSIONS,
-        "stocks": STOCK_TICKERS
+        "crypto": [],
+        "forex": {},
+        "stocks": []
     })
 
 @app.route("/", methods=["GET"])
 def index():
-    return "ZigZag Bot v3.2 Modular (with WebApp API) running 🟢"
+    return "ZigZag Bot v3.3 Modular (with CORS) running 🟢"
 
 if __name__ != "__main__":
-    # Потрібні нові імпорти для API
-    import json
-    import urllib.parse
     init_db()
