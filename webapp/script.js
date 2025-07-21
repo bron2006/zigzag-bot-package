@@ -1,25 +1,24 @@
 // script.js
 
-// Спочатку отримуємо доступ до елементів сторінки
+// Оголошуємо головну адресу вашого бекенду
+const API_BASE_URL = "https://zigzag-bot-package.fly.dev";
+
 const loader = document.getElementById("loader");
 const listsContainer = document.getElementById("listsContainer");
 const signalOutput = document.getElementById("signalOutput");
 
-// Оголошуємо змінну tg, але не присвоюємо її одразу
 let tg;
 
-// Головна логіка виконується тільки після повного завантаження сторінки
 document.addEventListener('DOMContentLoaded', function() {
-    // Тепер, коли все завантажено, ми можемо безпечно отримати об'єкт Telegram
     tg = window.Telegram.WebApp;
-    tg.ready(); // Повідомляємо Telegram, що все готово
-    tg.expand(); // Розширюємо вікно на весь екран
+    tg.ready();
+    tg.expand();
 
     console.log("WebApp script started and Telegram object is ready.");
     showLoader(true);
     
-    // Передаємо ініціалізаційні дані для отримання watchlist
-    const apiUrl = `/api/get_pairs?initData=${tg.initDataUnsafe ? encodeURIComponent(tg.initData) : ''}`;
+    // Використовуємо повний URL
+    const apiUrl = `${API_BASE_URL}/api/get_pairs?initData=${tg.initDataUnsafe ? encodeURIComponent(tg.initData) : ''}`;
     console.log("Requesting URL:", apiUrl);
 
     fetch(apiUrl)
@@ -75,7 +74,8 @@ function fetchSignal(pair, assetType) {
     signalOutput.innerHTML = `⏳ Отримую дані для ${pair}...`;
     Plotly.purge('chart');
 
-    const signalApiUrl = `/api/signal?pair=${pair}`;
+    // Використовуємо повний URL
+    const signalApiUrl = `${API_BASE_URL}/api/signal?pair=${pair}`;
     console.log("Requesting signal URL:", signalApiUrl);
 
     fetch(signalApiUrl)
