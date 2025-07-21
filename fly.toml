@@ -1,17 +1,20 @@
+# fly.toml
+
 app = "zigzag-bot-package"
 
-# Вказуємо, що використовуємо Dockerfile для збірки
 [build]
   dockerfile = "Dockerfile"
 
-# Налаштування HTTP-сервісу
+# --- ПОЧАТОК ЗМІН ---
+# Спрощуємо налаштування сервісу для більш стабільної роботи
 [http_service]
   internal_port = 8080
   force_https = true
-  auto_stop_machines = false
-  auto_start_machines = true
-  min_machines_running = 1
+  auto_stop_machines = true   # Дозволяємо машині зупинятись, коли немає запитів
+  auto_start_machines = true  # Дозволяємо машині стартувати, коли є запит
+  min_machines_running = 0    # Дозволяємо кількості машин падати до 0 (сплячий режим)
   processes = ["app"]
+# --- КІНЕЦЬ ЗМІН ---
 
 # Налаштування віртуальної машини
 [[vm]]
