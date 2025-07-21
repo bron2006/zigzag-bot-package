@@ -1,20 +1,22 @@
 # bot.py
 import traceback
+import json
+import urllib.parse
 from flask import request, jsonify
-from flask_cors import CORS # <-- 1. ОСЬ ПОТРІБНИЙ ІМПОРТ
+from flask_cors import CORS
 from telegram import Update
 
 # Імпортуємо головні об'єкти з конфігурації
-from config import app, bot, dp, WEBHOOK_SECRET, logger
-# Імпортуємо ініціалізацію БД
-from db import init_db
+from config import app, bot, dp, WEBHOOK_SECRET, logger, CRYPTO_PAIRS_FULL, FOREX_SESSIONS, STOCK_TICKERS
+# Імпортуємо ініціалізацію БД та функції
+from db import init_db, get_watchlist
 # Імпортуємо аналітичну функцію для API
 from analysis import get_api_signal_data
 # Імпортуємо обробники, щоб Python "побачив" їх
 import telegram_ui
 
-# --- 2. ІНІЦІАЛІЗАЦІЯ CORS ---
-CORS(app) # <-- ОСЬ ЦЕЙ ВАЖЛИВИЙ РЯДОК
+# Ініціалізуємо CORS для нашого додатку
+CORS(app)
 
 @app.route(f"/{WEBHOOK_SECRET}", methods=["POST"])
 def webhook_handler():
@@ -41,8 +43,6 @@ def api_signal():
 
 @app.route("/api/get_pairs", methods=["GET"])
 def api_get_pairs():
-    import json
-    import urllib.parse
     init_data = request.args.get("initData")
     user_id = None
     if init_data:
@@ -54,17 +54,18 @@ def api_get_pairs():
                 except:
                     pass
     watchlist = get_watchlist(user_id) if user_id else []
-    # Повертаємо пусті списки для економії трафіку, оскільки вони вже є в JS
+    
+    # --- ВИПРАВЛЕНО: Повертаємо реальні списки, а не порожні ---
     return jsonify({
         "watchlist": watchlist,
-        "crypto": [],
-        "forex": {},
-        "stocks": []
+        "crypto": CRYPTO_PAIRS_FULL,
+        "forex": FOREX_SESSIONS,
+        "stocks": STOCK_TICKERS
     })
 
 @app.route("/", methods=["GET"])
 def index():
-    return "ZigZag Bot v3.3 Modular (with CORS) running 🟢"
+    return "ZigZag Bot v3.4 Modular (with API fix) running 🟢"
 
 if __name__ != "__main__":
     init_db()
