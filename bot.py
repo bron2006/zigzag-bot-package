@@ -6,16 +6,11 @@ from flask import request, jsonify
 from flask_cors import CORS
 from telegram import Update
 
-# Імпортуємо головні об'єкти з конфігурації
 from config import app, bot, dp, WEBHOOK_SECRET, logger, CRYPTO_PAIRS_FULL, FOREX_SESSIONS, STOCK_TICKERS
-# Імпортуємо ініціалізацію БД та функції
 from db import init_db, get_watchlist
-# Імпортуємо аналітичну функцію для API
 from analysis import get_api_signal_data
-# Імпортуємо обробники, щоб Python "побачив" їх
 import telegram_ui
 
-# Ініціалізуємо CORS для нашого додатку
 CORS(app)
 
 @app.route(f"/{WEBHOOK_SECRET}", methods=["POST"])
@@ -36,14 +31,12 @@ def api_signal():
         data = get_api_signal_data(pair)
         if "error" in data:
             logger.warning(f"Could not get data for API signal: {pair}. Reason: {data['error']}")
-            return jsonify({"error": f"Не вдалося отримати дані для {pair}. Можливо, ринок закритий або актив тимчасово недоступний."})
-        
+            return jsonify({"error": f"Не вдалося отримати дані для {pair}."})
         return jsonify(data)
     except Exception as e:
         logger.error(f"API error for pair {pair}: {e}\n{traceback.format_exc()}")
-        # --- ПОЧАТОК ЗМІНИ ---
-        # Тимчасово повертаємо точний текст помилки, щоб зрозуміти, що не так
-        return jsonify({"error": f"Детальна помилка для {pair}: {str(e)}"})
+        # --- ПОЧАТОК ЗМІНИ (повертаємо як було) ---
+        return jsonify({"error": f"Внутрішня помилка сервера при аналізі {pair}"})
         # --- КІНЕЦЬ ЗМІНИ ---
 
 @app.route("/api/get_pairs", methods=["GET"])
