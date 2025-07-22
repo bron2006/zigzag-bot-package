@@ -70,7 +70,9 @@ def analyze_candle_patterns(df):
     if signal > 0: pattern_type = 'bullish'
     elif signal < 0: pattern_type = 'bearish'
     name_map = pattern_name.replace('CDL_', '').replace('_', ' ').title()
-    return {"name": name_map, "type": pattern_type, "text": f"{'🟢' if signal > 0 else '🔴'} {name_map}"}
+    # --- ПОЧАТОК ЗМІНИ: Замінюємо кружечки на стрілки ---
+    return {"name": name_map, "type": pattern_type, "text": f"{'⬆️' if signal > 0 else '⬇️'} {name_map}"}
+    # --- КІНЕЦЬ ЗМІНИ ---
 
 def analyze_volume(df):
     if df.empty or 'Volume' not in df.columns or len(df) < 21: return "Недостатньо даних", 0
