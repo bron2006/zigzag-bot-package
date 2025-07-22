@@ -1,3 +1,5 @@
+// script.js
+
 const API_BASE_URL = "https://zigzag-bot-package.fly.dev";
 
 const loader = document.getElementById("loader");
@@ -10,8 +12,8 @@ if (!window.Telegram || !window.Telegram.WebApp) {
     tg = { 
         themeParams: { bg_color: '#1a1a1a', text_color: '#ffffff' }, 
         initData: '',
-        ready: function () {},
-        expand: function () {}
+        ready: function() {},
+        expand: function() {}
     };
 } else {
     tg = window.Telegram.WebApp;
@@ -20,10 +22,7 @@ if (!window.Telegram || !window.Telegram.WebApp) {
     console.log("Telegram WebApp object is ready.");
 }
 
-document.body.style.backgroundColor = tg.themeParams.bg_color || '#1a1a1a';
-document.body.style.color = tg.themeParams.text_color || '#ffffff';
-
-document.addEventListener('DOMContentLoaded', function () {
+document.addEventListener('DOMContentLoaded', function() {
     showLoader(true);
     const initDataString = tg.initData ? `?initData=${encodeURIComponent(tg.initData)}` : '';
     const apiUrl = `${API_BASE_URL}/api/get_pairs${initDataString}`;
@@ -48,7 +47,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
 function populateLists(data) {
     console.log("Populating lists...");
-    let html = '<button onclick="location.reload()" class="refresh-button">🔄 Оновити список</button>';
+    let html = '';
 
     if (Array.isArray(data.watchlist) && data.watchlist.length > 0) {
         html += '<div class="category"><div class="category-title">⭐ Обране</div><div class="pair-list">';
@@ -94,12 +93,7 @@ function fetchSignal(pair, assetType) {
     showLoader(true);
     signalOutput.innerHTML = `⏳ Отримую детальний аналіз для ${pair}...`;
     signalOutput.style.textAlign = 'left';
-    signalOutput.style.border = 'none';
     Plotly.purge('chart');
-
-    document.querySelectorAll('.pair-button').forEach(btn => btn.classList.remove('active'));
-    const clickedButton = Array.from(document.querySelectorAll('.pair-button')).find(btn => btn.textContent === pair);
-    if (clickedButton) clickedButton.classList.add('active');
 
     const signalApiUrl = `${API_BASE_URL}/api/signal?pair=${pair}`;
     console.log("Requesting signal URL:", signalApiUrl);
@@ -125,30 +119,43 @@ function fetchSignal(pair, assetType) {
 
             let candleHtml = '';
             if (data.candle_pattern && data.candle_pattern.text) {
-                candleHtml = `<div><strong>Свічковий патерн:</strong><br>${data.candle_pattern.text}</div>`;
+                candleHtml = `
+                <div style="margin-bottom: 10px;">
+                    <strong>Свічковий патерн:</strong><br>
+                    ${data.candle_pattern.text}
+                </div>`;
             }
 
             let volumeHtml = '';
             if (data.volume_analysis) {
-                volumeHtml = `<div><strong>Аналіз об'єму:</strong><br>${data.volume_analysis}</div>`;
+                volumeHtml = `
+                <div style="margin-bottom: 10px;">
+                    <strong>Аналіз об'єму:</strong><br>
+                    ${data.volume_analysis}
+                </div>`;
             }
 
-            let color = '#ccc';
-            if (data.bull_percentage >= 70) color = '#00e676';
-            else if (data.bear_percentage >= 70) color = '#ff1744';
-            signalOutput.style.border = `2px solid ${color}`;
-
-            const now = new Date();
-            const timeString = now.toLocaleTimeString();
+            const directionArrow = data.bull_percentage > data.bear_percentage ? '⬆️' : '⬇️';
 
             signalOutput.innerHTML = `
-                <div><strong>${data.pair}</strong> | Ціна: ${data.price.toFixed(4)}</div>
-                <div><strong>Баланс сил:</strong> 🐂 ${data.bull_percentage}% ⬆️ | 🐃 ${data.bear_percentage}% ⬇️</div>
+                <div style="font-size: 36px; text-align: center; margin-bottom: 10px;">${directionArrow}</div>
+                <div style="margin-bottom: 10px;">
+                    <strong>${data.pair}</strong> | Ціна: ${data.price.toFixed(4)}
+                </div>
+                <div style="margin-bottom: 10px;">
+                    <strong>Баланс сил:</strong><br>
+                    🐂 Бики: ${data.bull_percentage}% ⬆️ | 🐃 Ведмеді: ${data.bear_percentage}% ⬇️
+                </div>
                 ${candleHtml}
-                <div><strong>Рівні S/R:</strong> Підтримка: ${supportText} | Опір: ${resistanceText}</div>
+                <div style="margin-bottom: 10px;">
+                    <strong>Рівні S/R:</strong><br>
+                    Підтримка: ${supportText} | Опір: ${resistanceText}
+                </div>
                 ${volumeHtml}
-                <div><strong>Ключові фактори:</strong><ul>${reasonsList}</ul></div>
-                <div style="font-size: 12px; margin-top: 10px; color: var(--hint-color)">🕒 Оновлено: ${timeString}</div>
+                <div>
+                    <strong>Ключові фактори:</strong>
+                    <ul style="margin: 5px 0 0 20px; padding: 0;">${reasonsList}</ul>
+                </div>
             `;
 
             if (data.history && data.history.dates) {
@@ -165,17 +172,9 @@ function fetchSignal(pair, assetType) {
 }
 
 function drawChart(pair, history) {
-    const chartDiv = document.getElementById('chart');
-    chartDiv.style.opacity = '0';
-    setTimeout(() => { chartDiv.style.opacity = '1'; }, 50);
-
     const trace = {
-        x: history.dates,
-        close: history.close,
-        high: history.high,
-        low: history.low,
-        open: history.open,
-        type: 'candlestick',
+        x: history.dates, close: history.close, high: history.high,
+        low: history.low, open: history.open, type: 'candlestick',
         increasing: { line: { color: '#26a69a' } },
         decreasing: { line: { color: '#ef5350' } }
     };
