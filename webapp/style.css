@@ -108,3 +108,36 @@ h1 {
     0% { transform: translate(-50%, -50%) rotate(0deg); }
     100% { transform: translate(-50%, -50%) rotate(360deg); }
 }
+
+.pair-button.active {
+    background-color: var(--button-color);
+    color: var(--button-text-color);
+    font-weight: bold;
+    box-shadow: 0 0 5px var(--button-color);
+}
+
+.pair-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    justify-content: center;
+}
+
+.pair-button:active {
+    transform: scale(0.96);
+    transition: transform 0.05s;
+}
+
+#chart {
+    transition: opacity 0.4s ease-in-out;
+}
+
+.refresh-button {
+    background: var(--button-color);
+    color: var(--button-text-color);
+    padding: 8px 14px;
+    border: none;
+    border-radius: 6px;
+    margin-bottom: 10px;
+    cursor: pointer;
+}
