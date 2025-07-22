@@ -58,6 +58,18 @@ function populateLists(data) {
     });
     html += '</div></div>';
 
+    // --- ПОЧАТОК НОВОГО БЛОКУ ДЛЯ ВАЛЮТНИХ ПАР ---
+    if (data.forex && typeof data.forex === 'object') {
+        Object.keys(data.forex).forEach(sessionName => {
+            html += `<div class="category"><div class="category-title">🌍 Валюта (${sessionName})</div><div class="pair-list">';
+            data.forex[sessionName].forEach(pair => {
+                html += `<button class="pair-button" onclick="fetchSignal('${pair}', 'forex')">${pair}</button>`;
+            });
+            html += '</div></div>';
+        });
+    }
+    // --- КІНЕЦЬ НОВОГО БЛОКУ ---
+
     html += '<div class="category"><div class="category-title">🏢 Акції</div><div class="pair-list">';
     data.stocks.forEach(pair => {
         html += `<button class="pair-button" onclick="fetchSignal('${pair}', 'stocks')">${pair}</button>`;
@@ -68,19 +80,29 @@ function populateLists(data) {
     console.log("Lists populated.");
 }
 
+
 function fetchSignal(pair, assetType) {
     console.log(`fetchSignal called for pair: ${pair}`);
     showLoader(true);
     signalOutput.innerHTML = `⏳ Отримую дані для ${pair}...`;
     Plotly.purge('chart');
 
-    // Використовуємо повний URL
     const signalApiUrl = `${API_BASE_URL}/api/signal?pair=${pair}`;
     console.log("Requesting signal URL:", signalApiUrl);
 
     fetch(signalApiUrl)
         .then(res => {
-            if (!res.ok) throw new Error(`Network response was not ok: ${res.statusText}`);
+            if (!res.ok) {
+                 // Спробуємо отримати текст помилки з відповіді
+                return res.text().then(text => { 
+                    try {
+                        const jsonData = JSON.parse(text);
+                        throw new Error(jsonData.error || `Network response was not ok: ${res.statusText}`);
+                    } catch(e) {
+                         throw new Error(text || `Network response was not ok: ${res.statusText}`);
+                    }
+                });
+            }
             return res.json();
         })
         .then(data => {
