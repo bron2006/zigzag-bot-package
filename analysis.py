@@ -36,73 +36,96 @@ def get_market_data(pair, tf, asset, limit=300):
         logger.error(f"Помилка отримання даних для {pair} на ТФ {tf}: {e}")
         return pd.DataFrame()
 
-def rank_assets(pairs, asset_type):
-    def fetch_score(pair):
-        try:
-            timeframe = '1h' if asset_type == 'crypto' else '15min'
-            df = get_market_data(pair, timeframe, asset_type, limit=50)
-            if df.empty: return None
-            if asset_type in ('stocks', 'forex'):
-                date_col = 'datetime' if 'datetime' in df.columns else 'ts'
-                last_update_time = df[date_col].iloc[-1]
-                if datetime.now(timezone.utc) - last_update_time > timedelta(hours=4): return None
-            rsi = df.ta.rsi(length=14).iloc[-1]
-            if pd.isna(rsi): return None
-            score = abs(rsi - 50)
-            return {'ticker': pair, 'score': score}
-        except Exception as e:
-            logger.error(f"Не вдалося проаналізувати активність {pair}: {e}")
-            return None
-            
-    # --- ПОЧАТОК ЗМІНИ: Зменшуємо кількість одночасних запитів з 5 до 3 ---
-    with ThreadPoolExecutor(max_workers=3) as executor:
-        results = executor.map(fetch_score, pairs)
-    # --- КІНЕЦЬ ЗМІНИ ---
+def group_close_values(values, threshold=0.01):
+    if not len(values): return []
+    values = sorted(values)
+    groups, current_group = [], [values[0]]
+    for value in values[1:]:
+        if value - current_group[-1] <= threshold * value:
+            current_group.append(value)
+        else:
+            groups.append(np.mean(current_group))
+            current_group = [value]
+    groups.append(np.mean(current_group))
+    return groups
 
-    ranked_pairs = [r for r in results if r is not None]
-    return sorted(ranked_pairs, key=lambda x: x['score'], reverse=True)
-
-def rank_crypto_chunk(pairs_chunk):
-    return rank_assets(pairs_chunk, 'crypto')
-
-def identify_support_resistance_levels(df, window=10):
-    if df.empty or len(df) < window * 2 + 1: return [], []
-    local_min = df['Low'].rolling(window=window*2+1, center=True).min()
-    local_max = df['High'].rolling(window=window*2+1, center=True).max()
-    support_levels = df[df['Low'] == local_min]['Low'].dropna().unique().tolist()
-    resistance_levels = df[df['High'] == local_max]['High'].dropna().unique().tolist()
-    return support_levels, resistance_levels
+def identify_support_resistance_levels(df, window=20, threshold=0.01):
+    try:
+        lows = df['Low'].rolling(window=window, center=True, min_periods=3).min()
+        highs = df['High'].rolling(window=window, center=True, min_periods=3).max()
+        support_levels = group_close_values(df.loc[df['Low'] == lows, 'Low'].tolist(), threshold)
+        resistance_levels = group_close_values(df.loc[df['High'] == highs, 'High'].tolist(), threshold)
+        return sorted(support_levels), sorted(resistance_levels, reverse=True)
+    except Exception as e:
+        logger.error(f"Помилка в identify_support_resistance_levels: {e}")
+        return [], []
 
 def analyze_candle_patterns(df):
-    if df.empty: return None
-    patterns = df.ta.cdl_pattern(name="all")
-    if patterns.empty: return None
-    last_pattern_col = patterns.iloc[-1].replace(0, np.nan).dropna()
-    if last_pattern_col.empty: return None
-    pattern_name = last_pattern_col.index[0]
-    signal = last_pattern_col.iloc[0]
-    pattern_type = 'neutral'
-    if signal > 0: pattern_type = 'bullish'
-    elif signal < 0: pattern_type = 'bearish'
-    name_map = pattern_name.replace('CDL_', '').replace('_', ' ').title()
-    return {"name": name_map, "type": pattern_type, "text": f"{'⬆️' if signal > 0 else '⬇️'} {name_map}"}
+    try:
+        patterns = df.ta.cdl_pattern(name="all")
+        if patterns.empty: return None
+        last_candle = patterns.iloc[-1]
+        found_patterns = last_candle[last_candle != 0]
+        if found_patterns.empty: return None
+        pattern_name = found_patterns.index[0].replace("CDL_", "")
+        signal_strength = found_patterns.iloc[0]
+        
+        pattern_type = 'bullish' if signal_strength > 0 else 'bearish'
+        arrow = '⬆️' if pattern_type == 'bullish' else '⬇️'
+        text = f'{arrow} {pattern_name}'
+            
+        return {'name': pattern_name, 'type': pattern_type, 'text': text}
+    except Exception as e:
+        logger.error(f"Помилка в analyze_candle_patterns: {e}")
+        return None
 
 def analyze_volume(df):
     if df.empty or 'Volume' not in df.columns or len(df) < 21: return "Недостатньо даних", 0
     df['Volume_MA'] = df['Volume'].rolling(window=20).mean()
     last = df.iloc[-1]
-    prev = df.iloc[-2]
     if pd.isna(last['Volume_MA']): return "Недостатньо даних", 0
     volume_info = "Об'єм нейтральний"
     score_change = 0
     if last['Volume'] > last['Volume_MA'] * 1.5:
-        if last['Close'] > prev['Close']:
+        if last['Close'] > last['Open']:
             volume_info = "🟢 Підвищений об'єм на зростанні"
             score_change = 5
         else:
             volume_info = "🔴 Підвищений об'єм на падінні"
             score_change = -5
     return volume_info, score_change
+
+def rank_assets(pairs, asset_type):
+    def fetch_score(pair):
+        try:
+            timeframe = '1h' if asset_type == 'crypto' else '15min'
+            df = get_market_data(pair, timeframe, asset_type, limit=50)
+            if df.empty: return None
+            
+            if asset_type in ('stocks', 'forex'):
+                date_col = 'datetime' if 'datetime' in df.columns else 'ts'
+                last_update_time = df[date_col].iloc[-1]
+                if datetime.now(timezone.utc) - last_update_time > timedelta(hours=4):
+                    return None
+            
+            rsi = df.ta.rsi(length=14).iloc[-1]
+            if pd.isna(rsi): return None
+            
+            score = abs(rsi - 50)
+            return {'ticker': pair, 'score': score}
+        except Exception as e:
+            logger.error(f"Не вдалося проаналізувати активність {pair}: {e}")
+            return None
+
+    with ThreadPoolExecutor(max_workers=2) as executor: # Використовуємо безпечне значення 2
+        results = executor.map(fetch_score, pairs)
+    
+    ranked_pairs = [r for r in results if r is not None]
+    return sorted(ranked_pairs, key=lambda x: x['score'], reverse=True)
+
+def rank_crypto_chunk(pairs_chunk):
+    # Залишаємо для сумісності
+    return rank_assets(pairs_chunk, 'crypto')
 
 def get_signal_strength_verdict(pair, display_name, asset):
     df = get_market_data(pair, '1m', asset, limit=50)
@@ -112,15 +135,11 @@ def get_signal_strength_verdict(pair, display_name, asset):
         df.ta.rsi(length=14, append=True, col_names=('RSI',))
         df.ta.kama(length=14, append=True, col_names=('KAMA',))
         daily_df = get_market_data(pair, '1d', asset, limit=100)
-        support_levels, resistance_levels = [], []
-        if not daily_df.empty:
-            support_levels, resistance_levels = identify_support_resistance_levels(daily_df)
+        support_levels, resistance_levels = identify_support_resistance_levels(daily_df)
         last = df.iloc[-1]
         if pd.isna(last['RSI']) or pd.isna(last['KAMA']):
              return f"⚠️ Помилка розрахунку індикаторів для *{display_name}*."
         current_price = last['Close']
-        is_near_support = any(abs(current_price - sl) / current_price < 0.01 for sl in support_levels)
-        is_near_resistance = any(abs(current_price - rl) / current_price < 0.01 for rl in resistance_levels)
         candle_pattern = analyze_candle_patterns(df)
         volume_info, volume_score_change = analyze_volume(df)
         score = 50
@@ -130,12 +149,14 @@ def get_signal_strength_verdict(pair, display_name, asset):
         rsi = last['RSI']
         if rsi < 30: score += 15; reasons.append("RSI в зоні перепроданості")
         elif rsi > 70: score -= 15; reasons.append("RSI в зоні перекупленості")
-        if is_near_support: score += 10; reasons.append("ціна біля підтримки")
-        if is_near_resistance: score -= 10; reasons.append("ціна біля опору")
+        if support_levels and any(abs(current_price - sl) / current_price < 0.01 for sl in support_levels):
+            score += 10; reasons.append("ціна біля підтримки")
+        if resistance_levels and any(abs(current_price - rl) / current_price < 0.01 for rl in resistance_levels):
+            score -= 10; reasons.append("ціна біля опору")
         score += volume_score_change
         score = np.clip(score, 0, 100)
         bull_percentage, bear_percentage = int(score), 100 - int(score)
-        direction_arrow = "⬆️" if bull_percentage > bear_percentage else "⬇️"
+        direction_arrow = "⬆️" if bull_percentage >= 50 else "⬇️"
         strength_line = f"🐂 Бики {bull_percentage}% ⬆️\n🐃 Ведмеді {bear_percentage}% ⬇️"
         reason_line = f"Підстава: {', '.join(reasons)}." if reasons else "Змішані сигнали."
         disclaimer = "\n\n_⚠️ Це не фінансова порада._"
@@ -143,6 +164,7 @@ def get_signal_strength_verdict(pair, display_name, asset):
         if support_levels: sr_text_parts.append(f"Підтримка: `{min(support_levels, key=lambda x: abs(x - current_price)):.4f}`")
         if resistance_levels: sr_text_parts.append(f"Опір: `{min(resistance_levels, key=lambda x: abs(x - current_price)):.4f}`")
         sr_info = " | ".join(sr_text_parts) if sr_text_parts else "Рівні не визначені"
+        
         final_message = f"{direction_arrow}\n\n"
         final_message += (f"**🕯️ Індекс сили ринку (1хв):** *{display_name}*\n"
                          f"**Поточна ціна:** `{last['Close']:.4f}`\n\n"
@@ -176,7 +198,6 @@ def get_api_detailed_signal_data(pair):
     asset = 'stocks'
     if '/' in pair:
         asset = 'crypto' if 'USDT' in pair else 'forex'
-    
     df = get_market_data(pair, '1m', asset, limit=100)
     if df.empty or len(df) < 25:
         return {"error": "Недостатньо даних для аналізу."}
@@ -186,7 +207,6 @@ def get_api_detailed_signal_data(pair):
         last = df.iloc[-1]
         if pd.isna(last['RSI']) or pd.isna(last['KAMA']):
             return {"error": "Помилка розрахунку індикаторів."}
-
         current_price = float(last['Close'])
         score = 50
         reasons = []
@@ -195,25 +215,20 @@ def get_api_detailed_signal_data(pair):
         rsi = float(last['RSI'])
         if rsi < 30: score += 15; reasons.append("RSI в зоні перепроданості")
         elif rsi > 70: score -= 15; reasons.append("RSI в зоні перекупленості")
-
         daily_df = get_market_data(pair, '1d', asset, limit=100)
         support, resistance = None, None
         if not daily_df.empty:
             support_levels, resistance_levels = identify_support_resistance_levels(daily_df)
             if support_levels: support = float(min(support_levels, key=lambda x: abs(x - current_price)))
             if resistance_levels: resistance = float(min(resistance_levels, key=lambda x: abs(x - current_price)))
-
         if support and abs(current_price - support) / current_price < 0.01:
             score += 10; reasons.append("Ціна біля підтримки")
         if resistance and abs(current_price - resistance) / current_price < 0.01:
             score -= 10; reasons.append("Ціна біля опору")
-        
         candle_pattern = analyze_candle_patterns(df)
         volume_info, volume_score_change = analyze_volume(df)
         score += volume_score_change
-
         score = int(np.clip(score, 0, 100))
-        
         history_df = df.tail(50)
         date_col = 'ts' if 'ts' in history_df.columns else 'datetime'
         history = {
@@ -221,7 +236,6 @@ def get_api_detailed_signal_data(pair):
             "open": history_df['Open'].tolist(), "high": history_df['High'].tolist(),
             "low": history_df['Low'].tolist(), "close": history_df['Close'].tolist()
         }
-
         return {
             "pair": pair, "price": current_price, "bull_percentage": score,
             "bear_percentage": 100 - score, "reasons": reasons, "support": support,
@@ -240,16 +254,12 @@ def get_api_mta_data(pair, asset):
         if df.empty or len(df) < 55: return None
         df.ta.ema(length=21, append=True, col_names='EMA_fast')
         df.ta.ema(length=55, append=True, col_names='EMA_slow')
-        
         last_row = df.iloc[-1]
         if pd.isna(last_row['EMA_fast']) or pd.isna(last_row['EMA_slow']):
             return None
-            
         signal = "BUY" if last_row['EMA_fast'] > last_row['EMA_slow'] else "SELL"
         return {"tf": tf, "signal": signal}
-
     with ThreadPoolExecutor(max_workers=4) as ex:
         results = ex.map(worker, ANALYSIS_TIMEFRAMES)
-    
     mta_data = [r for r in results if r is not None]
     return mta_data
