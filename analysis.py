@@ -128,8 +128,11 @@ def get_signal_strength_verdict(pair, display_name, asset):
         if resistance_levels: sr_text_parts.append(f"Опір: `{min(resistance_levels, key=lambda x: abs(x - current_price)):.4f}`")
         sr_info = " | ".join(sr_text_parts) if sr_text_parts else "Рівні не визначені"
         
-        # --- ПОЧАТОК ЗМІНИ: Змінюємо порядок блоків ---
-        final_message = (f"**🕯️ Індекс сили ринку (1хв):** *{display_name}*\n"
+        # --- ПОЧАТОК ЗМІНИ: Додаємо велику стрілку на початок повідомлення ---
+        direction_arrow = "⬆️" if bull_percentage > bear_percentage else "⬇️"
+        
+        final_message = f"{direction_arrow}\n\n"
+        final_message += (f"**🕯️ Індекс сили ринку (1хв):** *{display_name}*\n"
                          f"**Поточна ціна:** `{last['Close']:.4f}`\n\n"
                          f"**Баланс сил:**\n{strength_line}\n\n")
 
