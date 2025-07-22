@@ -6,17 +6,32 @@ const loader = document.getElementById("loader");
 const listsContainer = document.getElementById("listsContainer");
 const signalOutput = document.getElementById("signalOutput");
 
+// Змінено: Робимо код стійким до запуску поза Telegram
+// Якщо об'єкт Telegram не існує, створюємо "заглушку" для тестування
 let tg;
-
-document.addEventListener('DOMContentLoaded', function() {
+if (!window.Telegram || !window.Telegram.WebApp) {
+    console.warn("Telegram WebApp object not found. Running in browser mode with mock data.");
+    tg = { 
+        themeParams: { bg_color: '#1a1a1a', text_color: '#ffffff' }, 
+        initData: '',
+        ready: function() {},
+        expand: function() {}
+    };
+} else {
     tg = window.Telegram.WebApp;
     tg.ready();
     tg.expand();
+    console.log("Telegram WebApp object is ready.");
+}
 
-    console.log("WebApp script started and Telegram object is ready.");
+
+document.addEventListener('DOMContentLoaded', function() {
     showLoader(true);
     
-    const apiUrl = `${API_BASE_URL}/api/get_pairs?initData=${tg.initDataUnsafe ? encodeURIComponent(tg.initData) : ''}`;
+    // Змінено: Коректно використовуємо initData
+    const initDataString = tg.initData ? `?initData=${encodeURIComponent(tg.initData)}` : '';
+    const apiUrl = `${API_BASE_URL}/api/get_pairs${initDataString}`;
+    
     console.log("Requesting URL:", apiUrl);
 
     fetch(apiUrl)
@@ -40,9 +55,6 @@ function populateLists(data) {
     console.log("Populating lists...");
     let html = '';
 
-    // --- ПОЧАТОК ЗМІН: Додаємо перевірки ---
-
-    // Перевіряємо, чи існує data.watchlist і чи це масив
     if (Array.isArray(data.watchlist) && data.watchlist.length > 0) {
         html += '<div class="category"><div class="category-title">⭐ Обране</div><div class="pair-list">';
         data.watchlist.forEach(pair => {
@@ -52,7 +64,6 @@ function populateLists(data) {
         html += '</div></div>';
     }
 
-    // Перевіряємо, чи існує data.crypto і чи це масив
     if (Array.isArray(data.crypto)) {
         html += '<div class="category"><div class="category-title">📈 Криптовалюти</div><div class="pair-list">';
         data.crypto.slice(0, 12).forEach(pair => {
@@ -61,10 +72,10 @@ function populateLists(data) {
         html += '</div></div>';
     }
 
-    // Перевіряємо, чи існує data.forex і чи це об'єкт
     if (data.forex && typeof data.forex === 'object') {
         Object.keys(data.forex).forEach(sessionName => {
-            html += `<div class="category"><div class="category-title">🌍 Валюта (${sessionName})</div><div class="pair-list">';
+            // Виправлено: Прибрали зайву лапку в кінці рядка
+            html += `<div class="category"><div class="category-title">🌍 Валюта (${sessionName})</div><div class="pair-list">`;
             data.forex[sessionName].forEach(pair => {
                 html += `<button class="pair-button" onclick="fetchSignal('${pair}', 'forex')">${pair}</button>`;
             });
@@ -72,7 +83,6 @@ function populateLists(data) {
         });
     }
 
-    // Перевіряємо, чи існує data.stocks і чи це масив
     if (Array.isArray(data.stocks)) {
         html += '<div class="category"><div class="category-title">🏢 Акції</div><div class="pair-list">';
         data.stocks.forEach(pair => {
@@ -80,8 +90,6 @@ function populateLists(data) {
         });
         html += '</div></div>';
     }
-
-    // --- КІНЕЦЬ ЗМІН ---
     
     listsContainer.innerHTML = html;
     console.log("Lists populated.");
