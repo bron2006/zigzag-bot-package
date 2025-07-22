@@ -117,7 +117,6 @@ function fetchSignal(pair, assetType) {
             const resistanceText = data.resistance ? data.resistance.toFixed(4) : 'N/A';
             const reasonsList = data.reasons.map(reason => `<li>${reason}</li>`).join('');
 
-            // --- ПОЧАТОК ЗМІН: Формуємо блоки для нових даних ---
             let candleHtml = '';
             if (data.candle_pattern && data.candle_pattern.text) {
                 candleHtml = `
@@ -135,8 +134,8 @@ function fetchSignal(pair, assetType) {
                     ${data.volume_analysis}
                 </div>`;
             }
-            // --- КІНЕЦЬ ЗМІН ---
 
+            // --- ПОЧАТОК ЗМІНИ: Змінено порядок блоків ---
             signalOutput.innerHTML = `
                 <div style="margin-bottom: 10px;">
                     <strong>${data.pair}</strong> | Ціна: ${data.price.toFixed(4)}
@@ -145,17 +144,18 @@ function fetchSignal(pair, assetType) {
                     <strong>Баланс сил:</strong><br>
                     🐂 Бики: ${data.bull_percentage}% ⬆️ | 🐃 Ведмеді: ${data.bear_percentage}% ⬇️
                 </div>
+                ${candleHtml}
                 <div style="margin-bottom: 10px;">
                     <strong>Рівні S/R:</strong><br>
                     Підтримка: ${supportText} | Опір: ${resistanceText}
                 </div>
-                ${candleHtml} 
                 ${volumeHtml}
                 <div>
                     <strong>Ключові фактори:</strong>
                     <ul style="margin: 5px 0 0 20px; padding: 0;">${reasonsList}</ul>
                 </div>
             `;
+            // --- КІНЕЦЬ ЗМІНИ ---
 
             if (data.history && data.history.dates) {
                 drawChart(pair, data.history);
