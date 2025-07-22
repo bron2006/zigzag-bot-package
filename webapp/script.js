@@ -92,7 +92,7 @@ function fetchSignal(pair, assetType) {
     console.log(`fetchSignal called for pair: ${pair}`);
     showLoader(true);
     signalOutput.innerHTML = `⏳ Отримую детальний аналіз для ${pair}...`;
-    signalOutput.style.textAlign = 'left'; 
+    signalOutput.style.textAlign = 'left';
     Plotly.purge('chart');
 
     const signalApiUrl = `${API_BASE_URL}/api/signal?pair=${pair}`;
@@ -117,7 +117,26 @@ function fetchSignal(pair, assetType) {
             const resistanceText = data.resistance ? data.resistance.toFixed(4) : 'N/A';
             const reasonsList = data.reasons.map(reason => `<li>${reason}</li>`).join('');
 
-            // --- ПОЧАТОК ЗМІНИ: Додано стрілки ---
+            // --- ПОЧАТОК ЗМІН: Формуємо блоки для нових даних ---
+            let candleHtml = '';
+            if (data.candle_pattern && data.candle_pattern.text) {
+                candleHtml = `
+                <div style="margin-bottom: 10px;">
+                    <strong>Свічковий патерн:</strong><br>
+                    ${data.candle_pattern.text}
+                </div>`;
+            }
+
+            let volumeHtml = '';
+            if (data.volume_analysis) {
+                volumeHtml = `
+                <div style="margin-bottom: 10px;">
+                    <strong>Аналіз об'єму:</strong><br>
+                    ${data.volume_analysis}
+                </div>`;
+            }
+            // --- КІНЕЦЬ ЗМІН ---
+
             signalOutput.innerHTML = `
                 <div style="margin-bottom: 10px;">
                     <strong>${data.pair}</strong> | Ціна: ${data.price.toFixed(4)}
@@ -130,12 +149,13 @@ function fetchSignal(pair, assetType) {
                     <strong>Рівні S/R:</strong><br>
                     Підтримка: ${supportText} | Опір: ${resistanceText}
                 </div>
+                ${candleHtml} 
+                ${volumeHtml}
                 <div>
                     <strong>Ключові фактори:</strong>
                     <ul style="margin: 5px 0 0 20px; padding: 0;">${reasonsList}</ul>
                 </div>
             `;
-            // --- КІНЕЦЬ ЗМІНИ ---
 
             if (data.history && data.history.dates) {
                 drawChart(pair, data.history);
