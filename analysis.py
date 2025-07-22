@@ -70,9 +70,7 @@ def analyze_candle_patterns(df):
     if signal > 0: pattern_type = 'bullish'
     elif signal < 0: pattern_type = 'bearish'
     name_map = pattern_name.replace('CDL_', '').replace('_', ' ').title()
-    # --- ПОЧАТОК ЗМІНИ: Замінюємо кружечки на стрілки ---
     return {"name": name_map, "type": pattern_type, "text": f"{'⬆️' if signal > 0 else '⬇️'} {name_map}"}
-    # --- КІНЕЦЬ ЗМІНИ ---
 
 def analyze_volume(df):
     if df.empty or 'Volume' not in df.columns or len(df) < 21: return "Недостатньо даних", 0
@@ -129,13 +127,23 @@ def get_signal_strength_verdict(pair, display_name, asset):
         if support_levels: sr_text_parts.append(f"Підтримка: `{min(support_levels, key=lambda x: abs(x - current_price)):.4f}`")
         if resistance_levels: sr_text_parts.append(f"Опір: `{min(resistance_levels, key=lambda x: abs(x - current_price)):.4f}`")
         sr_info = " | ".join(sr_text_parts) if sr_text_parts else "Рівні не визначені"
+        
+        # --- ПОЧАТОК ЗМІНИ: Змінюємо порядок блоків ---
         final_message = (f"**🕯️ Індекс сили ринку (1хв):** *{display_name}*\n"
                          f"**Поточна ціна:** `{last['Close']:.4f}`\n\n"
-                         f"**Баланс сил:**\n{strength_line}\n\n"
-                         f"**Рівні S/R (денні):**\n{sr_info}\n\n")
-        if candle_pattern: final_message += f"**Свічковий патерн:**\n{candle_pattern['text']}\n\n"
-        if volume_info: final_message += f"**Аналіз об'єму:**\n{volume_info}\n\n"
+                         f"**Баланс сил:**\n{strength_line}\n\n")
+
+        if candle_pattern:
+            final_message += f"**Свічковий патерн:**\n{candle_pattern['text']}\n\n"
+        
+        final_message += f"**Рівні S/R (денні):**\n{sr_info}\n\n"
+        
+        if volume_info:
+            final_message += f"**Аналіз об'єму:**\n{volume_info}\n\n"
+        
         final_message += f"_{reason_line}_{disclaimer}"
+        # --- КІНЕЦЬ ЗМІНИ ---
+        
         return final_message
     except Exception as e:
         logger.error(f"Помилка розрахунку індексу для {pair}: {e}")
