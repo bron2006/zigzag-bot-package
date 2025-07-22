@@ -6,8 +6,6 @@ const loader = document.getElementById("loader");
 const listsContainer = document.getElementById("listsContainer");
 const signalOutput = document.getElementById("signalOutput");
 
-// Змінено: Робимо код стійким до запуску поза Telegram
-// Якщо об'єкт Telegram не існує, створюємо "заглушку" для тестування
 let tg;
 if (!window.Telegram || !window.Telegram.WebApp) {
     console.warn("Telegram WebApp object not found. Running in browser mode with mock data.");
@@ -24,14 +22,10 @@ if (!window.Telegram || !window.Telegram.WebApp) {
     console.log("Telegram WebApp object is ready.");
 }
 
-
 document.addEventListener('DOMContentLoaded', function() {
     showLoader(true);
-    
-    // Змінено: Коректно використовуємо initData
     const initDataString = tg.initData ? `?initData=${encodeURIComponent(tg.initData)}` : '';
     const apiUrl = `${API_BASE_URL}/api/get_pairs${initDataString}`;
-    
     console.log("Requesting URL:", apiUrl);
 
     fetch(apiUrl)
@@ -74,7 +68,6 @@ function populateLists(data) {
 
     if (data.forex && typeof data.forex === 'object') {
         Object.keys(data.forex).forEach(sessionName => {
-            // Виправлено: Прибрали зайву лапку в кінці рядка
             html += `<div class="category"><div class="category-title">🌍 Валюта (${sessionName})</div><div class="pair-list">`;
             data.forex[sessionName].forEach(pair => {
                 html += `<button class="pair-button" onclick="fetchSignal('${pair}', 'forex')">${pair}</button>`;
@@ -95,10 +88,12 @@ function populateLists(data) {
     console.log("Lists populated.");
 }
 
+// --- ПОЧАТОК ЗМІН: Оновлюємо функцію для відображення нових даних ---
 function fetchSignal(pair, assetType) {
     console.log(`fetchSignal called for pair: ${pair}`);
     showLoader(true);
-    signalOutput.innerHTML = `⏳ Отримую дані для ${pair}...`;
+    signalOutput.innerHTML = `⏳ Отримую детальний аналіз для ${pair}...`;
+    signalOutput.style.textAlign = 'left'; // Вирівнюємо текст по лівому краю для кращої читабельності
     Plotly.purge('chart');
 
     const signalApiUrl = `${API_BASE_URL}/api/signal?pair=${pair}`;
@@ -107,24 +102,41 @@ function fetchSignal(pair, assetType) {
     fetch(signalApiUrl)
         .then(res => {
             if (!res.ok) {
-                return res.json().then(errData => {
-                    throw new Error(errData.error || `Network response was not ok: ${res.statusText}`);
-                }).catch(() => {
-                    throw new Error(`Network response was not ok: ${res.statusText}`);
-                });
+                return res.json().then(errData => { throw new Error(errData.error || `Network response was not ok: ${res.statusText}`); });
             }
             return res.json();
         })
         .then(data => {
             if (data.error) {
                 signalOutput.innerHTML = `❌ Помилка: ${data.error}`;
+                signalOutput.style.textAlign = 'center';
                 showLoader(false);
                 return;
             }
+
+            // Формуємо красивий вивід нових даних
+            const supportText = data.support ? data.support.toFixed(4) : 'N/A';
+            const resistanceText = data.resistance ? data.resistance.toFixed(4) : 'N/A';
+            const reasonsList = data.reasons.map(reason => `<li>${reason}</li>`).join('');
+
             signalOutput.innerHTML = `
-                <strong>${data.pair}</strong>: ${data.signal}<br/>
-                <strong>Ціна:</strong> ${data.price.toFixed(4)} | <strong>RSI:</strong> ${data.rsi.toFixed(2)}
+                <div style="margin-bottom: 10px;">
+                    <strong>${data.pair}</strong> | Ціна: ${data.price.toFixed(4)}
+                </div>
+                <div style="margin-bottom: 10px;">
+                    <strong>Баланс сил:</strong><br>
+                    🐂 Бики: ${data.bull_percentage}% | 🐃 Ведмеді: ${data.bear_percentage}%
+                </div>
+                <div style="margin-bottom: 10px;">
+                    <strong>Рівні S/R:</strong><br>
+                    Підтримка: ${supportText} | Опір: ${resistanceText}
+                </div>
+                <div>
+                    <strong>Ключові фактори:</strong>
+                    <ul style="margin: 5px 0 0 20px; padding: 0;">${reasonsList}</ul>
+                </div>
             `;
+
             if (data.history && data.history.dates) {
                 drawChart(pair, data.history);
             }
@@ -133,9 +145,11 @@ function fetchSignal(pair, assetType) {
         .catch(err => {
             console.error(`Error fetching signal for ${pair}:`, err);
             signalOutput.innerHTML = `❌ Помилка: ${err.message}`;
+            signalOutput.style.textAlign = 'center';
             showLoader(false);
         });
 }
+// --- КІНЕЦЬ ЗМІН ---
 
 function drawChart(pair, history) {
     const trace = {
