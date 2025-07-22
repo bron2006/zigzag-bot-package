@@ -88,12 +88,11 @@ function populateLists(data) {
     console.log("Lists populated.");
 }
 
-// --- ПОЧАТОК ЗМІН: Оновлюємо функцію для відображення нових даних ---
 function fetchSignal(pair, assetType) {
     console.log(`fetchSignal called for pair: ${pair}`);
     showLoader(true);
     signalOutput.innerHTML = `⏳ Отримую детальний аналіз для ${pair}...`;
-    signalOutput.style.textAlign = 'left'; // Вирівнюємо текст по лівому краю для кращої читабельності
+    signalOutput.style.textAlign = 'left'; 
     Plotly.purge('chart');
 
     const signalApiUrl = `${API_BASE_URL}/api/signal?pair=${pair}`;
@@ -114,18 +113,18 @@ function fetchSignal(pair, assetType) {
                 return;
             }
 
-            // Формуємо красивий вивід нових даних
             const supportText = data.support ? data.support.toFixed(4) : 'N/A';
             const resistanceText = data.resistance ? data.resistance.toFixed(4) : 'N/A';
             const reasonsList = data.reasons.map(reason => `<li>${reason}</li>`).join('');
 
+            // --- ПОЧАТОК ЗМІНИ: Додано стрілки ---
             signalOutput.innerHTML = `
                 <div style="margin-bottom: 10px;">
                     <strong>${data.pair}</strong> | Ціна: ${data.price.toFixed(4)}
                 </div>
                 <div style="margin-bottom: 10px;">
                     <strong>Баланс сил:</strong><br>
-                    🐂 Бики: ${data.bull_percentage}% | 🐃 Ведмеді: ${data.bear_percentage}%
+                    🐂 Бики: ${data.bull_percentage}% ⬆️ | 🐃 Ведмеді: ${data.bear_percentage}% ⬇️
                 </div>
                 <div style="margin-bottom: 10px;">
                     <strong>Рівні S/R:</strong><br>
@@ -136,6 +135,7 @@ function fetchSignal(pair, assetType) {
                     <ul style="margin: 5px 0 0 20px; padding: 0;">${reasonsList}</ul>
                 </div>
             `;
+            // --- КІНЕЦЬ ЗМІНИ ---
 
             if (data.history && data.history.dates) {
                 drawChart(pair, data.history);
@@ -149,7 +149,6 @@ function fetchSignal(pair, assetType) {
             showLoader(false);
         });
 }
-// --- КІНЕЦЬ ЗМІН ---
 
 function drawChart(pair, history) {
     const trace = {
