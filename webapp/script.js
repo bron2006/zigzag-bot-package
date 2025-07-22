@@ -1,6 +1,5 @@
 // script.js
 
-// Оголошуємо головну адресу вашого бекенду
 const API_BASE_URL = "https://zigzag-bot-package.fly.dev";
 
 const loader = document.getElementById("loader");
@@ -17,13 +16,11 @@ document.addEventListener('DOMContentLoaded', function() {
     console.log("WebApp script started and Telegram object is ready.");
     showLoader(true);
     
-    // Використовуємо повний URL
     const apiUrl = `${API_BASE_URL}/api/get_pairs?initData=${tg.initDataUnsafe ? encodeURIComponent(tg.initData) : ''}`;
     console.log("Requesting URL:", apiUrl);
 
     fetch(apiUrl)
         .then(res => {
-            console.log("Received response for /api/get_pairs. Status:", res.status);
             if (!res.ok) throw new Error(`Network response was not ok: ${res.statusText}`);
             return res.json();
         })
@@ -43,7 +40,10 @@ function populateLists(data) {
     console.log("Populating lists...");
     let html = '';
 
-    if (data.watchlist && data.watchlist.length > 0) {
+    // --- ПОЧАТОК ЗМІН: Додаємо перевірки ---
+
+    // Перевіряємо, чи існує data.watchlist і чи це масив
+    if (Array.isArray(data.watchlist) && data.watchlist.length > 0) {
         html += '<div class="category"><div class="category-title">⭐ Обране</div><div class="pair-list">';
         data.watchlist.forEach(pair => {
             const assetType = getAssetType(pair);
@@ -52,13 +52,16 @@ function populateLists(data) {
         html += '</div></div>';
     }
 
-    html += '<div class="category"><div class="category-title">📈 Криптовалюти</div><div class="pair-list">';
-    data.crypto.slice(0, 12).forEach(pair => {
-        html += `<button class="pair-button" onclick="fetchSignal('${pair}', 'crypto')">${pair}</button>`;
-    });
-    html += '</div></div>';
+    // Перевіряємо, чи існує data.crypto і чи це масив
+    if (Array.isArray(data.crypto)) {
+        html += '<div class="category"><div class="category-title">📈 Криптовалюти</div><div class="pair-list">';
+        data.crypto.slice(0, 12).forEach(pair => {
+            html += `<button class="pair-button" onclick="fetchSignal('${pair}', 'crypto')">${pair}</button>`;
+        });
+        html += '</div></div>';
+    }
 
-    // --- ПОЧАТОК НОВОГО БЛОКУ ДЛЯ ВАЛЮТНИХ ПАР ---
+    // Перевіряємо, чи існує data.forex і чи це об'єкт
     if (data.forex && typeof data.forex === 'object') {
         Object.keys(data.forex).forEach(sessionName => {
             html += `<div class="category"><div class="category-title">🌍 Валюта (${sessionName})</div><div class="pair-list">';
@@ -68,18 +71,21 @@ function populateLists(data) {
             html += '</div></div>';
         });
     }
-    // --- КІНЕЦЬ НОВОГО БЛОКУ ---
 
-    html += '<div class="category"><div class="category-title">🏢 Акції</div><div class="pair-list">';
-    data.stocks.forEach(pair => {
-        html += `<button class="pair-button" onclick="fetchSignal('${pair}', 'stocks')">${pair}</button>`;
-    });
-    html += '</div></div>';
+    // Перевіряємо, чи існує data.stocks і чи це масив
+    if (Array.isArray(data.stocks)) {
+        html += '<div class="category"><div class="category-title">🏢 Акції</div><div class="pair-list">';
+        data.stocks.forEach(pair => {
+            html += `<button class="pair-button" onclick="fetchSignal('${pair}', 'stocks')">${pair}</button>`;
+        });
+        html += '</div></div>';
+    }
+
+    // --- КІНЕЦЬ ЗМІН ---
     
     listsContainer.innerHTML = html;
     console.log("Lists populated.");
 }
-
 
 function fetchSignal(pair, assetType) {
     console.log(`fetchSignal called for pair: ${pair}`);
@@ -93,14 +99,10 @@ function fetchSignal(pair, assetType) {
     fetch(signalApiUrl)
         .then(res => {
             if (!res.ok) {
-                 // Спробуємо отримати текст помилки з відповіді
-                return res.text().then(text => { 
-                    try {
-                        const jsonData = JSON.parse(text);
-                        throw new Error(jsonData.error || `Network response was not ok: ${res.statusText}`);
-                    } catch(e) {
-                         throw new Error(text || `Network response was not ok: ${res.statusText}`);
-                    }
+                return res.json().then(errData => {
+                    throw new Error(errData.error || `Network response was not ok: ${res.statusText}`);
+                }).catch(() => {
+                    throw new Error(`Network response was not ok: ${res.statusText}`);
                 });
             }
             return res.json();
@@ -122,7 +124,7 @@ function fetchSignal(pair, assetType) {
         })
         .catch(err => {
             console.error(`Error fetching signal for ${pair}:`, err);
-            signalOutput.innerHTML = `❌ Не вдалося отримати сигнал. Перевірте консоль. Помилка: ${err.message}`;
+            signalOutput.innerHTML = `❌ Помилка: ${err.message}`;
             showLoader(false);
         });
 }
