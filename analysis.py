@@ -53,8 +53,12 @@ def rank_assets(pairs, asset_type):
         except Exception as e:
             logger.error(f"Не вдалося проаналізувати активність {pair}: {e}")
             return None
-    with ThreadPoolExecutor(max_workers=5) as executor:
+            
+    # --- ПОЧАТОК ЗМІНИ: Зменшуємо кількість одночасних запитів з 5 до 3 ---
+    with ThreadPoolExecutor(max_workers=3) as executor:
         results = executor.map(fetch_score, pairs)
+    # --- КІНЕЦЬ ЗМІНИ ---
+
     ranked_pairs = [r for r in results if r is not None]
     return sorted(ranked_pairs, key=lambda x: x['score'], reverse=True)
 
