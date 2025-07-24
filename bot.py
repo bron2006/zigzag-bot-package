@@ -7,6 +7,7 @@ from flask_cors import CORS
 from telegram import Update
 
 from config import app, bot, dp, WEBHOOK_SECRET, logger, CRYPTO_PAIRS_FULL, FOREX_SESSIONS, STOCK_TICKERS, FOREX_PAIRS_MAP
+# Змінено: додаємо toggle_watch
 from db import init_db, get_watchlist, toggle_watch
 from analysis import get_api_detailed_signal_data, rank_assets_for_api, get_api_mta_data
 import telegram_ui
@@ -64,11 +65,7 @@ def api_get_active_markets():
         all_forex_pairs = list(FOREX_PAIRS_MAP.keys())
         ranked_forex = rank_assets_for_api(all_forex_pairs, 'forex')
         top_forex = [p['ticker'] for p in ranked_forex[:5]]
-        return jsonify({
-            "active_crypto": top_crypto,
-            "active_stocks": top_stocks,
-            "active_forex": top_forex
-        })
+        return jsonify({ "active_crypto": top_crypto, "active_stocks": top_stocks, "active_forex": top_forex })
     except Exception as e:
         logger.error(f"API error for active markets: {e}\n{traceback.format_exc()}")
         return jsonify({"error": "Помилка при аналізі ринків"}), 500
@@ -86,28 +83,37 @@ def api_get_mta():
         logger.error(f"API error for MTA on {pair}: {e}\n{traceback.format_exc()}")
         return jsonify({"error": "Помилка при розрахунку MTA"}), 500
 
-@app.route("/api/toggle_fav", methods=["GET"])
-def toggle_favorite():
+# --- ПОЧАТОК НОВОГО КОДУ ---
+@app.route("/api/toggle_watchlist", methods=["GET"])
+def toggle_watchlist_route():
     init_data = request.args.get("initData")
     pair = request.args.get("pair")
     user_id = None
-    if init_data and pair:
-        try:
-            parsed = parse_qs(init_data)
-            user_json_str = parsed.get("user", [None])[0]
-            if user_json_str:
-                user_data = json.loads(user_json_str)
-                user_id = user_data.get("id")
-                if user_id:
-                    toggle_watch(user_id, pair)
-                    return jsonify({"success": True})
-        except Exception as e:
-            logger.warning(f"Toggle favorite error: {e}")
-    return jsonify({"success": False})
+
+    if not init_data or not pair:
+        return jsonify({"success": False, "error": "Missing required parameters"}), 400
+
+    try:
+        parsed = parse_qs(init_data)
+        user_json_str = parsed.get("user", [None])[0]
+        if user_json_str:
+            user_data = json.loads(user_json_str)
+            user_id = user_data.get("id")
+            
+            if user_id:
+                toggle_watch(user_id, pair)
+                return jsonify({"success": True})
+
+    except Exception as e:
+        logger.error(f"Error in toggle_watchlist: {e}")
+        return jsonify({"success": False, "error": "Internal server error"}), 500
+
+    return jsonify({"success": False, "error": "Invalid initData"}), 400
+# --- КІНЕЦЬ НОВОГО КОДУ ---
 
 @app.route("/", methods=["GET"])
 def index():
-    return "ZigZag Bot v4.2 Final Stable 🟢"
+    return "ZigZag Bot v4.3 Backend with Watchlist API 🟢"
 
 if __name__ != "__main__":
     init_db()
