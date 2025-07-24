@@ -1,3 +1,4 @@
+/* style.css */
 :root {
     --bg-color: var(--tg-theme-bg-color, #1a1a1a);
     --text-color: var(--tg-theme-text-color, #ffffff);
@@ -109,35 +110,38 @@ h1 {
     100% { transform: translate(-50%, -50%) rotate(360deg); }
 }
 
-.pair-button.active {
-    background-color: var(--button-color);
-    color: var(--button-text-color);
+/* --- ПОЧАТОК НОВОГО КОДУ: Стилі для таблиці МТА --- */
+.mta-container {
+    margin-top: 15px;
+    padding-top: 10px;
+    border-top: 1px solid rgba(128, 128, 128, 0.3);
+}
+
+.mta-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 8px;
+}
+
+.mta-table th, .mta-table td {
+    border: 1px solid var(--secondary-bg-color);
+    padding: 8px;
+    text-align: center;
+    font-size: 14px;
+}
+
+.mta-table th {
+    font-weight: normal;
+    color: var(--hint-color);
+}
+
+.mta-table .buy {
+    color: #26a69a; /* Зелений, як на графіку */
     font-weight: bold;
-    box-shadow: 0 0 5px var(--button-color);
 }
 
-.pair-list {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    justify-content: center;
+.mta-table .sell {
+    color: #ef5350; /* Червоний, як на графіку */
+    font-weight: bold;
 }
-
-.pair-button:active {
-    transform: scale(0.96);
-    transition: transform 0.05s;
-}
-
-#chart {
-    transition: opacity 0.4s ease-in-out;
-}
-
-.refresh-button {
-    background: var(--button-color);
-    color: var(--button-text-color);
-    padding: 8px 14px;
-    border: none;
-    border-radius: 6px;
-    margin-bottom: 10px;
-    cursor: pointer;
-}
+/* --- КІНЕЦЬ НОВОГО КОДУ --- */

@@ -1,4 +1,4 @@
-// script.js (updated with arrow display logic)
+// script.js
 
 const API_BASE_URL = "https://zigzag-bot-package.fly.dev";
 
@@ -25,7 +25,7 @@ if (!window.Telegram || !window.Telegram.WebApp) {
 document.addEventListener('DOMContentLoaded', function() {
     showLoader(true);
     const initDataString = tg.initData ? `?initData=${encodeURIComponent(tg.initData)}` : '';
-
+    
     const staticPairsUrl = `${API_BASE_URL}/api/get_pairs${initDataString}`;
     const activeMarketsUrl = `${API_BASE_URL}/api/get_active_markets`;
 
@@ -71,6 +71,7 @@ function populateLists(staticData, activeData) {
             html += '</div></div>';
         }
     }
+
     if (Array.isArray(staticData.watchlist) && staticData.watchlist.length > 0) {
         html += '<div class="category"><div class="category-title">⭐ Обране</div><div class="pair-list">';
         staticData.watchlist.forEach(pair => {
@@ -79,6 +80,7 @@ function populateLists(staticData, activeData) {
         });
         html += '</div></div>';
     }
+
     if (Array.isArray(staticData.crypto)) {
         html += '<div class="category"><div class="category-title">📈 Уся криптовалюта</div><div class="pair-list">';
         staticData.crypto.slice(0, 12).forEach(pair => {
@@ -86,6 +88,7 @@ function populateLists(staticData, activeData) {
         });
         html += '</div></div>';
     }
+
     if (staticData.forex && typeof staticData.forex === 'object') {
         Object.keys(staticData.forex).forEach(sessionName => {
             html += `<div class="category"><div class="category-title">🌍 Усі валюти (${sessionName})</div><div class="pair-list">`;
@@ -95,6 +98,7 @@ function populateLists(staticData, activeData) {
             html += '</div></div>';
         });
     }
+
     if (Array.isArray(staticData.stocks)) {
         html += '<div class="category"><div class="category-title">🏢 Усі акції</div><div class="pair-list">';
         staticData.stocks.forEach(pair => {
@@ -102,50 +106,85 @@ function populateLists(staticData, activeData) {
         });
         html += '</div></div>';
     }
+    
     listsContainer.innerHTML = html;
 }
 
+
+// --- ПОЧАТОК ЗМІН: Тепер функція завантажує і основний сигнал, і дані МТА ---
 function fetchSignal(pair, assetType) {
     console.log(`fetchSignal called for pair: ${pair}`);
     showLoader(true);
     signalOutput.innerHTML = `⏳ Отримую детальний аналіз для ${pair}...`;
     signalOutput.style.textAlign = 'left';
     Plotly.purge('chart');
-    const signalApiUrl = `${API_BASE_URL}/api/signal?pair=${pair}`;
-    fetch(signalApiUrl)
-        .then(res => res.ok ? res.json() : res.json().then(err => { throw new Error(err.error || res.statusText); }))
-        .then(data => {
-            if (data.error) {
-                signalOutput.innerHTML = `❌ Помилка: ${data.error}`;
-                signalOutput.style.textAlign = 'center';
-                showLoader(false);
-                return;
-            }
-            const arrow = data.bull_percentage >= 50 ? '⬆️' : '⬇️';
-            const supportText = data.support ? data.support.toFixed(4) : 'N/A';
-            const resistanceText = data.resistance ? data.resistance.toFixed(4) : 'N/A';
-            const reasonsList = data.reasons.map(r => `<li>${r}</li>`).join('');
-            let candleHtml = data.candle_pattern?.text ? `<div style="margin-bottom:10px"><strong>Свічковий патерн:</strong><br>${data.candle_pattern.text}</div>` : '';
-            let volumeHtml = data.volume_analysis ? `<div style="margin-bottom:10px"><strong>Аналіз об'єму:</strong><br>${data.volume_analysis}</div>` : '';
 
-            signalOutput.innerHTML = `
-                <div style="font-size: 32px; text-align: center; margin-bottom: 15px;">${arrow}</div>
-                <div style="margin-bottom: 10px;"><strong>${data.pair}</strong> | Ціна: ${data.price.toFixed(4)}</div>
-                <div style="margin-bottom: 10px;"><strong>Баланс сил:</strong><br>🐂 Бики: ${data.bull_percentage}% ⬆️ | 🐃 Ведмеді: ${data.bear_percentage}% ⬇️</div>
-                ${candleHtml}
-                <div style="margin-bottom: 10px;"><strong>Рівні S/R:</strong><br>Підтримка: ${supportText} | Опір: ${resistanceText}</div>
-                ${volumeHtml}
-                <div><strong>Ключові фактори:</strong><ul style="margin: 5px 0 0 20px; padding: 0;">${reasonsList}</ul></div>`;
-            if (data.history && data.history.dates) drawChart(pair, data.history);
-            showLoader(false);
-        })
-        .catch(err => {
-            console.error(`Error fetching signal for ${pair}:`, err);
-            signalOutput.innerHTML = `❌ Помилка: ${err.message}`;
+    const signalApiUrl = `${API_BASE_URL}/api/signal?pair=${pair}`;
+    const mtaApiUrl = `${API_BASE_URL}/api/get_mta?pair=${pair}`;
+
+    Promise.all([
+        fetch(signalApiUrl).then(res => res.json()),
+        fetch(mtaApiUrl).then(res => res.json())
+    ])
+    .then(([signalData, mtaData]) => {
+        if (signalData.error) {
+            signalOutput.innerHTML = `❌ Помилка: ${signalData.error}`;
             signalOutput.style.textAlign = 'center';
             showLoader(false);
-        });
+            return;
+        }
+
+        const supportText = signalData.support ? signalData.support.toFixed(4) : 'N/A';
+        const resistanceText = signalData.resistance ? signalData.resistance.toFixed(4) : 'N/A';
+        const reasonsList = signalData.reasons.map(reason => `<li>${reason}</li>`).join('');
+
+        let candleHtml = '';
+        if (signalData.candle_pattern && signalData.candle_pattern.text) {
+            candleHtml = `<div style="margin-bottom: 10px;"><strong>Свічковий патерн:</strong><br>${signalData.candle_pattern.text}</div>`;
+        }
+        let volumeHtml = '';
+        if (signalData.volume_analysis) {
+            volumeHtml = `<div style="margin-bottom: 10px;"><strong>Аналіз об'єму:</strong><br>${signalData.volume_analysis}</div>`;
+        }
+
+        // Генеруємо HTML для таблиці MTA
+        let mtaHtml = '';
+        if (Array.isArray(mtaData) && mtaData.length > 0) {
+            mtaHtml += '<div class="mta-container">';
+            mtaHtml += '<strong>Мульти-таймфрейм аналіз (MTA):</strong>';
+            mtaHtml += '<table class="mta-table"><tr>';
+            mtaData.forEach(item => { mtaHtml += `<th>${item.tf}</th>`; });
+            mtaHtml += '</tr><tr>';
+            mtaData.forEach(item => {
+                const signalClass = item.signal.toLowerCase(); // 'buy' or 'sell'
+                mtaHtml += `<td class="${signalClass}">${item.signal}</td>`;
+            });
+            mtaHtml += '</tr></table></div>';
+        }
+
+        signalOutput.innerHTML = `
+            <div style="margin-bottom: 10px;"><strong>${signalData.pair}</strong> | Ціна: ${signalData.price.toFixed(4)}</div>
+            <div style="margin-bottom: 10px;"><strong>Баланс сил:</strong><br>🐂 Бики: ${signalData.bull_percentage}% ⬆️ | 🐃 Ведмеді: ${signalData.bear_percentage}% ⬇️</div>
+            ${candleHtml}
+            <div style="margin-bottom: 10px;"><strong>Рівні S/R:</strong><br>Підтримка: ${supportText} | Опір: ${resistanceText}</div>
+            ${volumeHtml}
+            <div><strong>Ключові фактори:</strong><ul style="margin: 5px 0 0 20px; padding: 0;">${reasonsList}</ul></div>
+            ${mtaHtml}
+        `;
+
+        if (signalData.history && signalData.history.dates) {
+            drawChart(pair, signalData.history);
+        }
+        showLoader(false);
+    })
+    .catch(err => {
+        console.error(`Error fetching signal for ${pair}:`, err);
+        signalOutput.innerHTML = `❌ Помилка: ${err.message}`;
+        signalOutput.style.textAlign = 'center';
+        showLoader(false);
+    });
 }
+// --- КІНЕЦЬ ЗМІН ---
 
 function drawChart(pair, history) {
     const trace = { x: history.dates, close: history.close, high: history.high, low: history.low, open: history.open, type: 'candlestick', increasing: { line: { color: '#26a69a' } }, decreasing: { line: { color: '#ef5350' } } };
@@ -158,6 +197,6 @@ function showLoader(visible) {
 }
 
 function getAssetType(pair) {
-    if (pair.includes('/')) return pair.includes('USDT') ? 'crypto' : 'forex';
+    if (pair.includes('/')) { return pair.includes('USDT') ? 'crypto' : 'forex'; }
     return 'stocks';
 }
