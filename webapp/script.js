@@ -110,8 +110,6 @@ function populateLists(staticData, activeData) {
     listsContainer.innerHTML = html;
 }
 
-
-// --- ПОЧАТОК ЗМІН: Тепер функція завантажує і основний сигнал, і дані МТА ---
 function fetchSignal(pair, assetType) {
     console.log(`fetchSignal called for pair: ${pair}`);
     showLoader(true);
@@ -134,6 +132,10 @@ function fetchSignal(pair, assetType) {
             return;
         }
 
+        // --- ПОЧАТОК ЗМІНИ: Повертаємо логіку для великої стрілки ---
+        const directionArrow = signalData.bull_percentage >= 50 ? '⬆️' : '⬇️';
+        // --- КІНЕЦЬ ЗМІНИ ---
+
         const supportText = signalData.support ? signalData.support.toFixed(4) : 'N/A';
         const resistanceText = signalData.resistance ? signalData.resistance.toFixed(4) : 'N/A';
         const reasonsList = signalData.reasons.map(reason => `<li>${reason}</li>`).join('');
@@ -147,7 +149,6 @@ function fetchSignal(pair, assetType) {
             volumeHtml = `<div style="margin-bottom: 10px;"><strong>Аналіз об'єму:</strong><br>${signalData.volume_analysis}</div>`;
         }
 
-        // Генеруємо HTML для таблиці MTA
         let mtaHtml = '';
         if (Array.isArray(mtaData) && mtaData.length > 0) {
             mtaHtml += '<div class="mta-container">';
@@ -156,13 +157,15 @@ function fetchSignal(pair, assetType) {
             mtaData.forEach(item => { mtaHtml += `<th>${item.tf}</th>`; });
             mtaHtml += '</tr><tr>';
             mtaData.forEach(item => {
-                const signalClass = item.signal.toLowerCase(); // 'buy' or 'sell'
+                const signalClass = item.signal.toLowerCase();
                 mtaHtml += `<td class="${signalClass}">${item.signal}</td>`;
             });
             mtaHtml += '</tr></table></div>';
         }
 
+        // --- ПОЧАТОК ЗМІНИ: Додаємо div для великої стрілки ---
         signalOutput.innerHTML = `
+            <div style="font-size: 36px; text-align: center; margin-bottom: 10px;">${directionArrow}</div>
             <div style="margin-bottom: 10px;"><strong>${signalData.pair}</strong> | Ціна: ${signalData.price.toFixed(4)}</div>
             <div style="margin-bottom: 10px;"><strong>Баланс сил:</strong><br>🐂 Бики: ${signalData.bull_percentage}% ⬆️ | 🐃 Ведмеді: ${signalData.bear_percentage}% ⬇️</div>
             ${candleHtml}
@@ -171,6 +174,7 @@ function fetchSignal(pair, assetType) {
             <div><strong>Ключові фактори:</strong><ul style="margin: 5px 0 0 20px; padding: 0;">${reasonsList}</ul></div>
             ${mtaHtml}
         `;
+        // --- КІНЕЦЬ ЗМІНИ ---
 
         if (signalData.history && signalData.history.dates) {
             drawChart(pair, signalData.history);
@@ -184,7 +188,6 @@ function fetchSignal(pair, assetType) {
         showLoader(false);
     });
 }
-// --- КІНЕЦЬ ЗМІН ---
 
 function drawChart(pair, history) {
     const trace = { x: history.dates, close: history.close, high: history.high, low: history.low, open: history.open, type: 'candlestick', increasing: { line: { color: '#26a69a' } }, decreasing: { line: { color: '#ef5350' } } };
