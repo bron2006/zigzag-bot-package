@@ -7,6 +7,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 from config import logger, binance, td, CACHE, ANALYSIS_TIMEFRAMES, CRYPTO_PAIRS_FULL, STOCK_TICKERS, FOREX_PAIRS_MAP
 
+# --- БЛОК 1: ВАШІ СТАБІЛЬНІ ФУНКЦІЇ ---
+
 def get_market_data(pair, tf, asset, limit=300):
     key = f"{pair}_{tf}_{limit}"
     if key in CACHE: return CACHE[key]
@@ -78,7 +80,6 @@ def analyze_candle_patterns(df: pd.DataFrame):
         logger.error(f"Помилка в analyze_candle_patterns: {e}")
         return None
 
-# --- ПОЧАТОК ЗМІНИ: ПОВЕРТАЄМО ВІДСУТНЮ ФУНКЦІЮ ---
 def analyze_volume(df):
     if df.empty or 'Volume' not in df.columns or len(df) < 21: return "Недостатньо даних", 0
     df['Volume_MA'] = df['Volume'].rolling(window=20).mean()
@@ -94,33 +95,22 @@ def analyze_volume(df):
             volume_info = "🔴 Підвищений об'єм на падінні"
             score_change = -5
     return volume_info, score_change
-# --- КІНЕЦЬ ЗМІНИ ---
-
-def rank_assets_for_api(pairs, asset_type):
-    def fetch_score(pair):
-        try:
-            timeframe = '1h' if asset_type == 'crypto' else '15min'
-            df = get_market_data(pair, timeframe, asset_type, limit=50)
-            if df.empty: return None
-            if asset_type in ('stocks', 'forex'):
-                date_col = 'datetime' if 'datetime' in df.columns else 'ts'
-                if date_col not in df.columns: return None
-                last_update_time = df[date_col].iloc[-1]
-                if datetime.now(timezone.utc) - last_update_time > timedelta(hours=4): return None
-            rsi = df.ta.rsi(length=14).iloc[-1]
-            if pd.isna(rsi): return None
-            score = abs(rsi - 50)
-            return {'ticker': pair, 'score': score}
-        except Exception as e:
-            logger.error(f"Не вдалося проаналізувати активність {pair}: {e}")
-            return None
-    with ThreadPoolExecutor(max_workers=3) as executor:
-        results = executor.map(fetch_score, pairs)
-    ranked_pairs = [r for r in results if r is not None]
-    return sorted(ranked_pairs, key=lambda x: x['score'], reverse=True)
 
 def rank_crypto_chunk(pairs_chunk):
-    return rank_assets_for_api(pairs_chunk, 'crypto')
+    def fetch_score(pair):
+        try:
+            df = get_market_data(pair, '1h', 'crypto', limit=50)
+            if df.empty: return None
+            rsi = df.ta.rsi(length=14).iloc[-1]
+            if pd.isna(rsi): return None
+            return {'display_name': pair, 'ticker': pair, 'score': abs(rsi - 50)}
+        except Exception as e:
+            logger.error(f"Не вдалося проаналізувати пару {pair}: {e}")
+            return None
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = executor.map(fetch_score, pairs_chunk)
+    ranked_pairs = [r for r in results if r is not None]
+    return sorted(ranked_pairs, key=lambda x: x['score'], reverse=True)
 
 def get_signal_strength_verdict(pair, display_name, asset):
     df = get_market_data(pair, '1m', asset, limit=50)
@@ -192,6 +182,31 @@ def get_full_mta_verdict(pair, display_name, asset):
     rows = [r for r in results if r[1] is not None]
     table = "\n".join([f"| {tf:<4} | {sig} |" for tf, sig in rows])
     return f"**📊 Детальний огляд тренду:** *{display_name}*\n\n| ТФ   | Сигнал |\n|:----:|:---:|\n{table}"
+
+# --- БЛОК 2: НОВІ ФУНКЦІЇ, ЯКІ ВИКОРИСТОВУЄ ЛИШЕ ВЕБ-ДОДАТОК ---
+
+def rank_assets_for_api(pairs, asset_type):
+    def fetch_score(pair):
+        try:
+            timeframe = '1h' if asset_type == 'crypto' else '15min'
+            df = get_market_data(pair, timeframe, asset_type, limit=50)
+            if df.empty: return None
+            if asset_type in ('stocks', 'forex'):
+                date_col = 'datetime' if 'datetime' in df.columns else 'ts'
+                if date_col not in df.columns: return None
+                last_update_time = df[date_col].iloc[-1]
+                if datetime.now(timezone.utc) - last_update_time > timedelta(hours=4): return None
+            rsi = df.ta.rsi(length=14).iloc[-1]
+            if pd.isna(rsi): return None
+            score = abs(rsi - 50)
+            return {'ticker': pair, 'score': score}
+        except Exception as e:
+            logger.error(f"Не вдалося проаналізувати активність {pair}: {e}")
+            return None
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = executor.map(fetch_score, pairs)
+    ranked_pairs = [r for r in results if r is not None]
+    return sorted(ranked_pairs, key=lambda x: x['score'], reverse=True)
 
 def get_api_detailed_signal_data(pair):
     asset = 'stocks'
