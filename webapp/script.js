@@ -22,9 +22,15 @@ if (!window.Telegram || !window.Telegram.WebApp) {
     console.log("Telegram WebApp object is ready.");
 }
 
+// --- ПОЧАТОК ЗМІН: Зберігаємо дані глобально для легкого доступу ---
+let currentWatchlist = [];
+let initData = tg.initData || '';
+// --- КІНЕЦЬ ЗМІН ---
+
+
 document.addEventListener('DOMContentLoaded', function() {
     showLoader(true);
-    const initDataString = tg.initData ? `?initData=${encodeURIComponent(tg.initData)}` : '';
+    const initDataString = initData ? `?initData=${encodeURIComponent(initData)}` : '';
     
     const staticPairsUrl = `${API_BASE_URL}/api/get_pairs${initDataString}`;
     const activeMarketsUrl = `${API_BASE_URL}/api/get_active_markets`;
@@ -36,6 +42,10 @@ document.addEventListener('DOMContentLoaded', function() {
     .then(([staticData, activeData]) => {
         console.log("Received static pairs:", staticData);
         console.log("Received active markets:", activeData);
+        
+        // Зберігаємо початковий список обраного
+        currentWatchlist = staticData.watchlist || [];
+        
         populateLists(staticData, activeData);
         showLoader(false);
     })
@@ -46,64 +56,98 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 });
 
+// --- ПОЧАТОК НОВОГО КОДУ: Функції для роботи з "Обраним" ---
+
+// Створює HTML для кнопки "Обране"
+function renderFavoriteButton(pair) {
+    const isFavorite = currentWatchlist.includes(pair);
+    const icon = isFavorite ? '✅' : '⭐';
+    return `<button class="fav-btn" onclick="toggleFavorite(event, '${pair}')">${icon}</button>`;
+}
+
+// Обробляє натискання на кнопку "Обране"
+function toggleFavorite(event, pair) {
+    event.stopPropagation(); // Зупиняємо клік, щоб не спрацював аналіз пари
+    
+    const button = event.currentTarget;
+    const isCurrentlyFavorite = currentWatchlist.includes(pair);
+
+    // Оптимістичне оновлення UI
+    button.innerHTML = isCurrentlyFavorite ? '⭐' : '✅';
+    
+    const url = `${API_BASE_URL}/api/toggle_watchlist?pair=${pair}&initData=${encodeURIComponent(initData)}`;
+    
+    fetch(url)
+        .then(res => res.json())
+        .then(data => {
+            if (data.success) {
+                // Оновлюємо наш локальний список
+                if (isCurrentlyFavorite) {
+                    currentWatchlist = currentWatchlist.filter(p => p !== pair);
+                } else {
+                    currentWatchlist.push(pair);
+                }
+                console.log("Watchlist updated:", currentWatchlist);
+                // Можна додати логіку для оновлення секції "Обране", якщо потрібно
+            } else {
+                // Якщо на сервері помилка, повертаємо іконку назад
+                button.innerHTML = isCurrentlyFavorite ? '✅' : '⭐';
+                alert("Не вдалося оновити список обраного.");
+            }
+        })
+        .catch(err => {
+            // Якщо помилка мережі, також повертаємо іконку
+            button.innerHTML = isCurrentlyFavorite ? '✅' : '⭐';
+            alert("Помилка мережі при оновленні списку обраного.");
+            console.error(err);
+        });
+}
+
+// Створює повний HTML для однієї кнопки з парою та зірочкою
+function createPairButton(pair, assetType) {
+    return `<div class="pair-item">
+        <button class="pair-button" onclick="fetchSignal('${pair}', '${assetType}')">${pair}</button>
+        ${renderFavoriteButton(pair)}
+    </div>`;
+}
+
+// --- КІНЕЦЬ НОВОГО КОДУ ---
+
 function populateLists(staticData, activeData) {
     let html = '';
+    
+    // Функція-помічник для створення секцій
+    function createSection(title, pairs, assetTypeResolver) {
+        if (!Array.isArray(pairs) || pairs.length === 0) return '';
+        let sectionHtml = `<div class="category"><div class="category-title">${title}</div><div class="pair-list">`;
+        pairs.forEach(pair => {
+            const assetType = typeof assetTypeResolver === 'function' ? assetTypeResolver(pair) : assetTypeResolver;
+            sectionHtml += createPairButton(pair, assetType);
+        });
+        sectionHtml += '</div></div>';
+        return sectionHtml;
+    }
+
     if (activeData) {
-        if (Array.isArray(activeData.active_crypto) && activeData.active_crypto.length > 0) {
-            html += '<div class="category"><div class="category-title">⚡ Активна крипта</div><div class="pair-list">';
-            activeData.active_crypto.forEach(pair => {
-                html += `<button class="pair-button" onclick="fetchSignal('${pair}', 'crypto')">${pair}</button>`;
-            });
-            html += '</div></div>';
-        }
-        if (Array.isArray(activeData.active_stocks) && activeData.active_stocks.length > 0) {
-            html += '<div class="category"><div class="category-title">⚡ Активні акції</div><div class="pair-list">';
-            activeData.active_stocks.forEach(pair => {
-                html += `<button class="pair-button" onclick="fetchSignal('${pair}', 'stocks')">${pair}</button>`;
-            });
-            html += '</div></div>';
-        }
-        if (Array.isArray(activeData.active_forex) && activeData.active_forex.length > 0) {
-            html += '<div class="category"><div class="category-title">⚡ Активні валюти</div><div class="pair-list">';
-            activeData.active_forex.forEach(pair => {
-                html += `<button class="pair-button" onclick="fetchSignal('${pair}', 'forex')">${pair}</button>`;
-            });
-            html += '</div></div>';
-        }
+        html += createSection('⚡ Активна крипта', activeData.active_crypto, 'crypto');
+        html += createSection('⚡ Активні акції', activeData.active_stocks, 'stocks');
+        html += createSection('⚡ Активні валюти', activeData.active_forex, 'forex');
     }
-    if (Array.isArray(staticData.watchlist) && staticData.watchlist.length > 0) {
-        html += '<div class="category"><div class="category-title">⭐ Обране</div><div class="pair-list">';
-        staticData.watchlist.forEach(pair => {
-            const assetType = getAssetType(pair);
-            html += `<button class="pair-button" onclick="fetchSignal('${pair}', '${assetType}')">${pair}</button>`;
-        });
-        html += '</div></div>';
-    }
-    if (Array.isArray(staticData.crypto)) {
-        html += '<div class="category"><div class="category-title">📈 Уся криптовалюта</div><div class="pair-list">';
-        staticData.crypto.slice(0, 12).forEach(pair => {
-            html += `<button class="pair-button" onclick="fetchSignal('${pair}', 'crypto')">${pair}</button>`;
-        });
-        html += '</div></div>';
-    }
+
+    html += createSection('⭐ Обране', staticData.watchlist, getAssetType);
+    html += createSection('📈 Уся криптовалюта', staticData.crypto ? staticData.crypto.slice(0, 12) : [], 'crypto');
+    
     if (staticData.forex && typeof staticData.forex === 'object') {
         Object.keys(staticData.forex).forEach(sessionName => {
-            html += `<div class="category"><div class="category-title">🌍 Усі валюти (${sessionName})</div><div class="pair-list">`;
-            staticData.forex[sessionName].forEach(pair => {
-                html += `<button class="pair-button" onclick="fetchSignal('${pair}', 'forex')">${pair}</button>`;
-            });
-            html += '</div></div>';
+            html += createSection(`🌍 Усі валюти (${sessionName})`, staticData.forex[sessionName], 'forex');
         });
     }
-    if (Array.isArray(staticData.stocks)) {
-        html += '<div class="category"><div class="category-title">🏢 Усі акції</div><div class="pair-list">';
-        staticData.stocks.forEach(pair => {
-            html += `<button class="pair-button" onclick="fetchSignal('${pair}', 'stocks')">${pair}</button>`;
-        });
-        html += '</div></div>';
-    }
+    
+    html += createSection('🏢 Усі акції', staticData.stocks, 'stocks');
+    
     listsContainer.innerHTML = html;
 }
+
 
 function fetchSignal(pair, assetType) {
     console.log(`fetchSignal called for pair: ${pair}`);
@@ -134,7 +178,6 @@ function fetchSignal(pair, assetType) {
         let candleHtml = signalData.candle_pattern?.text ? `<div style="margin-bottom:10px"><strong>Свічковий патерн:</strong><br>${signalData.candle_pattern.text}</div>` : '';
         let volumeHtml = signalData.volume_analysis ? `<div style="margin-bottom:10px"><strong>Аналіз об'єму:</strong><br>${signalData.volume_analysis}</div>` : '';
 
-        // --- ПОЧАТОК НОВОГО КОДУ: Генеруємо таблицю МТА ---
         let mtaHtml = '';
         if (Array.isArray(mtaData) && mtaData.length > 0) {
             mtaHtml += '<div class="mta-container">';
@@ -148,7 +191,6 @@ function fetchSignal(pair, assetType) {
             });
             mtaHtml += '</tr></table></div>';
         }
-        // --- КІНЕЦЬ НОВОГО КОДУ ---
 
         signalOutput.innerHTML = `
             <div style="font-size: 32px; text-align: center; margin-bottom: 15px;">${arrow}</div>
