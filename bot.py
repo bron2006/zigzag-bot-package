@@ -7,9 +7,10 @@ from flask_cors import CORS
 from telegram import Update
 
 from config import app, bot, dp, WEBHOOK_SECRET, logger, CRYPTO_PAIRS_FULL, FOREX_SESSIONS, STOCK_TICKERS, FOREX_PAIRS_MAP
-# Змінено: додаємо toggle_watch
 from db import init_db, get_watchlist, toggle_watch
-from analysis import get_api_detailed_signal_data, rank_assets_for_api, get_api_mта_data
+# --- ПОЧАТОК ЗМІНИ: Виправляємо опечатку в імпорті ---
+from analysis import get_api_detailed_signal_data, rank_assets_for_api, get_api_mta_data
+# --- КІНЕЦЬ ЗМІНИ ---
 import telegram_ui
 
 CORS(app)
@@ -77,13 +78,14 @@ def api_get_mta():
     asset_type = 'stocks'
     if '/' in pair: asset_type = 'crypto' if 'USDT' in pair else 'forex'
     try:
+        # --- ПОЧАТОК ЗМІНИ: Виправляємо опечатку у виклику функції ---
         mta_data = get_api_mta_data(pair, asset_type)
+        # --- КІНЕЦЬ ЗМІНИ ---
         return jsonify(mta_data)
     except Exception as e:
         logger.error(f"API error for MTA on {pair}: {e}\n{traceback.format_exc()}")
         return jsonify({"error": "Помилка при розрахунку MTA"}), 500
 
-# --- ПОЧАТОК НОВОГО КОДУ ---
 @app.route("/api/toggle_fav", methods=["GET"])
 def toggle_favorite():
     init_data = request.args.get("initData")
@@ -96,19 +98,16 @@ def toggle_favorite():
             if user_json_str:
                 user_data = json.loads(user_json_str)
                 user_id = user_data.get("id")
-                # Переконуємось, що user_id не порожній перед викликом БД
                 if user_id:
                     toggle_watch(user_id, pair)
                     return jsonify({"success": True})
         except Exception as e:
             logger.warning(f"Toggle favorite error: {e}")
     return jsonify({"success": False})
-# --- КІНЕЦЬ НОВОГО КОДУ ---
-
 
 @app.route("/", methods=["GET"])
 def index():
-    return "ZigZag Bot v4.0 Final with Watchlist Mgmt 🟢"
+    return "ZigZag Bot v4.1 Final Stable 🟢"
 
 if __name__ != "__main__":
     init_db()
