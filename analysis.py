@@ -7,8 +7,6 @@ from concurrent.futures import ThreadPoolExecutor
 
 from config import logger, binance, td, CACHE, ANALYSIS_TIMEFRAMES, CRYPTO_PAIRS_FULL, STOCK_TICKERS, FOREX_PAIRS_MAP
 
-# --- БЛОК 1: ВАШІ СТАРІ, СТАБІЛЬНІ ФУНКЦІЇ (з невеликими покращеннями) ---
-
 def get_market_data(pair, tf, asset, limit=300):
     key = f"{pair}_{tf}_{limit}"
     if key in CACHE: return CACHE[key]
@@ -79,6 +77,24 @@ def analyze_candle_patterns(df: pd.DataFrame):
         logger.error(f"Помилка в analyze_candle_patterns: {e}")
         return None
 
+# --- ПОЧАТОК ЗМІНИ: Повертаємо відсутню функцію ---
+def analyze_volume(df):
+    if df.empty or 'Volume' not in df.columns or len(df) < 21: return "Недостатньо даних", 0
+    df['Volume_MA'] = df['Volume'].rolling(window=20).mean()
+    last = df.iloc[-1]
+    if pd.isna(last['Volume_MA']): return "Недостатньо даних", 0
+    volume_info = "Об'єм нейтральний"
+    score_change = 0
+    if last['Volume'] > last['Volume_MA'] * 1.5:
+        if last['Close'] > last['Open']:
+            volume_info = "🟢 Підвищений об'єм на зростанні"
+            score_change = 5
+        else:
+            volume_info = "🔴 Підвищений об'єм на падінні"
+            score_change = -5
+    return volume_info, score_change
+# --- КІНЕЦЬ ЗМІНИ ---
+
 def rank_crypto_chunk(pairs_chunk):
     def fetch_score(pair):
         try:
@@ -101,7 +117,7 @@ def get_signal_strength_verdict(pair, display_name, asset):
         return f"⚠️ Недостатньо даних для 1-хв аналізу *{display_name}*."
     try:
         df.ta.rsi(length=14, append=True, col_names=('RSI',))
-        df.ta.kama(length=14, append=True, col_names=('KAMA',)) # Використовуємо KAMA для більшої точності
+        df.ta.kama(length=14, append=True, col_names=('KAMA',))
         daily_df = get_market_data(pair, '1d', asset, limit=30)
         support_levels, resistance_levels = identify_support_resistance_levels(daily_df)
         last = df.iloc[-1]
@@ -109,6 +125,7 @@ def get_signal_strength_verdict(pair, display_name, asset):
              return f"⚠️ Помилка розрахунку індикаторів для *{display_name}*."
         current_price = last['Close']
         candle_pattern = analyze_candle_patterns(df)
+        volume_info, volume_score_change = analyze_volume(df)
         score = 50
         reasons = []
         if last['Close'] > last['KAMA']: score += 10; reasons.append("ціна вище KAMA(14)")
@@ -120,10 +137,9 @@ def get_signal_strength_verdict(pair, display_name, asset):
             score += 10; reasons.append("ціна біля підтримки")
         if resistance_levels and any(abs(current_price - rl) / current_price < 0.01 for rl in resistance_levels):
             score -= 10; reasons.append("ціна біля опору")
+        score += volume_score_change
         score = np.clip(score, 0, 100)
         bull_percentage, bear_percentage = int(score), 100 - int(score)
-        
-        # Повертаємо велику стрілку
         direction_arrow = "⬆️" if bull_percentage >= 50 else "⬇️"
         strength_line = f"🐂 Бики {bull_percentage}% ⬆️\n🐃 Ведмеді {bear_percentage}% ⬇️"
         reason_line = f"Підстава: {', '.join(reasons)}." if reasons else "Змішані сигнали."
@@ -160,8 +176,6 @@ def get_full_mta_verdict(pair, display_name, asset):
     rows = [r for r in results if r[1] is not None]
     table = "\n".join([f"| {tf:<4} | {sig} |" for tf, sig in rows])
     return f"**📊 Детальний огляд тренду:** *{display_name}*\n\n| ТФ   | Сигнал |\n|:----:|:---:|\n{table}"
-
-# --- БЛОК 2: НОВІ ФУНКЦІЇ, ЯКІ ВИКОРИСТОВУЄ ЛИШЕ ВЕБ-ДОДАТОК ---
 
 def rank_assets_for_api(pairs, asset_type):
     def fetch_score(pair):
