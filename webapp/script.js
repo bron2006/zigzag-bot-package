@@ -1,154 +1,6 @@
-// script.js
+// [...початок твого коду не змінено...]
 
-const API_BASE_URL = "https://zigzag-bot-package.fly.dev";
-
-const loader = document.getElementById("loader");
-const listsContainer = document.getElementById("listsContainer");
-const signalOutput = document.getElementById("signalOutput");
-
-let tg;
-if (!window.Telegram || !window.Telegram.WebApp) {
-    console.warn("Telegram WebApp object not found. Running in browser mode with mock data.");
-    tg = { 
-        themeParams: { bg_color: '#1a1a1a', text_color: '#ffffff' }, 
-        initData: '',
-        ready: function() {},
-        expand: function() {}
-    };
-} else {
-    tg = window.Telegram.WebApp;
-    tg.ready();
-    tg.expand();
-    console.log("Telegram WebApp object is ready.");
-}
-
-// --- ПОЧАТОК ЗМІН: Зберігаємо дані глобально для легкого доступу ---
-let currentWatchlist = [];
-let initData = tg.initData || '';
-// --- КІНЕЦЬ ЗМІН ---
-
-
-document.addEventListener('DOMContentLoaded', function() {
-    showLoader(true);
-    const initDataString = initData ? `?initData=${encodeURIComponent(initData)}` : '';
-    
-    const staticPairsUrl = `${API_BASE_URL}/api/get_pairs${initDataString}`;
-    const activeMarketsUrl = `${API_BASE_URL}/api/get_active_markets`;
-
-    Promise.all([
-        fetch(staticPairsUrl).then(res => res.json()),
-        fetch(activeMarketsUrl).then(res => res.json())
-    ])
-    .then(([staticData, activeData]) => {
-        console.log("Received static pairs:", staticData);
-        console.log("Received active markets:", activeData);
-        
-        // Зберігаємо початковий список обраного
-        currentWatchlist = staticData.watchlist || [];
-        
-        populateLists(staticData, activeData);
-        showLoader(false);
-    })
-    .catch(err => {
-        console.error("Error fetching pair lists:", err);
-        signalOutput.innerHTML = "❌ Не вдалося завантажити списки пар. Перевірте консоль.";
-        showLoader(false);
-    });
-});
-
-// --- ПОЧАТОК НОВОГО КОДУ: Функції для роботи з "Обраним" ---
-
-// Створює HTML для кнопки "Обране"
-function renderFavoriteButton(pair) {
-    const isFavorite = currentWatchlist.includes(pair);
-    const icon = isFavorite ? '✅' : '⭐';
-    return `<button class="fav-btn" onclick="toggleFavorite(event, '${pair}')">${icon}</button>`;
-}
-
-// Обробляє натискання на кнопку "Обране"
-function toggleFavorite(event, pair) {
-    event.stopPropagation(); // Зупиняємо клік, щоб не спрацював аналіз пари
-    
-    const button = event.currentTarget;
-    const isCurrentlyFavorite = currentWatchlist.includes(pair);
-
-    // Оптимістичне оновлення UI
-    button.innerHTML = isCurrentlyFavorite ? '⭐' : '✅';
-    
-    const url = `${API_BASE_URL}/api/toggle_watchlist?pair=${pair}&initData=${encodeURIComponent(initData)}`;
-    
-    fetch(url)
-        .then(res => res.json())
-        .then(data => {
-            if (data.success) {
-                // Оновлюємо наш локальний список
-                if (isCurrentlyFavorite) {
-                    currentWatchlist = currentWatchlist.filter(p => p !== pair);
-                } else {
-                    currentWatchlist.push(pair);
-                }
-                console.log("Watchlist updated:", currentWatchlist);
-                // Можна додати логіку для оновлення секції "Обране", якщо потрібно
-            } else {
-                // Якщо на сервері помилка, повертаємо іконку назад
-                button.innerHTML = isCurrentlyFavorite ? '✅' : '⭐';
-                alert("Не вдалося оновити список обраного.");
-            }
-        })
-        .catch(err => {
-            // Якщо помилка мережі, також повертаємо іконку
-            button.innerHTML = isCurrentlyFavorite ? '✅' : '⭐';
-            alert("Помилка мережі при оновленні списку обраного.");
-            console.error(err);
-        });
-}
-
-// Створює повний HTML для однієї кнопки з парою та зірочкою
-function createPairButton(pair, assetType) {
-    return `<div class="pair-item">
-        <button class="pair-button" onclick="fetchSignal('${pair}', '${assetType}')">${pair}</button>
-        ${renderFavoriteButton(pair)}
-    </div>`;
-}
-
-// --- КІНЕЦЬ НОВОГО КОДУ ---
-
-function populateLists(staticData, activeData) {
-    let html = '';
-    
-    // Функція-помічник для створення секцій
-    function createSection(title, pairs, assetTypeResolver) {
-        if (!Array.isArray(pairs) || pairs.length === 0) return '';
-        let sectionHtml = `<div class="category"><div class="category-title">${title}</div><div class="pair-list">`;
-        pairs.forEach(pair => {
-            const assetType = typeof assetTypeResolver === 'function' ? assetTypeResolver(pair) : assetTypeResolver;
-            sectionHtml += createPairButton(pair, assetType);
-        });
-        sectionHtml += '</div></div>';
-        return sectionHtml;
-    }
-
-    if (activeData) {
-        html += createSection('⚡ Активна крипта', activeData.active_crypto, 'crypto');
-        html += createSection('⚡ Активні акції', activeData.active_stocks, 'stocks');
-        html += createSection('⚡ Активні валюти', activeData.active_forex, 'forex');
-    }
-
-    html += createSection('⭐ Обране', staticData.watchlist, getAssetType);
-    html += createSection('📈 Уся криптовалюта', staticData.crypto ? staticData.crypto.slice(0, 12) : [], 'crypto');
-    
-    if (staticData.forex && typeof staticData.forex === 'object') {
-        Object.keys(staticData.forex).forEach(sessionName => {
-            html += createSection(`🌍 Усі валюти (${sessionName})`, staticData.forex[sessionName], 'forex');
-        });
-    }
-    
-    html += createSection('🏢 Усі акції', staticData.stocks, 'stocks');
-    
-    listsContainer.innerHTML = html;
-}
-
-
+// --- ПОЧАТОК ОНОВЛЕННЯ fetchSignal() ---
 function fetchSignal(pair, assetType) {
     console.log(`fetchSignal called for pair: ${pair}`);
     showLoader(true);
@@ -172,6 +24,10 @@ function fetchSignal(pair, assetType) {
         }
 
         const arrow = signalData.bull_percentage >= 50 ? '⬆️' : '⬇️';
+        const mainReason = signalData.reasons && signalData.reasons.length > 0
+            ? signalData.reasons[0]
+            : 'Основна причина відсутня';
+
         const supportText = signalData.support ? signalData.support.toFixed(4) : 'N/A';
         const resistanceText = signalData.resistance ? signalData.resistance.toFixed(4) : 'N/A';
         const reasonsList = signalData.reasons.map(r => `<li>${r}</li>`).join('');
@@ -193,7 +49,8 @@ function fetchSignal(pair, assetType) {
         }
 
         signalOutput.innerHTML = `
-            <div style="font-size: 32px; text-align: center; margin-bottom: 15px;">${arrow}</div>
+            <div style="font-size: 38px; text-align: center; margin-bottom: 8px;">${arrow}</div>
+            <div style="text-align: center; margin-bottom: 12px;"><strong>Причина:</strong> ${mainReason}</div>
             <div style="margin-bottom: 10px;"><strong>${signalData.pair}</strong> | Ціна: ${signalData.price.toFixed(4)}</div>
             <div style="margin-bottom: 10px;"><strong>Баланс сил:</strong><br>🐂 Бики: ${signalData.bull_percentage}% ⬆️ | 🐃 Ведмеді: ${signalData.bear_percentage}% ⬇️</div>
             ${candleHtml}
@@ -213,18 +70,6 @@ function fetchSignal(pair, assetType) {
         showLoader(false);
     });
 }
+// --- КІНЕЦЬ ОНОВЛЕННЯ fetchSignal() ---
 
-function drawChart(pair, history) {
-    const trace = { x: history.dates, close: history.close, high: history.high, low: history.low, open: history.open, type: 'candlestick', increasing: { line: { color: '#26a69a' } }, decreasing: { line: { color: '#ef5350' } } };
-    const layout = { paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)', font: { color: tg.themeParams.text_color || '#fff' }, xaxis: { rangeslider: { visible: false }, showgrid: false }, yaxis: { showgrid: false }, margin: { l: 35, r: 35, b: 35, t: 35 } };
-    Plotly.newPlot('chart', [trace], layout);
-}
-
-function showLoader(visible) {
-    loader.className = visible ? '' : 'hidden';
-}
-
-function getAssetType(pair) {
-    if (pair.includes('/')) return pair.includes('USDT') ? 'crypto' : 'forex';
-    return 'stocks';
-}
+// [...весь твій код після fetchSignal — не змінюється...]
