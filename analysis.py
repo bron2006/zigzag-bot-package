@@ -37,32 +37,6 @@ def get_market_data(pair, tf, asset, limit=300):
         logger.error(f"Помилка отримання даних для {pair} на ТФ {tf}: {e}")
         return pd.DataFrame()
 
-def rank_assets_for_api(pairs, asset_type):
-    def fetch_score(pair):
-        try:
-            timeframe = '1h' if asset_type == 'crypto' else '15min'
-            df = get_market_data(pair, timeframe, asset_type, limit=50)
-            if df.empty: return None
-            if asset_type in ('stocks', 'forex'):
-                date_col = 'datetime' if 'datetime' in df.columns else 'ts'
-                if date_col not in df.columns: return None
-                last_update_time = df[date_col].iloc[-1]
-                if datetime.now(timezone.utc) - last_update_time > timedelta(hours=4): return None
-            rsi = df.ta.rsi(length=14).iloc[-1]
-            if pd.isna(rsi): return None
-            score = abs(rsi - 50)
-            return {'ticker': pair, 'score': score}
-        except Exception as e:
-            logger.error(f"Не вдалося проаналізувати активність {pair}: {e}")
-            return None
-    with ThreadPoolExecutor(max_workers=3) as executor:
-        results = executor.map(fetch_score, pairs)
-    ranked_pairs = [r for r in results if r is not None]
-    return sorted(ranked_pairs, key=lambda x: x['score'], reverse=True)
-
-def rank_crypto_chunk(pairs_chunk):
-    return rank_assets_for_api(pairs_chunk, 'crypto')
-
 def group_close_values(values, threshold=0.01):
     if not len(values): return []
     values = sorted(values)
@@ -104,6 +78,7 @@ def analyze_candle_patterns(df: pd.DataFrame):
         logger.error(f"Помилка в analyze_candle_patterns: {e}")
         return None
 
+# --- ПОЧАТОК ЗМІНИ: ПОВЕРТАЄМО ВІДСУТНЮ ФУНКЦІЮ ---
 def analyze_volume(df):
     if df.empty or 'Volume' not in df.columns or len(df) < 21: return "Недостатньо даних", 0
     df['Volume_MA'] = df['Volume'].rolling(window=20).mean()
@@ -119,6 +94,33 @@ def analyze_volume(df):
             volume_info = "🔴 Підвищений об'єм на падінні"
             score_change = -5
     return volume_info, score_change
+# --- КІНЕЦЬ ЗМІНИ ---
+
+def rank_assets_for_api(pairs, asset_type):
+    def fetch_score(pair):
+        try:
+            timeframe = '1h' if asset_type == 'crypto' else '15min'
+            df = get_market_data(pair, timeframe, asset_type, limit=50)
+            if df.empty: return None
+            if asset_type in ('stocks', 'forex'):
+                date_col = 'datetime' if 'datetime' in df.columns else 'ts'
+                if date_col not in df.columns: return None
+                last_update_time = df[date_col].iloc[-1]
+                if datetime.now(timezone.utc) - last_update_time > timedelta(hours=4): return None
+            rsi = df.ta.rsi(length=14).iloc[-1]
+            if pd.isna(rsi): return None
+            score = abs(rsi - 50)
+            return {'ticker': pair, 'score': score}
+        except Exception as e:
+            logger.error(f"Не вдалося проаналізувати активність {pair}: {e}")
+            return None
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        results = executor.map(fetch_score, pairs)
+    ranked_pairs = [r for r in results if r is not None]
+    return sorted(ranked_pairs, key=lambda x: x['score'], reverse=True)
+
+def rank_crypto_chunk(pairs_chunk):
+    return rank_assets_for_api(pairs_chunk, 'crypto')
 
 def get_signal_strength_verdict(pair, display_name, asset):
     df = get_market_data(pair, '1m', asset, limit=50)
@@ -157,12 +159,10 @@ def get_signal_strength_verdict(pair, display_name, asset):
         if support_levels or resistance_levels:
             nearest_support = min(support_levels, key=lambda x: abs(x - current_price)) if support_levels else 'N/A'
             nearest_resistance = min(resistance_levels, key=lambda x: abs(x - current_price)) if resistance_levels else 'N/A'
-            if isinstance(nearest_support, float) and isinstance(nearest_resistance, float):
-                sr_info = f"Підтримка: `{nearest_support:.4f}` | Опір: `{nearest_resistance:.4f}`"
-            elif isinstance(nearest_support, float):
-                sr_info = f"Підтримка: `{nearest_support:.4f}`"
-            elif isinstance(nearest_resistance, float):
-                sr_info = f"Опір: `{nearest_resistance:.4f}`"
+            sr_parts = []
+            if isinstance(nearest_support, float): sr_parts.append(f"Підтримка: `{nearest_support:.4f}`")
+            if isinstance(nearest_resistance, float): sr_parts.append(f"Опір: `{nearest_resistance:.4f}`")
+            sr_info = " | ".join(sr_parts)
 
         final_message = f"{direction_arrow}\n\n"
         final_message += (f"**🕯️ Індекс сили ринку (1хв):** *{display_name}*\n"
