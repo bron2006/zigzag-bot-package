@@ -8,9 +8,7 @@ from telegram import Update
 
 from config import app, bot, dp, WEBHOOK_SECRET, logger, CRYPTO_PAIRS_FULL, FOREX_SESSIONS, STOCK_TICKERS, FOREX_PAIRS_MAP
 from db import init_db, get_watchlist, toggle_watch
-# --- ПОЧАТОК ЗМІНИ: Виправляємо опечатку в імпорті ---
 from analysis import get_api_detailed_signal_data, rank_assets_for_api, get_api_mta_data
-# --- КІНЕЦЬ ЗМІНИ ---
 import telegram_ui
 
 CORS(app)
@@ -66,7 +64,11 @@ def api_get_active_markets():
         all_forex_pairs = list(FOREX_PAIRS_MAP.keys())
         ranked_forex = rank_assets_for_api(all_forex_pairs, 'forex')
         top_forex = [p['ticker'] for p in ranked_forex[:5]]
-        return jsonify({ "active_crypto": top_crypto, "active_stocks": top_stocks, "active_forex": top_forex })
+        return jsonify({
+            "active_crypto": top_crypto,
+            "active_stocks": top_stocks,
+            "active_forex": top_forex
+        })
     except Exception as e:
         logger.error(f"API error for active markets: {e}\n{traceback.format_exc()}")
         return jsonify({"error": "Помилка при аналізі ринків"}), 500
@@ -78,9 +80,7 @@ def api_get_mta():
     asset_type = 'stocks'
     if '/' in pair: asset_type = 'crypto' if 'USDT' in pair else 'forex'
     try:
-        # --- ПОЧАТОК ЗМІНИ: Виправляємо опечатку у виклику функції ---
         mta_data = get_api_mta_data(pair, asset_type)
-        # --- КІНЕЦЬ ЗМІНИ ---
         return jsonify(mta_data)
     except Exception as e:
         logger.error(f"API error for MTA on {pair}: {e}\n{traceback.format_exc()}")
@@ -107,7 +107,7 @@ def toggle_favorite():
 
 @app.route("/", methods=["GET"])
 def index():
-    return "ZigZag Bot v4.1 Final Stable 🟢"
+    return "ZigZag Bot v4.2 Final Stable 🟢"
 
 if __name__ != "__main__":
     init_db()
