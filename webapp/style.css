@@ -17,131 +17,64 @@ body {
     box-sizing: border-box;
 }
 
-.container {
-    max-width: 100%;
-    margin: auto;
-}
+.container { max-width: 100%; margin: auto; }
+h1 { text-align: center; color: var(--text-color); font-size: 24px; margin-top: 0; }
+.category { margin-bottom: 15px; }
+.category-title { font-size: 18px; font-weight: bold; margin-bottom: 10px; padding-bottom: 5px; border-bottom: 1px solid var(--secondary-bg-color); }
+.pair-list { display: flex; flex-wrap: wrap; gap: 8px; }
 
-h1 {
-    text-align: center;
-    color: var(--text-color);
-    font-size: 24px;
-    margin-top: 0;
-}
-
-.category {
-    margin-bottom: 15px;
-}
-
-.category-title {
-    font-size: 18px;
-    font-weight: bold;
-    margin-bottom: 10px;
-    padding-bottom: 5px;
-    border-bottom: 1px solid var(--secondary-bg-color);
-}
-
-.pair-list {
+/* --- ПОЧАТОК ЗМІН: Стилі для контейнера кнопки і зірочки --- */
+.pair-item {
     display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
+    flex-grow: 1; /* Дозволяє елементам розтягуватися */
+    min-width: 120px; /* Мінімальна ширина для уникнення переносів */
 }
 
 .pair-button {
+    flex-grow: 1; /* Основна кнопка займає весь доступний простір */
     padding: 10px 15px;
     background: var(--secondary-bg-color);
     color: var(--text-color);
     border: none;
-    border-radius: 8px;
+    /* Робимо заокруглення лише зліва */
+    border-top-left-radius: 8px;
+    border-bottom-left-radius: 8px;
     cursor: pointer;
     font-size: 14px;
     transition: background-color 0.2s;
+    text-align: center;
 }
 
-.pair-button:hover {
+.fav-btn {
+    padding: 10px 12px;
+    background: var(--secondary-bg-color);
+    color: var(--text-color);
+    border: none;
+    /* Робимо заокруглення лише справа */
+    border-top-right-radius: 8px;
+    border-bottom-right-radius: 8px;
+    cursor: pointer;
+    font-size: 14px;
+    border-left: 1px solid var(--bg-color); /* Розділювач */
+}
+
+.pair-button:hover, .fav-btn:hover {
     background-color: var(--button-color);
     color: var(--button-text-color);
 }
+/* --- КІНЕЦЬ ЗМІН --- */
 
-.separator {
-    height: 1px;
-    background-color: var(--secondary-bg-color);
-    margin: 20px 0;
-}
 
-#signalContainer {
-    text-align: center;
-}
+#signalContainer { text-align: center; }
+#signalOutput { padding: 15px; background: var(--secondary-bg-color); border-radius: 8px; line-height: 1.6; min-height: 50px; }
+#chart { width: 100%; height: 350px; margin-top: 15px; }
+#loader { position: fixed; left: 50%; top: 50%; width: 50px; height: 50px; border: 5px solid var(--secondary-bg-color); border-top: 5px solid var(--button-color); border-radius: 50%; transform: translate(-50%, -50%); animation: spin 1s linear infinite; }
+.hidden { display: none; }
+@keyframes spin { 0% { transform: translate(-50%, -50%) rotate(0deg); } 100% { transform: translate(-50%, -50%) rotate(360deg); } }
 
-#signalOutput {
-    padding: 15px;
-    background: var(--secondary-bg-color);
-    border-radius: 8px;
-    line-height: 1.6;
-    min-height: 50px;
-}
-
-#chart {
-    width: 100%;
-    height: 350px;
-    margin-top: 15px;
-}
-
-/* Loader animation */
-#loader {
-    position: fixed;
-    left: 50%;
-    top: 50%;
-    width: 50px;
-    height: 50px;
-    border: 5px solid var(--secondary-bg-color);
-    border-top: 5px solid var(--button-color);
-    border-radius: 50%;
-    transform: translate(-50%, -50%);
-    animation: spin 1s linear infinite;
-}
-
-.hidden {
-    display: none;
-}
-
-@keyframes spin {
-    0% { transform: translate(-50%, -50%) rotate(0deg); }
-    100% { transform: translate(-50%, -50%) rotate(360deg); }
-}
-
-/* --- ПОЧАТОК НОВОГО КОДУ: Стилі для таблиці МТА --- */
-.mta-container {
-    margin-top: 15px;
-    padding-top: 10px;
-    border-top: 1px solid rgba(128, 128, 128, 0.3);
-}
-
-.mta-table {
-    width: 100%;
-    border-collapse: collapse;
-    margin-top: 8px;
-}
-
-.mta-table th, .mta-table td {
-    border: 1px solid var(--secondary-bg-color);
-    padding: 8px;
-    text-align: center;
-    font-size: 14px;
-}
-
-.mta-table th {
-    font-weight: normal;
-    color: var(--hint-color);
-}
-
-.mta-table .buy {
-    color: #26a69a; /* Зелений, як на графіку */
-    font-weight: bold;
-}
-
-.mta-table .sell {
-    color: #ef5350; /* Червоний, як на графіку */
-    font-weight: bold;
-}
-/* --- КІНЕЦЬ НОВОГО КОДУ --- */
+.mta-container { margin-top: 15px; padding-top: 10px; border-top: 1px solid rgba(128, 128, 128, 0.3); }
+.mta-table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+.mta-table th, .mta-table td { border: 1px solid var(--secondary-bg-color); padding: 8px; text-align: center; font-size: 14px; }
+.mta-table th { font-weight: normal; color: var(--hint-color); }
+.mta-table .buy { color: #26a69a; font-weight: bold; }
+.mta-table .sell { color: #ef5350; font-weight: bold; }
