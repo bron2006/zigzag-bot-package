@@ -8,7 +8,7 @@ from telegram import Update
 
 from config import app, bot, dp, WEBHOOK_SECRET, logger, CRYPTO_PAIRS_FULL, FOREX_SESSIONS, STOCK_TICKERS, FOREX_PAIRS_MAP
 from db import init_db, get_watchlist
-from analysis import get_api_detailed_signal_data, rank_assets, get_api_mta_data
+from analysis import get_api_detailed_signal_data, rank_assets_for_api, get_api_mta_data
 import telegram_ui
 
 CORS(app)
@@ -29,16 +29,14 @@ def webhook_handler():
 @app.route("/api/signal", methods=["GET"])
 def api_signal():
     pair = request.args.get("pair")
-    if not pair:
-        return jsonify({"error": "pair is required"}), 400
+    if not pair: return jsonify({"error": "pair is required"}), 400
     try:
         data = get_api_detailed_signal_data(pair)
-        if "error" in data:
-            return jsonify(data)
+        if "error" in data: return jsonify(data)
         return jsonify(data)
     except Exception as e:
         logger.error(f"API error for pair {pair}: {e}\n{traceback.format_exc()}")
-        return jsonify({"error": f"Внутрішня помилка сервера при аналізі {pair}"}), 500
+        return jsonify({"error": f"Внутрішня помилка сервера"}), 500
 
 @app.route("/api/get_pairs", methods=["GET"])
 def api_get_pairs():
@@ -53,29 +51,19 @@ def api_get_pairs():
                 user_id = user_data.get("id")
         except Exception as e:
             logger.warning(f"Failed to parse initData: {e}")
-    
     watchlist = get_watchlist(user_id) if user_id else []
-    
-    return jsonify({
-        "watchlist": watchlist,
-        "crypto": CRYPTO_PAIRS_FULL,
-        "forex": FOREX_SESSIONS,
-        "stocks": STOCK_TICKERS
-    })
+    return jsonify({ "watchlist": watchlist, "crypto": CRYPTO_PAIRS_FULL, "forex": FOREX_SESSIONS, "stocks": STOCK_TICKERS })
 
 @app.route("/api/get_active_markets", methods=["GET"])
 def api_get_active_markets():
     try:
-        ranked_crypto = rank_assets(CRYPTO_PAIRS_FULL, 'crypto')
+        ranked_crypto = rank_assets_for_api(CRYPTO_PAIRS_FULL, 'crypto')
         top_crypto = [p['ticker'] for p in ranked_crypto[:5]]
-
-        ranked_stocks = rank_assets(STOCK_TICKERS, 'stocks')
+        ranked_stocks = rank_assets_for_api(STOCK_TICKERS, 'stocks')
         top_stocks = [p['ticker'] for p in ranked_stocks[:5]]
-
         all_forex_pairs = list(FOREX_PAIRS_MAP.keys())
-        ranked_forex = rank_assets(all_forex_pairs, 'forex')
+        ranked_forex = rank_assets_for_api(all_forex_pairs, 'forex')
         top_forex = [p['ticker'] for p in ranked_forex[:5]]
-
         return jsonify({
             "active_crypto": top_crypto,
             "active_stocks": top_stocks,
@@ -88,13 +76,10 @@ def api_get_active_markets():
 @app.route("/api/get_mta", methods=["GET"])
 def api_get_mta():
     pair = request.args.get("pair")
-    if not pair:
-        return jsonify({"error": "pair is required"}), 400
-    
+    if not pair: return jsonify({"error": "pair is required"}), 400
     asset_type = 'stocks'
     if '/' in pair:
         asset_type = 'crypto' if 'USDT' in pair else 'forex'
-
     try:
         mta_data = get_api_mta_data(pair, asset_type)
         return jsonify(mta_data)
@@ -104,7 +89,7 @@ def api_get_mta():
 
 @app.route("/", methods=["GET"])
 def index():
-    return "ZigZag Bot v3.8 Backend with MTA API 🟢"
+    return "ZigZag Bot v3.9 Final Stable 🟢"
 
 if __name__ != "__main__":
     init_db()
