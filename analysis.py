@@ -6,12 +6,17 @@ from concurrent.futures import ThreadPoolExecutor
 
 from config import logger, binance, td, CACHE, ANALYSIS_TIMEFRAMES
 
-# --- ПОЧАТОК ЗМІН ---
-# Створюємо єдиний, глобальний пул потоків для всього модуля.
-# Це дозволяє уникнути створення нових потоків при кожному запиті,
-# що є причиною помилок "Out of Memory" на сервері.
-# Ми обираємо 4 воркери як компроміс між швидкістю та використанням ресурсів.
-EXECUTOR = ThreadPoolExecutor(max_workers=4)
+# --- ПОЧАТОК ЗМІН: Лінива ініціалізація пулу потоків ---
+# Замість глобального створення, ми будемо створювати екземпляр
+# лише при першому зверненні. Це безпечно для роботи з Gunicorn.
+_executor = None
+
+def get_executor():
+    """Повертає єдиний екземпляр ThreadPoolExecutor."""
+    global _executor
+    if _executor is None:
+        _executor = ThreadPoolExecutor(max_workers=4)
+    return _executor
 # --- КІНЕЦЬ ЗМІН ---
 
 
@@ -107,9 +112,9 @@ def rank_crypto_chunk(pairs_chunk):
             return None
             
     # --- ПОЧАТОК ЗМІН ---
-    # Використовуємо глобальний EXECUTOR замість створення нового.
-    # Забираємо конструкцію "with".
-    results = EXECUTOR.map(fetch_score, pairs_chunk)
+    # Отримуємо екземпляр пулу потоків через функцію
+    executor = get_executor()
+    results = executor.map(fetch_score, pairs_chunk)
     # --- КІНЕЦЬ ЗМІН ---
     
     ranked_pairs = [r for r in results if r is not None]
@@ -198,9 +203,9 @@ def get_full_mta_verdict(pair, display_name, asset):
         return (tf, sig)
 
     # --- ПОЧАТОК ЗМІН ---
-    # Використовуємо глобальний EXECUTOR замість створення нового.
-    # Забираємо конструкцію "with".
-    results = EXECUTOR.map(worker, ANALYSIS_TIMEFRAMES)
+    # Отримуємо екземпляр пулу потоків через функцію
+    executor = get_executor()
+    results = executor.map(worker, ANALYSIS_TIMEFRAMES)
     # --- КІНЕЦЬ ЗМІН ---
 
     rows = [r for r in results if r[1] is not None]
