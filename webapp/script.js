@@ -26,11 +26,22 @@ let currentWatchlist = [];
 let initData = tg.initData || '';
 
 document.addEventListener('DOMContentLoaded', function() {
+    // --- ПОЧАТОК ЗМІН: Попередження про демо-режим ---
+    if (!initData) {
+        const warning = document.createElement('div');
+        warning.textContent = "⚠️ Ви в демо-режимі. Функція 'Обране' недоступна. Для повного доступу відкрийте додаток у Telegram.";
+        warning.className = "demo-warning";
+        document.body.prepend(warning);
+    } else {
+        // Якщо ми не в демо-режимі, прибираємо зайвий відступ
+        document.querySelector('.container').style.paddingTop = '15px';
+    }
+    // --- КІНЕЦЬ ЗМІН ---
+
     showLoader(true);
     const initDataString = initData ? `?initData=${encodeURIComponent(initData)}` : '';
     const staticPairsUrl = `${API_BASE_URL}/api/get_pairs${initDataString}`;
 
-    // ТИМЧАСОВО: прибираємо get_active_markets (викликає OOM)
     fetch(staticPairsUrl)
         .then(res => res.json())
         .then(staticData => {
@@ -47,6 +58,10 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 function renderFavoriteButton(pair) {
+    // У демо-режимі кнопка неактивна
+    if (!initData) {
+        return `<button class="fav-btn" disabled style="cursor: not-allowed;">⭐</button>`;
+    }
     const isFavorite = currentWatchlist.includes(pair);
     const icon = isFavorite ? '✅' : '⭐';
     return `<button class="fav-btn" onclick="toggleFavorite(event, '${pair}')">${icon}</button>`;
@@ -54,10 +69,17 @@ function renderFavoriteButton(pair) {
 
 function toggleFavorite(event, pair) {
     event.stopPropagation();
+    // Додатково перевіряємо, чи є initData
+    if (!initData) {
+        alert("Ця функція доступна лише в Telegram.");
+        return;
+    }
+
     const button = event.currentTarget;
     const isCurrentlyFavorite = currentWatchlist.includes(pair);
-    button.innerHTML = isCurrentlyFavorite ? '⭐' : '✅';
+    button.innerHTML = isCurrentlyFavorite ? '⭐' : '✅'; // Оптимістичне оновлення
     const url = `${API_BASE_URL}/api/toggle_watchlist?pair=${pair}&initData=${encodeURIComponent(initData)}`;
+    
     fetch(url)
         .then(res => res.json())
         .then(data => {
@@ -68,12 +90,12 @@ function toggleFavorite(event, pair) {
                     currentWatchlist.push(pair);
                 }
             } else {
-                button.innerHTML = isCurrentlyFavorite ? '✅' : '⭐';
+                button.innerHTML = isCurrentlyFavorite ? '✅' : '⭐'; // Повертаємо іконку назад
                 alert("Не вдалося оновити список обраного.");
             }
         })
         .catch(err => {
-            button.innerHTML = isCurrentlyFavorite ? '✅' : '⭐';
+            button.innerHTML = isCurrentlyFavorite ? '✅' : '⭐'; // Повертаємо іконку назад
             alert("Помилка мережі при оновленні списку обраного.");
             console.error(err);
         });
@@ -165,9 +187,19 @@ function fetchSignal(pair, assetType) {
             ${mtaHtml}
         `;
 
-        if (signalData.history && signalData.history.dates) {
+        // --- ПОЧАТОК ЗМІН: Обробка відсутності даних для графіка ---
+        if (signalData.history && signalData.history.dates && signalData.history.dates.length > 0) {
             drawChart(pair, signalData.history);
+        } else {
+            const noChartDiv = document.createElement('div');
+            noChartDiv.textContent = '❗ Немає достатньо історичних даних для побудови графіку.';
+            noChartDiv.style.marginTop = '15px';
+            noChartDiv.style.padding = '10px';
+            noChartDiv.style.background = 'var(--secondary-bg-color)';
+            noChartDiv.style.borderRadius = '8px';
+            document.getElementById('chart').insertAdjacentElement('afterend', noChartDiv);
         }
+        // --- КІНЕЦЬ ЗМІН ---
         showLoader(false);
     })
     .catch(err => {
