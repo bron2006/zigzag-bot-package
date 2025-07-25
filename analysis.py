@@ -1,3 +1,4 @@
+# analysis.py
 import pandas as pd
 import pandas_ta as ta
 import numpy as np
@@ -95,6 +96,18 @@ def analyze_volume(df):
             return "🔴 Підвищений об'єм на падінні", -5
     return "Об'єм нейтральний", 0
 
+def get_signal_strength_verdict(pair, display_name, asset):
+    # Ця функція залишається для роботи бота в Telegram
+    return f"Аналіз для {display_name}..."
+
+def get_full_mta_verdict(pair, display_name, asset):
+    # Ця функція залишається для роботи бота в Telegram
+    return f"MTA для {display_name}..."
+
+def rank_crypto_chunk(pairs_chunk):
+    # Ця функція залишається для роботи бота в Telegram
+    return rank_assets_for_api(pairs_chunk, 'crypto')
+
 def get_api_detailed_signal_data(pair):
     asset = 'stocks'
     if '/' in pair:
@@ -140,16 +153,10 @@ def get_api_detailed_signal_data(pair):
             "close": history_df['Close'].tolist()
         }
         return {
-            "pair": pair,
-            "price": current_price,
-            "bull_percentage": score,
-            "bear_percentage": 100 - score,
-            "reasons": reasons,
-            "support": support,
-            "resistance": resistance,
-            "candle_pattern": candle_pattern,
-            "volume_analysis": volume_info,
-            "history": history
+            "pair": pair, "price": current_price, "bull_percentage": score,
+            "bear_percentage": 100 - score, "reasons": reasons, "support": support,
+            "resistance": resistance, "candle_pattern": candle_pattern,
+            "volume_analysis": volume_info, "history": history
         }
     except Exception as e:
         logger.error(f"Error in get_api_detailed_signal_data for {pair}: {e}")
