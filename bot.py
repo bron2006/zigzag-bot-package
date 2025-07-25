@@ -8,9 +8,8 @@ from telegram import Update
 
 from config import app, bot, dp, WEBHOOK_SECRET, logger, CRYPTO_PAIRS_FULL, FOREX_SESSIONS, STOCK_TICKERS, FOREX_PAIRS_MAP
 from db import init_db, get_watchlist, toggle_watch
-# --- ПОЧАТОК ЗМІН: Оновлюємо імпорти згідно з новими функціями в analysis.py ---
+# --- Змінено: Оновлено імпорти з analysis.py ---
 from analysis import get_api_detailed_signal_data, rank_assets_for_api, get_api_mta_data
-# --- КІНЕЦЬ ЗМІН ---
 import telegram_ui
 
 CORS(app)
@@ -33,7 +32,7 @@ def api_signal():
     pair = request.args.get("pair")
     if not pair: return jsonify({"error": "pair is required"}), 400
     try:
-        data = get_api_detailed_signal_data(pair) # Тепер ця функція існує
+        data = get_api_detailed_signal_data(pair)
         if "error" in data: return jsonify(data), 400
         return jsonify(data)
     except Exception as e:
@@ -81,7 +80,7 @@ def api_get_mta():
     asset_type = 'stocks'
     if '/' in pair: asset_type = 'crypto' if 'USDT' in pair else 'forex'
     try:
-        mta_data = get_api_mta_data(pair, asset_type) # Тепер ця функція існує
+        mta_data = get_api_mta_data(pair, asset_type)
         return jsonify(mta_data)
     except Exception as e:
         logger.error(f"API error for MTA on {pair}: {e}\n{traceback.format_exc()}")
@@ -92,19 +91,25 @@ def toggle_watchlist_route():
     init_data = request.args.get("initData")
     pair = request.args.get("pair")
     user_id = None
-    if not init_data or not pair: return jsonify({"success": False, "error": "Missing required parameters"}), 400
+
+    if not init_data or not pair:
+        return jsonify({"success": False, "error": "Missing required parameters"}), 400
+
     try:
         parsed = parse_qs(init_data)
         user_json_str = parsed.get("user", [None])[0]
         if user_json_str:
             user_data = json.loads(user_json_str)
             user_id = user_data.get("id")
+            
             if user_id:
                 toggle_watch(user_id, pair)
                 return jsonify({"success": True})
+
     except Exception as e:
         logger.error(f"Error in toggle_watchlist: {e}")
         return jsonify({"success": False, "error": "Internal server error"}), 500
+
     return jsonify({"success": False, "error": "Invalid initData"}), 400
 
 @app.route("/", methods=["GET"])
