@@ -149,6 +149,11 @@ def get_signal_strength_verdict(pair, display_name, asset):
             score = (score + 50) / 2
         score = np.clip(score, 0, 100)
         bull_percentage, bear_percentage = int(score), 100 - int(score)
+        
+        # --- ПОЧАТОК ЗМІН: Повертаємо стрілку ---
+        arrow = '⬆️' if bull_percentage >= 50 else '⬇️'
+        # --- КІНЕЦЬ ЗМІН ---
+
         strength_line = f"🐂 Бики {bull_percentage}% ⬆️\n🐃 Ведмеді {bear_percentage}% ⬇️"
         reason_line = f"Підстава: {', '.join(reasons)}." if reasons else "Змішані сигнали."
         disclaimer = "\n\n_⚠️ Це не фінансова порада._"
@@ -164,8 +169,10 @@ def get_signal_strength_verdict(pair, display_name, asset):
             confluence_header = "🚀 **СИЛЬНИЙ СИГНАЛ ВГОРУ!**\n*Виявлено збіг кількох бичачих індикаторів.*\n\n"
         elif bear_percentage >= 80 and candle_pattern and candle_pattern['type'] == 'bearish':
             confluence_header = "📉 **СИЛЬНИЙ СИГНАЛ ВНИЗ!**\n*Виявлено збіг кількох ведмежих індикаторів.*\n\n"
-        final_message = (f"{confluence_header}"
-                         f"**🕯️ Індекс сили ринку (1хв):** *{display_name}*\n"
+        
+        final_message = (f"{arrow} *{display_name}*\n\n" # Додано стрілку сюди
+                         f"{confluence_header}"
+                         f"**🕯️ Індекс сили ринку (1хв)**\n"
                          f"**Поточна ціна:** `{last['Close']:.4f}`\n\n"
                          f"**Баланс сил:**\n{strength_line}\n\n"
                          f"**Рівні S/R (денні):**\n{sr_info}\n\n")
