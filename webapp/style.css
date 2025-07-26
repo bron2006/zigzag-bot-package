@@ -18,7 +18,6 @@ body {
     box-sizing: border-box;
 }
 
-/* --- ПОЧАТОК ЗМІН: Стиль для попередження про демо-режим --- */
 .demo-warning {
     background-color: var(--warning-bg-color);
     color: #000;
@@ -35,18 +34,40 @@ body {
 .container { 
     max-width: 100%; 
     margin: auto;
-    /* Додаємо відступ зверху, якщо є попередження */
-    padding-top: 40px; 
+    padding-top: 15px; 
+}
+.container.in-demo {
+    padding-top: 40px;
+}
+
+h1 { text-align: center; color: var(--text-color); font-size: 24px; margin-top: 0; }
+
+/* --- ПОЧАТОК ЗМІН: Стилі для пошуку --- */
+.search-container {
+    margin-bottom: 20px;
+}
+
+#searchInput {
+    width: 100%;
+    padding: 12px 15px;
+    background-color: var(--secondary-bg-color);
+    color: var(--text-color);
+    border: 1px solid var(--hint-color);
+    border-radius: 8px;
+    font-size: 16px;
+    box-sizing: border-box;
+}
+#searchInput::placeholder {
+    color: var(--hint-color);
 }
 /* --- КІНЕЦЬ ЗМІН --- */
 
-h1 { text-align: center; color: var(--text-color); font-size: 24px; margin-top: 0; }
 .category { margin-bottom: 15px; }
 .category-title { font-size: 18px; font-weight: bold; margin-bottom: 10px; padding-bottom: 5px; border-bottom: 1px solid var(--secondary-bg-color); }
 .pair-list { display: flex; flex-wrap: wrap; gap: 8px; }
 
 .pair-item {
-    display: flex;
+    display: flex; /* Важливо: зберігаємо flex для правильного відображення */
     flex-grow: 1;
     min-width: 120px;
 }

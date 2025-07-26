@@ -26,17 +26,13 @@ let currentWatchlist = [];
 let initData = tg.initData || '';
 
 document.addEventListener('DOMContentLoaded', function() {
-    // --- ПОЧАТОК ЗМІН: Попередження про демо-режим ---
     if (!initData) {
         const warning = document.createElement('div');
         warning.textContent = "⚠️ Ви в демо-режимі. Функція 'Обране' недоступна. Для повного доступу відкрийте додаток у Telegram.";
         warning.className = "demo-warning";
         document.body.prepend(warning);
-    } else {
-        // Якщо ми не в демо-режимі, прибираємо зайвий відступ
-        document.querySelector('.container').style.paddingTop = '15px';
+        document.querySelector('.container').classList.add('in-demo');
     }
-    // --- КІНЕЦЬ ЗМІН ---
 
     showLoader(true);
     const initDataString = initData ? `?initData=${encodeURIComponent(initData)}` : '';
@@ -55,10 +51,29 @@ document.addEventListener('DOMContentLoaded', function() {
             signalOutput.innerHTML = "❌ Не вдалося завантажити списки пар.";
             showLoader(false);
         });
+
+    // --- ПОЧАТОК ЗМІН: Логіка для пошуку ---
+    const searchInput = document.getElementById('searchInput');
+    searchInput.addEventListener('input', (e) => {
+        const query = e.target.value.trim().toLowerCase();
+        
+        document.querySelectorAll('.pair-item').forEach(item => {
+            // Перевіряємо текст кнопки, щоб не враховувати іконку "обраного"
+            const buttonText = item.querySelector('.pair-button').textContent.trim().toLowerCase();
+            // Використовуємо 'flex' замість 'block', щоб зберегти верстку
+            item.style.display = buttonText.includes(query) ? 'flex' : 'none';
+        });
+
+        // Також ховаємо/показуємо заголовки категорій
+        document.querySelectorAll('.category').forEach(category => {
+            const visibleItems = category.querySelectorAll('.pair-item[style*="display: flex"]');
+            category.style.display = visibleItems.length > 0 ? 'block' : 'none';
+        });
+    });
+    // --- КІНЕЦЬ ЗМІН ---
 });
 
 function renderFavoriteButton(pair) {
-    // У демо-режимі кнопка неактивна
     if (!initData) {
         return `<button class="fav-btn" disabled style="cursor: not-allowed;">⭐</button>`;
     }
@@ -69,17 +84,14 @@ function renderFavoriteButton(pair) {
 
 function toggleFavorite(event, pair) {
     event.stopPropagation();
-    // Додатково перевіряємо, чи є initData
     if (!initData) {
         alert("Ця функція доступна лише в Telegram.");
         return;
     }
-
     const button = event.currentTarget;
     const isCurrentlyFavorite = currentWatchlist.includes(pair);
-    button.innerHTML = isCurrentlyFavorite ? '⭐' : '✅'; // Оптимістичне оновлення
+    button.innerHTML = isCurrentlyFavorite ? '⭐' : '✅';
     const url = `${API_BASE_URL}/api/toggle_watchlist?pair=${pair}&initData=${encodeURIComponent(initData)}`;
-    
     fetch(url)
         .then(res => res.json())
         .then(data => {
@@ -90,12 +102,12 @@ function toggleFavorite(event, pair) {
                     currentWatchlist.push(pair);
                 }
             } else {
-                button.innerHTML = isCurrentlyFavorite ? '✅' : '⭐'; // Повертаємо іконку назад
+                button.innerHTML = isCurrentlyFavorite ? '✅' : '⭐';
                 alert("Не вдалося оновити список обраного.");
             }
         })
         .catch(err => {
-            button.innerHTML = isCurrentlyFavorite ? '✅' : '⭐'; // Повертаємо іконку назад
+            button.innerHTML = isCurrentlyFavorite ? '✅' : '⭐';
             alert("Помилка мережі при оновленні списку обраного.");
             console.error(err);
         });
@@ -121,26 +133,30 @@ function populateLists(staticData) {
         return sectionHtml;
     }
 
-    html += createSection('⭐ Обране', staticData.watchlist, getAssetType);
-    html += createSection('📈 Уся криптовалюта', staticData.crypto ? staticData.crypto.slice(0, 12) : [], 'crypto');
-
+    if (staticData.watchlist && staticData.watchlist.length > 0) {
+        html += createSection('⭐ Обране', staticData.watchlist, getAssetType);
+    }
+    html += createSection('📈 Криптовалюта', staticData.crypto || [], 'crypto');
     if (staticData.forex && typeof staticData.forex === 'object') {
         Object.keys(staticData.forex).forEach(sessionName => {
-            html += createSection(`🌍 Усі валюти (${sessionName})`, staticData.forex[sessionName], 'forex');
+            html += createSection(`🌍 Валюти (${sessionName})`, staticData.forex[sessionName], 'forex');
         });
     }
-
-    html += createSection('🏢 Усі акції', staticData.stocks, 'stocks');
-
+    html += createSection('🏢 Акції', staticData.stocks || [], 'stocks');
     listsContainer.innerHTML = html;
 }
 
 function fetchSignal(pair, assetType) {
     console.log(`fetchSignal called for pair: ${pair}`);
     showLoader(true);
+    // Очищуємо попередній результат і графік
     signalOutput.innerHTML = `⏳ Отримую детальний аналіз для ${pair}...`;
     signalOutput.style.textAlign = 'left';
-    Plotly.purge('chart');
+    const chartDiv = document.getElementById('chart');
+    if (chartDiv) Plotly.purge(chartDiv);
+    // Видаляємо старе повідомлення про відсутність графіка, якщо воно є
+    const oldNoChartDiv = document.getElementById('no-chart-info');
+    if (oldNoChartDiv) oldNoChartDiv.remove();
 
     const signalApiUrl = `${API_BASE_URL}/api/signal?pair=${pair}`;
     const mtaApiUrl = `${API_BASE_URL}/api/get_mta?pair=${pair}`;
@@ -187,19 +203,18 @@ function fetchSignal(pair, assetType) {
             ${mtaHtml}
         `;
 
-        // --- ПОЧАТОК ЗМІН: Обробка відсутності даних для графіка ---
         if (signalData.history && signalData.history.dates && signalData.history.dates.length > 0) {
             drawChart(pair, signalData.history);
         } else {
             const noChartDiv = document.createElement('div');
+            noChartDiv.id = 'no-chart-info'; // Додаємо ID для легшого видалення
             noChartDiv.textContent = '❗ Немає достатньо історичних даних для побудови графіку.';
             noChartDiv.style.marginTop = '15px';
             noChartDiv.style.padding = '10px';
             noChartDiv.style.background = 'var(--secondary-bg-color)';
             noChartDiv.style.borderRadius = '8px';
-            document.getElementById('chart').insertAdjacentElement('afterend', noChartDiv);
+            chartDiv.insertAdjacentElement('afterend', noChartDiv);
         }
-        // --- КІНЕЦЬ ЗМІН ---
         showLoader(false);
     })
     .catch(err => {
