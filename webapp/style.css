@@ -7,6 +7,8 @@
     --button-text-color: var(--tg-theme-button-text-color, #ffffff);
     --secondary-bg-color: var(--tg-theme-secondary-bg-color, #272727);
     --warning-bg-color: #ffc107;
+    --buy-color: #26a69a;
+    --sell-color: #ef5350;
 }
 
 body {
@@ -42,7 +44,6 @@ body {
 
 h1 { text-align: center; color: var(--text-color); font-size: 24px; margin-top: 0; }
 
-/* --- ПОЧАТОК ЗМІН: Стилі для пошуку --- */
 .search-container {
     margin-bottom: 20px;
 }
@@ -60,14 +61,13 @@ h1 { text-align: center; color: var(--text-color); font-size: 24px; margin-top: 
 #searchInput::placeholder {
     color: var(--hint-color);
 }
-/* --- КІНЕЦЬ ЗМІН --- */
 
 .category { margin-bottom: 15px; }
 .category-title { font-size: 18px; font-weight: bold; margin-bottom: 10px; padding-bottom: 5px; border-bottom: 1px solid var(--secondary-bg-color); }
 .pair-list { display: flex; flex-wrap: wrap; gap: 8px; }
 
 .pair-item {
-    display: flex; /* Важливо: зберігаємо flex для правильного відображення */
+    display: flex;
     flex-grow: 1;
     min-width: 120px;
 }
@@ -115,5 +115,34 @@ h1 { text-align: center; color: var(--text-color); font-size: 24px; margin-top: 
 .mta-table { width: 100%; border-collapse: collapse; margin-top: 8px; }
 .mta-table th, .mta-table td { border: 1px solid var(--secondary-bg-color); padding: 8px; text-align: center; font-size: 14px; }
 .mta-table th { font-weight: normal; color: var(--hint-color); }
-.mta-table .buy { color: #26a69a; font-weight: bold; }
-.mta-table .sell { color: #ef5350; font-weight: bold; }
+.mta-table .buy { color: var(--buy-color); font-weight: bold; }
+.mta-table .sell { color: var(--sell-color); font-weight: bold; }
+
+/* --- ПОЧАТОК ЗМІН: Стилі для історії сигналів --- */
+#historyContainer {
+    margin-top: 20px;
+    text-align: left;
+}
+.history-title {
+    font-size: 18px;
+    font-weight: bold;
+    margin-bottom: 10px;
+}
+.history-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+}
+.history-table th, .history-table td {
+    border-bottom: 1px solid var(--secondary-bg-color);
+    padding: 10px 8px;
+}
+.history-table th {
+    color: var(--hint-color);
+    font-weight: normal;
+    text-align: left;
+}
+.history-table .signal-buy { color: var(--buy-color); }
+.history-table .signal-sell { color: var(--sell-color); }
+.history-table .signal-neutral { color: var(--hint-color); }
+/* --- КІНЕЦЬ ЗМІН --- */
