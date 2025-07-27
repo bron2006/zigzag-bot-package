@@ -1,16 +1,16 @@
 # netlify.toml
 
-# 🔧 Вказуємо папку, де лежить сайт
 [build]
   publish = "webapp"
   command = "echo 'No build step required'"
 
-# 🔐 CSP (Content Security Policy) + інші заголовки
 [[headers]]
-  for = "/*"
-  [headers.values]
-    Content-Security-Policy = "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.plot.ly https://telegram.org; connect-src 'self' https://zigzag-bot-package.fly.dev; style-src 'self' 'unsafe-inline';"
-    X-Content-Type-Options = "nosniff"
-    Referrer-Policy = "strict-origin-when-cross-origin"
-    X-Frame-Options = "DENY"
-    X-XSS-Protection = "1; mode=block"
+for = "/*"
+[headers.values]
+  Content-Security-Policy = """
+    default-src 'self';
+    script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.plot.ly https://telegram.org;
+    connect-src 'self' https://zigzag-bot-package.fly.dev;
+    style-src 'self' 'unsafe-inline';
+    img-src 'self' data:;
+  """
