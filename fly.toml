@@ -13,6 +13,14 @@ app = "zigzag-bot-package"
   min_machines_running = 0
   processes = ["app"]
 
+  # --- ПОЧАТОК ЗМІН: Додаємо перевірку працездатності ---
+  [[http_service.checks]]
+    interval = "10s"
+    timeout = "2s"
+    method = "GET"
+    path = "/" # Перевіряємо головну сторінку, яка має повернути "ZigZag Bot v4.3 Backend..."
+  # --- КІНЕЦЬ ЗМІН ---
+
 [[vm]]
   cpu_kind = "shared"
   cpus = 1
