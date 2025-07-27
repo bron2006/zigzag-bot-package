@@ -4,19 +4,14 @@ import pandas_ta as ta
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor
 
-# --- НОВЕ: Імпортуємо функцію для збереження історії ---
-from db import add_signal_to_history
 from config import logger, binance, td, CACHE, ANALYSIS_TIMEFRAMES
 
-# --- Лінива ініціалізація пулу потоків ---
 _executor = None
 def get_executor():
     global _executor
     if _executor is None:
         _executor = ThreadPoolExecutor(max_workers=2)
     return _executor
-
-# ------------------- ОСНОВНІ ФУНКЦІЇ АНАЛІТИКИ -------------------
 
 def get_market_data(pair, tf, asset, limit=300):
     key = f"{pair}_{tf}_{limit}"
@@ -123,8 +118,7 @@ def _calculate_core_signal(df, daily_df):
     score = 50.0
     reasons = []
     last = df.iloc[-1]
-    ema_status = 'above' if last['Close'] > last['EMA_21'] else 'below'
-    if ema_status == 'above':
+    if last['Close'] > last['EMA_21']:
         score += 10 * weights['ema']
         reasons.append("Ціна вище EMA(21)")
     else:
@@ -160,14 +154,10 @@ def _calculate_core_signal(df, daily_df):
     return {
         "score": score, "reasons": reasons, "support_levels": support_levels,
         "resistance_levels": resistance_levels, "candle_pattern": candle_pattern,
-        "volume_analysis": volume_analysis, "current_price": current_price,
-        "rsi": rsi, "ema_status": ema_status
+        "volume_analysis": volume_analysis, "current_price": current_price
     }
 
-# ------------------- ОНОВЛЕНІ ФУНКЦІЇ ДЛЯ UI ТА API -------------------
-
-# --- НОВЕ: функція тепер приймає user_id для збереження історії ---
-def get_signal_strength_verdict(pair, display_name, asset, user_id=None):
+def get_signal_strength_verdict(pair, display_name, asset):
     df = get_market_data(pair, '1m', asset, limit=50)
     if not is_market_active(df):
         return f" Ринок для *{display_name}* зараз неактивний. Аналіз недоцільний."
@@ -177,23 +167,11 @@ def get_signal_strength_verdict(pair, display_name, asset, user_id=None):
         score = analysis['score']
         bull_percentage, bear_percentage = score, 100 - score
         arrow = '⬆️' if bull_percentage >= 50 else '⬇️'
-        
-        # --- НОВЕ: Зберігаємо сигнал в історію ---
-        if user_id:
-            signal_type = "BUY" if bull_percentage > 55 else "SELL" if bull_percentage < 45 else "NEUTRAL"
-            nearest_support = min(analysis['support_levels'], key=lambda x: abs(x - analysis['current_price'])) if analysis['support_levels'] else None
-            nearest_resistance = min(analysis['resistance_levels'], key=lambda x: abs(x - analysis['current_price'])) if analysis['resistance_levels'] else None
-            
-            add_signal_to_history(
-                user_id=user_id, pair=pair, price=analysis['current_price'],
-                signal_type=signal_type, rsi=analysis['rsi'], ema_status=analysis['ema_status'],
-                support=nearest_support, resistance=nearest_resistance,
-                bull_percentage=bull_percentage, bear_percentage=bear_percentage
-            )
-
         strength_line = f"🐂 Бики {bull_percentage}% ⬆️\n🐃 Ведмеді {bear_percentage}% ⬇️"
         reason_line = f"Підстава: {', '.join(analysis['reasons'])}." if analysis['reasons'] else "Змішані сигнали."
         disclaimer = "\n\n_⚠️ Це не фінансова порада._"
+        nearest_support = min(analysis['support_levels'], key=lambda x: abs(x - analysis['current_price'])) if analysis['support_levels'] else 'N/A'
+        nearest_resistance = min(analysis['resistance_levels'], key=lambda x: abs(x - analysis['current_price'])) if analysis['resistance_levels'] else 'N/A'
         sr_info = f"Підтримка: `{nearest_support:.4f}` | Опір: `{nearest_resistance:.4f}`"
         final_message = (f"{arrow} *{display_name}*\n\n"
                          f"**🕯️ Індекс сили ринку (1хв)**\n"
@@ -208,7 +186,7 @@ def get_signal_strength_verdict(pair, display_name, asset, user_id=None):
         logger.error(f"Помилка розрахунку індексу для {pair}: {e}")
         return f"⚠️ Помилка аналізу *{display_name}*."
 
-def get_api_detailed_signal_data(pair, user_id=None):
+def get_api_detailed_signal_data(pair):
     asset_type = 'stocks'
     if '/' in pair: asset_type = 'crypto' if 'USDT' in pair else 'forex'
     df = get_market_data(pair, '1m', asset_type, limit=100)
@@ -219,7 +197,7 @@ def get_api_detailed_signal_data(pair, user_id=None):
         analysis = _calculate_core_signal(df, daily_df)
         score = analysis['score']
         date_col = 'ts' if 'ts' in df.columns else 'datetime'
-        result = {
+        return {
             "pair": pair, "price": analysis['current_price'], "bull_percentage": score,
             "bear_percentage": 100 - score,
             "support": min(analysis['support_levels'], key=lambda x: abs(x - analysis['current_price'])) if analysis['support_levels'] else None,
@@ -231,8 +209,6 @@ def get_api_detailed_signal_data(pair, user_id=None):
                 "low": df['Low'].tolist(), "close": df['Close'].tolist(),
             } if not df.empty and pd.api.types.is_datetime64_any_dtype(df[date_col]) else None
         }
-        # Ця функція не зберігає історію, щоб не дублювати її з WebApp
-        return result
     except Exception as e:
         logger.error(f"Помилка API-сигналу для {pair}: {e}")
         return {"error": "Внутрішня помилка сервера при аналізі"}

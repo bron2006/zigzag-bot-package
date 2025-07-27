@@ -8,7 +8,6 @@ from config import dp, CRYPTO_PAIRS_FULL, CRYPTO_CHUNK_SIZE, STOCK_TICKERS, FORE
 from db import get_watchlist, toggle_watch
 from analysis import rank_crypto_chunk, get_signal_strength_verdict, get_full_mta_verdict
 
-# ------------------- KEYBOARDS -------------------
 def main_kb():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📈 Криптовалюти", callback_data='menu_crypto_0')],
@@ -48,7 +47,6 @@ def asset_list_kb(asset_type, pairs, chunk_index=0):
         
     return InlineKeyboardMarkup(keyboard)
 
-# ------------------- HANDLERS -------------------
 def start(update: Update, context: CallbackContext):
     keyboard = [["МЕНЮ"]]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
@@ -110,8 +108,7 @@ def button_handler(update: Update, context: CallbackContext):
         user_id = query.from_user.id
         
         query.edit_message_text(f"⏳ Аналізую {display}...")
-        # --- НОВЕ: Передаємо user_id для збереження історії ---
-        msg = get_signal_strength_verdict(ticker, display, asset, user_id=user_id)
+        msg = get_signal_strength_verdict(ticker, display, asset)
         
         watchlist = get_watchlist(user_id)
         watch_text = "🌟 В обраному" if ticker in watchlist else "⭐ В обране"
