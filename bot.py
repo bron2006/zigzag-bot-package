@@ -7,19 +7,20 @@ from flask_cors import CORS
 from telegram import Update
 
 from config import app, bot, dp, WEBHOOK_SECRET, logger, CRYPTO_PAIRS_FULL, FOREX_SESSIONS, STOCK_TICKERS, FOREX_PAIRS_MAP
-# --- Змінено: Імпортуємо функцію для отримання історії ---
 from db import init_db, get_watchlist, toggle_watch, get_signal_history
 from analysis import (
     get_api_detailed_signal_data,
     rank_assets_for_api,
-    get_api_mta_data,
-    get_signal_strength_verdict # Додано, бо використовується в get_api_detailed_signal_data
+    get_api_mta_data
 )
 import telegram_ui
 
-CORS(app)
+# --- ПОЧАТОК ЗМІН: Більш чітка настройка CORS ---
+# Ми явно вказуємо, що всі маршрути, які починаються з /api/,
+# можуть бути викликані з будь-якого домену (*).
+CORS(app, resources={r"/api/*": {"origins": "*"}})
+# --- КІНЕЦЬ ЗМІН ---
 
-# --- НОВЕ: Допоміжна функція для отримання user_id ---
 def _get_user_id_from_request(req):
     """Отримує user_id з параметру initData."""
     init_data = req.args.get("initData")
@@ -50,13 +51,9 @@ def webhook_handler():
 def api_signal():
     pair = request.args.get("pair")
     if not pair: return jsonify({"error": "pair is required"}), 400
-    
-    # Змінено: Використовуємо допоміжну функцію для отримання user_id
     user_id = _get_user_id_from_request(request)
     try:
-        # get_api_detailed_signal_data тепер не зберігає історію,
-        # це робить get_signal_strength_verdict
-        data = get_api_detailed_signal_data(pair)
+        data = get_api_detailed_signal_data(pair, user_id=user_id)
         if "error" in data: return jsonify(data), 400
         return jsonify(data)
     except Exception as e:
@@ -97,17 +94,12 @@ def api_get_mta():
         logger.error(f"Помилка API для MTA на {pair}: {e}\n{traceback.format_exc()}")
         return jsonify({"error": "Помилка при розрахунку MTA"}), 500
 
-# --- НОВЕ: API-маршрут для отримання історії сигналів ---
 @app.route("/api/signal_history", methods=["GET"])
 def api_signal_history():
     pair = request.args.get("pair")
     user_id = _get_user_id_from_request(request)
-
-    if not user_id:
-        return jsonify({"error": "Не авторизовано"}), 401
-    if not pair:
-        return jsonify({"error": "Необхідно вказати пару"}), 400
-    
+    if not user_id: return jsonify({"error": "Не авторизовано"}), 401
+    if not pair: return jsonify({"error": "Необхідно вказати пару"}), 400
     try:
         history = get_signal_history(user_id, pair)
         return jsonify(history)
