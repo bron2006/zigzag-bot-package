@@ -5,23 +5,27 @@ app = "zigzag-bot-package"
 [build]
   dockerfile = "Dockerfile"
 
-# --- ПОЧАТОК ЗМІН ---
-# Спрощуємо налаштування сервісу для більш стабільної роботи
 [http_service]
   internal_port = 8080
   force_https = true
-  auto_stop_machines = true   # Дозволяємо машині зупинятись, коли немає запитів
-  auto_start_machines = true  # Дозволяємо машині стартувати, коли є запит
-  min_machines_running = 0    # Дозволяємо кількості машин падати до 0 (сплячий режим)
+  auto_stop_machines = true
+  auto_start_machines = true
+  min_machines_running = 0
   processes = ["app"]
-# --- КІНЕЦЬ ЗМІН ---
 
-# Налаштування віртуальної машини
+  # --- ПОЧАТОК ЗМІН: Додаємо перевірку працездатності ---
+  # Це буде "тримати в тонусі" наш сервер, не даючи йому заснути
+  [[http_service.checks]]
+    interval = "15s" # Перевіряти кожні 15 секунд
+    timeout = "2s"   # Давати 2 секунди на відповідь
+    method = "GET"
+    path = "/"       # Робити запит на головну сторінку
+  # --- КІНЕЦЬ ЗМІН ---
+
 [[vm]]
   cpu_kind = "shared"
   cpus = 1
   memory_mb = 512
 
-# Додаємо секцію для експериментальних функцій
 [experimental]
   auto_rollback = true
