@@ -6,7 +6,6 @@
     --button-color: var(--tg-theme-button-color, #3390ec);
     --button-text-color: var(--tg-theme-button-text-color, #ffffff);
     --secondary-bg-color: var(--tg-theme-secondary-bg-color, #272727);
-    --warning-bg-color: #ffc107;
 }
 
 body {
@@ -18,52 +17,13 @@ body {
     box-sizing: border-box;
 }
 
-.demo-warning {
-    background-color: var(--warning-bg-color);
-    color: #000;
-    text-align: center;
-    padding: 8px;
-    font-size: 14px;
-    font-weight: 500;
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    z-index: 1000;
-}
-.container { 
-    max-width: 100%; 
-    margin: auto;
-    padding-top: 15px; 
-}
-.container.in-demo {
-    padding-top: 40px;
-}
-
+.container { max-width: 100%; margin: auto; }
 h1 { text-align: center; color: var(--text-color); font-size: 24px; margin-top: 0; }
-
-.search-container {
-    margin-bottom: 20px;
-}
-
-#searchInput {
-    width: 100%;
-    padding: 12px 15px;
-    background-color: var(--secondary-bg-color);
-    color: var(--text-color);
-    border: 1px solid var(--hint-color);
-    border-radius: 8px;
-    font-size: 16px;
-    box-sizing: border-box;
-}
-#searchInput::placeholder {
-    color: var(--hint-color);
-}
-
 .category { margin-bottom: 15px; }
 .category-title { font-size: 18px; font-weight: bold; margin-bottom: 10px; padding-bottom: 5px; border-bottom: 1px solid var(--secondary-bg-color); }
 .pair-list { display: flex; flex-wrap: wrap; gap: 8px; }
 
+/* --- ПОЧАТОК ЗМІН: Стилі для контейнера кнопки і зірочки --- */
 .pair-item {
     display: flex;
     flex-grow: 1;
@@ -101,6 +61,7 @@ h1 { text-align: center; color: var(--text-color); font-size: 24px; margin-top: 
     background-color: var(--button-color);
     color: var(--button-text-color);
 }
+/* --- КІНЕЦЬ ЗМІН --- */
 
 #signalContainer { text-align: center; }
 #signalOutput { padding: 15px; background: var(--secondary-bg-color); border-radius: 8px; line-height: 1.6; min-height: 50px; }

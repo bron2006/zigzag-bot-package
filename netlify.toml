@@ -1,10 +1,10 @@
-# netlify.toml
-
+# Налаштування збірки: вказуємо, яку папку публікувати
 [build]
   publish = "webapp"
   command = "echo 'No build step required'"
 
+# Налаштування заголовків: вирішуємо проблему з Content Security Policy
 [[headers]]
   for = "/*"
   [headers.values]
-    Content-Security-Policy = "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.plot.ly https://telegram.org; connect-src 'self' https://zigzag-bot-package.fly.dev;"
+    Content-Security-Policy = "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.plot.ly https://telegram.org;"

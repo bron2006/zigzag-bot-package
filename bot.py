@@ -7,23 +7,16 @@ from flask_cors import CORS
 from telegram import Update
 
 from config import app, bot, dp, WEBHOOK_SECRET, logger, CRYPTO_PAIRS_FULL, FOREX_SESSIONS, STOCK_TICKERS, FOREX_PAIRS_MAP
+# Змінено: додаємо toggle_watch
 from db import init_db, get_watchlist, toggle_watch
 from analysis import get_api_detailed_signal_data, rank_assets_for_api, get_api_mta_data
 import telegram_ui
 
-CORS(app, resources={r"/api/*": {"origins": "*"}})
+CORS(app)
 
-def _get_user_id_from_request(req):
-    init_data = req.args.get("initData")
-    if not init_data: return None
-    try:
-        parsed = parse_qs(init_data)
-        user_json_str = parsed.get("user", [None])[0]
-        if user_json_str:
-            return json.loads(user_json_str).get("id")
-    except Exception as e:
-        logger.warning(f"Не вдалося розпарсити initData: {e}")
-    return None
+@app.before_request
+def log_request():
+    logger.info(f"[{request.method}] {request.path} - args={request.args.to_dict()}")
 
 @app.route(f"/{WEBHOOK_SECRET}", methods=["POST"])
 def webhook_handler():
@@ -31,7 +24,7 @@ def webhook_handler():
         update = Update.de_json(request.get_json(force=True), bot)
         dp.process_update(update)
     except Exception as e:
-        logger.error(f"Помилка вебхука: {e}\n{traceback.format_exc()}")
+        logger.error(f"Webhook error: {e}\n{traceback.format_exc()}")
     return "OK", 200
 
 @app.route("/api/signal", methods=["GET"])
@@ -40,15 +33,25 @@ def api_signal():
     if not pair: return jsonify({"error": "pair is required"}), 400
     try:
         data = get_api_detailed_signal_data(pair)
-        if "error" in data: return jsonify(data), 400
+        if "error" in data: return jsonify(data)
         return jsonify(data)
     except Exception as e:
-        logger.error(f"Помилка API для пари {pair}: {e}\n{traceback.format_exc()}")
+        logger.error(f"API error for pair {pair}: {e}\n{traceback.format_exc()}")
         return jsonify({"error": f"Внутрішня помилка сервера"}), 500
 
 @app.route("/api/get_pairs", methods=["GET"])
 def api_get_pairs():
-    user_id = _get_user_id_from_request(request)
+    init_data = request.args.get("initData")
+    user_id = None
+    if init_data:
+        try:
+            parsed = parse_qs(init_data)
+            user_json_str = parsed.get("user", [None])[0]
+            if user_json_str:
+                user_data = json.loads(user_json_str)
+                user_id = user_data.get("id")
+        except Exception as e:
+            logger.warning(f"Failed to parse initData: {e}")
     watchlist = get_watchlist(user_id) if user_id else []
     return jsonify({ "watchlist": watchlist, "crypto": CRYPTO_PAIRS_FULL, "forex": FOREX_SESSIONS, "stocks": STOCK_TICKERS })
 
@@ -64,7 +67,7 @@ def api_get_active_markets():
         top_forex = [p['ticker'] for p in ranked_forex[:5]]
         return jsonify({ "active_crypto": top_crypto, "active_stocks": top_stocks, "active_forex": top_forex })
     except Exception as e:
-        logger.error(f"Помилка API для активних ринків: {e}\n{traceback.format_exc()}")
+        logger.error(f"API error for active markets: {e}\n{traceback.format_exc()}")
         return jsonify({"error": "Помилка при аналізі ринків"}), 500
 
 @app.route("/api/get_mta", methods=["GET"])
@@ -77,21 +80,36 @@ def api_get_mta():
         mta_data = get_api_mta_data(pair, asset_type)
         return jsonify(mta_data)
     except Exception as e:
-        logger.error(f"Помилка API для MTA на {pair}: {e}\n{traceback.format_exc()}")
+        logger.error(f"API error for MTA on {pair}: {e}\n{traceback.format_exc()}")
         return jsonify({"error": "Помилка при розрахунку MTA"}), 500
 
+# --- ПОЧАТОК НОВОГО КОДУ ---
 @app.route("/api/toggle_watchlist", methods=["GET"])
 def toggle_watchlist_route():
+    init_data = request.args.get("initData")
     pair = request.args.get("pair")
-    user_id = _get_user_id_from_request(request)
-    if not user_id or not pair:
-        return jsonify({"success": False, "error": "Відсутні необхідні параметри"}), 400
+    user_id = None
+
+    if not init_data or not pair:
+        return jsonify({"success": False, "error": "Missing required parameters"}), 400
+
     try:
-        toggle_watch(user_id, pair)
-        return jsonify({"success": True})
+        parsed = parse_qs(init_data)
+        user_json_str = parsed.get("user", [None])[0]
+        if user_json_str:
+            user_data = json.loads(user_json_str)
+            user_id = user_data.get("id")
+            
+            if user_id:
+                toggle_watch(user_id, pair)
+                return jsonify({"success": True})
+
     except Exception as e:
-        logger.error(f"Помилка в toggle_watchlist: {e}")
-        return jsonify({"success": False, "error": "Внутрішня помилка сервера"}), 500
+        logger.error(f"Error in toggle_watchlist: {e}")
+        return jsonify({"success": False, "error": "Internal server error"}), 500
+
+    return jsonify({"success": False, "error": "Invalid initData"}), 400
+# --- КІНЕЦЬ НОВОГО КОДУ ---
 
 @app.route("/", methods=["GET"])
 def index():

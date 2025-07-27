@@ -4,10 +4,12 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKe
 from telegram.ext import CallbackContext, CommandHandler, MessageHandler, Filters, CallbackQueryHandler
 from telegram.error import BadRequest
 
+# Імпортуємо все необхідне з інших модулів
 from config import dp, CRYPTO_PAIRS_FULL, CRYPTO_CHUNK_SIZE, STOCK_TICKERS, FOREX_SESSIONS, FOREX_PAIRS_MAP
 from db import get_watchlist, toggle_watch
 from analysis import rank_crypto_chunk, get_signal_strength_verdict, get_full_mta_verdict
 
+# ------------------- KEYBOARDS -------------------
 def main_kb():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📈 Криптовалюти", callback_data='menu_crypto_0')],
@@ -47,22 +49,30 @@ def asset_list_kb(asset_type, pairs, chunk_index=0):
         
     return InlineKeyboardMarkup(keyboard)
 
+# ------------------- HANDLERS -------------------
 def start(update: Update, context: CallbackContext):
     keyboard = [["МЕНЮ"]]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
     update.message.reply_text("👋 Вітаю! Натисніть «МЕНЮ» нижче.", reply_markup=reply_markup)
 
 def menu(update: Update, context: CallbackContext):
+    """Оновлений обробник, який прибирає за собою."""
     chat_id = update.message.chat_id
+    
+    # Видаляємо повідомлення користувача ("МЕНЮ")
     try:
         context.bot.delete_message(chat_id=chat_id, message_id=update.message.message_id)
     except BadRequest:
         pass
+
+    # Видаляємо попереднє повідомлення бота, якщо воно було
     if 'last_menu_id' in context.user_data:
         try:
             context.bot.delete_message(chat_id=chat_id, message_id=context.user_data['last_menu_id'])
         except BadRequest:
             pass
+    
+    # Надсилаємо нове меню і зберігаємо його ID
     sent_message = context.bot.send_message(chat_id=chat_id, text="🏠 Головне меню:", reply_markup=main_kb())
     context.user_data['last_menu_id'] = sent_message.message_id
 
@@ -70,6 +80,8 @@ def button_handler(update: Update, context: CallbackContext):
     query = update.callback_query
     query.answer()
     data = query.data
+    
+    # Зберігаємо ID поточного повідомлення, щоб потім його видалити
     context.user_data['last_menu_id'] = query.message.message_id
     
     if data == 'main_menu':
@@ -80,14 +92,18 @@ def button_handler(update: Update, context: CallbackContext):
         start_pos = chunk_index * CRYPTO_CHUNK_SIZE
         end_pos = start_pos + CRYPTO_CHUNK_SIZE
         pairs_to_analyze = CRYPTO_PAIRS_FULL[start_pos:end_pos]
+        
         query.edit_message_text(f"⏳ Аналізую крипто-пари ({start_pos+1}-{end_pos})...")
+        
         ranked_pairs = rank_crypto_chunk(pairs_to_analyze)
+        
         if not ranked_pairs:
             query.edit_message_text(
                 "❌ Не вдалося проаналізувати ринок. Спробуйте пізніше.",
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Головне меню", callback_data='main_menu')]])
             )
             return
+
         query.edit_message_text("📈 Криптовалюти (відсортовано за активністю):", 
                                 reply_markup=asset_list_kb('crypto', [p['display_name'] for p in ranked_pairs], chunk_index))
 
@@ -129,14 +145,18 @@ def button_handler(update: Update, context: CallbackContext):
         _, asset, ticker_safe, display_safe, chunk_idx_str = data.split('_', 4)
         ticker, display = ticker_safe.replace('~', '/'), display_safe.replace('~', '/')
         user_id = query.from_user.id
+        
         toggle_watch(user_id, ticker)
         query.answer(text=f"{display} оновлено в списку спостереження!")
+        
         watchlist = get_watchlist(user_id)
         watch_text = "🌟 В обраному" if ticker in watchlist else "⭐ В обране"
+        
         analyze_callback = f'analyze_{asset}_{ticker_safe}_{display_safe}_{chunk_idx_str}'
         if asset == 'crypto': back_button_cb = f'menu_crypto_{chunk_idx_str}'
         elif asset == 'forex': back_button_cb = f'session_{next((s for s, p in FOREX_SESSIONS.items() if display in p), "Азіатська")}'
         else: back_button_cb = 'menu_stocks'
+
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("🔄 Оновити (1хв)", callback_data=analyze_callback)],
             [InlineKeyboardButton("📊 Детальний огляд", callback_data=f'fullmta_{asset}_{ticker_safe}_{display_safe}_{chunk_idx_str}')],
@@ -153,7 +173,8 @@ def button_handler(update: Update, context: CallbackContext):
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Назад до індексу", callback_data=f'analyze_{asset}_{ticker_safe}_{display_safe}_{chunk_idx_str}')]])
         query.edit_message_text(text=msg, parse_mode='Markdown', reply_markup=kb)
 
+# Додаємо обробники до диспетчера
 dp.add_handler(CommandHandler("start", start))
-dp.add_handler(CommandHandler("menu", menu))
-dp.add_handler(MessageHandler(Filters.text("МЕНЮ"), menu))
+dp.add_handler(CommandHandler("menu", menu)) # Обробник для /menu
+dp.add_handler(MessageHandler(Filters.text("МЕНЮ"), menu)) # Обробник для текстової кнопки
 dp.add_handler(CallbackQueryHandler(button_handler))

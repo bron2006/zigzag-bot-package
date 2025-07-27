@@ -1,7 +1,7 @@
 # config.py
 import os
 import logging
-from cachetools import TTLCache # Імпортуємо TTLCache
+from cachetools import TTLCache
 import ccxt
 from twelvedata import TDClient
 from dotenv import load_dotenv
@@ -19,10 +19,8 @@ TWELVEDATA_API_KEY = os.getenv("TWELVEDATA_API_KEY")
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# --- ОПТИМІЗОВАНИЙ КЕШ ---
-# Зменшено кеш для економії пам'яті: 500 об'єктів, живуть 3 хвилини (180с)
-CACHE = TTLCache(maxsize=500, ttl=180)
-
+# --- Кеш та клієнти API ---
+CACHE = TTLCache(maxsize=5000, ttl=300)
 binance = ccxt.binance({'enableRateLimit': True})
 td = TDClient(apikey=TWELVEDATA_API_KEY)
 
@@ -34,7 +32,7 @@ app = Flask(__name__)
 
 # --- Константи ---
 CRYPTO_PAIRS_FULL = [
-    "BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "DOGE/USDT",
+    "BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "DOGE/USDT", 
     "ADA/USDT", "SHIB/USDT", "AVAX/USDT", "LINK/USDT", "DOT/USDT", "TRX/USDT",
     "MATIC/USDT", "LTC/USDT", "BCH/USDT", "XLM/USDT", "ATOM/USDT", "ETC/USDT",
     "FIL/USDT", "NEAR/USDT", "ALGO/USDT", "VET/USDT", "ICP/USDT", "EOS/USDT"
