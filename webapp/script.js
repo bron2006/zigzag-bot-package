@@ -5,6 +5,7 @@ const API_BASE_URL = "https://zigzag-bot-package.fly.dev";
 const loader = document.getElementById("loader");
 const listsContainer = document.getElementById("listsContainer");
 const signalOutput = document.getElementById("signalOutput");
+const historyContainer = document.getElementById("historyContainer"); // Новий елемент
 
 let tg;
 if (!window.Telegram || !window.Telegram.WebApp) {
@@ -30,7 +31,6 @@ document.addEventListener('DOMContentLoaded', function() {
     const initDataString = initData ? `?initData=${encodeURIComponent(initData)}` : '';
     const staticPairsUrl = `${API_BASE_URL}/api/get_pairs${initDataString}`;
 
-    // ТИМЧАСОВО: прибираємо get_active_markets (викликає OOM)
     fetch(staticPairsUrl)
         .then(res => res.json())
         .then(staticData => {
@@ -101,15 +101,12 @@ function populateLists(staticData) {
 
     html += createSection('⭐ Обране', staticData.watchlist, getAssetType);
     html += createSection('📈 Уся криптовалюта', staticData.crypto ? staticData.crypto.slice(0, 12) : [], 'crypto');
-
     if (staticData.forex && typeof staticData.forex === 'object') {
         Object.keys(staticData.forex).forEach(sessionName => {
             html += createSection(`🌍 Усі валюти (${sessionName})`, staticData.forex[sessionName], 'forex');
         });
     }
-
     html += createSection('🏢 Усі акції', staticData.stocks, 'stocks');
-
     listsContainer.innerHTML = html;
 }
 
@@ -118,6 +115,7 @@ function fetchSignal(pair, assetType) {
     showLoader(true);
     signalOutput.innerHTML = `⏳ Отримую детальний аналіз для ${pair}...`;
     signalOutput.style.textAlign = 'left';
+    historyContainer.innerHTML = ''; // Очищуємо стару історію
     Plotly.purge('chart');
 
     const signalApiUrl = `${API_BASE_URL}/api/signal?pair=${pair}`;
@@ -141,7 +139,6 @@ function fetchSignal(pair, assetType) {
         const reasonsList = signalData.reasons.map(r => `<li>${r}</li>`).join('');
         let candleHtml = signalData.candle_pattern?.text ? `<div style="margin-bottom:10px"><strong>Свічковий патерн:</strong><br>${signalData.candle_pattern.text}</div>` : '';
         let volumeHtml = signalData.volume_analysis ? `<div style="margin-bottom:10px"><strong>Аналіз об'єму:</strong><br>${signalData.volume_analysis}</div>` : '';
-
         let mtaHtml = '';
         if (Array.isArray(mtaData) && mtaData.length > 0) {
             mtaHtml += '<div class="mta-container"><strong>Мульти-таймфрейм аналіз (MTA):</strong><table class="mta-table"><tr>';
@@ -168,6 +165,13 @@ function fetchSignal(pair, assetType) {
         if (signalData.history && signalData.history.dates) {
             drawChart(pair, signalData.history);
         }
+        
+        // --- ПОЧАТОК ЗМІН: Запит та відображення історії ---
+        if (initData) {
+            fetchHistory(pair);
+        }
+        // --- КІНЕЦЬ ЗМІН ---
+
         showLoader(false);
     })
     .catch(err => {
@@ -177,6 +181,44 @@ function fetchSignal(pair, assetType) {
         showLoader(false);
     });
 }
+
+// --- НОВЕ: Функція для отримання та відображення історії ---
+function fetchHistory(pair) {
+    const historyApiUrl = `${API_BASE_URL}/api/signal_history?pair=${pair}&initData=${encodeURIComponent(initData)}`;
+    fetch(historyApiUrl)
+        .then(res => res.json())
+        .then(historyData => {
+            if (historyData && historyData.length > 0) {
+                displaySignalHistory(historyData);
+            }
+        })
+        .catch(err => console.error("Error fetching signal history:", err));
+}
+
+function displaySignalHistory(history) {
+    let html = '<div class="history-title">Історія сигналів</div>';
+    html += '<table class="history-table"><thead><tr><th>Час</th><th>Ціна</th><th>Сигнал</th><th>Сила (Бики)</th></tr></thead><tbody>';
+
+    history.forEach(item => {
+        const date = new Date(item.timestamp.replace(' ', 'T') + 'Z');
+        const formattedDate = `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')} ${date.getDate().toString().padStart(2, '0')}.${(date.getMonth() + 1).toString().padStart(2, '0')}`;
+        const signalClass = `signal-${item.signal_type.toLowerCase()}`;
+        const price = item.price ? item.price.toFixed(4) : 'N/A';
+
+        html += `
+            <tr>
+                <td>${formattedDate}</td>
+                <td>${price}</td>
+                <td class="${signalClass}">${item.signal_type}</td>
+                <td>${item.bull_percentage}%</td>
+            </tr>
+        `;
+    });
+
+    html += '</tbody></table>';
+    historyContainer.innerHTML = html;
+}
+// --- КІНЕЦЬ ЗМІН ---
 
 function drawChart(pair, history) {
     const trace = {

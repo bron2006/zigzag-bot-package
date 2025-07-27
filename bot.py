@@ -7,12 +7,25 @@ from flask_cors import CORS
 from telegram import Update
 
 from config import app, bot, dp, WEBHOOK_SECRET, logger, CRYPTO_PAIRS_FULL, FOREX_SESSIONS, STOCK_TICKERS, FOREX_PAIRS_MAP
-# Змінено: додаємо toggle_watch
-from db import init_db, get_watchlist, toggle_watch
+# --- Змінено: додаємо get_signal_history ---
+from db import init_db, get_watchlist, toggle_watch, get_signal_history
 from analysis import get_api_detailed_signal_data, rank_assets_for_api, get_api_mta_data
 import telegram_ui
 
 CORS(app)
+
+def _get_user_id_from_request(req):
+    """Допоміжна функція для отримання user_id з initData."""
+    init_data = req.args.get("initData")
+    if not init_data: return None
+    try:
+        parsed = parse_qs(init_data)
+        user_json_str = parsed.get("user", [None])[0]
+        if user_json_str:
+            return json.loads(user_json_str).get("id")
+    except Exception as e:
+        logger.warning(f"Failed to parse initData: {e}")
+    return None
 
 @app.before_request
 def log_request():
@@ -41,17 +54,7 @@ def api_signal():
 
 @app.route("/api/get_pairs", methods=["GET"])
 def api_get_pairs():
-    init_data = request.args.get("initData")
-    user_id = None
-    if init_data:
-        try:
-            parsed = parse_qs(init_data)
-            user_json_str = parsed.get("user", [None])[0]
-            if user_json_str:
-                user_data = json.loads(user_json_str)
-                user_id = user_data.get("id")
-        except Exception as e:
-            logger.warning(f"Failed to parse initData: {e}")
+    user_id = _get_user_id_from_request(request)
     watchlist = get_watchlist(user_id) if user_id else []
     return jsonify({ "watchlist": watchlist, "crypto": CRYPTO_PAIRS_FULL, "forex": FOREX_SESSIONS, "stocks": STOCK_TICKERS })
 
@@ -83,32 +86,36 @@ def api_get_mta():
         logger.error(f"API error for MTA on {pair}: {e}\n{traceback.format_exc()}")
         return jsonify({"error": "Помилка при розрахунку MTA"}), 500
 
-# --- ПОЧАТОК НОВОГО КОДУ ---
 @app.route("/api/toggle_watchlist", methods=["GET"])
 def toggle_watchlist_route():
-    init_data = request.args.get("initData")
+    user_id = _get_user_id_from_request(request)
     pair = request.args.get("pair")
-    user_id = None
-
-    if not init_data or not pair:
+    if not user_id or not pair:
         return jsonify({"success": False, "error": "Missing required parameters"}), 400
-
     try:
-        parsed = parse_qs(init_data)
-        user_json_str = parsed.get("user", [None])[0]
-        if user_json_str:
-            user_data = json.loads(user_json_str)
-            user_id = user_data.get("id")
-            
-            if user_id:
-                toggle_watch(user_id, pair)
-                return jsonify({"success": True})
-
+        toggle_watch(user_id, pair)
+        return jsonify({"success": True})
     except Exception as e:
         logger.error(f"Error in toggle_watchlist: {e}")
         return jsonify({"success": False, "error": "Internal server error"}), 500
 
-    return jsonify({"success": False, "error": "Invalid initData"}), 400
+# --- ПОЧАТОК НОВОГО КОДУ: API для історії сигналів ---
+@app.route("/api/signal_history", methods=["GET"])
+def api_signal_history():
+    user_id = _get_user_id_from_request(request)
+    pair = request.args.get("pair")
+
+    if not user_id:
+        return jsonify({"error": "Not authorized"}), 401
+    if not pair:
+        return jsonify({"error": "pair is required"}), 400
+    
+    try:
+        history = get_signal_history(user_id, pair)
+        return jsonify(history)
+    except Exception as e:
+        logger.error(f"API error for signal history on {pair}: {e}\n{traceback.format_exc()}")
+        return jsonify({"error": "Помилка при отриманні історії"}), 500
 # --- КІНЕЦЬ НОВОГО КОДУ ---
 
 @app.route("/", methods=["GET"])
