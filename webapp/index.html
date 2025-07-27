@@ -3,17 +3,8 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no"/>
-
-    <!-- ✅ CSP-заголовок, який дозволяє Plotly, Telegram WebApp, unsafe-eval -->
-   <meta http-equiv="Content-Security-Policy" content="
-  default-src 'self';
-  script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.plot.ly https://telegram.org;
-  style-src 'self' 'unsafe-inline';
-  img-src 'self' data:;
-  connect-src 'self' https://zigzag-bot-package.fly.dev;
-">
-
     <title>ZigZag WebApp</title>
+    <link rel="icon" href="data:,">
     <link rel="stylesheet" href="style.css">
     <script src="https://cdn.plot.ly/plotly-2.24.1.min.js"></script>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
@@ -21,6 +12,10 @@
 <body>
     <div class="container">
         <h1>Термінал</h1>
+
+        <div class="search-container">
+            <input type="text" id="searchInput" placeholder="🔎 Пошук пари...">
+        </div>
         
         <div id="listsContainer"></div>
         
@@ -31,7 +26,6 @@
             <div id="chart"></div>
         </div>
 
-        <div id="historyContainer"></div>
         <div id="loader" class="hidden"></div>
     </div>
     <script src="script.js"></script>

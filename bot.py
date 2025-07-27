@@ -7,22 +7,13 @@ from flask_cors import CORS
 from telegram import Update
 
 from config import app, bot, dp, WEBHOOK_SECRET, logger, CRYPTO_PAIRS_FULL, FOREX_SESSIONS, STOCK_TICKERS, FOREX_PAIRS_MAP
-from db import init_db, get_watchlist, toggle_watch, get_signal_history
-from analysis import (
-    get_api_detailed_signal_data,
-    rank_assets_for_api,
-    get_api_mta_data
-)
+from db import init_db, get_watchlist, toggle_watch
+from analysis import get_api_detailed_signal_data, rank_assets_for_api, get_api_mta_data
 import telegram_ui
 
-# --- ПОЧАТОК ЗМІН: Більш чітка настройка CORS ---
-# Ми явно вказуємо, що всі маршрути, які починаються з /api/,
-# можуть бути викликані з будь-якого домену (*).
 CORS(app, resources={r"/api/*": {"origins": "*"}})
-# --- КІНЕЦЬ ЗМІН ---
 
 def _get_user_id_from_request(req):
-    """Отримує user_id з параметру initData."""
     init_data = req.args.get("initData")
     if not init_data: return None
     try:
@@ -33,10 +24,6 @@ def _get_user_id_from_request(req):
     except Exception as e:
         logger.warning(f"Не вдалося розпарсити initData: {e}")
     return None
-
-@app.before_request
-def log_request():
-    logger.info(f"[{request.method}] {request.path} - args={request.args.to_dict()}")
 
 @app.route(f"/{WEBHOOK_SECRET}", methods=["POST"])
 def webhook_handler():
@@ -51,9 +38,8 @@ def webhook_handler():
 def api_signal():
     pair = request.args.get("pair")
     if not pair: return jsonify({"error": "pair is required"}), 400
-    user_id = _get_user_id_from_request(request)
     try:
-        data = get_api_detailed_signal_data(pair, user_id=user_id)
+        data = get_api_detailed_signal_data(pair)
         if "error" in data: return jsonify(data), 400
         return jsonify(data)
     except Exception as e:
@@ -93,19 +79,6 @@ def api_get_mta():
     except Exception as e:
         logger.error(f"Помилка API для MTA на {pair}: {e}\n{traceback.format_exc()}")
         return jsonify({"error": "Помилка при розрахунку MTA"}), 500
-
-@app.route("/api/signal_history", methods=["GET"])
-def api_signal_history():
-    pair = request.args.get("pair")
-    user_id = _get_user_id_from_request(request)
-    if not user_id: return jsonify({"error": "Не авторизовано"}), 401
-    if not pair: return jsonify({"error": "Необхідно вказати пару"}), 400
-    try:
-        history = get_signal_history(user_id, pair)
-        return jsonify(history)
-    except Exception as e:
-        logger.error(f"Помилка API для історії сигналів на {pair}: {e}\n{traceback.format_exc()}")
-        return jsonify({"error": "Помилка при отриманні історії"}), 500
 
 @app.route("/api/toggle_watchlist", methods=["GET"])
 def toggle_watchlist_route():
