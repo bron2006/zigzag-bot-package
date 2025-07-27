@@ -5,7 +5,7 @@ const API_BASE_URL = "https://zigzag-bot-package.fly.dev";
 const loader = document.getElementById("loader");
 const listsContainer = document.getElementById("listsContainer");
 const signalOutput = document.getElementById("signalOutput");
-const historyContainer = document.getElementById("historyContainer"); // Новий елемент
+const historyContainer = document.getElementById("historyContainer");
 
 let tg;
 if (!window.Telegram || !window.Telegram.WebApp) {
@@ -100,13 +100,18 @@ function populateLists(staticData) {
     }
 
     html += createSection('⭐ Обране', staticData.watchlist, getAssetType);
-    html += createSection('📈 Уся криптовалюта', staticData.crypto ? staticData.crypto.slice(0, 12) : [], 'crypto');
+    // --- ПОЧАТОК ЗМІН: Прибираємо .slice(0, 12), щоб показати всі пари ---
+    html += createSection('📈 Уся криптовалюта', staticData.crypto || [], 'crypto');
+    // --- КІНЕЦЬ ЗМІН ---
+
     if (staticData.forex && typeof staticData.forex === 'object') {
         Object.keys(staticData.forex).forEach(sessionName => {
             html += createSection(`🌍 Усі валюти (${sessionName})`, staticData.forex[sessionName], 'forex');
         });
     }
+
     html += createSection('🏢 Усі акції', staticData.stocks, 'stocks');
+
     listsContainer.innerHTML = html;
 }
 
@@ -115,7 +120,7 @@ function fetchSignal(pair, assetType) {
     showLoader(true);
     signalOutput.innerHTML = `⏳ Отримую детальний аналіз для ${pair}...`;
     signalOutput.style.textAlign = 'left';
-    historyContainer.innerHTML = ''; // Очищуємо стару історію
+    historyContainer.innerHTML = ''; 
     Plotly.purge('chart');
 
     const signalApiUrl = `${API_BASE_URL}/api/signal?pair=${pair}`;
@@ -166,11 +171,9 @@ function fetchSignal(pair, assetType) {
             drawChart(pair, signalData.history);
         }
         
-        // --- ПОЧАТОК ЗМІН: Запит та відображення історії ---
         if (initData) {
             fetchHistory(pair);
         }
-        // --- КІНЕЦЬ ЗМІН ---
 
         showLoader(false);
     })
@@ -182,7 +185,6 @@ function fetchSignal(pair, assetType) {
     });
 }
 
-// --- НОВЕ: Функція для отримання та відображення історії ---
 function fetchHistory(pair) {
     const historyApiUrl = `${API_BASE_URL}/api/signal_history?pair=${pair}&initData=${encodeURIComponent(initData)}`;
     fetch(historyApiUrl)
@@ -218,7 +220,6 @@ function displaySignalHistory(history) {
     html += '</tbody></table>';
     historyContainer.innerHTML = html;
 }
-// --- КІНЕЦЬ ЗМІН ---
 
 function drawChart(pair, history) {
     const trace = {
