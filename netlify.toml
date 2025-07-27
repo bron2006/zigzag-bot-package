@@ -1,5 +1,14 @@
 # netlify.toml
 
+# Вказуємо, що наш сайт знаходиться у папці 'webapp'
 [build]
   publish = "webapp"
   command = "echo 'No build step required'"
+
+# Додаємо налаштування заголовків (Headers)
+[[headers]]
+  # Правило діє для всіх сторінок сайту
+  for = "/*"
+  [headers.values]
+    # Наша політика безпеки (CSP), яка дозволяє роботу Plotly.js
+    Content-Security-Policy = "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.plot.ly https://telegram.org; connect-src 'self' https://zigzag-bot-package.fly.dev;"
