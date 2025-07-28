@@ -6,7 +6,7 @@ from telegram.error import BadRequest
 
 from config import dp, CRYPTO_PAIRS_FULL, CRYPTO_CHUNK_SIZE, STOCK_TICKERS, FOREX_SESSIONS, FOREX_PAIRS_MAP
 from db import get_watchlist, toggle_watch
-from analysis import rank_crypto_chunk, get_signal_strength_verdict, get_full_mta_verdict
+from analysis import get_signal_strength_verdict, get_full_mta_verdict
 
 # ------------------- KEYBOARDS -------------------
 def main_kb():
@@ -77,18 +77,18 @@ def button_handler(update: Update, context: CallbackContext):
     if data == 'main_menu':
         query.edit_message_text("🏠 Головне меню:", reply_markup=main_kb())
 
+    # --- ПОЧАТОК ЗМІН: Прибрано аналіз, тепер просто показуємо статичний список ---
     elif data.startswith('menu_crypto_'):
-        # ... (код без змін)
         chunk_index = int(data.split('_')[-1])
         start_pos = chunk_index * CRYPTO_CHUNK_SIZE
         end_pos = start_pos + CRYPTO_CHUNK_SIZE
-        pairs_to_analyze = CRYPTO_PAIRS_FULL[start_pos:end_pos]
-        query.edit_message_text(f"⏳ Аналізую крипто-пари ({start_pos+1}-{end_pos})...")
-        ranked_pairs = rank_crypto_chunk(pairs_to_analyze)
-        if not ranked_pairs:
-            query.edit_message_text("❌ Не вдалося проаналізувати ринок. Спробуйте пізніше.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Головне меню", callback_data='main_menu')]]))
-            return
-        query.edit_message_text("📈 Криптовалюти (відсортовано за активністю):", reply_markup=asset_list_kb('crypto', [p['display_name'] for p in ranked_pairs], chunk_index))
+        pairs_chunk = CRYPTO_PAIRS_FULL[start_pos:end_pos]
+        
+        query.edit_message_text(
+            f"📈 Криптовалюти (Сторінка {chunk_index + 1}):", 
+            reply_markup=asset_list_kb('crypto', pairs_chunk, chunk_index)
+        )
+    # --- КІНЕЦЬ ЗМІН ---
 
     elif data == 'menu_forex':
         query.edit_message_text("💹 Виберіть сесію:", reply_markup=forex_session_kb())
@@ -112,7 +112,6 @@ def button_handler(update: Update, context: CallbackContext):
         
         msg, analysis_data = get_signal_strength_verdict(ticker, display, asset, user_id=user_id, force_refresh=is_refresh)
         
-        # Зберігаємо дані аналізу для кнопки "Деталі"
         if analysis_data:
             context.user_data[f"analysis_{ticker_safe}"] = analysis_data
 
@@ -136,7 +135,6 @@ def button_handler(update: Update, context: CallbackContext):
         ])
         query.edit_message_text(text=msg, parse_mode='Markdown', reply_markup=kb)
 
-    # --- ПОЧАТОК ЗМІН: Новий обробник для кнопки "Деталі" ---
     elif data.startswith('details_'):
         _, asset, ticker_safe, display_safe, chunk_idx_str = data.split('_', 4)
         
@@ -171,10 +169,8 @@ def button_handler(update: Update, context: CallbackContext):
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Назад до вердикту", callback_data=back_callback)]])
 
         query.edit_message_text(text=details_text, parse_mode='Markdown', reply_markup=kb)
-    # --- КІНЕЦЬ ЗМІН ---
 
     elif data.startswith('togglewatch_'):
-        # ... (код без змін)
         _, asset, ticker_safe, display_safe, chunk_idx_str = data.split('_', 4)
         ticker, display = ticker_safe.replace('~', '/'), display_safe.replace('~', '/')
         user_id = query.from_user.id
@@ -198,7 +194,6 @@ def button_handler(update: Update, context: CallbackContext):
         query.edit_message_reply_markup(reply_markup=kb)
 
     elif data.startswith('fullmta_'):
-        # ... (код без змін)
         parts = data.split('_')
         force_refresh = parts[-1] == 'refresh'
         asset, ticker_safe, display_safe, chunk_idx_str = parts[1], parts[2], parts[3], parts[4]

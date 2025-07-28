@@ -9,9 +9,7 @@ from telegram import Update
 
 from config import app, bot, dp, WEBHOOK_SECRET, logger, CRYPTO_PAIRS_FULL, FOREX_SESSIONS, STOCK_TICKERS, FOREX_PAIRS_MAP
 from db import init_db, get_watchlist, toggle_watch, get_signal_history
-# --- ПОЧАТОК ЗМІН: Виправлено помилку в назві функції ---
 from analysis import get_api_detailed_signal_data, rank_assets_for_api, get_api_mta_data
-# --- КІНЕЦЬ ЗМІН ---
 import telegram_ui
 
 CORS(app)
@@ -97,7 +95,7 @@ def api_get_active_markets():
     try:
         ranked_crypto = rank_assets_for_api(CRYPTO_PAIRS_FULL, 'crypto')
         top_crypto = [p['ticker'] for p in ranked_crypto[:5]]
-
+        
         # Відключаємо автоаналіз для stocks і forex
         top_stocks = []
         top_forex = []
