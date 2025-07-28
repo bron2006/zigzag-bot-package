@@ -14,9 +14,12 @@ def get_executor():
         _executor = ThreadPoolExecutor(max_workers=2)
     return _executor
 
-def get_market_data(pair, tf, asset, limit=300):
+# --- ПОЧАТОК ЗМІН: Додано параметр force_refresh ---
+def get_market_data(pair, tf, asset, limit=300, force_refresh=False):
     key = f"{pair}_{tf}_{limit}"
-    if key in CACHE: return CACHE[key]
+    if not force_refresh and key in CACHE:
+        return CACHE[key]
+    # --- КІНЕЦЬ ЗМІН ---
     try:
         df = pd.DataFrame()
         if asset == 'crypto':
@@ -121,7 +124,6 @@ def _calculate_core_signal(df, daily_df):
         if dist_to_resistance / current_price < 0.003:
             score -= 15; reasons.append("Ціна ДУЖЕ близько до опору")
     
-    # Зберігаємо оригінальний score перед можливою зміною через низький об'єм
     original_score = score
     
     if "Аномально низький" in volume_info:
@@ -136,12 +138,14 @@ def _calculate_core_signal(df, daily_df):
         "candle_pattern": candle_pattern, "volume_info": volume_info, "price": current_price
     }
 
-def get_signal_strength_verdict(pair, display_name, asset, user_id=None):
-    df = get_market_data(pair, '1m', asset, limit=100)
+# --- ПОЧАТОК ЗМІН: Додано параметр force_refresh ---
+def get_signal_strength_verdict(pair, display_name, asset, user_id=None, force_refresh=False):
+    df = get_market_data(pair, '1m', asset, limit=100, force_refresh=force_refresh)
     if df.empty or len(df) < 25:
         return f"⚠️ Недостатньо даних для 1-хв аналізу *{display_name}*."
     try:
-        daily_df = get_market_data(pair, '1d', asset, limit=100)
+        daily_df = get_market_data(pair, '1d', asset, limit=100, force_refresh=force_refresh)
+        # --- КІНЕЦЬ ЗМІН ---
         analysis = _calculate_core_signal(df, daily_df)
         bull_percentage = analysis['score']
         if user_id:
@@ -192,21 +196,13 @@ def get_api_detailed_signal_data(pair):
         score = analysis['score']
         
         active_factors = 0
-        # Рахуємо фактори на основі чистого "original_score", щоб уникнути впливу обрізання через низький об'єм
-        temp_reasons = []
-        if analysis['original_score'] > 50: temp_reasons.append("KAMA_UP") 
-        else: temp_reasons.append("KAMA_DOWN")
-        # ... (можна додати більш точний підрахунок факторів, але для простоти залишимо поточний)
         if "RSI" in "".join(analysis['reasons']): active_factors += 1
         if "підтримки" in "".join(analysis['reasons']): active_factors += 1
         if "опору" in "".join(analysis['reasons']): active_factors += 1
         if analysis.get("candle_pattern"): active_factors += 1
-        # Фактор KAMA рахуємо завжди, бо ціна завжди або вище, або нижче
         active_factors += 1 
-        # Фактор об'єму рахується окремо
         volume_factor = 1 if analysis.get("volume_info") and "нейтральний" not in analysis['volume_info'].lower() else 0
 
-        # --- ПОЧАТОК ЗМІН: Логіка для генерації вердикту ---
         verdict_text = "НЕЙТРАЛЬНА СИТУАЦІЯ"
         verdict_level = "neutral" 
 
@@ -237,7 +233,6 @@ def get_api_detailed_signal_data(pair):
                 else:
                     verdict_text = "Слабкий сигнал: ПРОДАВАТИ (Ризиковано)"
                     verdict_level = "weak_sell"
-        # --- КІНЕЦЬ ЗМІН ---
 
         history_df = df.tail(50)
         date_col = 'ts' if 'ts' in history_df.columns else 'datetime'
@@ -245,10 +240,8 @@ def get_api_detailed_signal_data(pair):
 
         return {
             "pair": pair, "price": analysis['price'],
-            # --- ПОЧАТОК ЗМІН: Повертаємо новий вердикт ---
             "verdict_text": verdict_text,
             "verdict_level": verdict_level,
-            # --- КІНЕЦЬ ЗМІН ---
             "reasons": analysis['reasons'], "support": analysis['support'], "resistance": analysis['resistance'],
             "candle_pattern": analysis['candle_pattern'], "volume_analysis": analysis['volume_info'], "history": history
         }
@@ -257,10 +250,11 @@ def get_api_detailed_signal_data(pair):
         logger.error(f"Error in get_api_detailed_signal_data for {pair}: {e}")
         return {"error": str(e)}
 
-def get_full_mta_verdict(pair, display_name, asset):
-    # ... (код без змін)
+# --- ПОЧАТОК ЗМІН: Додано параметр force_refresh ---
+def get_full_mta_verdict(pair, display_name, asset, force_refresh=False):
     def worker(tf):
-        df = get_market_data(pair, tf, asset, limit=200)
+        df = get_market_data(pair, tf, asset, limit=200, force_refresh=force_refresh)
+        # --- КІНЕЦЬ ЗМІН ---
         if df.empty or len(df) < 55: return (tf, None)
         df.ta.ema(length=21, append=True, col_names='EMA_fast')
         df.ta.ema(length=55, append=True, col_names='EMA_slow')
@@ -277,9 +271,7 @@ def get_full_mta_verdict(pair, display_name, asset):
     report = "\n".join(report_lines)
     return f"**📊 Детальний огляд тренду:** *{display_name}*\n\n{report}"
 
-
 def get_api_mta_data(pair, asset):
-    # ... (код без змін)
     def worker(tf):
         df = get_market_data(pair, tf, asset, limit=200)
         if df.empty or len(df) < 55: return None
@@ -294,9 +286,7 @@ def get_api_mta_data(pair, asset):
     mta_data = [r for r in results if r is not None]
     return mta_data
 
-
 def rank_crypto_chunk(pairs_chunk):
-    # ... (код без змін)
     def fetch_score(pair):
         try:
             df = get_market_data(pair, '1h', 'crypto', limit=50)
@@ -312,9 +302,7 @@ def rank_crypto_chunk(pairs_chunk):
     ranked_pairs = [r for r in results if r is not None]
     return sorted(ranked_pairs, key=lambda x: x['score'], reverse=True)
 
-
 def rank_assets_for_api(pairs, asset_type):
-    # ... (код без змін)
     def fetch_score(pair):
         try:
             timeframe = '1h' if asset_type == 'crypto' else '15min'
