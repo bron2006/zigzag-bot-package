@@ -67,17 +67,20 @@ def group_close_values(values, threshold=0.01):
     groups.append(np.mean(current_group))
     return groups
 
-# --- ПОЧАТОК ЗМІН: Нова функція для перевірки активності ринку ---
-def is_market_active(df: pd.DataFrame, periods: int = 10, threshold: float = 0.005) -> bool:
-    """Перевіряє, чи був ринок активним за останні N періодів."""
-    if len(df) < periods:
-        return True # Недостатньо даних для визначення, вважаємо ринок активним
-    last_periods = df.iloc[-periods:]
-    price_range = last_periods['High'].max() - last_periods['Low'].min()
+# --- ПОЧАТОК ЗМІН: Нова функція для перевірки волатильності через ATR ---
+def is_volatile_enough(df: pd.DataFrame, threshold: float = 0.003) -> bool:
+    """Перевіряє, чи є ринок достатньо волатильним на основі ATR."""
+    if len(df) < 15:  # Для ATR(14) потрібно мінімум 15 періодів
+        return True # Недостатньо даних, вважаємо ринок волатильним
+        
+    atr = df.ta.atr(length=14).iloc[-1]
     last_price = df['Close'].iloc[-1]
-    if last_price == 0: 
-        return False # Уникаємо ділення на нуль
-    return (price_range / last_price) > threshold
+    
+    if pd.isna(atr) or last_price == 0:
+        return False # Неможливо розрахувати, вважаємо ринок неволатильним
+        
+    # Поріг 0.003 означає, що середня свічка має бути більшою за 0.3% від ціни
+    return (atr / last_price) > threshold
 # --- КІНЕЦЬ ЗМІН ---
 
 def identify_support_resistance_levels(df, window=20, threshold=0.01):
@@ -201,12 +204,12 @@ def get_signal_strength_verdict(pair, display_name, asset, user_id=None, force_r
     if df.empty or len(df) < 25:
         return f"⚠️ Недостатньо даних для аналізу *{display_name}*.", None
 
-    # --- ПОЧАТОК ЗМІН: Перевірка на активність ринку ---
-    if not is_market_active(df, periods=10, threshold=0.005):
+    # --- ПОЧАТОК ЗМІН: Замінили перевірку на волатильність (ATR) ---
+    if not is_volatile_enough(df, threshold=0.003):
         formatted_price = _format_price(df['Close'].iloc[-1])
-        message = (f"**⚪️ Ринок для *{display_name}* неактивний**\n\n"
+        message = (f"**⚪️ Низька волатильність для *{display_name}***\n\n"
                    f"Ціна: `{formatted_price}`\n\n"
-                   f"_За останні 10 хвилин рух ціни був меншим за 0.5%. Сигнали тимчасово призупинені, щоб уникнути помилкових спрацювань на 'тихому' ринку._")
+                   f"_Ринок наразі занадто 'спокійний' для надійного аналізу. Сигнали тимчасово призупинені._")
         return message, None
     # --- КІНЕЦЬ ЗМІН ---
 
@@ -233,9 +236,9 @@ def get_api_detailed_signal_data(pair):
     if df.empty or len(df) < 25:
         return {"error": "Недостатньо даних для аналізу."}
 
-    # --- ПОЧАТОК ЗМІН: Перевірка на активність ринку ---
-    if not is_market_active(df, periods=10, threshold=0.005):
-        return {"error": f"Ринок для {pair} неактивний. Рух ціни за останні 10 хвилин менший за 0.5%."}
+    # --- ПОЧАТОК ЗМІН: Замінили перевірку на волатильність (ATR) ---
+    if not is_volatile_enough(df, threshold=0.003):
+        return {"error": f"Низька волатильність для {pair}. Ринок занадто 'спокійний' для аналізу."}
     # --- КІНЕЦЬ ЗМІН ---
     
     try:
@@ -262,7 +265,7 @@ def get_full_mta_verdict(pair, display_name, asset, force_refresh=False):
         if df.empty or len(df) < 55: return (tf, None)
         df.ta.ema(length=21, append=True, col_names='EMA_fast')
         df.ta.ema(length=55, append=True, col_names='EMA_slow')
-        sig = "✅ BUY" if df.iloc[-1]['EMA_fast'] > df.iloc[-1]['EMA_SLOW'] else "❌ SELL"
+        sig = "✅ BUY" if df.iloc[-1]['EMA_fast'] > df.iloc[-1]['EMA_slow'] else "❌ SELL"
         return (tf, sig)
     executor = get_executor()
     results = executor.map(worker, ANALYSIS_TIMEFRAMES)
