@@ -15,7 +15,6 @@ import telegram_ui
 CORS(app)
 
 def _get_user_id_from_request(req):
-    """Допоміжна функція для отримання user_id з initData."""
     init_data = req.args.get("initData")
     if not init_data: return None
     try:
@@ -40,45 +39,46 @@ def webhook_handler():
         logger.error(f"Webhook error: {e}\n{traceback.format_exc()}")
     return "OK", 200
 
+# --- ПОЧАТОК ЗМІН: Додано обробку параметра 'refresh' ---
 @app.route("/api/signal", methods=["GET"])
 def api_signal():
     pair = request.args.get("pair")
     if not pair: return jsonify({"error": "pair is required"}), 400
+    
+    force_refresh = request.args.get("refresh") == "true"
+    
     try:
-        data = get_api_detailed_signal_data(pair)
+        data = get_api_detailed_signal_data(pair, force_refresh=force_refresh)
         if "error" in data: return jsonify(data)
         return jsonify(data)
     except Exception as e:
         logger.error(f"API error for pair {pair}: {e}\n{traceback.format_exc()}")
         return jsonify({"error": f"Внутрішня помилка сервера"}), 500
+# --- КІНЕЦЬ ЗМІН ---
 
+# --- ПОЧАТОК ЗМІН: Аналіз тепер працює тільки для крипти ---
 @app.route("/api/get_ranked_pairs", methods=["GET"])
 def api_get_ranked_pairs():
     user_id = _get_user_id_from_request(request)
     watchlist = get_watchlist(user_id) if user_id else []
 
     try:
-        with ThreadPoolExecutor(max_workers=5) as executor:
-            crypto_future = executor.submit(rank_assets_for_api, CRYPTO_PAIRS_FULL, 'crypto')
-            stocks_future = executor.submit(rank_assets_for_api, STOCK_TICKERS, 'stocks')
-            
-            ranked_forex_sessions = {}
-            forex_futures = {
-                session: executor.submit(rank_assets_for_api, pairs, 'forex') 
-                for session, pairs in FOREX_SESSIONS.items()
-            }
-            
-            for session, future in forex_futures.items():
-                ranked_forex_sessions[session] = [{'ticker': p['ticker'], 'active': p['score'] != -1} for p in future.result()]
+        # Аналізуємо і сортуємо тільки криптовалюти
+        ranked_crypto_data = rank_assets_for_api(CRYPTO_PAIRS_FULL, 'crypto')
+        ranked_crypto = [{'ticker': p['ticker'], 'active': p['score'] != -1} for p in ranked_crypto_data]
 
-            ranked_crypto = [{'ticker': p['ticker'], 'active': p['score'] != -1} for p in crypto_future.result()]
-            ranked_stocks = [{'ticker': p['ticker'], 'active': p['score'] != -1} for p in stocks_future.result()]
+        # Для акцій та валют повертаємо статичні списки, щоб не використовувати ліміти API
+        static_stocks = [{'ticker': p, 'active': True} for p in STOCK_TICKERS]
+        static_forex = {
+            session: [{'ticker': p, 'active': True} for p in pairs] 
+            for session, pairs in FOREX_SESSIONS.items()
+        }
 
         return jsonify({
             "watchlist": watchlist,
             "crypto": ranked_crypto,
-            "forex": ranked_forex_sessions,
-            "stocks": ranked_stocks
+            "forex": static_forex,
+            "stocks": static_stocks
         })
     except Exception as e:
         logger.error(f"API error for ranked pairs: {e}\n{traceback.format_exc()}")
@@ -89,6 +89,7 @@ def api_get_ranked_pairs():
             "stocks": [{'ticker': p, 'active': True} for p in STOCK_TICKERS],
             "error_message": "Помилка при сортуванні, показано стандартний список."
         })
+# --- КІНЕЦЬ ЗМІН ---
 
 @app.route("/api/get_pairs", methods=["GET"])
 def api_get_pairs():
@@ -96,6 +97,7 @@ def api_get_pairs():
     watchlist = get_watchlist(user_id) if user_id else []
     return jsonify({ "watchlist": watchlist, "crypto": CRYPTO_PAIRS_FULL, "forex": FOREX_SESSIONS, "stocks": STOCK_TICKERS })
 
+# ... (решта файлу без змін) ...
 @app.route("/api/get_active_markets", methods=["GET"])
 def api_get_active_markets():
     try:
