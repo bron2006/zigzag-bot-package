@@ -8,6 +8,9 @@
     --secondary-bg-color: var(--tg-theme-secondary-bg-color, #272727);
     --buy-color: #26a69a;
     --sell-color: #ef5350;
+    --strong-confidence-bg: rgba(38, 166, 154, 0.2);
+    --weak-confidence-bg: rgba(239, 83, 80, 0.2);
+    --neutral-confidence-bg: rgba(170, 170, 170, 0.15);
 }
 
 body {
@@ -21,87 +24,48 @@ body {
 
 .container { max-width: 100%; margin: auto; }
 h1 { text-align: center; color: var(--text-color); font-size: 24px; margin-top: 0; }
+h4 { font-size: 16px; font-weight: 600; margin: 15px 0 8px 0; padding-bottom: 5px; border-bottom: 1px solid var(--secondary-bg-color); }
+
 .category { margin-bottom: 15px; }
 .category-title { font-size: 18px; font-weight: bold; margin-bottom: 10px; padding-bottom: 5px; border-bottom: 1px solid var(--secondary-bg-color); }
 .pair-list { display: flex; flex-wrap: wrap; gap: 8px; }
 
-.pair-item {
-    display: flex;
-    flex-grow: 1;
-    min-width: 120px;
-}
+.pair-item { display: flex; flex-grow: 1; min-width: 120px; }
+.pair-button { flex-grow: 1; padding: 10px 15px; background: var(--secondary-bg-color); color: var(--text-color); border: none; border-top-left-radius: 8px; border-bottom-left-radius: 8px; cursor: pointer; font-size: 14px; transition: background-color 0.2s; text-align: center; }
+.fav-btn { padding: 10px 12px; background: var(--secondary-bg-color); color: var(--text-color); border: none; border-top-right-radius: 8px; border-bottom-right-radius: 8px; cursor: pointer; font-size: 14px; border-left: 1px solid var(--bg-color); transition: background-color 0.2s; }
+.pair-button:hover, .fav-btn:hover { background-color: var(--button-color); color: var(--button-text-color); }
 
-.pair-button {
-    flex-grow: 1;
-    padding: 10px 15px;
-    background: var(--secondary-bg-color);
-    color: var(--text-color);
-    border: none;
-    border-top-left-radius: 8px;
-    border-bottom-left-radius: 8px;
-    cursor: pointer;
-    font-size: 14px;
-    transition: background-color 0.2s;
-    text-align: center;
-}
-
-.fav-btn {
-    padding: 10px 12px;
-    background: var(--secondary-bg-color);
-    color: var(--text-color);
-    border: none;
-    border-top-right-radius: 8px;
-    border-bottom-right-radius: 8px;
-    cursor: pointer;
-    font-size: 14px;
-    border-left: 1px solid var(--bg-color);
-    transition: background-color 0.2s;
-}
-
-.pair-button:hover, .fav-btn:hover {
-    background-color: var(--button-color);
-    color: var(--button-text-color);
-}
-
-#signalContainer { text-align: center; }
+#signalContainer { text-align: left; }
 #signalOutput { padding: 15px; background: var(--secondary-bg-color); border-radius: 8px; line-height: 1.6; min-height: 50px; }
+
+/* Нові стилі для блоку з результатом */
+.signal-summary { display: flex; justify-content: space-between; align-items: center; padding: 10px; border-radius: 8px; margin-bottom: 10px; }
+.signal-summary.strong { background: var(--strong-confidence-bg); }
+.signal-summary.weak { background: var(--weak-confidence-bg); }
+.signal-summary.neutral { background: var(--neutral-confidence-bg); }
+.direction-arrow { font-size: 28px; }
+.power-index, .confidence { font-size: 16px; }
+.pair-title { text-align: center; font-weight: bold; margin-bottom: 15px; color: var(--hint-color); }
+.reason-list { list-style-type: '– '; margin: 0 0 15px 20px; padding: 0; }
+.reason-list li { margin-bottom: 5px; }
+
 #chart { width: 100%; height: 350px; margin-top: 15px; }
+.no-chart { text-align: center; padding: 50px 0; color: var(--hint-color); }
+
 #loader { position: fixed; left: 50%; top: 50%; width: 50px; height: 50px; border: 5px solid var(--secondary-bg-color); border-top: 5px solid var(--button-color); border-radius: 50%; transform: translate(-50%, -50%); animation: spin 1s linear infinite; }
 .hidden { display: none; }
 @keyframes spin { 0% { transform: translate(-50%, -50%) rotate(0deg); } 100% { transform: translate(-50%, -50%) rotate(360deg); } }
 
-.mta-container { margin-top: 15px; padding-top: 10px; border-top: 1px solid rgba(128, 128, 128, 0.3); }
 .mta-table { width: 100%; border-collapse: collapse; margin-top: 8px; }
 .mta-table th, .mta-table td { border: 1px solid var(--secondary-bg-color); padding: 8px; text-align: center; font-size: 14px; }
 .mta-table th { font-weight: normal; color: var(--hint-color); }
 .mta-table .buy { color: var(--buy-color); font-weight: bold; }
 .mta-table .sell { color: var(--sell-color); font-weight: bold; }
 
-/* --- ПОЧАТОК ЗМІН: Стилі для історії сигналів --- */
-#historyContainer {
-    margin-top: 20px;
-    text-align: left;
-}
-.history-title {
-    font-size: 18px;
-    font-weight: bold;
-    margin-bottom: 10px;
-}
-.history-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 14px;
-}
-.history-table th, .history-table td {
-    border-bottom: 1px solid var(--secondary-bg-color);
-    padding: 10px 8px;
-}
-.history-table th {
-    color: var(--hint-color);
-    font-weight: normal;
-    text-align: left;
-}
+#historyContainer { margin-top: 20px; text-align: left; }
+.history-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.history-table th, .history-table td { border-bottom: 1px solid var(--secondary-bg-color); padding: 10px 8px; }
+.history-table th { color: var(--hint-color); font-weight: normal; text-align: left; }
 .history-table .signal-buy { color: var(--buy-color); }
 .history-table .signal-sell { color: var(--sell-color); }
 .history-table .signal-neutral { color: var(--hint-color); }
-/* --- КІНЕЦЬ ЗМІН --- */
