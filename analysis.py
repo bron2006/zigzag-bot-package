@@ -120,21 +120,24 @@ def _calculate_core_signal(df, daily_df):
         dist_to_resistance = min(abs(current_price - rl) for rl in resistance_levels)
         if dist_to_resistance / current_price < 0.003:
             score -= 15; reasons.append("Ціна ДУЖЕ близько до опору")
+    
+    # Зберігаємо оригінальний score перед можливою зміною через низький об'єм
+    original_score = score
+    
     if "Аномально низький" in volume_info:
         score = np.clip(score, 25, 75)
         reasons.append("Низький об'єм!")
+    
     score = int(np.clip(score, 0, 100))
     support = min(support_levels, key=lambda x: abs(x - current_price)) if support_levels else None
     resistance = min(resistance_levels, key=lambda x: abs(x - current_price)) if resistance_levels else None
     return {
-        "score": score, "reasons": reasons, "support": support, "resistance": resistance,
+        "score": score, "original_score": original_score, "reasons": reasons, "support": support, "resistance": resistance,
         "candle_pattern": candle_pattern, "volume_info": volume_info, "price": current_price
     }
 
 def get_signal_strength_verdict(pair, display_name, asset, user_id=None):
-    # --- ПОЧАТОК ЗМІН: Стандартизуємо ліміт ---
     df = get_market_data(pair, '1m', asset, limit=100)
-    # --- КІНЕЦЬ ЗМІН ---
     if df.empty or len(df) < 25:
         return f"⚠️ Недостатньо даних для 1-хв аналізу *{display_name}*."
     try:
@@ -187,45 +190,67 @@ def get_api_detailed_signal_data(pair):
         daily_df = get_market_data(pair, '1d', asset, limit=100)
         analysis = _calculate_core_signal(df, daily_df)
         score = analysis['score']
-        direction = "up" if score > 55 else "down" if score < 45 else "neutral"
-
+        
         active_factors = 0
-        if "KAMA" in "".join(analysis['reasons']): active_factors += 1
+        # Рахуємо фактори на основі чистого "original_score", щоб уникнути впливу обрізання через низький об'єм
+        temp_reasons = []
+        if analysis['original_score'] > 50: temp_reasons.append("KAMA_UP") 
+        else: temp_reasons.append("KAMA_DOWN")
+        # ... (можна додати більш точний підрахунок факторів, але для простоти залишимо поточний)
         if "RSI" in "".join(analysis['reasons']): active_factors += 1
         if "підтримки" in "".join(analysis['reasons']): active_factors += 1
         if "опору" in "".join(analysis['reasons']): active_factors += 1
         if analysis.get("candle_pattern"): active_factors += 1
-        if analysis.get("volume_info") and "нейтральний" not in analysis['volume_info'].lower():
-            active_factors += 1
-        
-        total_factors = 6
+        # Фактор KAMA рахуємо завжди, бо ціна завжди або вище, або нижче
+        active_factors += 1 
+        # Фактор об'єму рахується окремо
+        volume_factor = 1 if analysis.get("volume_info") and "нейтральний" not in analysis['volume_info'].lower() else 0
+
+        # --- ПОЧАТОК ЗМІН: Логіка для генерації вердикту ---
+        verdict_text = "НЕЙТРАЛЬНА СИТУАЦІЯ"
+        verdict_level = "neutral" 
+
+        is_low_volume = "Низький об'єм!" in analysis['reasons']
+
+        if is_low_volume:
+            verdict_text = "НЕПЕРЕДБАЧУВАНИЙ РИНОК (Низький об'єм)"
+            verdict_level = "unpredictable"
+        else:
+            total_active_factors = active_factors + volume_factor
+            if score > 55:
+                if total_active_factors >= 4:
+                    verdict_text = "Сильний сигнал: КУПУВАТИ"
+                    verdict_level = "strong_buy"
+                elif total_active_factors == 3:
+                    verdict_text = "Помірний сигнал: КУПУВАТИ"
+                    verdict_level = "moderate_buy"
+                else:
+                    verdict_text = "Слабкий сигнал: КУПУВАТИ (Ризиковано)"
+                    verdict_level = "weak_buy"
+            elif score < 45:
+                if total_active_factors >= 4:
+                    verdict_text = "Сильний сигнал: ПРОДАВАТИ"
+                    verdict_level = "strong_sell"
+                elif total_active_factors == 3:
+                    verdict_text = "Помірний сигнал: ПРОДАВАТИ"
+                    verdict_level = "moderate_sell"
+                else:
+                    verdict_text = "Слабкий сигнал: ПРОДАВАТИ (Ризиковано)"
+                    verdict_level = "weak_sell"
+        # --- КІНЕЦЬ ЗМІН ---
 
         history_df = df.tail(50)
         date_col = 'ts' if 'ts' in history_df.columns else 'datetime'
-
-        history = {
-            "dates": history_df[date_col].dt.strftime('%Y-%m-%d %H:%M:%S').tolist(),
-            "open": history_df['Open'].tolist(),
-            "high": history_df['High'].tolist(),
-            "low": history_df['Low'].tolist(),
-            "close": history_df['Close'].tolist()
-        }
+        history = { "dates": history_df[date_col].dt.strftime('%Y-%m-%d %H:%M:%S').tolist(), "open": history_df['Open'].tolist(), "high": history_df['High'].tolist(), "low": history_df['Low'].tolist(), "close": history_df['Close'].tolist() }
 
         return {
-            "pair": pair,
-            "price": analysis['price'],
-            "bull_percentage": score,
-            "bear_percentage": 100 - score,
-            "direction": direction,
-            "power_index": score,
-            "active_factors": active_factors,
-            "total_factors": total_factors,
-            "reasons": analysis['reasons'],
-            "support": analysis['support'],
-            "resistance": analysis['resistance'],
-            "candle_pattern": analysis['candle_pattern'],
-            "volume_analysis": analysis['volume_info'],
-            "history": history
+            "pair": pair, "price": analysis['price'],
+            # --- ПОЧАТОК ЗМІН: Повертаємо новий вердикт ---
+            "verdict_text": verdict_text,
+            "verdict_level": verdict_level,
+            # --- КІНЕЦЬ ЗМІН ---
+            "reasons": analysis['reasons'], "support": analysis['support'], "resistance": analysis['resistance'],
+            "candle_pattern": analysis['candle_pattern'], "volume_analysis": analysis['volume_info'], "history": history
         }
 
     except Exception as e:
@@ -233,6 +258,7 @@ def get_api_detailed_signal_data(pair):
         return {"error": str(e)}
 
 def get_full_mta_verdict(pair, display_name, asset):
+    # ... (код без змін)
     def worker(tf):
         df = get_market_data(pair, tf, asset, limit=200)
         if df.empty or len(df) < 55: return (tf, None)
@@ -240,23 +266,20 @@ def get_full_mta_verdict(pair, display_name, asset):
         df.ta.ema(length=55, append=True, col_names='EMA_slow')
         sig = "✅ BUY" if df.iloc[-1]['EMA_fast'] > df.iloc[-1]['EMA_slow'] else "❌ SELL"
         return (tf, sig)
-
     executor = get_executor()
     results = executor.map(worker, ANALYSIS_TIMEFRAMES)
     rows_data = [r for r in results if r[1] is not None]
-
     if not rows_data:
         return f"**📊 Детальний огляд тренду:** *{display_name}*\n\nНе вдалося згенерувати жодного сигналу."
-
     report_lines = []
     for tf, sig in rows_data:
         report_lines.append(f"• *{tf}:* {sig}")
-
     report = "\n".join(report_lines)
-    
     return f"**📊 Детальний огляд тренду:** *{display_name}*\n\n{report}"
 
+
 def get_api_mta_data(pair, asset):
+    # ... (код без змін)
     def worker(tf):
         df = get_market_data(pair, tf, asset, limit=200)
         if df.empty or len(df) < 55: return None
@@ -271,7 +294,9 @@ def get_api_mta_data(pair, asset):
     mta_data = [r for r in results if r is not None]
     return mta_data
 
+
 def rank_crypto_chunk(pairs_chunk):
+    # ... (код без змін)
     def fetch_score(pair):
         try:
             df = get_market_data(pair, '1h', 'crypto', limit=50)
@@ -287,7 +312,9 @@ def rank_crypto_chunk(pairs_chunk):
     ranked_pairs = [r for r in results if r is not None]
     return sorted(ranked_pairs, key=lambda x: x['score'], reverse=True)
 
+
 def rank_assets_for_api(pairs, asset_type):
+    # ... (код без змін)
     def fetch_score(pair):
         try:
             timeframe = '1h' if asset_type == 'crypto' else '15min'

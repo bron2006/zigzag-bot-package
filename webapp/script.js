@@ -138,25 +138,10 @@ function fetchSignal(pair, assetType) {
             return;
         }
 
-        const dir = signalData.direction || "neutral";
-        const arrow = dir === "up" ? "⬆️" : dir === "down" ? "⬇️" : "🟡";
-        const powerIndex = signalData.power_index !== undefined ? signalData.power_index : "?";
-        
-        // --- ПОЧАТОК ЗМІН: Використовуємо нові дані для визначення класу ---
-        const activeFactors = signalData.active_factors;
-        const totalFactors = signalData.total_factors;
-
-        let confidenceClass = "neutral";
-        if (activeFactors >= 4) confidenceClass = "strong"; // 4 і більше - сильний сигнал
-        else if (activeFactors <= 2) confidenceClass = "weak"; // 2 і менше - слабкий
-        // --- КІНЕЦЬ ЗМІН ---
-        
-        // --- ПОЧАТОК ЗМІН: Оновлюємо HTML ---
+        // --- ПОЧАТОК ЗМІН: Відображаємо єдиний вердикт ---
         let html = `
-            <div class="signal-summary ${confidenceClass}">
-                <div class="direction-arrow">${arrow}</div>
-                <div class="power-index">Індекс сили: <strong>${powerIndex}</strong></div>
-                <div class="confidence">Підтвердження: <strong>${activeFactors} з ${totalFactors}</strong></div>
+            <div class="verdict-box ${signalData.verdict_level}">
+                ${signalData.verdict_text}
             </div>
             <div class="pair-title">${signalData.pair} | Ціна: ${signalData.price.toFixed(4)}</div>
         `;
