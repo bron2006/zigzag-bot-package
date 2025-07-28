@@ -176,28 +176,52 @@ def get_api_detailed_signal_data(pair):
     asset = 'stocks'
     if '/' in pair:
         asset = 'crypto' if 'USDT' in pair else 'forex'
+    
     df = get_market_data(pair, '1m', asset, limit=100)
     if df.empty or len(df) < 25:
         return {"error": "Недостатньо даних для аналізу."}
+
     try:
         daily_df = get_market_data(pair, '1d', asset, limit=100)
         analysis = _calculate_core_signal(df, daily_df)
         score = analysis['score']
+        direction = "up" if score > 55 else "down" if score < 45 else "neutral"
+
+        # Підрахунок довіри до сигналу (на основі кількості факторів)
+        confidence_score = len(analysis['reasons'])
+        if analysis.get("candle_pattern"): confidence_score += 1
+        if analysis.get("volume_info") and "нейтральний" not in analysis['volume_info'].lower():
+            confidence_score += 1
+
+        signal_confidence = min(confidence_score * 10, 100)
+
         history_df = df.tail(50)
         date_col = 'ts' if 'ts' in history_df.columns else 'datetime'
+
         history = {
             "dates": history_df[date_col].dt.strftime('%Y-%m-%d %H:%M:%S').tolist(),
-            "open": history_df['Open'].tolist(), "high": history_df['High'].tolist(),
-            "low": history_df['Low'].tolist(), "close": history_df['Close'].tolist()
+            "open": history_df['Open'].tolist(),
+            "high": history_df['High'].tolist(),
+            "low": history_df['Low'].tolist(),
+            "close": history_df['Close'].tolist()
         }
+
         return {
-            "pair": pair, "price": analysis['price'], "bull_percentage": score,
-            "bear_percentage": 100 - score, "reasons": analysis['reasons'], 
-            "support": analysis['support'], "resistance": analysis['resistance'],
+            "pair": pair,
+            "price": analysis['price'],
+            "bull_percentage": score,
+            "bear_percentage": 100 - score,
+            "direction": direction,
+            "power_index": score,
+            "signal_confidence": signal_confidence,
+            "reasons": analysis['reasons'],
+            "support": analysis['support'],
+            "resistance": analysis['resistance'],
             "candle_pattern": analysis['candle_pattern'],
             "volume_analysis": analysis['volume_info'],
             "history": history
         }
+
     except Exception as e:
         logger.error(f"Error in get_api_detailed_signal_data for {pair}: {e}")
         return {"error": str(e)}
