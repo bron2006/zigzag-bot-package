@@ -277,34 +277,38 @@ def rank_crypto_chunk(pairs_chunk):
     ranked_pairs = [r for r in results if r is not None]
     return sorted(ranked_pairs, key=lambda x: x['score'], reverse=True)
 
+# --- ПОЧАТОК ЗМІН: Функція rank_assets_for_api тепер працює тільки для крипти ---
 def rank_assets_for_api(pairs, asset_type):
+    """Ранжує активи за активністю (тільки для криптовалют)."""
     cache_key = f"ranking_{asset_type}"
     if cache_key in RANKING_CACHE:
         return RANKING_CACHE[cache_key]
-    def fetch_score(pair):
+
+    def fetch_crypto_score(pair):
         try:
-            timeframe = '1h' if asset_type == 'crypto' else '15m'
-            df = get_market_data(pair, timeframe, asset_type, limit=50)
+            # Логіка тепер тільки для криптовалют
+            df = get_market_data(pair, '1h', 'crypto', limit=50)
             if df.empty or len(df) < 30:
                 return {'ticker': pair, 'score': -1}
-            if asset_type in ('stocks', 'forex'):
-                date_col = 'datetime' if 'datetime' in df.columns else 'ts'
-                if date_col not in df.columns: return {'ticker': pair, 'score': -1}
-                last_update_time = df[date_col].iloc[-1]
-                if pd.Timestamp.utcnow() - last_update_time > timedelta(hours=2):
-                    return {'ticker': pair, 'score': -1}
+
             rsi = df.ta.rsi(length=14).iloc[-1]
             if pd.isna(rsi):
                 return {'ticker': pair, 'score': -1}
+
             score = abs(rsi - 50)
             return {'ticker': pair, 'score': score}
         except Exception as e:
             logger.error(f"Не вдалося проаналізувати активність {pair}: {e}")
             return {'ticker': pair, 'score': -1}
+
     executor = get_executor()
-    results = list(executor.map(fetch_score, pairs))
+    # Використовуємо fetch_crypto_score, оскільки ця функція тепер спеціалізована
+    results = list(executor.map(fetch_crypto_score, pairs))
+    
     active_part = sorted([res for res in results if res['score'] != -1], key=lambda x: x['score'], reverse=True)
     inactive_part = [res for res in results if res['score'] == -1]
     final_ranking = active_part + inactive_part
+    
     RANKING_CACHE[cache_key] = final_ranking
     return final_ranking
+# --- КІНЕЦЬ ЗМІН ---
