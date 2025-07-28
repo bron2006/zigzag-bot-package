@@ -210,11 +210,28 @@ def get_full_mta_verdict(pair, display_name, asset):
         df.ta.ema(length=55, append=True, col_names='EMA_slow')
         sig = "✅ BUY" if df.iloc[-1]['EMA_fast'] > df.iloc[-1]['EMA_slow'] else "❌ SELL"
         return (tf, sig)
+
     executor = get_executor()
     results = executor.map(worker, ANALYSIS_TIMEFRAMES)
-    rows = [r for r in results if r[1] is not None]
-    table = "\n".join([f"| {tf:<4} | {sig} |" for tf, sig in rows])
-    return f"**📊 Детальний огляд тренду:** *{display_name}*\n\n| ТФ   | Сигнал |\n|:----:|:---:|\n{table}"
+    rows_data = [r for r in results if r[1] is not None]
+
+    if not rows_data:
+        return f"**📊 Детальний огляд тренду:** *{display_name}*\n\nНе вдалося згенерувати жодного сигналу."
+
+    # Створюємо таблицю з ручним вирівнюванням для моноширинного блоку
+    table_lines = []
+    table_lines.append("ТФ      | Сигнал")
+    table_lines.append("--------|----------")
+    
+    for tf, sig in rows_data:
+        # Додаємо відступи до таймфрейму, щоб вирівняти роздільник '|'
+        tf_padded = tf.ljust(7)
+        table_lines.append(f"{tf_padded} | {sig}")
+
+    table = "\n".join(table_lines)
+    
+    # Загортаємо всю таблицю в блок ``` для коректного відображення
+    return f"**📊 Детальний огляд тренду:** *{display_name}*\n\n```{table}```"
 
 def get_api_mta_data(pair, asset):
     def worker(tf):
