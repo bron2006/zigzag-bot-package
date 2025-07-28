@@ -2,9 +2,9 @@
 import pandas as pd
 import pandas_ta as ta
 import numpy as np
+from datetime import datetime, timedelta, timezone
 from concurrent.futures import ThreadPoolExecutor
 
-from db import add_signal_to_history
 from config import logger, binance, td, CACHE, ANALYSIS_TIMEFRAMES
 
 _executor = None
@@ -131,7 +131,7 @@ def _calculate_core_signal(df, daily_df):
         "candle_pattern": candle_pattern, "volume_info": volume_info, "price": current_price
     }
 
-def get_signal_strength_verdict(pair, display_name, asset, user_id=None):
+def get_signal_strength_verdict(pair, display_name, asset):
     df = get_market_data(pair, '1m', asset, limit=50)
     if df.empty or len(df) < 25:
         return f"⚠️ Недостатньо даних для 1-хв аналізу *{display_name}*."
@@ -139,14 +139,6 @@ def get_signal_strength_verdict(pair, display_name, asset, user_id=None):
         daily_df = get_market_data(pair, '1d', asset, limit=30)
         analysis = _calculate_core_signal(df, daily_df)
         bull_percentage = analysis['score']
-        if user_id:
-            signal_data = {
-                'user_id': user_id,
-                'pair': pair,
-                'price': analysis['price'],
-                'bull_percentage': bull_percentage
-            }
-            add_signal_to_history(signal_data)
         bear_percentage = 100 - bull_percentage
         direction_arrow = "⬆️" if bull_percentage >= 50 else "⬇️"
         strength_line = f"🐂 Бики {bull_percentage}% ⬆️\n🐃 Ведмеді {bear_percentage}% ⬇️"
@@ -158,6 +150,7 @@ def get_signal_strength_verdict(pair, display_name, asset, user_id=None):
             if analysis['support']: sr_parts.append(f"Підтримка: `{analysis['support']:.4f}`")
             if analysis['resistance']: sr_parts.append(f"Опір: `{analysis['resistance']:.4f}`")
             sr_info = " | ".join(sr_parts)
+
         final_message = f"{direction_arrow}\n\n"
         final_message += (f"**🕯️ Індекс сили ринку (1хв):** *{display_name}*\n"
                          f"**Поточна ціна:** `{analysis['price']:.4f}`\n\n"
@@ -176,6 +169,7 @@ def get_api_detailed_signal_data(pair):
     asset = 'stocks'
     if '/' in pair:
         asset = 'crypto' if 'USDT' in pair else 'forex'
+    
     df = get_market_data(pair, '1m', asset, limit=100)
     if df.empty or len(df) < 25:
         return {"error": "Недостатньо даних для аналізу."}
@@ -213,8 +207,13 @@ def get_full_mta_verdict(pair, display_name, asset):
     executor = get_executor()
     results = executor.map(worker, ANALYSIS_TIMEFRAMES)
     rows = [r for r in results if r[1] is not None]
-    table = "\n".join([f"| {tf:<4} | {sig} |" for tf, sig in rows])
-    return f"**📊 Детальний огляд тренду:** *{display_name}*\n\n| ТФ   | Сигнал |\n|:----:|:---:|\n{table}"
+    
+    # --- ПОЧАТОК ЗМІН: Форматуємо таблицю як блок коду ---
+    table_rows_str = "\n".join([f"| {tf:<4} | {sig} |" for tf, sig in rows])
+    table_content = f"| ТФ   | Сигнал |\n|:----:|:------:|\n{table_rows_str}"
+    
+    return f"**📊 Детальний огляд тренду:** *{display_name}*\n\n```{table_content}```"
+    # --- КІНЕЦЬ ЗМІН ---
 
 def get_api_mta_data(pair, asset):
     def worker(tf):
