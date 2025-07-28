@@ -9,9 +9,7 @@ from telegram import Update
 
 from config import app, bot, dp, WEBHOOK_SECRET, logger, CRYPTO_PAIRS_FULL, FOREX_SESSIONS, STOCK_TICKERS, FOREX_PAIRS_MAP
 from db import init_db, get_watchlist, toggle_watch, get_signal_history
-# --- ПОЧАТОК ЗМІН: Виправлено помилку в назві функції ---
 from analysis import get_api_detailed_signal_data, rank_assets_for_api, get_api_mta_data
-# --- КІНЕЦЬ ЗМІН ---
 import telegram_ui
 
 CORS(app)
@@ -45,11 +43,8 @@ def webhook_handler():
 def api_signal():
     pair = request.args.get("pair")
     if not pair: return jsonify({"error": "pair is required"}), 400
-    
-    force_refresh = request.args.get("refresh") == "true"
-    
     try:
-        data = get_api_detailed_signal_data(pair, force_refresh=force_refresh)
+        data = get_api_detailed_signal_data(pair)
         if "error" in data: return jsonify(data)
         return jsonify(data)
     except Exception as e:
@@ -62,22 +57,27 @@ def api_get_ranked_pairs():
     watchlist = get_watchlist(user_id) if user_id else []
 
     try:
-        # Аналізуємо і сортуємо тільки криптовалюти
-        ranked_crypto_data = rank_assets_for_api(CRYPTO_PAIRS_FULL, 'crypto')
-        ranked_crypto = [{'ticker': p['ticker'], 'active': p['score'] != -1} for p in ranked_crypto_data]
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            crypto_future = executor.submit(rank_assets_for_api, CRYPTO_PAIRS_FULL, 'crypto')
+            stocks_future = executor.submit(rank_assets_for_api, STOCK_TICKERS, 'stocks')
+            
+            ranked_forex_sessions = {}
+            forex_futures = {
+                session: executor.submit(rank_assets_for_api, pairs, 'forex') 
+                for session, pairs in FOREX_SESSIONS.items()
+            }
+            
+            for session, future in forex_futures.items():
+                ranked_forex_sessions[session] = [{'ticker': p['ticker'], 'active': p['score'] != -1} for p in future.result()]
 
-        # Для акцій та валют повертаємо статичні списки
-        static_stocks = [{'ticker': p, 'active': True} for p in STOCK_TICKERS]
-        static_forex = {
-            session: [{'ticker': p, 'active': True} for p in pairs] 
-            for session, pairs in FOREX_SESSIONS.items()
-        }
+            ranked_crypto = [{'ticker': p['ticker'], 'active': p['score'] != -1} for p in crypto_future.result()]
+            ranked_stocks = [{'ticker': p['ticker'], 'active': p['score'] != -1} for p in stocks_future.result()]
 
         return jsonify({
             "watchlist": watchlist,
             "crypto": ranked_crypto,
-            "forex": static_forex,
-            "stocks": static_stocks
+            "forex": ranked_forex_sessions,
+            "stocks": ranked_stocks
         })
     except Exception as e:
         logger.error(f"API error for ranked pairs: {e}\n{traceback.format_exc()}")
