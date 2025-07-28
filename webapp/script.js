@@ -138,7 +138,6 @@ function fetchSignal(pair, assetType) {
             return;
         }
 
-        // Виправлена логіка для стрілок
         const dir = signalData.direction || "neutral";
         const arrow = dir === "up" ? "⬆️" : dir === "down" ? "⬇️" : "🟡";
         const powerIndex = signalData.power_index !== undefined ? signalData.power_index : "?";
@@ -148,7 +147,6 @@ function fetchSignal(pair, assetType) {
         if (confidence >= 67) confidenceClass = "strong";
         else if (confidence <= 33) confidenceClass = "weak";
         
-        // Основний блок з індексом сили та ймовірністю
         let html = `
             <div class="signal-summary ${confidenceClass}">
                 <div class="direction-arrow">${arrow}</div>
@@ -157,13 +155,21 @@ function fetchSignal(pair, assetType) {
             </div>
             <div class="pair-title">${signalData.pair} | Ціна: ${signalData.price.toFixed(4)}</div>
         `;
+        
+        // --- ПОЧАТОК ЗМІН: Додаємо блок для рівнів підтримки/опору ---
+        if (signalData.support || signalData.resistance) {
+            const supportText = signalData.support ? `Підтримка: <strong>${signalData.support.toFixed(4)}</strong>` : '';
+            const resistanceText = signalData.resistance ? `Опір: <strong>${signalData.resistance.toFixed(4)}</strong>` : '';
+            const separator = signalData.support && signalData.resistance ? ' | ' : '';
+            
+            html += `<div class="sr-levels">${supportText}${separator}${resistanceText}</div>`;
+        }
+        // --- КІНЕЦЬ ЗМІН ---
 
-        // Блок з причинами
         if (signalData.reasons && signalData.reasons.length) {
             html += `<h4>Ключові фактори:</h4><ul class="reason-list">${signalData.reasons.map(r => `<li>${r}</li>`).join('')}</ul>`;
         }
         
-        // Блок з MTA
         if (Array.isArray(mtaData) && mtaData.length > 0) {
             html += '<h4>Мульти-таймфрейм аналіз (MTA):</h4><table class="mta-table"><tr>';
             mtaData.forEach(item => { html += `<th>${item.tf}</th>`; });
@@ -177,7 +183,6 @@ function fetchSignal(pair, assetType) {
 
         signalOutput.innerHTML = html;
 
-        // Повертаємо інформативний свічковий графік
         if (signalData.history && signalData.history.dates && signalData.history.dates.length > 0) {
             drawChart(pair, signalData.history);
         } else {
