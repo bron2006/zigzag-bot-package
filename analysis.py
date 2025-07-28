@@ -218,31 +218,15 @@ def get_full_mta_verdict(pair, display_name, asset):
     if not rows_data:
         return f"**📊 Детальний огляд тренду:** *{display_name}*\n\nНе вдалося згенерувати жодного сигналу."
 
-    # Створення простої ASCII-таблиці для максимальної сумісності
-    tf_col_width = 7
-    sig_col_width = 11
-
-    separator = f"+{'-' * (tf_col_width + 2)}+{'-' * (sig_col_width + 2)}+"
-    
-    table_lines = []
-    table_lines.append(separator)
-    
-    tf_header = "ТФ".center(tf_col_width)
-    sig_header = "Сигнал".center(sig_col_width)
-    table_lines.append(f"| {tf_header} | {sig_header} |")
-    
-    table_lines.append(separator)
-    
+    # Фінальний підхід: простий і надійний список, що не зламається
+    report_lines = []
     for tf, sig in rows_data:
-        tf_padded = tf.ljust(tf_col_width)
-        sig_padded = f" {sig}".ljust(sig_col_width)
-        table_lines.append(f"| {tf_padded} | {sig_padded} |")
+        # Форматуємо як "• 1h: ✅ BUY"
+        report_lines.append(f"• *{tf}:* {sig}")
 
-    table_lines.append(separator)
+    report = "\n".join(report_lines)
     
-    table = "\n".join(table_lines)
-    
-    return f"**📊 Детальний огляд тренду:** *{display_name}*\n\n```{table}```"
+    return f"**📊 Детальний огляд тренду:** *{display_name}*\n\n{report}"
 
 def get_api_mta_data(pair, asset):
     def worker(tf):
