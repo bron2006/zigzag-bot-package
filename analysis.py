@@ -6,7 +6,9 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 
 from db import add_signal_to_history
-from config import logger, binance, td, CACHE, ANALYSIS_TIMEFRAMES
+# --- ПОЧАТОК ЗМІН: Імпортуємо обидва кеші ---
+from config import logger, binance, td, MARKET_DATA_CACHE, RANKING_CACHE, ANALYSIS_TIMEFRAMES
+# --- КІНЕЦЬ ЗМІН ---
 
 _executor = None
 def get_executor():
@@ -17,8 +19,10 @@ def get_executor():
 
 def get_market_data(pair, tf, asset, limit=300, force_refresh=False):
     key = f"{pair}_{tf}_{limit}"
-    if not force_refresh and key in CACHE:
-        return CACHE[key]
+    # --- ПОЧАТОК ЗМІН: Використовуємо MARKET_DATA_CACHE ---
+    if not force_refresh and key in MARKET_DATA_CACHE:
+        return MARKET_DATA_CACHE[key]
+    # --- КІНЕЦЬ ЗМІН ---
     try:
         df = pd.DataFrame()
         if asset == 'crypto':
@@ -41,12 +45,13 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False):
         if df.empty:
             logger.warning(f"API повернуло порожній результат для {pair} на ТФ {tf}")
             return pd.DataFrame()
-        CACHE[key] = df
+        MARKET_DATA_CACHE[key] = df
         return df
     except Exception as e:
         logger.error(f"Помилка отримання даних для {pair} на ТФ {tf}: {e}")
         return pd.DataFrame()
 
+# ... (інші функції без змін) ...
 def group_close_values(values, threshold=0.01):
     if not len(values): return []
     values = sorted(values)
@@ -286,14 +291,26 @@ def rank_crypto_chunk(pairs_chunk):
     ranked_pairs = [r for r in results if r is not None]
     return sorted(ranked_pairs, key=lambda x: x['score'], reverse=True)
 
-# --- ПОЧАТОК ЗМІН: Нова логіка сортування, що не видаляє пари ---
+# --- ПОЧАТОК ЗМІН: Впроваджено всі твої пропозиції ---
 def rank_assets_for_api(pairs, asset_type):
+    cache_key = f"ranking_{asset_type}"
+    if cache_key in RANKING_CACHE:
+        return RANKING_CACHE[cache_key]
+
     def fetch_score(pair):
         try:
             timeframe = '1h' if asset_type == 'crypto' else '15m'
             df = get_market_data(pair, timeframe, asset_type, limit=50)
-            if df.empty:
+            
+            if df.empty or len(df) < 30:
                 return {'ticker': pair, 'score': -1}
+            
+            if asset_type in ('stocks', 'forex'):
+                date_col = 'datetime' if 'datetime' in df.columns else 'ts'
+                if date_col not in df.columns: return {'ticker': pair, 'score': -1}
+                last_update_time = df[date_col].iloc[-1]
+                if pd.Timestamp.utcnow() - last_update_time > timedelta(hours=2):
+                    return {'ticker': pair, 'score': -1}
             
             rsi = df.ta.rsi(length=14).iloc[-1]
             if pd.isna(rsi):
@@ -306,16 +323,12 @@ def rank_assets_for_api(pairs, asset_type):
             return {'ticker': pair, 'score': -1}
 
     executor = get_executor()
-    results = executor.map(fetch_score, pairs)
+    results = list(executor.map(fetch_score, pairs))
     
-    # Сортуємо так, щоб неактивні пари (score = -1) завжди були в кінці
-    sorted_results = sorted(list(results), key=lambda x: x['score'] == -1)
+    active_part = sorted([res for res in results if res['score'] != -1], key=lambda x: x['score'], reverse=True)
+    inactive_part = [res for res in results if res['score'] == -1]
     
-    # Потім сортуємо активну частину за спаданням score
-    active_part = [res for res in sorted_results if res['score'] != -1]
-    inactive_part = [res for res in sorted_results if res['score'] == -1]
-    
-    active_part_sorted = sorted(active_part, key=lambda x: x['score'], reverse=True)
-    
-    return active_part_sorted + inactive_part
+    final_ranking = active_part + inactive_part
+    RANKING_CACHE[cache_key] = final_ranking
+    return final_ranking
 # --- КІНЕЦЬ ЗМІН ---

@@ -20,7 +20,9 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # --- Кеш та клієнти API ---
-CACHE = TTLCache(maxsize=5000, ttl=300)
+MARKET_DATA_CACHE = TTLCache(maxsize=5000, ttl=300) # Для даних окремих активів
+RANKING_CACHE = TTLCache(maxsize=100, ttl=60)      # Для результатів сортування списків
+
 binance = ccxt.binance({'enableRateLimit': True})
 td = TDClient(apikey=TWELVEDATA_API_KEY)
 
