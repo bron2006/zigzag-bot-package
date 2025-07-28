@@ -132,7 +132,6 @@ def _calculate_core_signal(df, daily_df):
     resistance = min(resistance_levels, key=lambda x: abs(x - current_price)) if resistance_levels else None
     return { "score": score, "reasons": reasons, "support": support, "resistance": resistance, "candle_pattern": candle_pattern, "volume_info": volume_info, "price": current_price }
 
-# --- ПОЧАТОК ЗМІН: Нова єдина функція для генерації вердикту ---
 def _generate_verdict(analysis):
     score = analysis['score']
     reasons = analysis['reasons']
@@ -177,9 +176,7 @@ def _generate_verdict(analysis):
                 verdict_level = "weak_sell"
     
     return verdict_text, verdict_level
-# --- КІНЕЦЬ ЗМІН ---
 
-# --- ПОЧАТОК ЗМІН: get_signal_strength_verdict тепер використовує новий вердикт ---
 def get_signal_strength_verdict(pair, display_name, asset, user_id=None, force_refresh=False):
     df = get_market_data(pair, '1m', asset, limit=100, force_refresh=force_refresh)
     if df.empty or len(df) < 25:
@@ -202,7 +199,6 @@ def get_signal_strength_verdict(pair, display_name, asset, user_id=None, force_r
     except Exception as e:
         logger.error(f"Помилка розрахунку індексу для {pair}: {e}")
         return f"⚠️ Помилка аналізу *{display_name}*.", None
-# --- КІНЕЦЬ ЗМІН ---
 
 def get_api_detailed_signal_data(pair):
     asset = 'stocks'
@@ -286,20 +282,16 @@ def rank_crypto_chunk(pairs_chunk):
     ranked_pairs = [r for r in results if r is not None]
     return sorted(ranked_pairs, key=lambda x: x['score'], reverse=True)
 
-# --- ПОЧАТОК ЗМІН: Виправлено фільтр для закритих ринків ---
+# --- ПОЧАТОК ЗМІН: Видалено проблемний фільтр ---
 def rank_assets_for_api(pairs, asset_type):
     def fetch_score(pair):
         try:
             timeframe = '1h' if asset_type == 'crypto' else '15min'
             df = get_market_data(pair, timeframe, asset_type, limit=50)
             if df.empty: return None
-            if asset_type in ('stocks', 'forex'):
-                date_col = 'datetime' if 'datetime' in df.columns else 'ts'
-                if date_col not in df.columns: return None
-                last_update_time = df[date_col].iloc[-1]
-                # Змінюємо 4 години на 26, щоб врахувати закриття ринків
-                if pd.Timestamp.now(tz='UTC') - last_update_time > timedelta(hours=26):
-                    return None
+            
+            # ВИДАЛЕНО БЛОК ПЕРЕВІРКИ ЧАСУ ОНОВЛЕННЯ
+            
             rsi = df.ta.rsi(length=14).iloc[-1]
             if pd.isna(rsi): return None
             score = abs(rsi - 50)
