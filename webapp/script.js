@@ -7,6 +7,9 @@ const listsContainer = document.getElementById("listsContainer");
 const signalOutput = document.getElementById("signalOutput");
 const historyContainer = document.getElementById("historyContainer");
 const chartContainer = document.getElementById("chart");
+// ПОЧАТОК ЗМІН: Отримуємо елемент поля пошуку
+const searchInput = document.getElementById('searchInput');
+// КІНЕЦЬ ЗМІН
 
 let tg;
 if (!window.Telegram || !window.Telegram.WebApp) {
@@ -48,7 +51,44 @@ document.addEventListener('DOMContentLoaded', function() {
             signalOutput.innerHTML = "❌ Не вдалося завантажити списки пар.";
             showLoader(false);
         });
+
+    // ПОЧАТОК ЗМІН: Додаємо слухача подій для поля пошуку
+    searchInput.addEventListener('input', handleSearch);
+    // КІНЕЦЬ ЗМІН
 });
+
+
+// ПОЧАТОК ЗМІН: Нова функція для обробки пошуку
+function handleSearch() {
+    const searchTerm = searchInput.value.toUpperCase().trim();
+    const categories = document.querySelectorAll('.category');
+
+    categories.forEach(category => {
+        const pairs = category.querySelectorAll('.pair-item');
+        let visiblePairs = 0;
+
+        pairs.forEach(pair => {
+            const button = pair.querySelector('.pair-button');
+            const ticker = button.textContent.toUpperCase();
+
+            if (ticker.includes(searchTerm)) {
+                pair.style.display = 'flex';
+                visiblePairs++;
+            } else {
+                pair.style.display = 'none';
+            }
+        });
+
+        // Ховаємо заголовок категорії, якщо в ній не знайдено жодної пари
+        if (visiblePairs > 0) {
+            category.style.display = 'block';
+        } else {
+            category.style.display = 'none';
+        }
+    });
+}
+// КІНЕЦЬ ЗМІН
+
 
 function renderFavoriteButton(pair) {
     const isFavorite = currentWatchlist.includes(pair);

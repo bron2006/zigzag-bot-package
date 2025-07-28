@@ -26,6 +26,24 @@ body {
 h1 { text-align: center; color: var(--text-color); font-size: 24px; margin-top: 0; }
 h4 { font-size: 16px; font-weight: 600; margin: 15px 0 8px 0; padding-bottom: 5px; border-bottom: 1px solid var(--secondary-bg-color); }
 
+/* ПОЧАТОК ЗМІН: Стилі для поля пошуку */
+#searchInput {
+    width: 100%;
+    padding: 12px;
+    margin-bottom: 20px;
+    box-sizing: border-box;
+    background-color: var(--secondary-bg-color);
+    color: var(--text-color);
+    border: 1px solid var(--secondary-bg-color);
+    border-radius: 8px;
+    font-size: 16px;
+}
+
+#searchInput::placeholder {
+    color: var(--hint-color);
+}
+/* КІНЕЦЬ ЗМІН */
+
 .category { margin-bottom: 15px; }
 .category-title { font-size: 18px; font-weight: bold; margin-bottom: 10px; padding-bottom: 5px; border-bottom: 1px solid var(--secondary-bg-color); }
 .pair-list { display: flex; flex-wrap: wrap; gap: 8px; }
