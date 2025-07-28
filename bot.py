@@ -9,7 +9,9 @@ from telegram import Update
 
 from config import app, bot, dp, WEBHOOK_SECRET, logger, CRYPTO_PAIRS_FULL, FOREX_SESSIONS, STOCK_TICKERS, FOREX_PAIRS_MAP
 from db import init_db, get_watchlist, toggle_watch, get_signal_history
-from analysis import get_api_detailed_signal_data, rank_assets_for_api, get_api_mта_data
+# --- ПОЧАТОК ЗМІН: Виправлено помилку в назві функції ---
+from analysis import get_api_detailed_signal_data, rank_assets_for_api, get_api_mta_data
+# --- КІНЕЦЬ ЗМІН ---
 import telegram_ui
 
 CORS(app)
@@ -43,15 +45,17 @@ def webhook_handler():
 def api_signal():
     pair = request.args.get("pair")
     if not pair: return jsonify({"error": "pair is required"}), 400
+    
+    force_refresh = request.args.get("refresh") == "true"
+    
     try:
-        data = get_api_detailed_signal_data(pair)
+        data = get_api_detailed_signal_data(pair, force_refresh=force_refresh)
         if "error" in data: return jsonify(data)
         return jsonify(data)
     except Exception as e:
         logger.error(f"API error for pair {pair}: {e}\n{traceback.format_exc()}")
         return jsonify({"error": f"Внутрішня помилка сервера"}), 500
 
-# --- ПОЧАТОК ЗМІН: Аналіз тепер працює тільки для крипти ---
 @app.route("/api/get_ranked_pairs", methods=["GET"])
 def api_get_ranked_pairs():
     user_id = _get_user_id_from_request(request)
@@ -62,7 +66,7 @@ def api_get_ranked_pairs():
         ranked_crypto_data = rank_assets_for_api(CRYPTO_PAIRS_FULL, 'crypto')
         ranked_crypto = [{'ticker': p['ticker'], 'active': p['score'] != -1} for p in ranked_crypto_data]
 
-        # Для акцій та валют повертаємо статичні списки, щоб не використовувати ліміти API
+        # Для акцій та валют повертаємо статичні списки
         static_stocks = [{'ticker': p, 'active': True} for p in STOCK_TICKERS]
         static_forex = {
             session: [{'ticker': p, 'active': True} for p in pairs] 
@@ -84,7 +88,6 @@ def api_get_ranked_pairs():
             "stocks": [{'ticker': p, 'active': True} for p in STOCK_TICKERS],
             "error_message": "Помилка при сортуванні, показано стандартний список."
         })
-# --- КІНЕЦЬ ЗМІН ---
 
 @app.route("/api/get_pairs", methods=["GET"])
 def api_get_pairs():
