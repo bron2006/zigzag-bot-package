@@ -20,13 +20,17 @@ def get_market_data(pair, tf, asset, limit=300):
     try:
         df = pd.DataFrame()
         if asset == 'crypto':
+            logger.info(f"Запит до Binance для {pair} на ТФ {tf}...")
             bars = binance.fetch_ohlcv(pair, timeframe=tf, limit=limit)
+            logger.info(f"Відповідь від Binance для {pair} отримана.")
             df = pd.DataFrame(bars, columns=['ts','o','h','l','c','v'])
             df['ts'] = pd.to_datetime(df['ts'], unit='ms', utc=True)
             df = df.rename(columns={'o':'Open','h':'High','l':'Low','c':'Close','v':'Volume'})
         elif asset in ('forex', 'stocks'):
             td_tf = tf.replace('m', 'min').replace('h', 'hour') if tf != '1d' else '1day'
+            logger.info(f"Запит до TwelveData для {pair} на ТФ {tf}...")
             ts = td.time_series(symbol=pair, interval=td_tf, outputsize=limit)
+            logger.info(f"Відповідь від TwelveData для {pair} отримана.")
             df = ts.as_pandas()
             if not df.empty:
                 df = df.rename(columns={'open':'Open','high':'High','low':'Low','close':'Close','volume':'Volume'}).reset_index()
@@ -150,7 +154,6 @@ def get_signal_strength_verdict(pair, display_name, asset):
             if analysis['support']: sr_parts.append(f"Підтримка: `{analysis['support']:.4f}`")
             if analysis['resistance']: sr_parts.append(f"Опір: `{analysis['resistance']:.4f}`")
             sr_info = " | ".join(sr_parts)
-
         final_message = f"{direction_arrow}\n\n"
         final_message += (f"**🕯️ Індекс сили ринку (1хв):** *{display_name}*\n"
                          f"**Поточна ціна:** `{analysis['price']:.4f}`\n\n"
@@ -169,7 +172,6 @@ def get_api_detailed_signal_data(pair):
     asset = 'stocks'
     if '/' in pair:
         asset = 'crypto' if 'USDT' in pair else 'forex'
-    
     df = get_market_data(pair, '1m', asset, limit=100)
     if df.empty or len(df) < 25:
         return {"error": "Недостатньо даних для аналізу."}
@@ -207,13 +209,9 @@ def get_full_mta_verdict(pair, display_name, asset):
     executor = get_executor()
     results = executor.map(worker, ANALYSIS_TIMEFRAMES)
     rows = [r for r in results if r[1] is not None]
-    
-    # --- ПОЧАТОК ЗМІН: Форматуємо таблицю як блок коду ---
     table_rows_str = "\n".join([f"| {tf:<4} | {sig} |" for tf, sig in rows])
     table_content = f"| ТФ   | Сигнал |\n|:----:|:------:|\n{table_rows_str}"
-    
     return f"**📊 Детальний огляд тренду:** *{display_name}*\n\n```{table_content}```"
-    # --- КІНЕЦЬ ЗМІН ---
 
 def get_api_mta_data(pair, asset):
     def worker(tf):
