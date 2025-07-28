@@ -51,6 +51,7 @@ def api_signal():
         logger.error(f"API error for pair {pair}: {e}\n{traceback.format_exc()}")
         return jsonify({"error": f"Внутрішня помилка сервера"}), 500
 
+# --- ПОЧАТОК ЗМІН: Аналіз тепер працює тільки для крипти ---
 @app.route("/api/get_ranked_pairs", methods=["GET"])
 def api_get_ranked_pairs():
     user_id = _get_user_id_from_request(request)
@@ -61,7 +62,7 @@ def api_get_ranked_pairs():
         ranked_crypto_data = rank_assets_for_api(CRYPTO_PAIRS_FULL, 'crypto')
         ranked_crypto = [{'ticker': p['ticker'], 'active': p['score'] != -1} for p in ranked_crypto_data]
 
-        # Для акцій та валют повертаємо статичні списки
+        # Для акцій та валют повертаємо статичні списки, щоб не використовувати ліміти API
         static_stocks = [{'ticker': p, 'active': True} for p in STOCK_TICKERS]
         static_forex = {
             session: [{'ticker': p, 'active': True} for p in pairs] 
@@ -83,6 +84,7 @@ def api_get_ranked_pairs():
             "stocks": [{'ticker': p, 'active': True} for p in STOCK_TICKERS],
             "error_message": "Помилка при сортуванні, показано стандартний список."
         })
+# --- КІНЕЦЬ ЗМІН ---
 
 @app.route("/api/get_pairs", methods=["GET"])
 def api_get_pairs():
