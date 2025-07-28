@@ -30,11 +30,9 @@ let initData = tg.initData || '';
 document.addEventListener('DOMContentLoaded', function() {
     showLoader(true);
     const initDataString = initData ? `?initData=${encodeURIComponent(initData)}` : '';
-    // --- ПОЧАТОК ЗМІН: Змінюємо ендпоінт на новий, для отримання відсортованих пар ---
     const rankedPairsUrl = `${API_BASE_URL}/api/get_ranked_pairs${initDataString}`;
 
     fetch(rankedPairsUrl)
-    // --- КІНЕЦЬ ЗМІН ---
         .then(res => res.json())
         .then(staticData => {
             console.log("Received static pairs:", staticData);
@@ -85,8 +83,13 @@ function toggleFavorite(event, pair) {
         });
 }
 
-function createPairButton(pair, assetType) {
-    return `<div class="pair-item">
+// --- ПОЧАТОК ЗМІН: Функція тепер приймає об'єкт з даними про пару ---
+function createPairButton(pairData, assetType) {
+    const pair = pairData.ticker;
+    const isActive = pairData.active;
+    const inactiveClass = isActive ? '' : 'inactive';
+    
+    return `<div class="pair-item ${inactiveClass}">
         <button class="pair-button" onclick="fetchSignal('${pair}', '${assetType}')">${pair}</button>
         ${renderFavoriteButton(pair)}
     </div>`;
@@ -95,17 +98,26 @@ function createPairButton(pair, assetType) {
 function populateLists(staticData) {
     let html = '';
     function createSection(title, pairs, assetTypeResolver) {
-        if (!Array.isArray(pairs) || pairs.length === 0) return '';
+        if (!pairs || pairs.length === 0) return '';
         let sectionHtml = `<div class="category"><div class="category-title">${title}</div><div class="pair-list">`;
-        pairs.forEach(pair => {
-            const assetType = typeof assetTypeResolver === 'function' ? assetTypeResolver(pair) : assetTypeResolver;
-            sectionHtml += createPairButton(pair, assetType);
+        
+        // Перевіряємо, чи є watchlist, інакше використовуємо звичайний масив
+        const pairList = Array.isArray(pairs) ? pairs : (staticData.watchlist.includes(pairs.ticker) ? [pairs] : []);
+
+        pairList.forEach(pairData => {
+            // Якщо pairData - це рядок (для старого формату watchlist), перетворюємо на об'єкт
+            const data = typeof pairData === 'string' ? { ticker: pairData, active: true } : pairData;
+            const assetType = typeof assetTypeResolver === 'function' ? assetTypeResolver(data.ticker) : assetTypeResolver;
+            sectionHtml += createPairButton(data, assetType);
         });
         sectionHtml += '</div></div>';
         return sectionHtml;
     }
 
-    html += createSection('⭐ Обране', staticData.watchlist, getAssetType);
+    // Для watchlist потрібно перетворити рядки на об'єкти
+    const watchlistData = staticData.watchlist.map(ticker => ({ ticker, active: true }));
+    html += createSection('⭐ Обране', watchlistData, getAssetType);
+
     html += createSection('📈 Уся криптовалюта', staticData.crypto || [], 'crypto');
 
     if (staticData.forex && typeof staticData.forex === 'object') {
@@ -115,6 +127,7 @@ function populateLists(staticData) {
     }
 
     html += createSection('🏢 Усі акції', staticData.stocks, 'stocks');
+    // --- КІНЕЦЬ ЗМІН ---
 
     listsContainer.innerHTML = html;
 }

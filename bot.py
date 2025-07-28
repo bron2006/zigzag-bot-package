@@ -52,7 +52,6 @@ def api_signal():
         logger.error(f"API error for pair {pair}: {e}\n{traceback.format_exc()}")
         return jsonify({"error": f"Внутрішня помилка сервера"}), 500
 
-# --- ПОЧАТОК ЗМІН: Новий ендпоінт для відсортованих пар ---
 @app.route("/api/get_ranked_pairs", methods=["GET"])
 def api_get_ranked_pairs():
     user_id = _get_user_id_from_request(request)
@@ -60,11 +59,9 @@ def api_get_ranked_pairs():
 
     try:
         with ThreadPoolExecutor(max_workers=5) as executor:
-            # Паралельно запускаємо аналіз для всіх категорій
             crypto_future = executor.submit(rank_assets_for_api, CRYPTO_PAIRS_FULL, 'crypto')
             stocks_future = executor.submit(rank_assets_for_api, STOCK_TICKERS, 'stocks')
             
-            # Для Forex сортуємо пари всередині кожної сесії
             ranked_forex_sessions = {}
             forex_futures = {
                 session: executor.submit(rank_assets_for_api, pairs, 'forex') 
@@ -72,10 +69,10 @@ def api_get_ranked_pairs():
             }
             
             for session, future in forex_futures.items():
-                ranked_forex_sessions[session] = [p['ticker'] for p in future.result()]
+                ranked_forex_sessions[session] = [{'ticker': p['ticker'], 'active': p['score'] != -1} for p in future.result()]
 
-            ranked_crypto = [p['ticker'] for p in crypto_future.result()]
-            ranked_stocks = [p['ticker'] for p in stocks_future.result()]
+            ranked_crypto = [{'ticker': p['ticker'], 'active': p['score'] != -1} for p in crypto_future.result()]
+            ranked_stocks = [{'ticker': p['ticker'], 'active': p['score'] != -1} for p in stocks_future.result()]
 
         return jsonify({
             "watchlist": watchlist,
@@ -85,15 +82,13 @@ def api_get_ranked_pairs():
         })
     except Exception as e:
         logger.error(f"API error for ranked pairs: {e}\n{traceback.format_exc()}")
-        # У разі помилки повертаємо статичні списки
         return jsonify({
             "watchlist": watchlist,
-            "crypto": CRYPTO_PAIRS_FULL,
-            "forex": FOREX_SESSIONS,
-            "stocks": STOCK_TICKERS,
+            "crypto": [{'ticker': p, 'active': True} for p in CRYPTO_PAIRS_FULL],
+            "forex": {session: [{'ticker': p, 'active': True} for p in pairs] for session, pairs in FOREX_SESSIONS.items()},
+            "stocks": [{'ticker': p, 'active': True} for p in STOCK_TICKERS],
             "error_message": "Помилка при сортуванні, показано стандартний список."
         })
-# --- КІНЕЦЬ ЗМІН ---
 
 @app.route("/api/get_pairs", methods=["GET"])
 def api_get_pairs():

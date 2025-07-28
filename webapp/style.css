@@ -35,18 +35,17 @@ h4 { font-size: 16px; font-weight: 600; margin: 15px 0 8px 0; padding-bottom: 5p
 .fav-btn { padding: 10px 12px; background: var(--secondary-bg-color); color: var(--text-color); border: none; border-top-right-radius: 8px; border-bottom-right-radius: 8px; cursor: pointer; font-size: 14px; border-left: 1px solid var(--bg-color); transition: background-color 0.2s; }
 .pair-button:hover, .fav-btn:hover { background-color: var(--button-color); color: var(--button-text-color); }
 
+/* --- ПОЧАТОК ЗМІН: Стиль для неактивних пар --- */
+.pair-item.inactive .pair-button {
+    color: var(--hint-color);
+    opacity: 0.6;
+}
+/* --- КІНЕЦЬ ЗМІН --- */
+
 #signalContainer { text-align: left; }
 #signalOutput { padding: 15px; background: var(--secondary-bg-color); border-radius: 8px; line-height: 1.6; min-height: 50px; }
 
-/* --- ПОЧАТОК ЗМІН: Стилі для нового блоку вердикту --- */
-.verdict-box {
-    padding: 15px;
-    border-radius: 8px;
-    margin-bottom: 15px;
-    font-size: 18px;
-    font-weight: 600;
-    text-align: center;
-}
+.verdict-box { padding: 15px; border-radius: 8px; margin-bottom: 15px; font-size: 18px; font-weight: 600; text-align: center; }
 .verdict-box.strong_buy { background-color: #26a69a; color: #fff; }
 .verdict-box.moderate_buy { background-color: rgba(38, 166, 154, 0.5); }
 .verdict-box.weak_buy { background-color: rgba(255, 193, 7, 0.3); color: #fff; }
@@ -54,7 +53,6 @@ h4 { font-size: 16px; font-weight: 600; margin: 15px 0 8px 0; padding-bottom: 5p
 .verdict-box.moderate_sell { background-color: rgba(239, 83, 80, 0.5); }
 .verdict-box.weak_sell { background-color: rgba(255, 193, 7, 0.3); color: #fff; }
 .verdict-box.neutral, .verdict-box.unpredictable { background-color: rgba(170, 170, 170, 0.2); }
-/* --- КІНЕЦЬ ЗМІН --- */
 
 .pair-title { text-align: center; font-weight: bold; margin-bottom: 8px; color: var(--hint-color); }
 .reason-list { list-style-type: '– '; margin: 0 0 15px 20px; padding: 0; }

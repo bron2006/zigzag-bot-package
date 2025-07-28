@@ -15,7 +15,6 @@ def get_executor():
         _executor = ThreadPoolExecutor(max_workers=2)
     return _executor
 
-# --- ПОЧАТОК ЗМІН: Повністю переписана логіка конвертації таймфреймів ---
 def get_market_data(pair, tf, asset, limit=300, force_refresh=False):
     key = f"{pair}_{tf}_{limit}"
     if not force_refresh and key in CACHE:
@@ -28,21 +27,17 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False):
             df['ts'] = pd.to_datetime(df['ts'], unit='ms', utc=True)
             df = df.rename(columns={'o':'Open','h':'High','l':'Low','c':'Close','v':'Volume'})
         elif asset in ('forex', 'stocks'):
-            # Створюємо надійний словник для перетворення таймфреймів
             td_tf_map = { '1m': '1min', '15m': '15min', '1h': '1hour', '4h': '4hour', '1d': '1day', '15min': '15min' }
             td_tf = td_tf_map.get(tf)
-            
             if not td_tf:
                 logger.error(f"Непідтримуваний таймфрейм для TwelveData: {tf}")
                 return pd.DataFrame()
-
             ts = td.time_series(symbol=pair, interval=td_tf, outputsize=limit)
             df = ts.as_pandas()
             if not df.empty:
                 df = df.rename(columns={'open':'Open','high':'High','low':'Low','close':'Close','volume':'Volume'}).reset_index()
                 if 'datetime' in df.columns:
                     df['datetime'] = pd.to_datetime(df['datetime']).dt.tz_localize('UTC')
-
         if df.empty:
             logger.warning(f"API повернуло порожній результат для {pair} на ТФ {tf}")
             return pd.DataFrame()
@@ -51,7 +46,6 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False):
     except Exception as e:
         logger.error(f"Помилка отримання даних для {pair} на ТФ {tf}: {e}")
         return pd.DataFrame()
-# --- КІНЕЦЬ ЗМІН ---
 
 def group_close_values(values, threshold=0.01):
     if not len(values): return []
@@ -292,23 +286,36 @@ def rank_crypto_chunk(pairs_chunk):
     ranked_pairs = [r for r in results if r is not None]
     return sorted(ranked_pairs, key=lambda x: x['score'], reverse=True)
 
+# --- ПОЧАТОК ЗМІН: Нова логіка сортування, що не видаляє пари ---
 def rank_assets_for_api(pairs, asset_type):
     def fetch_score(pair):
         try:
-            # --- ПОЧАТОК ЗМІН: Використовуємо уніфіковані таймфрейми ---
             timeframe = '1h' if asset_type == 'crypto' else '15m'
-            # --- КІНЕЦЬ ЗМІН ---
             df = get_market_data(pair, timeframe, asset_type, limit=50)
-            if df.empty: return None
+            if df.empty:
+                return {'ticker': pair, 'score': -1}
             
             rsi = df.ta.rsi(length=14).iloc[-1]
-            if pd.isna(rsi): return None
+            if pd.isna(rsi):
+                return {'ticker': pair, 'score': -1}
+                
             score = abs(rsi - 50)
             return {'ticker': pair, 'score': score}
         except Exception as e:
             logger.error(f"Не вдалося проаналізувати активність {pair}: {e}")
-            return None
+            return {'ticker': pair, 'score': -1}
+
     executor = get_executor()
     results = executor.map(fetch_score, pairs)
-    ranked_pairs = [r for r in results if r is not None]
-    return sorted(ranked_pairs, key=lambda x: x['score'], reverse=True)
+    
+    # Сортуємо так, щоб неактивні пари (score = -1) завжди були в кінці
+    sorted_results = sorted(list(results), key=lambda x: x['score'] == -1)
+    
+    # Потім сортуємо активну частину за спаданням score
+    active_part = [res for res in sorted_results if res['score'] != -1]
+    inactive_part = [res for res in sorted_results if res['score'] == -1]
+    
+    active_part_sorted = sorted(active_part, key=lambda x: x['score'], reverse=True)
+    
+    return active_part_sorted + inactive_part
+# --- КІНЕЦЬ ЗМІН ---
