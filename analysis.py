@@ -67,6 +67,19 @@ def group_close_values(values, threshold=0.01):
     groups.append(np.mean(current_group))
     return groups
 
+# --- ПОЧАТОК ЗМІН: Нова функція для перевірки активності ринку ---
+def is_market_active(df: pd.DataFrame, periods: int = 10, threshold: float = 0.005) -> bool:
+    """Перевіряє, чи був ринок активним за останні N періодів."""
+    if len(df) < periods:
+        return True # Недостатньо даних для визначення, вважаємо ринок активним
+    last_periods = df.iloc[-periods:]
+    price_range = last_periods['High'].max() - last_periods['Low'].min()
+    last_price = df['Close'].iloc[-1]
+    if last_price == 0: 
+        return False # Уникаємо ділення на нуль
+    return (price_range / last_price) > threshold
+# --- КІНЕЦЬ ЗМІН ---
+
 def identify_support_resistance_levels(df, window=20, threshold=0.01):
     try:
         lows = df['Low'].rolling(window=window, center=True, min_periods=3).min()
@@ -187,6 +200,16 @@ def get_signal_strength_verdict(pair, display_name, asset, user_id=None, force_r
     df = get_market_data(pair, '1m', asset, limit=100, force_refresh=force_refresh)
     if df.empty or len(df) < 25:
         return f"⚠️ Недостатньо даних для аналізу *{display_name}*.", None
+
+    # --- ПОЧАТОК ЗМІН: Перевірка на активність ринку ---
+    if not is_market_active(df, periods=10, threshold=0.005):
+        formatted_price = _format_price(df['Close'].iloc[-1])
+        message = (f"**⚪️ Ринок для *{display_name}* неактивний**\n\n"
+                   f"Ціна: `{formatted_price}`\n\n"
+                   f"_За останні 10 хвилин рух ціни був меншим за 0.5%. Сигнали тимчасово призупинені, щоб уникнути помилкових спрацювань на 'тихому' ринку._")
+        return message, None
+    # --- КІНЕЦЬ ЗМІН ---
+
     try:
         daily_df = get_market_data(pair, '1d', asset, limit=100, force_refresh=force_refresh)
         analysis = _calculate_core_signal(df, daily_df)
@@ -209,6 +232,12 @@ def get_api_detailed_signal_data(pair):
     df = get_market_data(pair, '1m', asset, limit=100)
     if df.empty or len(df) < 25:
         return {"error": "Недостатньо даних для аналізу."}
+
+    # --- ПОЧАТОК ЗМІН: Перевірка на активність ринку ---
+    if not is_market_active(df, periods=10, threshold=0.005):
+        return {"error": f"Ринок для {pair} неактивний. Рух ціни за останні 10 хвилин менший за 0.5%."}
+    # --- КІНЕЦЬ ЗМІН ---
+    
     try:
         daily_df = get_market_data(pair, '1d', asset, limit=100)
         analysis = _calculate_core_signal(df, daily_df)
@@ -233,7 +262,7 @@ def get_full_mta_verdict(pair, display_name, asset, force_refresh=False):
         if df.empty or len(df) < 55: return (tf, None)
         df.ta.ema(length=21, append=True, col_names='EMA_fast')
         df.ta.ema(length=55, append=True, col_names='EMA_slow')
-        sig = "✅ BUY" if df.iloc[-1]['EMA_fast'] > df.iloc[-1]['EMA_slow'] else "❌ SELL"
+        sig = "✅ BUY" if df.iloc[-1]['EMA_fast'] > df.iloc[-1]['EMA_SLOW'] else "❌ SELL"
         return (tf, sig)
     executor = get_executor()
     results = executor.map(worker, ANALYSIS_TIMEFRAMES)
@@ -277,7 +306,6 @@ def rank_crypto_chunk(pairs_chunk):
     ranked_pairs = [r for r in results if r is not None]
     return sorted(ranked_pairs, key=lambda x: x['score'], reverse=True)
 
-# --- ПОЧАТОК ЗМІН: Функція rank_assets_for_api тепер працює тільки для крипти ---
 def rank_assets_for_api(pairs, asset_type):
     """Ранжує активи за активністю (тільки для криптовалют)."""
     cache_key = f"ranking_{asset_type}"
@@ -286,15 +314,12 @@ def rank_assets_for_api(pairs, asset_type):
 
     def fetch_crypto_score(pair):
         try:
-            # Логіка тепер тільки для криптовалют
             df = get_market_data(pair, '1h', 'crypto', limit=50)
             if df.empty or len(df) < 30:
                 return {'ticker': pair, 'score': -1}
-
             rsi = df.ta.rsi(length=14).iloc[-1]
             if pd.isna(rsi):
                 return {'ticker': pair, 'score': -1}
-
             score = abs(rsi - 50)
             return {'ticker': pair, 'score': score}
         except Exception as e:
@@ -302,7 +327,6 @@ def rank_assets_for_api(pairs, asset_type):
             return {'ticker': pair, 'score': -1}
 
     executor = get_executor()
-    # Використовуємо fetch_crypto_score, оскільки ця функція тепер спеціалізована
     results = list(executor.map(fetch_crypto_score, pairs))
     
     active_part = sorted([res for res in results if res['score'] != -1], key=lambda x: x['score'], reverse=True)
@@ -311,4 +335,3 @@ def rank_assets_for_api(pairs, asset_type):
     
     RANKING_CACHE[cache_key] = final_ranking
     return final_ranking
-# --- КІНЕЦЬ ЗМІН ---
