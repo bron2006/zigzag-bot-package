@@ -2,12 +2,12 @@
 import traceback
 import json
 from urllib.parse import parse_qs
+from concurrent.futures import ThreadPoolExecutor
 from flask import request, jsonify
 from flask_cors import CORS
 from telegram import Update
 
 from config import app, bot, dp, WEBHOOK_SECRET, logger, CRYPTO_PAIRS_FULL, FOREX_SESSIONS, STOCK_TICKERS, FOREX_PAIRS_MAP
-# --- Змінено: додаємо get_signal_history ---
 from db import init_db, get_watchlist, toggle_watch, get_signal_history
 from analysis import get_api_detailed_signal_data, rank_assets_for_api, get_api_mta_data
 import telegram_ui
@@ -51,6 +51,49 @@ def api_signal():
     except Exception as e:
         logger.error(f"API error for pair {pair}: {e}\n{traceback.format_exc()}")
         return jsonify({"error": f"Внутрішня помилка сервера"}), 500
+
+# --- ПОЧАТОК ЗМІН: Новий ендпоінт для відсортованих пар ---
+@app.route("/api/get_ranked_pairs", methods=["GET"])
+def api_get_ranked_pairs():
+    user_id = _get_user_id_from_request(request)
+    watchlist = get_watchlist(user_id) if user_id else []
+
+    try:
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            # Паралельно запускаємо аналіз для всіх категорій
+            crypto_future = executor.submit(rank_assets_for_api, CRYPTO_PAIRS_FULL, 'crypto')
+            stocks_future = executor.submit(rank_assets_for_api, STOCK_TICKERS, 'stocks')
+            
+            # Для Forex сортуємо пари всередині кожної сесії
+            ranked_forex_sessions = {}
+            forex_futures = {
+                session: executor.submit(rank_assets_for_api, pairs, 'forex') 
+                for session, pairs in FOREX_SESSIONS.items()
+            }
+            
+            for session, future in forex_futures.items():
+                ranked_forex_sessions[session] = [p['ticker'] for p in future.result()]
+
+            ranked_crypto = [p['ticker'] for p in crypto_future.result()]
+            ranked_stocks = [p['ticker'] for p in stocks_future.result()]
+
+        return jsonify({
+            "watchlist": watchlist,
+            "crypto": ranked_crypto,
+            "forex": ranked_forex_sessions,
+            "stocks": ranked_stocks
+        })
+    except Exception as e:
+        logger.error(f"API error for ranked pairs: {e}\n{traceback.format_exc()}")
+        # У разі помилки повертаємо статичні списки
+        return jsonify({
+            "watchlist": watchlist,
+            "crypto": CRYPTO_PAIRS_FULL,
+            "forex": FOREX_SESSIONS,
+            "stocks": STOCK_TICKERS,
+            "error_message": "Помилка при сортуванні, показано стандартний список."
+        })
+# --- КІНЕЦЬ ЗМІН ---
 
 @app.route("/api/get_pairs", methods=["GET"])
 def api_get_pairs():
@@ -99,24 +142,20 @@ def toggle_watchlist_route():
         logger.error(f"Error in toggle_watchlist: {e}")
         return jsonify({"success": False, "error": "Internal server error"}), 500
 
-# --- ПОЧАТОК НОВОГО КОДУ: API для історії сигналів ---
 @app.route("/api/signal_history", methods=["GET"])
 def api_signal_history():
     user_id = _get_user_id_from_request(request)
     pair = request.args.get("pair")
-
     if not user_id:
         return jsonify({"error": "Not authorized"}), 401
     if not pair:
         return jsonify({"error": "pair is required"}), 400
-    
     try:
         history = get_signal_history(user_id, pair)
         return jsonify(history)
     except Exception as e:
         logger.error(f"API error for signal history on {pair}: {e}\n{traceback.format_exc()}")
         return jsonify({"error": "Помилка при отриманні історії"}), 500
-# --- КІНЕЦЬ НОВОГО КОДУ ---
 
 @app.route("/", methods=["GET"])
 def index():

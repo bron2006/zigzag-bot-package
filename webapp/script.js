@@ -30,12 +30,17 @@ let initData = tg.initData || '';
 document.addEventListener('DOMContentLoaded', function() {
     showLoader(true);
     const initDataString = initData ? `?initData=${encodeURIComponent(initData)}` : '';
-    const staticPairsUrl = `${API_BASE_URL}/api/get_pairs${initDataString}`;
+    // --- ПОЧАТОК ЗМІН: Змінюємо ендпоінт на новий, для отримання відсортованих пар ---
+    const rankedPairsUrl = `${API_BASE_URL}/api/get_ranked_pairs${initDataString}`;
 
-    fetch(staticPairsUrl)
+    fetch(rankedPairsUrl)
+    // --- КІНЕЦЬ ЗМІН ---
         .then(res => res.json())
         .then(staticData => {
             console.log("Received static pairs:", staticData);
+            if(staticData.error_message) {
+                console.warn(staticData.error_message);
+            }
             currentWatchlist = staticData.watchlist || [];
             populateLists(staticData);
             showLoader(false);
@@ -138,14 +143,12 @@ function fetchSignal(pair, assetType) {
             return;
         }
 
-        // --- ПОЧАТОК ЗМІН: Відображаємо єдиний вердикт ---
         let html = `
             <div class="verdict-box ${signalData.verdict_level}">
                 ${signalData.verdict_text}
             </div>
             <div class="pair-title">${signalData.pair} | Ціна: ${signalData.price.toFixed(4)}</div>
         `;
-        // --- КІНЕЦЬ ЗМІН ---
         
         if (signalData.support || signalData.resistance) {
             const supportText = signalData.support ? `Підтримка: <strong>${signalData.support.toFixed(4)}</strong>` : '';
