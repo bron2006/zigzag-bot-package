@@ -78,6 +78,7 @@ def button_handler(update: Update, context: CallbackContext):
         query.edit_message_text("🏠 Головне меню:", reply_markup=main_kb())
 
     elif data.startswith('menu_crypto_'):
+        # ... (код без змін)
         chunk_index = int(data.split('_')[-1])
         start_pos = chunk_index * CRYPTO_CHUNK_SIZE
         end_pos = start_pos + CRYPTO_CHUNK_SIZE
@@ -85,13 +86,9 @@ def button_handler(update: Update, context: CallbackContext):
         query.edit_message_text(f"⏳ Аналізую крипто-пари ({start_pos+1}-{end_pos})...")
         ranked_pairs = rank_crypto_chunk(pairs_to_analyze)
         if not ranked_pairs:
-            query.edit_message_text(
-                "❌ Не вдалося проаналізувати ринок. Спробуйте пізніше.",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Головне меню", callback_data='main_menu')]])
-            )
+            query.edit_message_text("❌ Не вдалося проаналізувати ринок. Спробуйте пізніше.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Головне меню", callback_data='main_menu')]]))
             return
-        query.edit_message_text("📈 Криптовалюти (відсортовано за активністю):", 
-                                reply_markup=asset_list_kb('crypto', [p['display_name'] for p in ranked_pairs], chunk_index))
+        query.edit_message_text("📈 Криптовалюти (відсортовано за активністю):", reply_markup=asset_list_kb('crypto', [p['display_name'] for p in ranked_pairs], chunk_index))
 
     elif data == 'menu_forex':
         query.edit_message_text("💹 Виберіть сесію:", reply_markup=forex_session_kb())
@@ -104,7 +101,6 @@ def button_handler(update: Update, context: CallbackContext):
         pairs = FOREX_SESSIONS.get(session, [])
         query.edit_message_text(f"📊 Пари сесії {session}:", reply_markup=asset_list_kb('forex', pairs))
 
-    # --- ПОЧАТОК ЗМІН: Розділено логіку для звичайного аналізу і примусового оновлення ---
     elif data.startswith('analyze_') or data.startswith('refresh_'):
         is_refresh = data.startswith('refresh_')
         
@@ -114,8 +110,12 @@ def button_handler(update: Update, context: CallbackContext):
         
         query.edit_message_text(f"⏳ {'Примусово оновлюю' if is_refresh else 'Аналізую'} {display}...")
         
-        msg = get_signal_strength_verdict(ticker, display, asset, user_id=user_id, force_refresh=is_refresh)
+        msg, analysis_data = get_signal_strength_verdict(ticker, display, asset, user_id=user_id, force_refresh=is_refresh)
         
+        # Зберігаємо дані аналізу для кнопки "Деталі"
+        if analysis_data:
+            context.user_data[f"analysis_{ticker_safe}"] = analysis_data
+
         watchlist = get_watchlist(user_id)
         watch_text = "🌟 В обраному" if ticker in watchlist else "⭐ В обране"
         
@@ -123,69 +123,90 @@ def button_handler(update: Update, context: CallbackContext):
         elif asset == 'forex': back_button_cb = f'session_{next((s for s, p in FOREX_SESSIONS.items() if display in p), "Азіатська")}'
         else: back_button_cb = 'menu_stocks'
 
-        # Створюємо унікальні callback_data для оновлення
         refresh_callback = f'refresh_{asset}_{ticker_safe}_{display_safe}_{chunk_idx_str}'
         mta_callback = f'fullmta_{asset}_{ticker_safe}_{display_safe}_{chunk_idx_str}'
+        details_callback = f'details_{asset}_{ticker_safe}_{display_safe}_{chunk_idx_str}'
         
-        # Якщо це був refresh, наступний детальний огляд теж буде примусовим
-        if is_refresh:
-            mta_callback += '_refresh'
-
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("🔄 Оновити", callback_data=refresh_callback)],
-            [InlineKeyboardButton("📊 Детальний огляд", callback_data=mta_callback)],
+            [InlineKeyboardButton("📊 Детальний огляд (MTA)", callback_data=mta_callback)],
+            [InlineKeyboardButton("📝 Деталі вердикту", callback_data=details_callback)],
             [InlineKeyboardButton(watch_text, callback_data=f'togglewatch_{asset}_{ticker_safe}_{display_safe}_{chunk_idx_str}')],
             [InlineKeyboardButton("⬅️ Назад до списку", callback_data=back_button_cb)]
         ])
         query.edit_message_text(text=msg, parse_mode='Markdown', reply_markup=kb)
+
+    # --- ПОЧАТОК ЗМІН: Новий обробник для кнопки "Деталі" ---
+    elif data.startswith('details_'):
+        _, asset, ticker_safe, display_safe, chunk_idx_str = data.split('_', 4)
+        
+        analysis_data = context.user_data.get(f"analysis_{ticker_safe}")
+        if not analysis_data:
+            query.answer("Дані для деталей застаріли, будь ласка, оновіть сигнал.", show_alert=True)
+            return
+
+        reasons = analysis_data.get('reasons', [])
+        support = analysis_data.get('support')
+        resistance = analysis_data.get('resistance')
+        candle = analysis_data.get('candle_pattern')
+        volume = analysis_data.get('volume_info')
+        
+        details_text = "*Ключові фактори:*\n"
+        if reasons:
+            details_text += "\n".join([f"• _{r}_" for r in reasons])
+        else:
+            details_text += "_Немає виражених факторів._"
+            
+        details_text += "\n\n*Додаткова інформація:*\n"
+        if candle:
+            details_text += f"🕯️ Патерн: *{candle['text']}*\n"
+        if support:
+            details_text += f"📉 Підтримка: `{support:.4f}`\n"
+        if resistance:
+            details_text += f"📈 Опір: `{resistance:.4f}`\n"
+        if volume:
+             details_text += f"📊 Об'єм: *{volume}*"
+
+        back_callback = f"refresh_{asset}_{ticker_safe}_{display_safe}_{chunk_idx_str}"
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Назад до вердикту", callback_data=back_callback)]])
+
+        query.edit_message_text(text=details_text, parse_mode='Markdown', reply_markup=kb)
     # --- КІНЕЦЬ ЗМІН ---
 
     elif data.startswith('togglewatch_'):
+        # ... (код без змін)
         _, asset, ticker_safe, display_safe, chunk_idx_str = data.split('_', 4)
         ticker, display = ticker_safe.replace('~', '/'), display_safe.replace('~', '/')
         user_id = query.from_user.id
         toggle_watch(user_id, ticker)
         query.answer(text=f"{display} оновлено в списку спостереження!")
-        
-        # Просто оновлюємо клавіатуру, не роблячи повторного запиту
         watchlist = get_watchlist(user_id)
         watch_text = "🌟 В обраному" if ticker in watchlist else "⭐ В обране"
-        
-        # Визначаємо, чи була попередня дія оновленням, щоб зберегти стан
-        # (Це складно без зберігання стану, тому просто повертаємо стандартні кнопки)
-        analyze_callback = f'analyze_{asset}_{ticker_safe}_{display_safe}_{chunk_idx_str}'
         refresh_callback = f'refresh_{asset}_{ticker_safe}_{display_safe}_{chunk_idx_str}'
         mta_callback = f'fullmta_{asset}_{ticker_safe}_{display_safe}_{chunk_idx_str}'
-        
+        details_callback = f'details_{asset}_{ticker_safe}_{display_safe}_{chunk_idx_str}'
         if asset == 'crypto': back_button_cb = f'menu_crypto_{chunk_idx_str}'
         elif asset == 'forex': back_button_cb = f'session_{next((s for s, p in FOREX_SESSIONS.items() if display in p), "Азіатська")}'
         else: back_button_cb = 'menu_stocks'
-        
-        # Після toggle, ми не знаємо, чи був попередній виклик refresh.
-        # Для простоти, кнопка "Оновити" завжди буде примусовою.
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("🔄 Оновити", callback_data=refresh_callback)],
-            [InlineKeyboardButton("📊 Детальний огляд", callback_data=mta_callback)],
+            [InlineKeyboardButton("📊 Детальний огляд (MTA)", callback_data=mta_callback)],
+            [InlineKeyboardButton("📝 Деталі вердикту", callback_data=details_callback)],
             [InlineKeyboardButton(watch_text, callback_data=data)],
             [InlineKeyboardButton("⬅️ Назад до списку", callback_data=back_button_cb)]
         ])
         query.edit_message_reply_markup(reply_markup=kb)
 
     elif data.startswith('fullmta_'):
-        # --- ПОЧАТОК ЗМІН: Обробка прапорця _refresh ---
+        # ... (код без змін)
         parts = data.split('_')
         force_refresh = parts[-1] == 'refresh'
-        
         asset, ticker_safe, display_safe, chunk_idx_str = parts[1], parts[2], parts[3], parts[4]
         ticker, display = ticker_safe.replace('~', '/'), display_safe.replace('~', '/')
-        
         query.edit_message_text(f"⏳ Збираю MTF для {display}...")
         msg = get_full_mta_verdict(ticker, display, asset, force_refresh=force_refresh)
-        
-        # Кнопка "назад" повертає до примусово оновленого або кешованого вигляду
         back_callback = f"{'refresh' if force_refresh else 'analyze'}_{asset}_{ticker_safe}_{display_safe}_{chunk_idx_str}"
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Назад до індексу", callback_data=back_callback)]])
-        # --- КІНЕЦЬ ЗМІН ---
         query.edit_message_text(text=msg, parse_mode='Markdown', reply_markup=kb)
 
 dp.add_handler(CommandHandler("start", start))
