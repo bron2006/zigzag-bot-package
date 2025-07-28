@@ -218,19 +218,26 @@ def get_full_mta_verdict(pair, display_name, asset):
     if not rows_data:
         return f"**📊 Детальний огляд тренду:** *{display_name}*\n\nНе вдалося згенерувати жодного сигналу."
 
-    # Створюємо таблицю з ручним вирівнюванням для моноширинного блоку
+    # Використовуємо символи псевдографіки для створення надійної таблиці
     table_lines = []
-    table_lines.append("ТФ      | Сигнал")
-    table_lines.append("--------|----------")
+    # Верхня межа таблиці
+    table_lines.append("┌─────────┬────────────┐")
+    # Заголовок
+    table_lines.append("│   ТФ    │   Сигнал   │")
+    # Роздільник
+    table_lines.append("├─────────┼────────────┤")
     
     for tf, sig in rows_data:
-        # Додаємо відступи до таймфрейму, щоб вирівняти роздільник '|'
-        tf_padded = tf.ljust(7)
-        table_lines.append(f"{tf_padded} | {sig}")
+        # Вирівнюємо контент по центру/лівому краю всередині стовпців
+        tf_padded = tf.center(7)
+        sig_padded = f" {sig}".ljust(10)
+        table_lines.append(f"│ {tf_padded} │ {sig_padded} │")
 
+    # Нижня межа таблиці
+    table_lines.append("└─────────┴────────────┘")
+    
     table = "\n".join(table_lines)
     
-    # Загортаємо всю таблицю в блок ``` для коректного відображення
     return f"**📊 Детальний огляд тренду:** *{display_name}*\n\n```{table}```"
 
 def get_api_mta_data(pair, asset):
