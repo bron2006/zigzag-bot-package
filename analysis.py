@@ -3,7 +3,7 @@ import pandas as pd
 import pandas_ta as ta
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor
-from datetime import timedelta
+from datetime import datetime, time
 
 from db import add_signal_to_history
 from config import logger, binance, td, MARKET_DATA_CACHE, RANKING_CACHE, ANALYSIS_TIMEFRAMES
@@ -67,20 +67,46 @@ def group_close_values(values, threshold=0.01):
     groups.append(np.mean(current_group))
     return groups
 
-# --- ПОЧАТОК ЗМІН: Нова функція для перевірки волатильності через ATR ---
 def is_volatile_enough(df: pd.DataFrame, threshold: float = 0.003) -> bool:
     """Перевіряє, чи є ринок достатньо волатильним на основі ATR."""
-    if len(df) < 15:  # Для ATR(14) потрібно мінімум 15 періодів
-        return True # Недостатньо даних, вважаємо ринок волатильним
-        
+    if len(df) < 15:
+        return True
     atr = df.ta.atr(length=14).iloc[-1]
     last_price = df['Close'].iloc[-1]
-    
     if pd.isna(atr) or last_price == 0:
-        return False # Неможливо розрахувати, вважаємо ринок неволатильним
-        
-    # Поріг 0.003 означає, що середня свічка має бути більшою за 0.3% від ціни
+        return False
     return (atr / last_price) > threshold
+
+# --- ПОЧАТОК ЗМІН: Нова функція для перевірки торгового часу ---
+def is_trading_time(asset_type: str) -> bool:
+    """Перевіряє, чи активний ринок для даного типу активу."""
+    if asset_type == 'crypto':
+        return True # Крипторинок працює 24/7
+
+    now_utc = datetime.utcnow()
+    current_time = now_utc.time()
+    current_weekday = now_utc.weekday() # 0 = Понеділок, 6 = Неділя
+
+    if asset_type == 'stocks':
+        # Американський ринок акцій (приблизно 13:30-20:00 UTC)
+        if current_weekday >= 5: # Субота, Неділя
+            return False
+        if time(13, 30) <= current_time <= time(20, 0):
+            return True
+        return False
+
+    if asset_type == 'forex':
+        # Ринок Forex закритий на вихідних
+        # Закривається в п'ятницю о 21:00 UTC, відкривається в неділю о 21:00 UTC
+        if current_weekday == 5 and current_time > time(21, 0): # П'ятниця вечір
+            return False
+        if current_weekday == 6: # Субота
+            return False
+        if current_weekday == 0 and current_time < time(21, 0): # Неділя до відкриття
+             return False
+        return True
+        
+    return True
 # --- КІНЕЦЬ ЗМІН ---
 
 def identify_support_resistance_levels(df, window=20, threshold=0.01):
@@ -200,18 +226,24 @@ def _generate_verdict(analysis):
     return verdict_text, verdict_level
 
 def get_signal_strength_verdict(pair, display_name, asset, user_id=None, force_refresh=False):
+    # --- ПОЧАТОК ЗМІН: Перевірка на торговий час ---
+    if not is_trading_time(asset):
+        market_name = "Ринок акцій" if asset == 'stocks' else "Ринок Forex"
+        message = (f"**🌙 {market_name} зараз закритий**\n\n"
+                   f"_Аналіз для *{display_name}* буде доступний у робочі години._")
+        return message, None
+    # --- КІНЕЦЬ ЗМІН ---
+
     df = get_market_data(pair, '1m', asset, limit=100, force_refresh=force_refresh)
     if df.empty or len(df) < 25:
         return f"⚠️ Недостатньо даних для аналізу *{display_name}*.", None
 
-    # --- ПОЧАТОК ЗМІН: Замінили перевірку на волатильність (ATR) ---
     if not is_volatile_enough(df, threshold=0.003):
         formatted_price = _format_price(df['Close'].iloc[-1])
         message = (f"**⚪️ Низька волатильність для *{display_name}***\n\n"
                    f"Ціна: `{formatted_price}`\n\n"
                    f"_Ринок наразі занадто 'спокійний' для надійного аналізу. Сигнали тимчасово призупинені._")
         return message, None
-    # --- КІНЕЦЬ ЗМІН ---
 
     try:
         daily_df = get_market_data(pair, '1d', asset, limit=100, force_refresh=force_refresh)
@@ -232,14 +264,19 @@ def get_api_detailed_signal_data(pair):
     asset = 'stocks'
     if '/' in pair:
         asset = 'crypto' if 'USDT' in pair else 'forex'
+        
+    # --- ПОЧАТОК ЗМІН: Перевірка на торговий час ---
+    if not is_trading_time(asset):
+        market_name = "Ринок акцій" if asset == 'stocks' else "Ринок Forex"
+        return {"error": f"{market_name} зараз закритий. Аналіз недоступний."}
+    # --- КІНЕЦЬ ЗМІН ---
+
     df = get_market_data(pair, '1m', asset, limit=100)
     if df.empty or len(df) < 25:
         return {"error": "Недостатньо даних для аналізу."}
 
-    # --- ПОЧАТОК ЗМІН: Замінили перевірку на волатильність (ATR) ---
     if not is_volatile_enough(df, threshold=0.003):
         return {"error": f"Низька волатильність для {pair}. Ринок занадто 'спокійний' для аналізу."}
-    # --- КІНЕЦЬ ЗМІН ---
     
     try:
         daily_df = get_market_data(pair, '1d', asset, limit=100)
