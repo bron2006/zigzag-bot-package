@@ -2,9 +2,9 @@
 import pandas as pd
 import pandas_ta as ta
 import numpy as np
-from datetime import datetime, timedelta, timezone
 from concurrent.futures import ThreadPoolExecutor
 
+from db import add_signal_to_history
 from config import logger, binance, td, CACHE, ANALYSIS_TIMEFRAMES
 
 _executor = None
@@ -20,17 +20,13 @@ def get_market_data(pair, tf, asset, limit=300):
     try:
         df = pd.DataFrame()
         if asset == 'crypto':
-            logger.info(f"Запит до Binance для {pair} на ТФ {tf}...")
             bars = binance.fetch_ohlcv(pair, timeframe=tf, limit=limit)
-            logger.info(f"Відповідь від Binance для {pair} отримана.")
             df = pd.DataFrame(bars, columns=['ts','o','h','l','c','v'])
             df['ts'] = pd.to_datetime(df['ts'], unit='ms', utc=True)
             df = df.rename(columns={'o':'Open','h':'High','l':'Low','c':'Close','v':'Volume'})
         elif asset in ('forex', 'stocks'):
             td_tf = tf.replace('m', 'min').replace('h', 'hour') if tf != '1d' else '1day'
-            logger.info(f"Запит до TwelveData для {pair} на ТФ {tf}...")
             ts = td.time_series(symbol=pair, interval=td_tf, outputsize=limit)
-            logger.info(f"Відповідь від TwelveData для {pair} отримана.")
             df = ts.as_pandas()
             if not df.empty:
                 df = df.rename(columns={'open':'Open','high':'High','low':'Low','close':'Close','volume':'Volume'}).reset_index()
@@ -135,7 +131,7 @@ def _calculate_core_signal(df, daily_df):
         "candle_pattern": candle_pattern, "volume_info": volume_info, "price": current_price
     }
 
-def get_signal_strength_verdict(pair, display_name, asset):
+def get_signal_strength_verdict(pair, display_name, asset, user_id=None):
     df = get_market_data(pair, '1m', asset, limit=50)
     if df.empty or len(df) < 25:
         return f"⚠️ Недостатньо даних для 1-хв аналізу *{display_name}*."
@@ -143,6 +139,14 @@ def get_signal_strength_verdict(pair, display_name, asset):
         daily_df = get_market_data(pair, '1d', asset, limit=30)
         analysis = _calculate_core_signal(df, daily_df)
         bull_percentage = analysis['score']
+        if user_id:
+            signal_data = {
+                'user_id': user_id,
+                'pair': pair,
+                'price': analysis['price'],
+                'bull_percentage': bull_percentage
+            }
+            add_signal_to_history(signal_data)
         bear_percentage = 100 - bull_percentage
         direction_arrow = "⬆️" if bull_percentage >= 50 else "⬇️"
         strength_line = f"🐂 Бики {bull_percentage}% ⬆️\n🐃 Ведмеді {bear_percentage}% ⬇️"
@@ -209,9 +213,8 @@ def get_full_mta_verdict(pair, display_name, asset):
     executor = get_executor()
     results = executor.map(worker, ANALYSIS_TIMEFRAMES)
     rows = [r for r in results if r[1] is not None]
-    table_rows_str = "\n".join([f"| {tf:<4} | {sig} |" for tf, sig in rows])
-    table_content = f"| ТФ   | Сигнал |\n|:----:|:------:|\n{table_rows_str}"
-    return f"**📊 Детальний огляд тренду:** *{display_name}*\n\n```{table_content}```"
+    table = "\n".join([f"| {tf:<4} | {sig} |" for tf, sig in rows])
+    return f"**📊 Детальний огляд тренду:** *{display_name}*\n\n| ТФ   | Сигнал |\n|:----:|:---:|\n{table}"
 
 def get_api_mta_data(pair, asset):
     def worker(tf):
