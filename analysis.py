@@ -15,6 +15,7 @@ def get_executor():
         _executor = ThreadPoolExecutor(max_workers=2)
     return _executor
 
+# --- ПОЧАТОК ЗМІН: Повністю переписана логіка конвертації таймфреймів ---
 def get_market_data(pair, tf, asset, limit=300, force_refresh=False):
     key = f"{pair}_{tf}_{limit}"
     if not force_refresh and key in CACHE:
@@ -27,13 +28,21 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False):
             df['ts'] = pd.to_datetime(df['ts'], unit='ms', utc=True)
             df = df.rename(columns={'o':'Open','h':'High','l':'Low','c':'Close','v':'Volume'})
         elif asset in ('forex', 'stocks'):
-            td_tf = tf.replace('m', 'min').replace('h', 'hour') if tf != '1d' else '1day'
+            # Створюємо надійний словник для перетворення таймфреймів
+            td_tf_map = { '1m': '1min', '15m': '15min', '1h': '1hour', '4h': '4hour', '1d': '1day', '15min': '15min' }
+            td_tf = td_tf_map.get(tf)
+            
+            if not td_tf:
+                logger.error(f"Непідтримуваний таймфрейм для TwelveData: {tf}")
+                return pd.DataFrame()
+
             ts = td.time_series(symbol=pair, interval=td_tf, outputsize=limit)
             df = ts.as_pandas()
             if not df.empty:
                 df = df.rename(columns={'open':'Open','high':'High','low':'Low','close':'Close','volume':'Volume'}).reset_index()
                 if 'datetime' in df.columns:
                     df['datetime'] = pd.to_datetime(df['datetime']).dt.tz_localize('UTC')
+
         if df.empty:
             logger.warning(f"API повернуло порожній результат для {pair} на ТФ {tf}")
             return pd.DataFrame()
@@ -42,6 +51,7 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False):
     except Exception as e:
         logger.error(f"Помилка отримання даних для {pair} на ТФ {tf}: {e}")
         return pd.DataFrame()
+# --- КІНЕЦЬ ЗМІН ---
 
 def group_close_values(values, threshold=0.01):
     if not len(values): return []
@@ -282,15 +292,14 @@ def rank_crypto_chunk(pairs_chunk):
     ranked_pairs = [r for r in results if r is not None]
     return sorted(ranked_pairs, key=lambda x: x['score'], reverse=True)
 
-# --- ПОЧАТОК ЗМІН: Видалено проблемний фільтр ---
 def rank_assets_for_api(pairs, asset_type):
     def fetch_score(pair):
         try:
-            timeframe = '1h' if asset_type == 'crypto' else '15min'
+            # --- ПОЧАТОК ЗМІН: Використовуємо уніфіковані таймфрейми ---
+            timeframe = '1h' if asset_type == 'crypto' else '15m'
+            # --- КІНЕЦЬ ЗМІН ---
             df = get_market_data(pair, timeframe, asset_type, limit=50)
             if df.empty: return None
-            
-            # ВИДАЛЕНО БЛОК ПЕРЕВІРКИ ЧАСУ ОНОВЛЕННЯ
             
             rsi = df.ta.rsi(length=14).iloc[-1]
             if pd.isna(rsi): return None
@@ -303,4 +312,3 @@ def rank_assets_for_api(pairs, asset_type):
     results = executor.map(fetch_score, pairs)
     ranked_pairs = [r for r in results if r is not None]
     return sorted(ranked_pairs, key=lambda x: x['score'], reverse=True)
-# --- КІНЕЦЬ ЗМІН ---
