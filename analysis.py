@@ -132,11 +132,13 @@ def _calculate_core_signal(df, daily_df):
     }
 
 def get_signal_strength_verdict(pair, display_name, asset, user_id=None):
-    df = get_market_data(pair, '1m', asset, limit=50)
+    # --- ПОЧАТОК ЗМІН: Стандартизуємо ліміт ---
+    df = get_market_data(pair, '1m', asset, limit=100)
+    # --- КІНЕЦЬ ЗМІН ---
     if df.empty or len(df) < 25:
         return f"⚠️ Недостатньо даних для 1-хв аналізу *{display_name}*."
     try:
-        daily_df = get_market_data(pair, '1d', asset, limit=30)
+        daily_df = get_market_data(pair, '1d', asset, limit=100)
         analysis = _calculate_core_signal(df, daily_df)
         bull_percentage = analysis['score']
         if user_id:
@@ -187,7 +189,6 @@ def get_api_detailed_signal_data(pair):
         score = analysis['score']
         direction = "up" if score > 55 else "down" if score < 45 else "neutral"
 
-        # --- ПОЧАТОК ЗМІН: Розраховуємо кількість факторів ---
         active_factors = 0
         if "KAMA" in "".join(analysis['reasons']): active_factors += 1
         if "RSI" in "".join(analysis['reasons']): active_factors += 1
@@ -198,7 +199,6 @@ def get_api_detailed_signal_data(pair):
             active_factors += 1
         
         total_factors = 6
-        # --- КІНЕЦЬ ЗМІН ---
 
         history_df = df.tail(50)
         date_col = 'ts' if 'ts' in history_df.columns else 'datetime'
@@ -218,10 +218,8 @@ def get_api_detailed_signal_data(pair):
             "bear_percentage": 100 - score,
             "direction": direction,
             "power_index": score,
-            # --- ПОЧАТОК ЗМІН: Повертаємо нові поля ---
             "active_factors": active_factors,
             "total_factors": total_factors,
-            # --- КІНЕЦЬ ЗМІН ---
             "reasons": analysis['reasons'],
             "support": analysis['support'],
             "resistance": analysis['resistance'],
