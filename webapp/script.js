@@ -141,22 +141,27 @@ function fetchSignal(pair, assetType) {
         const dir = signalData.direction || "neutral";
         const arrow = dir === "up" ? "⬆️" : dir === "down" ? "⬇️" : "🟡";
         const powerIndex = signalData.power_index !== undefined ? signalData.power_index : "?";
-        const confidence = signalData.signal_confidence;
+        
+        // --- ПОЧАТОК ЗМІН: Використовуємо нові дані для визначення класу ---
+        const activeFactors = signalData.active_factors;
+        const totalFactors = signalData.total_factors;
 
         let confidenceClass = "neutral";
-        if (confidence >= 67) confidenceClass = "strong";
-        else if (confidence <= 33) confidenceClass = "weak";
+        if (activeFactors >= 4) confidenceClass = "strong"; // 4 і більше - сильний сигнал
+        else if (activeFactors <= 2) confidenceClass = "weak"; // 2 і менше - слабкий
+        // --- КІНЕЦЬ ЗМІН ---
         
+        // --- ПОЧАТОК ЗМІН: Оновлюємо HTML ---
         let html = `
             <div class="signal-summary ${confidenceClass}">
                 <div class="direction-arrow">${arrow}</div>
                 <div class="power-index">Індекс сили: <strong>${powerIndex}</strong></div>
-                <div class="confidence">Ймовірність: <strong>${confidence}%</strong></div>
+                <div class="confidence">Підтвердження: <strong>${activeFactors} з ${totalFactors}</strong></div>
             </div>
             <div class="pair-title">${signalData.pair} | Ціна: ${signalData.price.toFixed(4)}</div>
         `;
+        // --- КІНЕЦЬ ЗМІН ---
         
-        // --- ПОЧАТОК ЗМІН: Додаємо блок для рівнів підтримки/опору ---
         if (signalData.support || signalData.resistance) {
             const supportText = signalData.support ? `Підтримка: <strong>${signalData.support.toFixed(4)}</strong>` : '';
             const resistanceText = signalData.resistance ? `Опір: <strong>${signalData.resistance.toFixed(4)}</strong>` : '';
@@ -164,7 +169,6 @@ function fetchSignal(pair, assetType) {
             
             html += `<div class="sr-levels">${supportText}${separator}${resistanceText}</div>`;
         }
-        // --- КІНЕЦЬ ЗМІН ---
 
         if (signalData.reasons && signalData.reasons.length) {
             html += `<h4>Ключові фактори:</h4><ul class="reason-list">${signalData.reasons.map(r => `<li>${r}</li>`).join('')}</ul>`;

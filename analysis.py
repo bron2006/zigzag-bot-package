@@ -187,13 +187,18 @@ def get_api_detailed_signal_data(pair):
         score = analysis['score']
         direction = "up" if score > 55 else "down" if score < 45 else "neutral"
 
-        # Підрахунок довіри до сигналу (на основі кількості факторів)
-        confidence_score = len(analysis['reasons'])
-        if analysis.get("candle_pattern"): confidence_score += 1
+        # --- ПОЧАТОК ЗМІН: Розраховуємо кількість факторів ---
+        active_factors = 0
+        if "KAMA" in "".join(analysis['reasons']): active_factors += 1
+        if "RSI" in "".join(analysis['reasons']): active_factors += 1
+        if "підтримки" in "".join(analysis['reasons']): active_factors += 1
+        if "опору" in "".join(analysis['reasons']): active_factors += 1
+        if analysis.get("candle_pattern"): active_factors += 1
         if analysis.get("volume_info") and "нейтральний" not in analysis['volume_info'].lower():
-            confidence_score += 1
-
-        signal_confidence = min(confidence_score * 10, 100)
+            active_factors += 1
+        
+        total_factors = 6
+        # --- КІНЕЦЬ ЗМІН ---
 
         history_df = df.tail(50)
         date_col = 'ts' if 'ts' in history_df.columns else 'datetime'
@@ -213,7 +218,10 @@ def get_api_detailed_signal_data(pair):
             "bear_percentage": 100 - score,
             "direction": direction,
             "power_index": score,
-            "signal_confidence": signal_confidence,
+            # --- ПОЧАТОК ЗМІН: Повертаємо нові поля ---
+            "active_factors": active_factors,
+            "total_factors": total_factors,
+            # --- КІНЕЦЬ ЗМІН ---
             "reasons": analysis['reasons'],
             "support": analysis['support'],
             "resistance": analysis['resistance'],
@@ -242,10 +250,8 @@ def get_full_mta_verdict(pair, display_name, asset):
     if not rows_data:
         return f"**📊 Детальний огляд тренду:** *{display_name}*\n\nНе вдалося згенерувати жодного сигналу."
 
-    # Фінальний підхід: простий і надійний список, що не зламається
     report_lines = []
     for tf, sig in rows_data:
-        # Форматуємо як "• 1h: ✅ BUY"
         report_lines.append(f"• *{tf}:* {sig}")
 
     report = "\n".join(report_lines)
