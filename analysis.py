@@ -218,23 +218,27 @@ def get_full_mta_verdict(pair, display_name, asset):
     if not rows_data:
         return f"**📊 Детальний огляд тренду:** *{display_name}*\n\nНе вдалося згенерувати жодного сигналу."
 
-    # Використовуємо символи псевдографіки для створення надійної таблиці
+    # Створення простої ASCII-таблиці для максимальної сумісності
+    tf_col_width = 7
+    sig_col_width = 11
+
+    separator = f"+{'-' * (tf_col_width + 2)}+{'-' * (sig_col_width + 2)}+"
+    
     table_lines = []
-    # Верхня межа таблиці
-    table_lines.append("┌─────────┬────────────┐")
-    # Заголовок
-    table_lines.append("│   ТФ    │   Сигнал   │")
-    # Роздільник
-    table_lines.append("├─────────┼────────────┤")
+    table_lines.append(separator)
+    
+    tf_header = "ТФ".center(tf_col_width)
+    sig_header = "Сигнал".center(sig_col_width)
+    table_lines.append(f"| {tf_header} | {sig_header} |")
+    
+    table_lines.append(separator)
     
     for tf, sig in rows_data:
-        # Вирівнюємо контент по центру/лівому краю всередині стовпців
-        tf_padded = tf.center(7)
-        sig_padded = f" {sig}".ljust(10)
-        table_lines.append(f"│ {tf_padded} │ {sig_padded} │")
+        tf_padded = tf.ljust(tf_col_width)
+        sig_padded = f" {sig}".ljust(sig_col_width)
+        table_lines.append(f"| {tf_padded} | {sig_padded} |")
 
-    # Нижня межа таблиці
-    table_lines.append("└─────────┴────────────┘")
+    table_lines.append(separator)
     
     table = "\n".join(table_lines)
     
