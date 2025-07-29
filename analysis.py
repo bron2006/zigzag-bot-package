@@ -17,7 +17,10 @@ def get_executor():
 
 def get_market_data(pair, tf, asset, limit=300, force_refresh=False):
     key = f"{pair}_{tf}_{limit}"
-    if not force_refresh and key in MARKET_DATA_CACHE:
+    # --- ПОЧАТОК ЗМІН: Вимикаємо кеш для акцій та валют ---
+    use_cache = asset == 'crypto'
+    if use_cache and not force_refresh and key in MARKET_DATA_CACHE:
+    # --- КІНЕЦЬ ЗМІН ---
         return MARKET_DATA_CACHE[key]
     try:
         df = pd.DataFrame()
@@ -35,18 +38,26 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False):
             ts = td.time_series(symbol=pair, interval=td_tf, outputsize=limit)
             df = ts.as_pandas()
             if not df.empty:
+                # --- ПОЧАТОК ДІАГНОСТИЧНИХ ЗМІН ---
+                # Логуємо останню отриману точку даних, щоб перевірити свіжість
+                logger.info(f"DIAGNOSTICS: Last data point received for {pair} from provider: {df.iloc[-1].to_dict()}")
+                # --- КІНЕЦЬ ДІАГНОСТИЧНИХ ЗМІН ---
                 df = df.rename(columns={'open':'Open','high':'High','low':'Low','close':'Close','volume':'Volume'}).reset_index()
                 if 'datetime' in df.columns:
                     df['datetime'] = pd.to_datetime(df['datetime']).dt.tz_localize('UTC')
         if df.empty:
             logger.warning(f"API повернуло порожній результат для {pair} на ТФ {tf}")
             return pd.DataFrame()
-        MARKET_DATA_CACHE[key] = df
+        # --- ПОЧАТОК ЗМІН: Зберігаємо в кеш тільки дані по криптовалютах ---
+        if use_cache:
+            MARKET_DATA_CACHE[key] = df
+        # --- КІНЕЦЬ ЗМІН ---
         return df
     except Exception as e:
         logger.error(f"Помилка отримання даних для {pair} на ТФ {tf}: {e}")
         return pd.DataFrame()
 
+# ... (решта файлу без змін) ...
 def _format_price(price):
     if price >= 10:
         return f"{price:.2f}"
@@ -279,7 +290,10 @@ def rank_crypto_chunk(pairs_chunk):
 
 def rank_assets_for_api(pairs, asset_type):
     cache_key = f"ranking_{asset_type}"
-    if cache_key in RANKING_CACHE:
+    # --- ПОЧАТОК ЗМІН: Вимикаємо кеш для акцій та валют ---
+    use_cache = asset_type == 'crypto'
+    if use_cache and cache_key in RANKING_CACHE:
+    # --- КІНЕЦЬ ЗМІН ---
         return RANKING_CACHE[cache_key]
     def fetch_score(pair):
         try:
@@ -306,5 +320,8 @@ def rank_assets_for_api(pairs, asset_type):
     active_part = sorted([res for res in results if res['score'] != -1], key=lambda x: x['score'], reverse=True)
     inactive_part = [res for res in results if res['score'] == -1]
     final_ranking = active_part + inactive_part
-    RANKING_CACHE[cache_key] = final_ranking
+    # --- ПОЧАТОК ЗМІН: Зберігаємо в кеш тільки дані по криптовалютах ---
+    if use_cache:
+        RANKING_CACHE[cache_key] = final_ranking
+    # --- КІНЕЦЬ ЗМІН ---
     return final_ranking
