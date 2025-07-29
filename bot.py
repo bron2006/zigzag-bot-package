@@ -9,9 +9,7 @@ from telegram import Update
 
 from config import app, bot, dp, WEBHOOK_SECRET, logger, CRYPTO_PAIRS_FULL, FOREX_SESSIONS, STOCK_TICKERS
 from db import init_db, get_watchlist, toggle_watch, get_signal_history
-# --- ПОЧАТОК ЗМІН: Імпортуємо нові функції ---
 from analysis import get_api_detailed_signal_data, rank_assets_for_api, get_api_mta_data, sort_pairs_by_activity
-# --- КІНЕЦЬ ЗМІН ---
 import telegram_ui
 
 CORS(app)
@@ -41,11 +39,10 @@ def webhook_handler():
         logger.error(f"Webhook error: {e}\n{traceback.format_exc()}")
     return "OK", 200
 
-# --- ПОЧАТОК ЗМІН: Оновлюємо ендпоінт для прийому таймфрейму ---
 @app.route("/api/signal", methods=["GET"])
 def api_signal():
     pair = request.args.get("pair")
-    timeframe = request.args.get("tf", "1m") # За замовчуванням 1m
+    timeframe = request.args.get("tf", "1m")
     if not pair: return jsonify({"error": "pair is required"}), 400
     try:
         data = get_api_detailed_signal_data(pair, timeframe=timeframe)
@@ -54,7 +51,6 @@ def api_signal():
     except Exception as e:
         logger.error(f"API error for pair {pair} on tf {timeframe}: {e}\n{traceback.format_exc()}")
         return jsonify({"error": f"Внутрішня помилка сервера"}), 500
-# --- КІНЕЦЬ ЗМІН ---
 
 @app.route("/api/get_ranked_pairs", methods=["GET"])
 def api_get_ranked_pairs():
@@ -64,22 +60,27 @@ def api_get_ranked_pairs():
     try:
         ranked_crypto_data = rank_assets_for_api(CRYPTO_PAIRS_FULL, 'crypto')
         
-        # --- ПОЧАТОК ЗМІН: Сортуємо статичні списки за активністю ---
+        # --- ПОЧАТОК ТЕСТОВИХ ЗМІН: Тимчасово вимикаємо сортування ---
+        
+        # Готуємо дані, як і раніше
         stocks_data = [{'ticker': p, 'active': True} for p in STOCK_TICKERS]
-        sorted_stocks = sort_pairs_by_activity(stocks_data)
-
         forex_data = {}
         for session, pairs in FOREX_SESSIONS.items():
-            session_data = [{'ticker': p, 'active': True} for p in pairs]
-            forex_data[session] = sort_pairs_by_activity(session_data)
-        # --- КІНЕЦЬ ЗМІН ---
+            forex_data[session] = [{'ticker': p, 'active': True} for p in pairs]
+
+        # Функції сортування тимчасово не викликаються
+        # sorted_stocks = sort_pairs_by_activity(stocks_data)
+        # for session, pairs_data in forex_data.items():
+        #     forex_data[session] = sort_pairs_by_activity(pairs_data)
 
         return jsonify({
             "watchlist": watchlist,
             "crypto": ranked_crypto_data,
-            "forex": forex_data,
-            "stocks": sorted_stocks
+            "forex": forex_data,       # Повертаємо невідсортовані дані
+            "stocks": stocks_data      # Повертаємо невідсортовані дані
         })
+        # --- КІНЕЦЬ ТЕСТОВИХ ЗМІН ---
+
     except Exception as e:
         logger.error(f"API error for ranked pairs: {e}\n{traceback.format_exc()}")
         return jsonify({
@@ -90,7 +91,6 @@ def api_get_ranked_pairs():
             "error_message": "Помилка при сортуванні, показано стандартний список."
         })
 
-# ... (решта файлу залишається без змін)
 @app.route("/api/get_pairs", methods=["GET"])
 def api_get_pairs():
     user_id = _get_user_id_from_request(request)
