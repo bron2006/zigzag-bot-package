@@ -7,7 +7,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
     && rm -rf /var/lib/apt/lists/*
 
-# --- ПОЧАТОК ЗМІН: Розбиваємо компіляцію на кроки ---
+# Розбиваємо компіляцію на кроки
 WORKDIR /tmp
 
 # Крок 1: Завантаження
@@ -20,12 +20,13 @@ RUN tar -xzvf ta-lib-0.4.0-src.tar.gz
 WORKDIR /tmp/ta-lib
 RUN ./configure --prefix=/usr
 
-# Крок 4: Компіляція
-RUN make -j$(nproc)
+# --- ПОЧАТОК ЗМІН: Прибираємо паралельну збірку ---
+# Крок 4: Компіляція (в один потік для стабільності)
+RUN make
+# --- КІНЕЦЬ ЗМІН ---
 
 # Крок 5: Встановлення
 RUN make install
-# --- КІНЕЦЬ ЗМІН ---
 
 
 # Встановлюємо Python залежності
