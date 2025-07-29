@@ -12,15 +12,16 @@ app = "zigzag-bot-package"
   auto_start_machines = true
   min_machines_running = 0
   processes = ["app"]
-
-  # --- ПОЧАТОК ЗМІН: Додаємо перевірку працездатності ---
-  # Це буде "тримати в тонусі" наш сервер, не даючи йому заснути
-  [[http_service.checks]]
-    interval = "15s" # Перевіряти кожні 15 секунд
-    timeout = "2s"   # Давати 2 секунди на відповідь
-    method = "GET"
-    path = "/"       # Робити запит на головну сторінку
+  
+  # --- ПОЧАТОК ЗМІН: Даємо боту 30 секунд на "прогрів" ---
+  grace_period = "30s"
   # --- КІНЕЦЬ ЗМІН ---
+
+  [[http_service.checks]]
+    interval = "15s"
+    timeout = "2s"
+    method = "GET"
+    path = "/"
 
 [[vm]]
   cpu_kind = "shared"
