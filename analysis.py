@@ -12,13 +12,20 @@ _executor = None
 def get_executor():
     global _executor
     if _executor is None:
-        _executor = ThreadPoolExecutor(max_workers=4) # Збільшимо кількість потоків
+        _executor = ThreadPoolExecutor(max_workers=4)
     return _executor
 
+# --- ПОЧАТОК ЗМІН: Повністю перероблена логіка кешування ---
 def get_market_data(pair, tf, asset, limit=300, force_refresh=False):
-    key = f"{pair}_{tf}_{asset}_{limit}"
-    if not force_refresh and key in MARKET_DATA_CACHE:
-        return MARKET_DATA_CACHE[key]
+    # Для криптовалют кеш працює надійно, залишаємо його.
+    if asset == 'crypto':
+        key = f"{pair}_{tf}_{asset}_{limit}"
+        if not force_refresh and key in MARKET_DATA_CACHE:
+            return MARKET_DATA_CACHE[key]
+    
+    # Для Forex та акцій ми тимчасово вимикаємо кеш, щоб завжди отримувати свіжі дані
+    # Це вирішить проблему із застарілою ціною.
+    
     try:
         df = pd.DataFrame()
         if asset == 'crypto':
@@ -26,10 +33,11 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False):
             df = pd.DataFrame(bars, columns=['ts','o','h','l','c','v'])
             df['ts'] = pd.to_datetime(df['ts'], unit='ms', utc=True)
             df = df.rename(columns={'o':'Open','h':'High','l':'Low','c':'Close','v':'Volume'})
+            # Кешуємо тільки результат для криптовалют
+            MARKET_DATA_CACHE[key] = df
+        
         elif asset in ('forex', 'stocks'):
-            # --- ПОЧАТОК ЗМІН: Уніфікована карта таймфреймів ---
             td_tf_map = { '1m': '1min', '5m': '5min', '15m': '15min', '1h': '1hour', '4h': '4hour', '1d': '1day' }
-            # --- КІНЕЦЬ ЗМІН ---
             td_tf = td_tf_map.get(tf)
             if not td_tf:
                 logger.error(f"Непідтримуваний таймфрейм для TwelveData: {tf}")
@@ -40,14 +48,16 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False):
                 df = df.rename(columns={'open':'Open','high':'High','low':'Low','close':'Close','volume':'Volume'}).reset_index()
                 if 'datetime' in df.columns:
                     df['datetime'] = pd.to_datetime(df['datetime']).dt.tz_localize('UTC')
+
         if df.empty:
             logger.warning(f"API повернуло порожній результат для {pair} на ТФ {tf}")
-            return pd.DataFrame()
-        MARKET_DATA_CACHE[key] = df
+        
         return df
+        
     except Exception as e:
         logger.error(f"Помилка отримання даних для {pair} на ТФ {tf}: {e}")
         return pd.DataFrame()
+# --- КІНЕЦЬ ЗМІН ---
 
 def _format_price(price):
     if price >= 10: return f"{price:.2f}"
@@ -74,30 +84,16 @@ def is_volatile_enough(df: pd.DataFrame, threshold: float = 0.003) -> bool:
     if pd.isna(atr) or last_price == 0: return False
     return (atr / last_price) > threshold
 
-# --- ПОЧАТОК ЗМІН: Нова, більш точна перевірка активності ---
 def is_pair_active_now(pair: str, asset_type: str) -> bool:
-    """Перевіряє, чи активний ринок для даного активу/пари."""
     now_utc = datetime.utcnow()
-    
-    if asset_type == 'crypto':
-        return True
-
-    # Загальне правило для вихідних
-    if now_utc.weekday() >= 5: # Субота, Неділя
-        return False
-
-    if asset_type == 'stocks':
-        # Американський ринок акцій (13:30-20:00 UTC)
-        return time(13, 30) <= now_utc.time() <= time(20, 0)
-
+    if asset_type == 'crypto': return True
+    if now_utc.weekday() >= 5: return False
+    if asset_type == 'stocks': return time(13, 30) <= now_utc.time() <= time(20, 0)
     if asset_type == 'forex':
         start, end = PAIR_ACTIVE_HOURS.get(pair, (None, None))
-        if start is None:
-            return True # Якщо пари немає в списку, вважаємо активною
+        if start is None: return True
         return start <= now_utc.time() <= end
-        
     return True
-# --- КІНЕЦЬ ЗМІН ---
 
 def identify_support_resistance_levels(df, window=20, threshold=0.01):
     try:
@@ -183,7 +179,6 @@ def _generate_verdict(analysis):
         else: verdict_text, verdict_level = "🧐 Слабкий сигнал: ПРОДАВАТИ (Ризиковано)", "weak_sell"
     return verdict_text, verdict_level
 
-# --- ПОЧАТОК ЗМІН: Додано параметр timeframe ---
 def get_signal_strength_verdict(pair, display_name, asset, timeframe='1m', user_id=None, force_refresh=False):
     cache_key = f"signal_{pair}_{timeframe}"
     if not force_refresh and cache_key in ANALYSIS_CACHE: return ANALYSIS_CACHE[cache_key]
@@ -222,7 +217,6 @@ def get_signal_strength_verdict(pair, display_name, asset, timeframe='1m', user_
     except Exception as e:
         logger.error(f"Помилка розрахунку індексу для {pair}: {e}")
         return f"⚠️ Помилка аналізу *{display_name}*.", None
-# --- КІНЕЦЬ ЗМІН ---
 
 def get_api_detailed_signal_data(pair, timeframe='1m'):
     asset = 'stocks'
@@ -232,7 +226,7 @@ def get_api_detailed_signal_data(pair, timeframe='1m'):
         market_name = "Ринок акцій" if asset == 'stocks' else "Ринок Forex"
         return {"error": f"{market_name} зараз неактивний для пари {pair}. Аналіз недоступний."}
 
-    df = get_market_data(pair, timeframe, asset, limit=100)
+    df = get_market_data(pair, timeframe, asset, limit=100, force_refresh=True) # Завжди робимо force_refresh
     if df.empty or len(df) < 25:
         return {"error": f"Недостатньо даних для аналізу {pair} на таймфреймі {timeframe}."}
 
@@ -240,7 +234,7 @@ def get_api_detailed_signal_data(pair, timeframe='1m'):
         return {"error": f"Низька волатильність для {pair} на таймфреймі {timeframe}."}
     
     try:
-        daily_df = get_market_data(pair, '1d', asset, limit=100)
+        daily_df = get_market_data(pair, '1d', asset, limit=100, force_refresh=True) # Завжди робимо force_refresh
         analysis = _calculate_core_signal(df, daily_df)
         verdict_text, verdict_level = _generate_verdict(analysis)
         history_df = df.tail(50)
@@ -285,35 +279,25 @@ def get_api_mta_data(pair, asset):
     results = executor.map(worker, ANALYSIS_TIMEFRAMES)
     return [r for r in results if r is not None]
 
-# --- ПОЧАТОК ЗМІН: Функція сортування за активністю ---
 def sort_pairs_by_activity(pairs: list[dict]) -> list[dict]:
-    """Сортує пари, виносячи активні вгору."""
     now = datetime.utcnow()
-    
     def is_active(pair_data):
         pair_ticker = pair_data['ticker']
         asset_type = 'stocks'
         if '/' in pair_ticker: asset_type = 'crypto' if 'USDT' in pair_ticker else 'forex'
-        
         if asset_type == 'crypto': return True
         if now.weekday() >= 5: return False
-
-        if asset_type == 'stocks':
-            return time(13, 30) <= now.time() <= time(20, 0)
-        
+        if asset_type == 'stocks': return time(13, 30) <= now.time() <= time(20, 0)
         if asset_type == 'forex':
             start, end = PAIR_ACTIVE_HOURS.get(pair_ticker, (None, None))
             if start is None: return True
             return start <= now.time() <= end
         return True
-
     return sorted(pairs, key=lambda p: is_active(p), reverse=True)
-# --- КІНЕЦЬ ЗМІН ---
 
 def rank_assets_for_api(pairs, asset_type):
     cache_key = f"ranking_{asset_type}"
     if cache_key in ANALYSIS_CACHE: return ANALYSIS_CACHE[cache_key]
-    
     def fetch_crypto_score(pair):
         try:
             df = get_market_data(pair, '1h', 'crypto', limit=50)
@@ -324,7 +308,6 @@ def rank_assets_for_api(pairs, asset_type):
         except Exception as e:
             logger.error(f"Не вдалося проаналізувати активність {pair}: {e}")
             return {'ticker': pair, 'score': -1}
-
     executor = get_executor()
     results = list(executor.map(fetch_crypto_score, pairs))
     active_part = sorted([res for res in results if res['score'] != -1], key=lambda x: x['score'], reverse=True)
