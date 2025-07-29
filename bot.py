@@ -14,11 +14,14 @@ CORS(app)
 
 def _get_user_id_from_request(req):
     init_data = req.args.get("initData")
-    if not init_data: return None
+    if not init_data:
+        return None
     try:
         user_json_str = parse_qs(init_data).get("user", [None])[0]
-        if user_json_str: return json.loads(user_json_str).get("id")
-    except Exception: return None
+        if user_json_str:
+            return json.loads(user_json_str).get("id")
+    except Exception:
+        return None
 
 @app.route(f"/{WEBHOOK_SECRET}", methods=["POST"])
 def webhook_handler():
@@ -33,14 +36,15 @@ def webhook_handler():
 def api_signal():
     pair = request.args.get("pair")
     timeframe = request.args.get("tf", "1m")
-    if not pair: return jsonify({"error": "pair is required"}), 400
+    if not pair:
+        return jsonify({"error": "pair is required"}), 400
     return jsonify(get_api_detailed_signal_data(pair, timeframe=timeframe))
 
 @app.route("/api/get_ranked_pairs", methods=["GET"])
 def api_get_ranked_pairs():
     user_id = _get_user_id_from_request(request)
     watchlist = get_watchlist(user_id) if user_id else []
-    
+
     return jsonify({
         "watchlist": watchlist,
         "crypto": rank_assets_for_api(CRYPTO_PAIRS_FULL, 'crypto'),
