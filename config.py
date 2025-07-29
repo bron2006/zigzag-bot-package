@@ -14,6 +14,9 @@ load_dotenv()
 TOKEN = os.getenv("TOKEN")
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
 TWELVEDATA_API_KEY = os.getenv("TWELVEDATA_API_KEY")
+# --- ОСЬ ЦЕЙ РЯДОК ПОТРІБНО ДОДАТИ ---
+FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY")
+# -----------------------------------------
 
 # --- Логування ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -34,7 +37,7 @@ app = Flask(__name__)
 
 # --- Константи ---
 CRYPTO_PAIRS_FULL = [
-    "BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "DOGE/USDT", 
+    "BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "DOGE/USDT",
     "ADA/USDT", "SHIB/USDT", "AVAX/USDT", "LINK/USDT", "DOT/USDT", "TRX/USDT",
     "MATIC/USDT", "LTC/USDT", "BCH/USDT", "XLM/USDT", "ATOM/USDT", "ETC/USDT",
     "FIL/USDT", "NEAR/USDT", "ALGO/USDT", "VET/USDT", "ICP/USDT", "EOS/USDT"
