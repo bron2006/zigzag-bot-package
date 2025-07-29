@@ -1,26 +1,36 @@
 # Етап 1: Збірка образу ("Майстерня")
 FROM python:3.11-slim as builder
 
-# Встановлюємо системні залежності для компіляції TA-Lib
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
+# Встановлюємо системні залежності для компіляції
+RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     wget \
     && rm -rf /var/lib/apt/lists/*
 
-# Завантажуємо та компілюємо TA-Lib з вихідного коду
+# --- ПОЧАТОК ЗМІН: Розбиваємо компіляцію на кроки ---
 WORKDIR /tmp
-RUN wget http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz -q && \
-    tar -xzvf ta-lib-0.4.0-src.tar.gz && \
-    cd ta-lib && \
-    ./configure --prefix=/usr && \
-    make -j$(nproc) && \
-    make install
+
+# Крок 1: Завантаження
+RUN wget http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz -O ta-lib-0.4.0-src.tar.gz
+
+# Крок 2: Розпакування
+RUN tar -xzvf ta-lib-0.4.0-src.tar.gz
+
+# Крок 3: Конфігурація
+WORKDIR /tmp/ta-lib
+RUN ./configure --prefix=/usr
+
+# Крок 4: Компіляція
+RUN make -j$(nproc)
+
+# Крок 5: Встановлення
+RUN make install
+# --- КІНЕЦЬ ЗМІН ---
+
 
 # Встановлюємо Python залежності
 WORKDIR /app
 COPY requirements.txt .
-# Тепер, коли бібліотека TA-Lib встановлена в системі, pip-пакет має встановитись коректно
 RUN pip install --no-cache-dir -r requirements.txt --prefix /install
 
 # ---
