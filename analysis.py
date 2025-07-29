@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, time
 
 from db import add_signal_to_history
-from config import logger, binance, td, MARKET_DATA_CACHE, ANALYSIS_CACHE, PAIR_ACTIVE_HOURS, ANALYSIS_TIMEFRAMES
+from config import logger, binance, td, MARKET_DATA_CACHE, PAIR_ACTIVE_HOURS, ANALYSIS_TIMEFRAMES
 
 _executor = None
 def get_executor():
@@ -15,16 +15,12 @@ def get_executor():
         _executor = ThreadPoolExecutor(max_workers=4)
     return _executor
 
-# --- ПОЧАТОК ЗМІН: Повністю перероблена логіка кешування ---
 def get_market_data(pair, tf, asset, limit=300, force_refresh=False):
-    # Для криптовалют кеш працює надійно, залишаємо його.
+    # Кешування залишається тільки для crypto, де дані надійні
     if asset == 'crypto':
         key = f"{pair}_{tf}_{asset}_{limit}"
         if not force_refresh and key in MARKET_DATA_CACHE:
             return MARKET_DATA_CACHE[key]
-    
-    # Для Forex та акцій ми тимчасово вимикаємо кеш, щоб завжди отримувати свіжі дані
-    # Це вирішить проблему із застарілою ціною.
     
     try:
         df = pd.DataFrame()
@@ -33,7 +29,6 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False):
             df = pd.DataFrame(bars, columns=['ts','o','h','l','c','v'])
             df['ts'] = pd.to_datetime(df['ts'], unit='ms', utc=True)
             df = df.rename(columns={'o':'Open','h':'High','l':'Low','c':'Close','v':'Volume'})
-            # Кешуємо тільки результат для криптовалют
             MARKET_DATA_CACHE[key] = df
         
         elif asset in ('forex', 'stocks'):
@@ -57,7 +52,6 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False):
     except Exception as e:
         logger.error(f"Помилка отримання даних для {pair} на ТФ {tf}: {e}")
         return pd.DataFrame()
-# --- КІНЕЦЬ ЗМІН ---
 
 def _format_price(price):
     if price >= 10: return f"{price:.2f}"
@@ -179,10 +173,10 @@ def _generate_verdict(analysis):
         else: verdict_text, verdict_level = "🧐 Слабкий сигнал: ПРОДАВАТИ (Ризиковано)", "weak_sell"
     return verdict_text, verdict_level
 
+# --- ПОЧАТОК ЗМІН: Повністю видалено кешування готових результатів ---
 def get_signal_strength_verdict(pair, display_name, asset, timeframe='1m', user_id=None, force_refresh=False):
-    cache_key = f"signal_{pair}_{timeframe}"
-    if not force_refresh and cache_key in ANALYSIS_CACHE: return ANALYSIS_CACHE[cache_key]
-
+    # Кеш результатів аналізу ВИДАЛЕНО, щоб гарантувати свіжість даних
+    
     if not is_pair_active_now(pair, asset):
         market_name = "Ринок акцій" if asset == 'stocks' else "Ринок Forex"
         message = (f"**🌙 {market_name} зараз неактивний для пари {display_name}**\n\n"
@@ -211,9 +205,7 @@ def get_signal_strength_verdict(pair, display_name, asset, timeframe='1m', user_
                          f"*{display_name}* | *ТФ: {timeframe}* | *Ціна:* `{formatted_price}`\n\n"
                          f"_Це не фінансова порада. Для деталей натисніть кнопки нижче._")
         
-        result = (final_message, analysis)
-        ANALYSIS_CACHE[cache_key] = result
-        return result
+        return final_message, analysis
     except Exception as e:
         logger.error(f"Помилка розрахунку індексу для {pair}: {e}")
         return f"⚠️ Помилка аналізу *{display_name}*.", None
@@ -226,7 +218,7 @@ def get_api_detailed_signal_data(pair, timeframe='1m'):
         market_name = "Ринок акцій" if asset == 'stocks' else "Ринок Forex"
         return {"error": f"{market_name} зараз неактивний для пари {pair}. Аналіз недоступний."}
 
-    df = get_market_data(pair, timeframe, asset, limit=100, force_refresh=True) # Завжди робимо force_refresh
+    df = get_market_data(pair, timeframe, asset, limit=100, force_refresh=True)
     if df.empty or len(df) < 25:
         return {"error": f"Недостатньо даних для аналізу {pair} на таймфреймі {timeframe}."}
 
@@ -234,7 +226,7 @@ def get_api_detailed_signal_data(pair, timeframe='1m'):
         return {"error": f"Низька волатильність для {pair} на таймфреймі {timeframe}."}
     
     try:
-        daily_df = get_market_data(pair, '1d', asset, limit=100, force_refresh=True) # Завжди робимо force_refresh
+        daily_df = get_market_data(pair, '1d', asset, limit=100, force_refresh=True)
         analysis = _calculate_core_signal(df, daily_df)
         verdict_text, verdict_level = _generate_verdict(analysis)
         history_df = df.tail(50)
@@ -249,6 +241,7 @@ def get_api_detailed_signal_data(pair, timeframe='1m'):
     except Exception as e:
         logger.error(f"Error in get_api_detailed_signal_data for {pair}: {e}")
         return {"error": str(e)}
+# --- КІНЕЦЬ ЗМІН ---
 
 def get_full_mta_verdict(pair, display_name, asset, force_refresh=False):
     def worker(tf):
@@ -295,9 +288,9 @@ def sort_pairs_by_activity(pairs: list[dict]) -> list[dict]:
         return True
     return sorted(pairs, key=lambda p: is_active(p), reverse=True)
 
+# --- ПОЧАТОК ЗМІН: Видалено кешування для функції ранжування ---
 def rank_assets_for_api(pairs, asset_type):
-    cache_key = f"ranking_{asset_type}"
-    if cache_key in ANALYSIS_CACHE: return ANALYSIS_CACHE[cache_key]
+    # Кеш ВИДАЛЕНО
     def fetch_crypto_score(pair):
         try:
             df = get_market_data(pair, '1h', 'crypto', limit=50)
@@ -313,5 +306,5 @@ def rank_assets_for_api(pairs, asset_type):
     active_part = sorted([res for res in results if res['score'] != -1], key=lambda x: x['score'], reverse=True)
     inactive_part = [res for res in results if res['score'] == -1]
     final_ranking = active_part + inactive_part
-    ANALYSIS_CACHE[cache_key] = final_ranking
     return final_ranking
+# --- КІНЕЦЬ ЗМІН ---
