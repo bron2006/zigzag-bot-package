@@ -8,15 +8,13 @@ const signalOutput = document.getElementById("signalOutput");
 const historyContainer = document.getElementById("historyContainer");
 const chartContainer = document.getElementById("chart");
 const searchInput = document.getElementById('searchInput');
-// --- ПОЧАТОК ЗМІН: Отримуємо контейнер для таймфреймів ---
 const timeframeSelector = document.getElementById('timeframeSelector');
-// --- КІНЕЦЬ ЗМІН ---
 
 let tg;
 if (!window.Telegram || !window.Telegram.WebApp) {
-    console.warn("Telegram WebApp object not found. Running in browser mode with mock data.");
-    tg = { 
-        themeParams: { bg_color: '#1a1a1a', text_color: '#ffffff' }, 
+    console.warn("Telegram WebApp object not found. Running in browser mode.");
+    tg = {
+        themeParams: { bg_color: '#1a1a1a', text_color: '#ffffff' },
         initData: '',
         ready: function() {},
         expand: function() {}
@@ -29,11 +27,9 @@ if (!window.Telegram || !window.Telegram.WebApp) {
 
 let currentWatchlist = [];
 let initData = tg.initData || '';
-// --- ПОЧАТОК ЗМІН: Зберігаємо поточний актив та таймфрейм ---
 let currentPair = null;
 let currentAssetType = null;
 let currentTf = '1m';
-// --- КІНЕЦЬ ЗМІН ---
 
 document.addEventListener('DOMContentLoaded', function() {
     showLoader(true);
@@ -45,14 +41,6 @@ document.addEventListener('DOMContentLoaded', function() {
         .then(staticData => {
             if(staticData.error_message) console.warn(staticData.error_message);
             currentWatchlist = staticData.watchlist || [];
-            // --- ПОЧАТОК ЗМІН: Додаємо сортування за активністю на фронтенді ---
-            if (staticData.stocks) staticData.stocks = sortPairsByActivity(staticData.stocks, 'stocks');
-            if (staticData.forex) {
-                for (const session in staticData.forex) {
-                    staticData.forex[session] = sortPairsByActivity(staticData.forex[session], 'forex');
-                }
-            }
-            // --- КІНЕЦЬ ЗМІН ---
             populateLists(staticData);
             showLoader(false);
         })
@@ -65,23 +53,20 @@ document.addEventListener('DOMContentLoaded', function() {
     searchInput.addEventListener('input', handleSearch);
 });
 
-// --- ПОЧАТОК ЗМІН: Функція сортування на фронтенді ---
-function sortPairsByActivity(pairs, assetType) {
-    // Проста імітація сортування на фронті, основна логіка на бекенді
-    // Тут можна додати візуальне виділення активних пар
-    return pairs; 
-}
-// --- КІНЕЦЬ ЗМІН ---
-
 function handleSearch() {
     const searchTerm = searchInput.value.toUpperCase().trim();
-    document.querySelectorAll('.pair-item').forEach(pair => {
-        const ticker = pair.querySelector('.pair-button').textContent.toUpperCase();
-        pair.style.display = ticker.includes(searchTerm) ? 'flex' : 'none';
-    });
     document.querySelectorAll('.category').forEach(category => {
-        const visiblePairs = category.querySelectorAll('.pair-item[style*="display: flex"]').length;
-        category.style.display = visiblePairs > 0 ? 'block' : 'none';
+        let hasVisiblePairs = false;
+        category.querySelectorAll('.pair-item').forEach(pairItem => {
+            const ticker = pairItem.querySelector('.pair-button').textContent.toUpperCase();
+            if (ticker.includes(searchTerm)) {
+                pairItem.style.display = 'flex';
+                hasVisiblePairs = true;
+            } else {
+                pairItem.style.display = 'none';
+            }
+        });
+        category.style.display = hasVisiblePairs ? 'block' : 'none';
     });
 }
 
@@ -99,7 +84,11 @@ function toggleFavorite(event, pair) {
         .then(res => res.json())
         .then(data => {
             if (data.success) {
-                currentWatchlist = isCurrentlyFavorite ? currentWatchlist.filter(p => p !== pair) : [...currentWatchlist, pair];
+                if (isCurrentlyFavorite) {
+                    currentWatchlist = currentWatchlist.filter(p => p !== pair);
+                } else {
+                    currentWatchlist.push(pair);
+                }
                 button.innerHTML = !isCurrentlyFavorite ? '✅' : '⭐';
             } else {
                 button.innerHTML = isCurrentlyFavorite ? '✅' : '⭐';
@@ -119,14 +108,26 @@ function createPairButton(pairData, assetType) {
 
 function populateLists(staticData) {
     let html = '';
-    const createSection = (title, pairs, assetType) => {
+    
+    // --- ПОЧАТОК ВИПРАВЛЕННЯ: Правильна логіка для assetTypeResolver ---
+    const createSection = (title, pairs, assetTypeResolver) => {
         if (!pairs || !pairs.length) return '';
-        return `<div class="category"><div class="category-title">${title}</div><div class="pair-list">` +
-               pairs.map(p => createPairButton(typeof p === 'string' ? {ticker: p, active: true} : p, assetType)).join('') +
-               `</div></div>`;
+        let sectionHtml = `<div class="category"><div class="category-title">${title}</div><div class="pair-list">`;
+        
+        pairs.forEach(pairData => {
+            const data = typeof pairData === 'string' ? { ticker: pairData, active: true } : pairData;
+            // Визначаємо тип активу для кожної пари. Якщо assetTypeResolver - це функція, викликаємо її.
+            const assetType = typeof assetTypeResolver === 'function' ? assetTypeResolver(data.ticker) : assetTypeResolver;
+            sectionHtml += createPairButton(data, assetType);
+        });
+        
+        sectionHtml += '</div></div>';
+        return sectionHtml;
     };
+    // --- КІНЕЦЬ ВИПРАВЛЕННЯ ---
+
     const watchlistData = staticData.watchlist.map(ticker => ({ ticker, active: true }));
-    html += createSection('⭐ Обране', watchlistData, getAssetType);
+    html += createSection('⭐ Обране', watchlistData, getAssetType); // Передаємо функцію getAssetType
     html += createSection('📈 Криптовалюта', staticData.crypto, 'crypto');
     if (staticData.forex) {
         Object.keys(staticData.forex).forEach(session => {
@@ -137,11 +138,11 @@ function populateLists(staticData) {
     listsContainer.innerHTML = html;
 }
 
-// --- ПОЧАТОК ЗМІН: Нові функції для вибору пари та таймфрейму ---
 function selectPair(pair, assetType) {
     currentPair = pair;
     currentAssetType = assetType;
-    timeframeSelector.innerHTML = ''; // Очищуємо селектор
+    currentTf = '1m'; // Скидаємо таймфрейм до стандартного при виборі нової пари
+    timeframeSelector.innerHTML = ''; 
 
     if (assetType === 'forex' || assetType === 'crypto') {
         const timeframes = ['1m', '5m', '15m'];
@@ -157,11 +158,9 @@ function selectPair(pair, assetType) {
 
 function selectTimeframe(tf) {
     currentTf = tf;
-    // Оновлюємо активну кнопку
-    document.querySelectorAll('.tf-button').forEach(btn => {
-        btn.classList.toggle('active', btn.textContent === tf);
-    });
-    fetchSignal(); // Перезапускаємо аналіз з новим таймфреймом
+    document.querySelectorAll('.tf-button').forEach(btn => btn.classList.remove('active'));
+    event.target.classList.add('active');
+    fetchSignal();
 }
 
 function fetchSignal() {
@@ -178,10 +177,10 @@ function fetchSignal() {
 
     Promise.all([fetch(signalApiUrl).then(res => res.json()), fetch(mtaApiUrl).then(res => res.json())])
     .then(([signalData, mtaData]) => {
+        showLoader(false);
         if (signalData.error) {
-            signalOutput.innerHTML = `❌ Помилка: ${signalData.error}`;
-            timeframeSelector.innerHTML = ''; // Ховаємо кнопки, якщо помилка
-            showLoader(false);
+            signalOutput.innerHTML = `<div class="verdict-box neutral">❌ Помилка: ${signalData.error}</div>`;
+            timeframeSelector.innerHTML = '';
             return;
         }
 
@@ -209,15 +208,13 @@ function fetchSignal() {
         else chartContainer.innerHTML = `<div class="no-chart">Графік недоступний</div>`;
         
         if (initData) fetchHistory(currentPair);
-        showLoader(false);
     })
     .catch(err => {
+        showLoader(false);
         console.error(`Error fetching signal for ${currentPair}:`, err);
         signalOutput.innerHTML = `❌ Помилка отримання сигналу.`;
-        showLoader(false);
     });
 }
-// --- КІНЕЦЬ ЗМІН ---
 
 function fetchHistory(pair) {
     fetch(`${API_BASE_URL}/api/signal_history?pair=${pair}&initData=${encodeURIComponent(initData)}`)
