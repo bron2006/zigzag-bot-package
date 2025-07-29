@@ -24,7 +24,6 @@ def forex_session_kb():
         [InlineKeyboardButton("⬅️ НАЗАД", callback_data="main_menu")]
     ])
 
-# --- ПОЧАТОК ЗМІН: Нова клавіатура для вибору таймфрейму ---
 def timeframe_kb(asset_type, context_data):
     """Створює клавіатуру для вибору таймфрейму."""
     keyboard = []
@@ -41,7 +40,6 @@ def timeframe_kb(asset_type, context_data):
     keyboard.append([InlineKeyboardButton("⬅️ НАЗАД", callback_data=back_callback)])
     
     return InlineKeyboardMarkup(keyboard)
-# --- КІНЕЦЬ ЗМІН ---
 
 def asset_list_kb(asset_type, pairs, chunk_index=0, timeframe='1m'):
     keyboard = []
@@ -104,14 +102,17 @@ def button_handler(update: Update, context: CallbackContext):
         # Для акцій одразу показуємо список, бо таймфрейм один
         query.edit_message_text("🏢 Виберіть акцію:", reply_markup=asset_list_kb('stocks', STOCK_TICKERS))
 
-    # --- ПОЧАТОК ЗМІН: Обробка вибору сесії та перехід до вибору таймфрейму ---
     elif data.startswith('session_'):
         session = data.split('_')[1]
         query.edit_message_text(f"⏳ Вибрана сесія: {session}.\nТепер виберіть таймфрейм:", reply_markup=timeframe_kb('forex', session))
     
+    # --- ПОЧАТОК ЗМІН: Виправлено логіку розділення даних ---
     elif data.startswith('select_tf_'):
-        _, asset_type, tf, context_data = data.split('_', 3)
-        session = context_data
+        parts = data.split('_') # Розбиваємо на всі частини
+        # Правильний порядок: 0=select, 1=tf, 2=asset_type, 3=tf_value, 4=session_name
+        asset_type = parts[2]
+        tf = parts[3]
+        session = parts[4]
         pairs = FOREX_SESSIONS.get(session, [])
         query.edit_message_text(f"📊 Пари сесії {session} (ТФ: {tf}):", reply_markup=asset_list_kb(asset_type, pairs, timeframe=tf))
     # --- КІНЕЦЬ ЗМІН ---
@@ -179,7 +180,6 @@ def button_handler(update: Update, context: CallbackContext):
         user_id = query.from_user.id
         toggle_watch(user_id, ticker)
         query.answer(text=f"{display} оновлено в списку спостереження!")
-        # Оновлюємо клавіатуру без перемальовування повідомлення
         watchlist = get_watchlist(user_id)
         watch_text = "🌟 В обраному" if ticker in watchlist else "⭐ В обране"
         refresh_callback = f'refresh_{asset}_{ticker_safe}_{display_safe}_{chunk_idx_str}_{timeframe}'
