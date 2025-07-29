@@ -1,7 +1,7 @@
 # config.py
 import os
 import logging
-from datetime import time
+from cachetools import TTLCache
 import ccxt
 from twelvedata import TDClient
 from dotenv import load_dotenv
@@ -19,7 +19,10 @@ TWELVEDATA_API_KEY = os.getenv("TWELVEDATA_API_KEY")
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# --- Клієнти API ---
+# --- Кеш та клієнти API ---
+MARKET_DATA_CACHE = TTLCache(maxsize=5000, ttl=300) # Для даних окремих активів
+RANKING_CACHE = TTLCache(maxsize=100, ttl=60)      # Для результатів сортування списків
+
 binance = ccxt.binance({'enableRateLimit': True})
 td = TDClient(apikey=TWELVEDATA_API_KEY)
 
@@ -31,7 +34,7 @@ app = Flask(__name__)
 
 # --- Константи ---
 CRYPTO_PAIRS_FULL = [
-    "BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "DOGE/USDT",
+    "BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "DOGE/USDT", 
     "ADA/USDT", "SHIB/USDT", "AVAX/USDT", "LINK/USDT", "DOT/USDT", "TRX/USDT",
     "MATIC/USDT", "LTC/USDT", "BCH/USDT", "XLM/USDT", "ATOM/USDT", "ETC/USDT",
     "FIL/USDT", "NEAR/USDT", "ALGO/USDT", "VET/USDT", "ICP/USDT", "EOS/USDT"
@@ -51,24 +54,5 @@ FOREX_SESSIONS = {
     "Європейська": ["EUR/USD", "GBP/USD", "USD/CHF", "EUR/GBP", "EUR/CHF", "GBP/CHF"],
     "Американська": ["USD/CAD", "USD/MXN", "USD/BRL", "USD/ZAR"]
 }
-
-PAIR_ACTIVE_HOURS = {
-    "USD/JPY": (time(0, 0), time(9, 0)),
-    "AUD/USD": (time(0, 0), time(9, 0)),
-    "NZD/USD": (time(0, 0), time(9, 0)),
-    "EUR/JPY": (time(0, 0), time(9, 0)),
-    "CHF/JPY": (time(0, 0), time(9, 0)),
-    "EUR/USD": (time(7, 0), time(16, 0)),
-    "GBP/USD": (time(7, 0), time(16, 0)),
-    "USD/CHF": (time(7, 0), time(16, 0)),
-    "EUR/GBP": (time(7, 0), time(16, 0)),
-    "EUR/CHF": (time(7, 0), time(16, 0)),
-    "GBP/CHF": (time(7, 0), time(16, 0)),
-    "USD/CAD": (time(13, 0), time(22, 0)),
-    "USD/MXN": (time(13, 0), time(22, 0)),
-    "USD/BRL": (time(13, 0), time(22, 0)),
-    "USD/ZAR": (time(13, 0), time(22, 0)),
-}
-
-ANALYSIS_TIMEFRAMES = ['15m', '1h', '4h', '1d']
+ANALYSIS_TIMEFRAMES = ['15min', '1h', '4h', '1day']
 DB_NAME = "zigzag.db"
