@@ -123,8 +123,13 @@ def button_handler(update: Update, context: CallbackContext):
         else: back_button_cb = 'menu_stocks'
 
         refresh_callback = f'refresh_{asset}_{ticker_safe}_{display_safe}_{chunk_idx_str}'
-        mta_callback = f'fullmta_{asset}_{ticker_safe}_{display_safe}_{chunk_idx_str}'
         details_callback = f'details_{asset}_{ticker_safe}_{display_safe}_{chunk_idx_str}'
+        
+        # --- ПОЧАТОК ЗМІН: Додаємо суфікс '_refresh' до MTA-кнопки, якщо потрібно ---
+        mta_callback = f'fullmta_{asset}_{ticker_safe}_{display_safe}_{chunk_idx_str}'
+        if is_refresh:
+            mta_callback += '_refresh'
+        # --- КІНЕЦЬ ЗМІН ---
         
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("🔄 Оновити", callback_data=refresh_callback)],
