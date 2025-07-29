@@ -7,6 +7,7 @@ from telegram import Update
 
 from config import app, bot, dp, WEBHOOK_SECRET, logger, CRYPTO_PAIRS_FULL, FOREX_SESSIONS, STOCK_TICKERS
 from db import init_db, get_watchlist, toggle_watch
+# Змінено імпорт: get_api_detailed_signal_data тепер імпортується з analysis
 from analysis import get_api_detailed_signal_data, rank_assets_for_api, get_api_mta_data, sort_pairs_by_activity
 import telegram_ui
 
@@ -36,9 +37,11 @@ def webhook_handler():
 def api_signal():
     pair = request.args.get("pair")
     timeframe = request.args.get("tf", "1m")
+    user_id = _get_user_id_from_request(request) # Отримуємо user_id з запиту
     if not pair:
         return jsonify({"error": "pair is required"}), 400
-    return jsonify(get_api_detailed_signal_data(pair, timeframe=timeframe))
+    # Передаємо user_id до функції аналізу
+    return jsonify(get_api_detailed_signal_data(pair, timeframe=timeframe, user_id=user_id))
 
 @app.route("/api/get_ranked_pairs", methods=["GET"])
 def api_get_ranked_pairs():

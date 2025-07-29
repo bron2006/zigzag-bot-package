@@ -6,6 +6,7 @@ from telegram.error import BadRequest
 
 from config import dp, CRYPTO_PAIRS_FULL, CRYPTO_CHUNK_SIZE, STOCK_TICKERS, FOREX_SESSIONS, FOREX_PAIRS_MAP
 from db import get_watchlist, toggle_watch
+# Змінено імпорт: get_signal_strength_verdict тепер імпортується з analysis
 from analysis import get_signal_strength_verdict, get_full_mta_verdict
 
 # ------------------- KEYBOARDS -------------------
@@ -106,16 +107,13 @@ def button_handler(update: Update, context: CallbackContext):
         session = data.split('_')[1]
         query.edit_message_text(f"⏳ Вибрана сесія: {session}.\nТепер виберіть таймфрейм:", reply_markup=timeframe_kb('forex', session))
     
-    # --- ПОЧАТОК ЗМІН: Виправлено логіку розділення даних ---
     elif data.startswith('select_tf_'):
-        parts = data.split('_') # Розбиваємо на всі частини
-        # Правильний порядок: 0=select, 1=tf, 2=asset_type, 3=tf_value, 4=session_name
+        parts = data.split('_') 
         asset_type = parts[2]
         tf = parts[3]
         session = parts[4]
         pairs = FOREX_SESSIONS.get(session, [])
         query.edit_message_text(f"📊 Пари сесії {session} (ТФ: {tf}):", reply_markup=asset_list_kb(asset_type, pairs, timeframe=tf))
-    # --- КІНЕЦЬ ЗМІН ---
 
     elif data.startswith('analyze_') or data.startswith('refresh_'):
         is_refresh = data.startswith('refresh_')
@@ -127,6 +125,7 @@ def button_handler(update: Update, context: CallbackContext):
         
         query.edit_message_text(f"⏳ {'Оновлюю' if is_refresh else 'Аналізую'} {display} на {timeframe}...")
         
+        # Використовуємо get_signal_strength_verdict, яка тепер викликає get_api_detailed_signal_data
         msg, analysis_data = get_signal_strength_verdict(ticker, display, asset, timeframe=timeframe, user_id=user_id, force_refresh=is_refresh)
         
         if analysis_data:
