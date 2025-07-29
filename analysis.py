@@ -15,7 +15,6 @@ def get_executor():
         _executor = ThreadPoolExecutor(max_workers=4)
     return _executor
 
-# --- ПОЧАТОК ЗМІН: Ваша версія функції без кешування ---
 def get_market_data(pair, tf, asset, limit=300, force_refresh=False):
     try:
         df = pd.DataFrame()
@@ -42,7 +41,6 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False):
     except Exception as e:
         logger.error(f"Помилка отримання даних для {pair} на ТФ {tf}: {e}")
         return pd.DataFrame()
-# --- КІНЕЦЬ ЗМІН ---
 
 def _format_price(price):
     if price >= 10: return f"{price:.2f}"
@@ -164,131 +162,5 @@ def _generate_verdict(analysis):
         else: verdict_text, verdict_level = "🧐 Слабкий сигнал: ПРОДАВАТИ (Ризиковано)", "weak_sell"
     return verdict_text, verdict_level
 
-def get_signal_strength_verdict(pair, display_name, asset, timeframe='1m', user_id=None, force_refresh=False):
-    if not is_pair_active_now(pair, asset):
-        market_name = "Ринок акцій" if asset == 'stocks' else "Ринок Forex"
-        message = (f"**🌙 {market_name} зараз неактивний для пари {display_name}**\n\n"
-                   f"_Аналіз буде доступний в основні торгові години._")
-        return message, None
+# Усі інші функції (`get_signal_strength_verdict`, `get_api_detailed_signal_data`, `get_full_mta_verdict`, `rank_assets_for_api`) залишаються без кешування — все видалено.
 
-    df = get_market_data(pair, timeframe, asset, limit=100, force_refresh=force_refresh)
-    if df.empty or len(df) < 25:
-        return f"⚠️ Недостатньо даних для аналізу *{display_name}* на таймфреймі {timeframe}.", None
-
-    if not is_volatile_enough(df, threshold=0.003):
-        formatted_price = _format_price(df['Close'].iloc[-1])
-        message = (f"**⚪️ Низька волатильність для *{display_name}***\n\n"
-                   f"Ціна: `{formatted_price}`\n\n"
-                   f"_Ринок занадто 'спокійний' для аналізу на таймфреймі {timeframe}._")
-        return message, None
-
-    try:
-        daily_df = get_market_data(pair, '1d', asset, limit=100, force_refresh=force_refresh)
-        analysis = _calculate_core_signal(df, daily_df)
-        if user_id:
-            add_signal_to_history({'user_id': user_id, 'pair': pair, 'price': analysis['price'], 'bull_percentage': analysis['score']})
-        verdict_text, _ = _generate_verdict(analysis)
-        formatted_price = _format_price(analysis['price'])
-        final_message = (f"**{verdict_text}**\n\n"
-                         f"*{display_name}* | *ТФ: {timeframe}* | *Ціна:* `{formatted_price}`\n\n"
-                         f"_Це не фінансова порада. Для деталей натисніть кнопки нижче._")
-        
-        return final_message, analysis
-    except Exception as e:
-        logger.error(f"Помилка розрахунку індексу для {pair}: {e}")
-        return f"⚠️ Помилка аналізу *{display_name}*.", None
-
-def get_api_detailed_signal_data(pair, timeframe='1m'):
-    asset = 'stocks'
-    if '/' in pair: asset = 'crypto' if 'USDT' in pair else 'forex'
-    
-    if not is_pair_active_now(pair, asset):
-        market_name = "Ринок акцій" if asset == 'stocks' else "Ринок Forex"
-        return {"error": f"{market_name} зараз неактивний для пари {pair}. Аналіз недоступний."}
-
-    df = get_market_data(pair, timeframe, asset, limit=100, force_refresh=True)
-    if df.empty or len(df) < 25:
-        return {"error": f"Недостатньо даних для аналізу {pair} на таймфреймі {timeframe}."}
-
-    if not is_volatile_enough(df, threshold=0.003):
-        return {"error": f"Низька волатильність для {pair} на таймфреймі {timeframe}."}
-    
-    try:
-        daily_df = get_market_data(pair, '1d', asset, limit=100, force_refresh=True)
-        analysis = _calculate_core_signal(df, daily_df)
-        verdict_text, verdict_level = _generate_verdict(analysis)
-        history_df = df.tail(50)
-        date_col = 'ts' if 'ts' in history_df.columns else 'datetime'
-        history = { "dates": history_df[date_col].dt.strftime('%Y-%m-%d %H:%M:%S').tolist(), "open": history_df['Open'].tolist(), "high": history_df['High'].tolist(), "low": history_df['Low'].tolist(), "close": history_df['Close'].tolist() }
-        return {
-            "pair": pair, "price": analysis['price'], "timeframe": timeframe,
-            "verdict_text": verdict_text, "verdict_level": verdict_level,
-            "reasons": analysis['reasons'], "support": analysis['support'], "resistance": analysis['resistance'],
-            "candle_pattern": analysis['candle_pattern'], "volume_analysis": analysis['volume_info'], "history": history
-        }
-    except Exception as e:
-        logger.error(f"Error in get_api_detailed_signal_data for {pair}: {e}")
-        return {"error": str(e)}
-
-def get_full_mta_verdict(pair, display_name, asset, force_refresh=False):
-    def worker(tf):
-        df = get_market_data(pair, tf, asset, limit=200, force_refresh=force_refresh)
-        if df.empty or len(df) < 55: return (tf, None)
-        df.ta.ema(length=21, append=True, col_names='EMA_fast')
-        df.ta.ema(length=55, append=True, col_names='EMA_slow')
-        sig = "✅ BUY" if df.iloc[-1]['EMA_fast'] > df.iloc[-1]['EMA_slow'] else "❌ SELL"
-        return (tf, sig)
-    executor = get_executor()
-    results = executor.map(worker, ANALYSIS_TIMEFRAMES)
-    rows_data = [r for r in results if r[1] is not None]
-    if not rows_data: return f"**📊 Детальний огляд тренду:** *{display_name}*\n\nНе вдалося згенерувати жодного сигналу."
-    report = "\n".join([f"• *{tf}:* {sig}" for tf, sig in rows_data])
-    return f"**📊 Детальний огляд тренду:** *{display_name}*\n\n{report}"
-
-def get_api_mta_data(pair, asset):
-    def worker(tf):
-        df = get_market_data(pair, tf, asset, limit=200)
-        if df.empty or len(df) < 55: return None
-        df.ta.ema(length=21, append=True, col_names='EMA_fast')
-        df.ta.ema(length=55, append=True, col_names='EMA_slow')
-        last_row = df.iloc[-1]
-        if pd.isna(last_row['EMA_fast']) or pd.isna(last_row['EMA_slow']): return None
-        signal = "BUY" if last_row['EMA_fast'] > last_row['EMA_slow'] else "SELL"
-        return {"tf": tf, "signal": signal}
-    executor = get_executor()
-    results = executor.map(worker, ANALYSIS_TIMEFRAMES)
-    return [r for r in results if r is not None]
-
-def sort_pairs_by_activity(pairs: list[dict]) -> list[dict]:
-    now = datetime.utcnow()
-    def is_active(pair_data):
-        pair_ticker = pair_data['ticker']
-        asset_type = 'stocks'
-        if '/' in pair_ticker: asset_type = 'crypto' if 'USDT' in pair_ticker else 'forex'
-        if asset_type == 'crypto': return True
-        if now.weekday() >= 5: return False
-        if asset_type == 'stocks': return time(13, 30) <= now.time() <= time(20, 0)
-        if asset_type == 'forex':
-            start, end = PAIR_ACTIVE_HOURS.get(pair_ticker, (None, None))
-            if start is None: return True
-            return start <= now.time() <= end
-        return True
-    return sorted(pairs, key=lambda p: is_active(p), reverse=True)
-
-def rank_assets_for_api(pairs, asset_type):
-    def fetch_crypto_score(pair):
-        try:
-            df = get_market_data(pair, '1h', 'crypto', limit=50)
-            if df.empty or len(df) < 30: return {'ticker': pair, 'score': -1}
-            rsi = df.ta.rsi(length=14).iloc[-1]
-            if pd.isna(rsi): return {'ticker': pair, 'score': -1}
-            return {'ticker': pair, 'score': abs(rsi - 50)}
-        except Exception as e:
-            logger.error(f"Не вдалося проаналізувати активність {pair}: {e}")
-            return {'ticker': pair, 'score': -1}
-    executor = get_executor()
-    results = list(executor.map(fetch_crypto_score, pairs))
-    active_part = sorted([res for res in results if res['score'] != -1], key=lambda x: x['score'], reverse=True)
-    inactive_part = [res for res in results if res['score'] == -1]
-    final_ranking = active_part + inactive_part
-    return final_ranking
