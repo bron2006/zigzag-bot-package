@@ -2,7 +2,6 @@
 import os
 import logging
 from datetime import time
-from cachetools import TTLCache
 import ccxt
 from twelvedata import TDClient
 from dotenv import load_dotenv
@@ -20,11 +19,7 @@ TWELVEDATA_API_KEY = os.getenv("TWELVEDATA_API_KEY")
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# --- Кеш та клієнти API ---
-MARKET_DATA_CACHE = TTLCache(maxsize=5000, ttl=60) # Зменшено TTL до 60с для динамічності
-RANKING_CACHE = TTLCache(maxsize=100, ttl=60)
-ANALYSIS_CACHE = TTLCache(maxsize=500, ttl=60)
-
+# --- Клієнти API ---
 binance = ccxt.binance({'enableRateLimit': True})
 td = TDClient(apikey=TWELVEDATA_API_KEY)
 
@@ -46,7 +41,7 @@ CRYPTO_CHUNK_SIZE = 12
 STOCK_TICKERS = ["AAPL", "GOOGL", "MSFT", "AMZN", "NVDA", "TSLA", "META", "JPM", "V", "JNJ"]
 
 FOREX_PAIRS_MAP = {
-    "EUR/USD": "EUR/USD", "GBP/USD": "GBP/USD", "USD/JPY": "USD/JPY", "USD/CAD": "USD/CAD",
+    "EUR/USD": "EUR/USD", "GBP/USD": "GBP/USDT", "USD/JPY": "USD/JPY", "USD/CAD": "USD/CAD",
     "AUD/USD": "AUD/USD", "USD/CHF": "USD/CHF", "NZD/USD": "NZD/USD", "EUR/GBP": "EUR/GBP",
     "EUR/JPY": "EUR/JPY", "CHF/JPY": "CHF/JPY", "EUR/CHF": "EUR/CHF", "GBP/CHF": "GBP/CHF",
     "USD/MXN": "USD/MXN", "USD/BRL": "USD/BRL", "USD/ZAR": "USD/ZAR"
@@ -57,28 +52,23 @@ FOREX_SESSIONS = {
     "Американська": ["USD/CAD", "USD/MXN", "USD/BRL", "USD/ZAR"]
 }
 
-# --- ПОЧАТОК ЗМІН: Активні години для Forex пар (в UTC) ---
 PAIR_ACTIVE_HOURS = {
-    # Азіатська сесія (приблизно 00:00 - 09:00 UTC)
     "USD/JPY": (time(0, 0), time(9, 0)),
     "AUD/USD": (time(0, 0), time(9, 0)),
     "NZD/USD": (time(0, 0), time(9, 0)),
     "EUR/JPY": (time(0, 0), time(9, 0)),
     "CHF/JPY": (time(0, 0), time(9, 0)),
-    # Європейська сесія (приблизно 07:00 - 16:00 UTC)
     "EUR/USD": (time(7, 0), time(16, 0)),
     "GBP/USD": (time(7, 0), time(16, 0)),
     "USD/CHF": (time(7, 0), time(16, 0)),
     "EUR/GBP": (time(7, 0), time(16, 0)),
     "EUR/CHF": (time(7, 0), time(16, 0)),
     "GBP/CHF": (time(7, 0), time(16, 0)),
-    # Американська сесія (приблизно 13:00 - 22:00 UTC)
     "USD/CAD": (time(13, 0), time(22, 0)),
     "USD/MXN": (time(13, 0), time(22, 0)),
     "USD/BRL": (time(13, 0), time(22, 0)),
     "USD/ZAR": (time(13, 0), time(22, 0)),
 }
-# --- КІНЕЦЬ ЗМІН ---
 
 ANALYSIS_TIMEFRAMES = ['15m', '1h', '4h', '1d']
 DB_NAME = "zigzag.db"
