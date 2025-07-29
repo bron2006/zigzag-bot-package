@@ -7,9 +7,11 @@ from flask import request, jsonify
 from flask_cors import CORS
 from telegram import Update
 
-from config import app, bot, dp, WEBHOOK_SECRET, logger, CRYPTO_PAIRS_FULL, FOREX_SESSIONS, STOCK_TICKERS, FOREX_PAIRS_MAP
+from config import app, bot, dp, WEBHOOK_SECRET, logger, CRYPTO_PAIRS_FULL, FOREX_SESSIONS, STOCK_TICKERS
 from db import init_db, get_watchlist, toggle_watch, get_signal_history
-from analysis import get_api_detailed_signal_data, rank_assets_for_api, get_api_mta_data
+# --- ПОЧАТОК ЗМІН: Імпортуємо нові функції ---
+from analysis import get_api_detailed_signal_data, rank_assets_for_api, get_api_mta_data, sort_pairs_by_activity
+# --- КІНЕЦЬ ЗМІН ---
 import telegram_ui
 
 CORS(app)
@@ -39,41 +41,44 @@ def webhook_handler():
         logger.error(f"Webhook error: {e}\n{traceback.format_exc()}")
     return "OK", 200
 
+# --- ПОЧАТОК ЗМІН: Оновлюємо ендпоінт для прийому таймфрейму ---
 @app.route("/api/signal", methods=["GET"])
 def api_signal():
     pair = request.args.get("pair")
+    timeframe = request.args.get("tf", "1m") # За замовчуванням 1m
     if not pair: return jsonify({"error": "pair is required"}), 400
     try:
-        data = get_api_detailed_signal_data(pair)
+        data = get_api_detailed_signal_data(pair, timeframe=timeframe)
         if "error" in data: return jsonify(data)
         return jsonify(data)
     except Exception as e:
-        logger.error(f"API error for pair {pair}: {e}\n{traceback.format_exc()}")
+        logger.error(f"API error for pair {pair} on tf {timeframe}: {e}\n{traceback.format_exc()}")
         return jsonify({"error": f"Внутрішня помилка сервера"}), 500
+# --- КІНЕЦЬ ЗМІН ---
 
-# --- ПОЧАТОК ЗМІН: Аналіз тепер працює тільки для крипти ---
 @app.route("/api/get_ranked_pairs", methods=["GET"])
 def api_get_ranked_pairs():
     user_id = _get_user_id_from_request(request)
     watchlist = get_watchlist(user_id) if user_id else []
 
     try:
-        # Аналізуємо і сортуємо тільки криптовалюти
         ranked_crypto_data = rank_assets_for_api(CRYPTO_PAIRS_FULL, 'crypto')
-        ranked_crypto = [{'ticker': p['ticker'], 'active': p['score'] != -1} for p in ranked_crypto_data]
+        
+        # --- ПОЧАТОК ЗМІН: Сортуємо статичні списки за активністю ---
+        stocks_data = [{'ticker': p, 'active': True} for p in STOCK_TICKERS]
+        sorted_stocks = sort_pairs_by_activity(stocks_data)
 
-        # Для акцій та валют повертаємо статичні списки, щоб не використовувати ліміти API
-        static_stocks = [{'ticker': p, 'active': True} for p in STOCK_TICKERS]
-        static_forex = {
-            session: [{'ticker': p, 'active': True} for p in pairs] 
-            for session, pairs in FOREX_SESSIONS.items()
-        }
+        forex_data = {}
+        for session, pairs in FOREX_SESSIONS.items():
+            session_data = [{'ticker': p, 'active': True} for p in pairs]
+            forex_data[session] = sort_pairs_by_activity(session_data)
+        # --- КІНЕЦЬ ЗМІН ---
 
         return jsonify({
             "watchlist": watchlist,
-            "crypto": ranked_crypto,
-            "forex": static_forex,
-            "stocks": static_stocks
+            "crypto": ranked_crypto_data,
+            "forex": forex_data,
+            "stocks": sorted_stocks
         })
     except Exception as e:
         logger.error(f"API error for ranked pairs: {e}\n{traceback.format_exc()}")
@@ -84,8 +89,8 @@ def api_get_ranked_pairs():
             "stocks": [{'ticker': p, 'active': True} for p in STOCK_TICKERS],
             "error_message": "Помилка при сортуванні, показано стандартний список."
         })
-# --- КІНЕЦЬ ЗМІН ---
 
+# ... (решта файлу залишається без змін)
 @app.route("/api/get_pairs", methods=["GET"])
 def api_get_pairs():
     user_id = _get_user_id_from_request(request)
@@ -97,11 +102,8 @@ def api_get_active_markets():
     try:
         ranked_crypto = rank_assets_for_api(CRYPTO_PAIRS_FULL, 'crypto')
         top_crypto = [p['ticker'] for p in ranked_crypto[:5]]
-        
-        # Відключаємо автоаналіз для stocks і forex
         top_stocks = []
         top_forex = []
-
         return jsonify({
             "active_crypto": top_crypto,
             "active_stocks": top_stocks,
@@ -141,10 +143,8 @@ def toggle_watchlist_route():
 def api_signal_history():
     user_id = _get_user_id_from_request(request)
     pair = request.args.get("pair")
-    if not user_id:
-        return jsonify({"error": "Not authorized"}), 401
-    if not pair:
-        return jsonify({"error": "pair is required"}), 400
+    if not user_id: return jsonify({"error": "Not authorized"}), 401
+    if not pair: return jsonify({"error": "pair is required"}), 400
     try:
         history = get_signal_history(user_id, pair)
         return jsonify(history)
@@ -154,7 +154,7 @@ def api_signal_history():
 
 @app.route("/", methods=["GET"])
 def index():
-    return "ZigZag Bot v4.3 Backend with Watchlist API 🟢"
+    return "ZigZag Bot v4.5 Backend with Watchlist & Timeframe API 🟢"
 
 if __name__ != "__main__":
     init_db()

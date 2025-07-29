@@ -11,17 +11,18 @@
 <body>
     <div class="container">
         <h1>Термінал</h1>
-
         <input type="text" id="searchInput" placeholder="🔎 Пошук за тікером...">
+        
         <div id="listsContainer"></div>
         
         <div class="separator"></div>
 
         <div id="signalContainer">
+            <div id="timeframeSelector" class="timeframe-selector"></div>
             <div id="signalOutput">Виберіть актив для аналізу...</div>
             <div id="chart"></div>
             <div id="historyContainer"></div>
-            </div>
+        </div>
 
         <div id="loader" class="hidden"></div>
     </div>

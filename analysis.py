@@ -6,17 +6,17 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, time
 
 from db import add_signal_to_history
-from config import logger, binance, td, MARKET_DATA_CACHE, RANKING_CACHE, ANALYSIS_TIMEFRAMES
+from config import logger, binance, td, MARKET_DATA_CACHE, ANALYSIS_CACHE, PAIR_ACTIVE_HOURS, ANALYSIS_TIMEFRAMES
 
 _executor = None
 def get_executor():
     global _executor
     if _executor is None:
-        _executor = ThreadPoolExecutor(max_workers=2)
+        _executor = ThreadPoolExecutor(max_workers=4) # Збільшимо кількість потоків
     return _executor
 
 def get_market_data(pair, tf, asset, limit=300, force_refresh=False):
-    key = f"{pair}_{tf}_{limit}"
+    key = f"{pair}_{tf}_{asset}_{limit}"
     if not force_refresh and key in MARKET_DATA_CACHE:
         return MARKET_DATA_CACHE[key]
     try:
@@ -27,7 +27,9 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False):
             df['ts'] = pd.to_datetime(df['ts'], unit='ms', utc=True)
             df = df.rename(columns={'o':'Open','h':'High','l':'Low','c':'Close','v':'Volume'})
         elif asset in ('forex', 'stocks'):
-            td_tf_map = { '1m': '1min', '15m': '15min', '1h': '1hour', '4h': '4hour', '1d': '1day', '15min': '15min' }
+            # --- ПОЧАТОК ЗМІН: Уніфікована карта таймфреймів ---
+            td_tf_map = { '1m': '1min', '5m': '5min', '15m': '15min', '1h': '1hour', '4h': '4hour', '1d': '1day' }
+            # --- КІНЕЦЬ ЗМІН ---
             td_tf = td_tf_map.get(tf)
             if not td_tf:
                 logger.error(f"Непідтримуваний таймфрейм для TwelveData: {tf}")
@@ -48,10 +50,8 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False):
         return pd.DataFrame()
 
 def _format_price(price):
-    if price >= 10:
-        return f"{price:.2f}"
-    if price >= 0.1:
-        return f"{price:.4f}"
+    if price >= 10: return f"{price:.2f}"
+    if price >= 0.1: return f"{price:.4f}"
     return f"{price:.8f}".rstrip('0')
 
 def group_close_values(values, threshold=0.01):
@@ -68,43 +68,33 @@ def group_close_values(values, threshold=0.01):
     return groups
 
 def is_volatile_enough(df: pd.DataFrame, threshold: float = 0.003) -> bool:
-    """Перевіряє, чи є ринок достатньо волатильним на основі ATR."""
-    if len(df) < 15:
-        return True
+    if len(df) < 15: return True
     atr = df.ta.atr(length=14).iloc[-1]
     last_price = df['Close'].iloc[-1]
-    if pd.isna(atr) or last_price == 0:
-        return False
+    if pd.isna(atr) or last_price == 0: return False
     return (atr / last_price) > threshold
 
-# --- ПОЧАТОК ЗМІН: Нова функція для перевірки торгового часу ---
-def is_trading_time(asset_type: str) -> bool:
-    """Перевіряє, чи активний ринок для даного типу активу."""
-    if asset_type == 'crypto':
-        return True # Крипторинок працює 24/7
-
+# --- ПОЧАТОК ЗМІН: Нова, більш точна перевірка активності ---
+def is_pair_active_now(pair: str, asset_type: str) -> bool:
+    """Перевіряє, чи активний ринок для даного активу/пари."""
     now_utc = datetime.utcnow()
-    current_time = now_utc.time()
-    current_weekday = now_utc.weekday() # 0 = Понеділок, 6 = Неділя
+    
+    if asset_type == 'crypto':
+        return True
 
-    if asset_type == 'stocks':
-        # Американський ринок акцій (приблизно 13:30-20:00 UTC)
-        if current_weekday >= 5: # Субота, Неділя
-            return False
-        if time(13, 30) <= current_time <= time(20, 0):
-            return True
+    # Загальне правило для вихідних
+    if now_utc.weekday() >= 5: # Субота, Неділя
         return False
 
+    if asset_type == 'stocks':
+        # Американський ринок акцій (13:30-20:00 UTC)
+        return time(13, 30) <= now_utc.time() <= time(20, 0)
+
     if asset_type == 'forex':
-        # Ринок Forex закритий на вихідних
-        # Закривається в п'ятницю о 21:00 UTC, відкривається в неділю о 21:00 UTC
-        if current_weekday == 5 and current_time > time(21, 0): # П'ятниця вечір
-            return False
-        if current_weekday == 6: # Субота
-            return False
-        if current_weekday == 0 and current_time < time(21, 0): # Неділя до відкриття
-             return False
-        return True
+        start, end = PAIR_ACTIVE_HOURS.get(pair, (None, None))
+        if start is None:
+            return True # Якщо пари немає в списку, вважаємо активною
+        return start <= now_utc.time() <= end
         
     return True
 # --- КІНЕЦЬ ЗМІН ---
@@ -128,8 +118,7 @@ def analyze_candle_patterns(df: pd.DataFrame):
         found_patterns = last_candle[last_candle != 0]
         if found_patterns.empty: return None
         signal_strength = found_patterns.iloc[0]
-        if abs(signal_strength) < 100:
-            return None
+        if abs(signal_strength) < 100: return None
         pattern_name = found_patterns.index[0].replace("CDL_", "")
         pattern_type = 'bullish' if signal_strength > 0 else 'bearish'
         arrow = '⬆️' if pattern_type == 'bullish' else '⬇️'
@@ -144,10 +133,8 @@ def analyze_volume(df):
     df['Volume_MA'] = df['Volume'].rolling(window=20).mean()
     last = df.iloc[-1]
     if pd.isna(last['Volume_MA']): return "Недостатньо даних"
-    if last['Volume'] > last['Volume_MA'] * 1.5:
-        return "🟢 Підвищений об'єм"
-    elif last['Volume'] < last['Volume_MA'] * 0.5:
-        return "🧊 Аномально низький об'єм"
+    if last['Volume'] > last['Volume_MA'] * 1.5: return "🟢 Підвищений об'єм"
+    elif last['Volume'] < last['Volume_MA'] * 0.5: return "🧊 Аномально низький об'єм"
     return "Об'єм нейтральний"
 
 def _calculate_core_signal(df, daily_df):
@@ -169,17 +156,11 @@ def _calculate_core_signal(df, daily_df):
     elif rsi > 70: score -= 15; reasons.append("RSI в зоні перекупленості")
     if support_levels:
         dist_to_support = min(abs(current_price - sl) for sl in support_levels)
-        if dist_to_support / current_price < 0.003:
-            score += 15; reasons.append("Ціна ДУЖЕ близько до підтримки")
+        if dist_to_support / current_price < 0.003: score += 15; reasons.append("Ціна ДУЖЕ близько до підтримки")
     if resistance_levels:
         dist_to_resistance = min(abs(current_price - rl) for rl in resistance_levels)
-        if dist_to_resistance / current_price < 0.003:
-            score -= 15; reasons.append("Ціна ДУЖЕ близько до опору")
-    
-    if "Аномально низький" in volume_info:
-        score = np.clip(score, 25, 75)
-        reasons.append("Низький об'єм!")
-    
+        if dist_to_resistance / current_price < 0.003: score -= 15; reasons.append("Ціна ДУЖЕ близько до опору")
+    if "Аномально низький" in volume_info: score = np.clip(score, 25, 75); reasons.append("Низький об'єм!")
     score = int(np.clip(score, 0, 100))
     support = min(support_levels, key=lambda x: abs(x - current_price)) if support_levels else None
     resistance = min(resistance_levels, key=lambda x: abs(x - current_price)) if resistance_levels else None
@@ -188,61 +169,40 @@ def _calculate_core_signal(df, daily_df):
 def _generate_verdict(analysis):
     score = analysis['score']
     reasons = analysis['reasons']
-    active_factors = 0
-    if "RSI" in "".join(reasons): active_factors += 1
-    if "підтримки" in "".join(reasons): active_factors += 1
-    if "опору" in "".join(reasons): active_factors += 1
-    if analysis.get("candle_pattern"): active_factors += 1
-    active_factors += 1
-    if analysis.get("volume_info") and "нейтральний" not in analysis['volume_info'].lower():
-        active_factors += 1
-    verdict_text = "🟡 НЕЙТРАЛЬНА СИТУАЦІЯ"
-    verdict_level = "neutral" 
-    is_low_volume = "Низький об'єм!" in reasons
-    if is_low_volume:
-        verdict_text = "⚪️ НЕПЕРЕДБАЧУВАНИЙ РИНОК (Низький об'єм)"
-        verdict_level = "unpredictable"
-    else:
-        if score > 55:
-            if active_factors >= 4:
-                verdict_text = "⬆️ Сильний сигнал: КУПУВАТИ"
-                verdict_level = "strong_buy"
-            elif active_factors == 3:
-                verdict_text = "↗️ Помірний сигнал: КУПУВАТИ"
-                verdict_level = "moderate_buy"
-            else:
-                verdict_text = "🧐 Слабкий сигнал: КУПУВАТИ (Ризиковано)"
-                verdict_level = "weak_buy"
-        elif score < 45:
-            if active_factors >= 4:
-                verdict_text = "⬇️ Сильний сигнал: ПРОДАВАТИ"
-                verdict_level = "strong_sell"
-            elif active_factors == 3:
-                verdict_text = "↘️ Помірний сигнал: ПРОДАВАТИ"
-                verdict_level = "moderate_sell"
-            else:
-                verdict_text = "🧐 Слабкий сигнал: ПРОДАВАТИ (Ризиковано)"
-                verdict_level = "weak_sell"
+    active_factors = sum(1 for r in ["RSI", "підтримки", "опору"] if r in "".join(reasons)) + (1 if analysis.get("candle_pattern") else 0) + (1 if analysis.get("volume_info") and "нейтральний" not in analysis['volume_info'].lower() else 0) + 1
+    verdict_text, verdict_level = "🟡 НЕЙТРАЛЬНА СИТУАЦІЯ", "neutral"
+    if "Низький об'єм!" in reasons:
+        verdict_text, verdict_level = "⚪️ НЕПЕРЕДБАЧУВАНИЙ РИНОК (Низький об'єм)", "unpredictable"
+    elif score > 55:
+        if active_factors >= 4: verdict_text, verdict_level = "⬆️ Сильний сигнал: КУПУВАТИ", "strong_buy"
+        elif active_factors == 3: verdict_text, verdict_level = "↗️ Помірний сигнал: КУПУВАТИ", "moderate_buy"
+        else: verdict_text, verdict_level = "🧐 Слабкий сигнал: КУПУВАТИ (Ризиковано)", "weak_buy"
+    elif score < 45:
+        if active_factors >= 4: verdict_text, verdict_level = "⬇️ Сильний сигнал: ПРОДАВАТИ", "strong_sell"
+        elif active_factors == 3: verdict_text, verdict_level = "↘️ Помірний сигнал: ПРОДАВАТИ", "moderate_sell"
+        else: verdict_text, verdict_level = "🧐 Слабкий сигнал: ПРОДАВАТИ (Ризиковано)", "weak_sell"
     return verdict_text, verdict_level
 
-def get_signal_strength_verdict(pair, display_name, asset, user_id=None, force_refresh=False):
-    # --- ПОЧАТОК ЗМІН: Перевірка на торговий час ---
-    if not is_trading_time(asset):
-        market_name = "Ринок акцій" if asset == 'stocks' else "Ринок Forex"
-        message = (f"**🌙 {market_name} зараз закритий**\n\n"
-                   f"_Аналіз для *{display_name}* буде доступний у робочі години._")
-        return message, None
-    # --- КІНЕЦЬ ЗМІН ---
+# --- ПОЧАТОК ЗМІН: Додано параметр timeframe ---
+def get_signal_strength_verdict(pair, display_name, asset, timeframe='1m', user_id=None, force_refresh=False):
+    cache_key = f"signal_{pair}_{timeframe}"
+    if not force_refresh and cache_key in ANALYSIS_CACHE: return ANALYSIS_CACHE[cache_key]
 
-    df = get_market_data(pair, '1m', asset, limit=100, force_refresh=force_refresh)
+    if not is_pair_active_now(pair, asset):
+        market_name = "Ринок акцій" if asset == 'stocks' else "Ринок Forex"
+        message = (f"**🌙 {market_name} зараз неактивний для пари {display_name}**\n\n"
+                   f"_Аналіз буде доступний в основні торгові години._")
+        return message, None
+
+    df = get_market_data(pair, timeframe, asset, limit=100, force_refresh=force_refresh)
     if df.empty or len(df) < 25:
-        return f"⚠️ Недостатньо даних для аналізу *{display_name}*.", None
+        return f"⚠️ Недостатньо даних для аналізу *{display_name}* на таймфреймі {timeframe}.", None
 
     if not is_volatile_enough(df, threshold=0.003):
         formatted_price = _format_price(df['Close'].iloc[-1])
         message = (f"**⚪️ Низька волатильність для *{display_name}***\n\n"
                    f"Ціна: `{formatted_price}`\n\n"
-                   f"_Ринок наразі занадто 'спокійний' для надійного аналізу. Сигнали тимчасово призупинені._")
+                   f"_Ринок занадто 'спокійний' для аналізу на таймфреймі {timeframe}._")
         return message, None
 
     try:
@@ -253,30 +213,31 @@ def get_signal_strength_verdict(pair, display_name, asset, user_id=None, force_r
         verdict_text, _ = _generate_verdict(analysis)
         formatted_price = _format_price(analysis['price'])
         final_message = (f"**{verdict_text}**\n\n"
-                         f"*{display_name}* | *Ціна:* `{formatted_price}`\n\n"
+                         f"*{display_name}* | *ТФ: {timeframe}* | *Ціна:* `{formatted_price}`\n\n"
                          f"_Це не фінансова порада. Для деталей натисніть кнопки нижче._")
-        return final_message, analysis
+        
+        result = (final_message, analysis)
+        ANALYSIS_CACHE[cache_key] = result
+        return result
     except Exception as e:
         logger.error(f"Помилка розрахунку індексу для {pair}: {e}")
         return f"⚠️ Помилка аналізу *{display_name}*.", None
+# --- КІНЕЦЬ ЗМІН ---
 
-def get_api_detailed_signal_data(pair):
+def get_api_detailed_signal_data(pair, timeframe='1m'):
     asset = 'stocks'
-    if '/' in pair:
-        asset = 'crypto' if 'USDT' in pair else 'forex'
-        
-    # --- ПОЧАТОК ЗМІН: Перевірка на торговий час ---
-    if not is_trading_time(asset):
+    if '/' in pair: asset = 'crypto' if 'USDT' in pair else 'forex'
+    
+    if not is_pair_active_now(pair, asset):
         market_name = "Ринок акцій" if asset == 'stocks' else "Ринок Forex"
-        return {"error": f"{market_name} зараз закритий. Аналіз недоступний."}
-    # --- КІНЕЦЬ ЗМІН ---
+        return {"error": f"{market_name} зараз неактивний для пари {pair}. Аналіз недоступний."}
 
-    df = get_market_data(pair, '1m', asset, limit=100)
+    df = get_market_data(pair, timeframe, asset, limit=100)
     if df.empty or len(df) < 25:
-        return {"error": "Недостатньо даних для аналізу."}
+        return {"error": f"Недостатньо даних для аналізу {pair} на таймфреймі {timeframe}."}
 
     if not is_volatile_enough(df, threshold=0.003):
-        return {"error": f"Низька волатильність для {pair}. Ринок занадто 'спокійний' для аналізу."}
+        return {"error": f"Низька волатильність для {pair} на таймфреймі {timeframe}."}
     
     try:
         daily_df = get_market_data(pair, '1d', asset, limit=100)
@@ -286,9 +247,8 @@ def get_api_detailed_signal_data(pair):
         date_col = 'ts' if 'ts' in history_df.columns else 'datetime'
         history = { "dates": history_df[date_col].dt.strftime('%Y-%m-%d %H:%M:%S').tolist(), "open": history_df['Open'].tolist(), "high": history_df['High'].tolist(), "low": history_df['Low'].tolist(), "close": history_df['Close'].tolist() }
         return {
-            "pair": pair, "price": analysis['price'],
-            "verdict_text": verdict_text,
-            "verdict_level": verdict_level,
+            "pair": pair, "price": analysis['price'], "timeframe": timeframe,
+            "verdict_text": verdict_text, "verdict_level": verdict_level,
             "reasons": analysis['reasons'], "support": analysis['support'], "resistance": analysis['resistance'],
             "candle_pattern": analysis['candle_pattern'], "volume_analysis": analysis['volume_info'], "history": history
         }
@@ -307,12 +267,8 @@ def get_full_mta_verdict(pair, display_name, asset, force_refresh=False):
     executor = get_executor()
     results = executor.map(worker, ANALYSIS_TIMEFRAMES)
     rows_data = [r for r in results if r[1] is not None]
-    if not rows_data:
-        return f"**📊 Детальний огляд тренду:** *{display_name}*\n\nНе вдалося згенерувати жодного сигналу."
-    report_lines = []
-    for tf, sig in rows_data:
-        report_lines.append(f"• *{tf}:* {sig}")
-    report = "\n".join(report_lines)
+    if not rows_data: return f"**📊 Детальний огляд тренду:** *{display_name}*\n\nНе вдалося згенерувати жодного сигналу."
+    report = "\n".join([f"• *{tf}:* {sig}" for tf, sig in rows_data])
     return f"**📊 Детальний огляд тренду:** *{display_name}*\n\n{report}"
 
 def get_api_mta_data(pair, asset):
@@ -327,51 +283,52 @@ def get_api_mta_data(pair, asset):
         return {"tf": tf, "signal": signal}
     executor = get_executor()
     results = executor.map(worker, ANALYSIS_TIMEFRAMES)
-    mta_data = [r for r in results if r is not None]
-    return mta_data
+    return [r for r in results if r is not None]
 
-def rank_crypto_chunk(pairs_chunk):
-    def fetch_score(pair):
-        try:
-            df = get_market_data(pair, '1h', 'crypto', limit=50)
-            if df.empty: return None
-            rsi = df.ta.rsi(length=14).iloc[-1]
-            if pd.isna(rsi): return None
-            return {'display_name': pair, 'ticker': pair, 'score': abs(rsi - 50)}
-        except Exception as e:
-            logger.error(f"Не вдалося проаналізувати пару {pair}: {e}")
-            return None
-    executor = get_executor()
-    results = executor.map(fetch_score, pairs_chunk)
-    ranked_pairs = [r for r in results if r is not None]
-    return sorted(ranked_pairs, key=lambda x: x['score'], reverse=True)
+# --- ПОЧАТОК ЗМІН: Функція сортування за активністю ---
+def sort_pairs_by_activity(pairs: list[dict]) -> list[dict]:
+    """Сортує пари, виносячи активні вгору."""
+    now = datetime.utcnow()
+    
+    def is_active(pair_data):
+        pair_ticker = pair_data['ticker']
+        asset_type = 'stocks'
+        if '/' in pair_ticker: asset_type = 'crypto' if 'USDT' in pair_ticker else 'forex'
+        
+        if asset_type == 'crypto': return True
+        if now.weekday() >= 5: return False
+
+        if asset_type == 'stocks':
+            return time(13, 30) <= now.time() <= time(20, 0)
+        
+        if asset_type == 'forex':
+            start, end = PAIR_ACTIVE_HOURS.get(pair_ticker, (None, None))
+            if start is None: return True
+            return start <= now.time() <= end
+        return True
+
+    return sorted(pairs, key=lambda p: is_active(p), reverse=True)
+# --- КІНЕЦЬ ЗМІН ---
 
 def rank_assets_for_api(pairs, asset_type):
-    """Ранжує активи за активністю (тільки для криптовалют)."""
     cache_key = f"ranking_{asset_type}"
-    if cache_key in RANKING_CACHE:
-        return RANKING_CACHE[cache_key]
-
+    if cache_key in ANALYSIS_CACHE: return ANALYSIS_CACHE[cache_key]
+    
     def fetch_crypto_score(pair):
         try:
             df = get_market_data(pair, '1h', 'crypto', limit=50)
-            if df.empty or len(df) < 30:
-                return {'ticker': pair, 'score': -1}
+            if df.empty or len(df) < 30: return {'ticker': pair, 'score': -1}
             rsi = df.ta.rsi(length=14).iloc[-1]
-            if pd.isna(rsi):
-                return {'ticker': pair, 'score': -1}
-            score = abs(rsi - 50)
-            return {'ticker': pair, 'score': score}
+            if pd.isna(rsi): return {'ticker': pair, 'score': -1}
+            return {'ticker': pair, 'score': abs(rsi - 50)}
         except Exception as e:
             logger.error(f"Не вдалося проаналізувати активність {pair}: {e}")
             return {'ticker': pair, 'score': -1}
 
     executor = get_executor()
     results = list(executor.map(fetch_crypto_score, pairs))
-    
     active_part = sorted([res for res in results if res['score'] != -1], key=lambda x: x['score'], reverse=True)
     inactive_part = [res for res in results if res['score'] == -1]
     final_ranking = active_part + inactive_part
-    
-    RANKING_CACHE[cache_key] = final_ranking
+    ANALYSIS_CACHE[cache_key] = final_ranking
     return final_ranking

@@ -95,3 +95,30 @@ h4 { font-size: 16px; font-weight: 600; margin: 15px 0 8px 0; padding-bottom: 5p
 .history-table .signal-buy { color: var(--buy-color); }
 .history-table .signal-sell { color: var(--sell-color); }
 .history-table .signal-neutral { color: var(--hint-color); }
+.timeframe-selector {
+    display: flex;
+    justify-content: center;
+    gap: 10px;
+    margin-bottom: 15px;
+}
+
+.tf-button {
+    padding: 8px 16px;
+    background: var(--secondary-bg-color);
+    color: var(--text-color);
+    border: 1px solid var(--secondary-bg-color);
+    border-radius: 20px;
+    cursor: pointer;
+    font-size: 14px;
+    transition: all 0.2s;
+}
+
+.tf-button:hover {
+    border-color: var(--button-color);
+}
+
+.tf-button.active {
+    background-color: var(--button-color);
+    color: var(--button-text-color);
+    font-weight: bold;
+}

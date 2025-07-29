@@ -7,9 +7,10 @@ const listsContainer = document.getElementById("listsContainer");
 const signalOutput = document.getElementById("signalOutput");
 const historyContainer = document.getElementById("historyContainer");
 const chartContainer = document.getElementById("chart");
-// ПОЧАТОК ЗМІН: Отримуємо елемент поля пошуку
 const searchInput = document.getElementById('searchInput');
-// КІНЕЦЬ ЗМІН
+// --- ПОЧАТОК ЗМІН: Отримуємо контейнер для таймфреймів ---
+const timeframeSelector = document.getElementById('timeframeSelector');
+// --- КІНЕЦЬ ЗМІН ---
 
 let tg;
 if (!window.Telegram || !window.Telegram.WebApp) {
@@ -24,11 +25,15 @@ if (!window.Telegram || !window.Telegram.WebApp) {
     tg = window.Telegram.WebApp;
     tg.ready();
     tg.expand();
-    console.log("Telegram WebApp object is ready.");
 }
 
 let currentWatchlist = [];
 let initData = tg.initData || '';
+// --- ПОЧАТОК ЗМІН: Зберігаємо поточний актив та таймфрейм ---
+let currentPair = null;
+let currentAssetType = null;
+let currentTf = '1m';
+// --- КІНЕЦЬ ЗМІН ---
 
 document.addEventListener('DOMContentLoaded', function() {
     showLoader(true);
@@ -38,11 +43,16 @@ document.addEventListener('DOMContentLoaded', function() {
     fetch(rankedPairsUrl)
         .then(res => res.json())
         .then(staticData => {
-            console.log("Received static pairs:", staticData);
-            if(staticData.error_message) {
-                console.warn(staticData.error_message);
-            }
+            if(staticData.error_message) console.warn(staticData.error_message);
             currentWatchlist = staticData.watchlist || [];
+            // --- ПОЧАТОК ЗМІН: Додаємо сортування за активністю на фронтенді ---
+            if (staticData.stocks) staticData.stocks = sortPairsByActivity(staticData.stocks, 'stocks');
+            if (staticData.forex) {
+                for (const session in staticData.forex) {
+                    staticData.forex[session] = sortPairsByActivity(staticData.forex[session], 'forex');
+                }
+            }
+            // --- КІНЕЦЬ ЗМІН ---
             populateLists(staticData);
             showLoader(false);
         })
@@ -52,252 +62,184 @@ document.addEventListener('DOMContentLoaded', function() {
             showLoader(false);
         });
 
-    // ПОЧАТОК ЗМІН: Додаємо слухача подій для поля пошуку
     searchInput.addEventListener('input', handleSearch);
-    // КІНЕЦЬ ЗМІН
 });
 
+// --- ПОЧАТОК ЗМІН: Функція сортування на фронтенді ---
+function sortPairsByActivity(pairs, assetType) {
+    // Проста імітація сортування на фронті, основна логіка на бекенді
+    // Тут можна додати візуальне виділення активних пар
+    return pairs; 
+}
+// --- КІНЕЦЬ ЗМІН ---
 
-// ПОЧАТОК ЗМІН: Нова функція для обробки пошуку
 function handleSearch() {
     const searchTerm = searchInput.value.toUpperCase().trim();
-    const categories = document.querySelectorAll('.category');
-
-    categories.forEach(category => {
-        const pairs = category.querySelectorAll('.pair-item');
-        let visiblePairs = 0;
-
-        pairs.forEach(pair => {
-            const button = pair.querySelector('.pair-button');
-            const ticker = button.textContent.toUpperCase();
-
-            if (ticker.includes(searchTerm)) {
-                pair.style.display = 'flex';
-                visiblePairs++;
-            } else {
-                pair.style.display = 'none';
-            }
-        });
-
-        // Ховаємо заголовок категорії, якщо в ній не знайдено жодної пари
-        if (visiblePairs > 0) {
-            category.style.display = 'block';
-        } else {
-            category.style.display = 'none';
-        }
+    document.querySelectorAll('.pair-item').forEach(pair => {
+        const ticker = pair.querySelector('.pair-button').textContent.toUpperCase();
+        pair.style.display = ticker.includes(searchTerm) ? 'flex' : 'none';
+    });
+    document.querySelectorAll('.category').forEach(category => {
+        const visiblePairs = category.querySelectorAll('.pair-item[style*="display: flex"]').length;
+        category.style.display = visiblePairs > 0 ? 'block' : 'none';
     });
 }
-// КІНЕЦЬ ЗМІН
-
 
 function renderFavoriteButton(pair) {
     const isFavorite = currentWatchlist.includes(pair);
-    const icon = isFavorite ? '✅' : '⭐';
-    return `<button class="fav-btn" onclick="toggleFavorite(event, '${pair}')">${icon}</button>`;
+    return `<button class="fav-btn" onclick="toggleFavorite(event, '${pair}')">${isFavorite ? '✅' : '⭐'}</button>`;
 }
 
 function toggleFavorite(event, pair) {
     event.stopPropagation();
     const button = event.currentTarget;
     const isCurrentlyFavorite = currentWatchlist.includes(pair);
-    button.innerHTML = isCurrentlyFavorite ? '⭐' : '✅';
-    const url = `${API_BASE_URL}/api/toggle_watchlist?pair=${pair}&initData=${encodeURIComponent(initData)}`;
-    fetch(url)
+    button.innerHTML = '⏳';
+    fetch(`${API_BASE_URL}/api/toggle_watchlist?pair=${pair}&initData=${encodeURIComponent(initData)}`)
         .then(res => res.json())
         .then(data => {
             if (data.success) {
-                if (isCurrentlyFavorite) {
-                    currentWatchlist = currentWatchlist.filter(p => p !== pair);
-                } else {
-                    currentWatchlist.push(pair);
-                }
+                currentWatchlist = isCurrentlyFavorite ? currentWatchlist.filter(p => p !== pair) : [...currentWatchlist, pair];
+                button.innerHTML = !isCurrentlyFavorite ? '✅' : '⭐';
             } else {
                 button.innerHTML = isCurrentlyFavorite ? '✅' : '⭐';
-                alert("Не вдалося оновити список обраного.");
             }
-        })
-        .catch(err => {
-            button.innerHTML = isCurrentlyFavorite ? '✅' : '⭐';
-            alert("Помилка мережі при оновленні списку обраного.");
-            console.error(err);
-        });
+        }).catch(() => button.innerHTML = isCurrentlyFavorite ? '✅' : '⭐');
 }
 
 function createPairButton(pairData, assetType) {
     const pair = pairData.ticker;
     const isActive = pairData.active;
     const inactiveClass = isActive ? '' : 'inactive';
-    
     return `<div class="pair-item ${inactiveClass}">
-        <button class="pair-button" onclick="fetchSignal('${pair}', '${assetType}')">${pair}</button>
+        <button class="pair-button" onclick="selectPair('${pair}', '${assetType}')">${pair}</button>
         ${renderFavoriteButton(pair)}
     </div>`;
 }
 
 function populateLists(staticData) {
     let html = '';
-    function createSection(title, pairs, assetTypeResolver) {
-        if (!pairs || pairs.length === 0) return '';
-        let sectionHtml = `<div class="category"><div class="category-title">${title}</div><div class="pair-list">`;
-        
-        const pairList = Array.isArray(pairs) ? pairs : (staticData.watchlist.includes(pairs.ticker) ? [pairs] : []);
-
-        pairList.forEach(pairData => {
-            const data = typeof pairData === 'string' ? { ticker: pairData, active: true } : pairData;
-            const assetType = typeof assetTypeResolver === 'function' ? assetTypeResolver(data.ticker) : assetTypeResolver;
-            sectionHtml += createPairButton(data, assetType);
-        });
-        sectionHtml += '</div></div>';
-        return sectionHtml;
-    }
-
+    const createSection = (title, pairs, assetType) => {
+        if (!pairs || !pairs.length) return '';
+        return `<div class="category"><div class="category-title">${title}</div><div class="pair-list">` +
+               pairs.map(p => createPairButton(typeof p === 'string' ? {ticker: p, active: true} : p, assetType)).join('') +
+               `</div></div>`;
+    };
     const watchlistData = staticData.watchlist.map(ticker => ({ ticker, active: true }));
     html += createSection('⭐ Обране', watchlistData, getAssetType);
-
-    html += createSection('📈 Уся криптовалюта', staticData.crypto || [], 'crypto');
-
-    if (staticData.forex && typeof staticData.forex === 'object') {
-        Object.keys(staticData.forex).forEach(sessionName => {
-            html += createSection(`🌍 Усі валюти (${sessionName})`, staticData.forex[sessionName], 'forex');
+    html += createSection('📈 Криптовалюта', staticData.crypto, 'crypto');
+    if (staticData.forex) {
+        Object.keys(staticData.forex).forEach(session => {
+            html += createSection(`🌍 Forex (${session})`, staticData.forex[session], 'forex');
         });
     }
-
-    html += createSection('🏢 Усі акції', staticData.stocks, 'stocks');
-
+    html += createSection('🏢 Акції', staticData.stocks, 'stocks');
     listsContainer.innerHTML = html;
 }
 
+// --- ПОЧАТОК ЗМІН: Нові функції для вибору пари та таймфрейму ---
+function selectPair(pair, assetType) {
+    currentPair = pair;
+    currentAssetType = assetType;
+    timeframeSelector.innerHTML = ''; // Очищуємо селектор
 
-function fetchSignal(pair, assetType) {
-    console.log(`fetchSignal called for pair: ${pair}`);
+    if (assetType === 'forex' || assetType === 'crypto') {
+        const timeframes = ['1m', '5m', '15m'];
+        let buttonsHtml = '<span>Таймфрейм:</span>';
+        timeframes.forEach(tf => {
+            buttonsHtml += `<button class="tf-button ${tf === currentTf ? 'active' : ''}" onclick="selectTimeframe('${tf}')">${tf}</button>`;
+        });
+        timeframeSelector.innerHTML = buttonsHtml;
+    }
+    
+    fetchSignal();
+}
+
+function selectTimeframe(tf) {
+    currentTf = tf;
+    // Оновлюємо активну кнопку
+    document.querySelectorAll('.tf-button').forEach(btn => {
+        btn.classList.toggle('active', btn.textContent === tf);
+    });
+    fetchSignal(); // Перезапускаємо аналіз з новим таймфреймом
+}
+
+function fetchSignal() {
+    if (!currentPair) return;
+
     showLoader(true);
-    signalOutput.innerHTML = `⏳ Отримую детальний аналіз для ${pair}...`;
+    signalOutput.innerHTML = `⏳ Аналіз ${currentPair} на ${currentTf}...`;
     signalOutput.style.textAlign = 'left';
     historyContainer.innerHTML = ''; 
     Plotly.purge('chart');
 
-    const signalApiUrl = `${API_BASE_URL}/api/signal?pair=${pair}&initData=${encodeURIComponent(initData)}`;
-    const mtaApiUrl = `${API_BASE_URL}/api/get_mta?pair=${pair}`;
+    const signalApiUrl = `${API_BASE_URL}/api/signal?pair=${currentPair}&tf=${currentTf}&initData=${encodeURIComponent(initData)}`;
+    const mtaApiUrl = `${API_BASE_URL}/api/get_mta?pair=${currentPair}`;
 
-    Promise.all([
-        fetch(signalApiUrl).then(res => res.json()),
-        fetch(mtaApiUrl).then(res => res.json())
-    ])
+    Promise.all([fetch(signalApiUrl).then(res => res.json()), fetch(mtaApiUrl).then(res => res.json())])
     .then(([signalData, mtaData]) => {
         if (signalData.error) {
             signalOutput.innerHTML = `❌ Помилка: ${signalData.error}`;
-            signalOutput.style.textAlign = 'center';
+            timeframeSelector.innerHTML = ''; // Ховаємо кнопки, якщо помилка
             showLoader(false);
             return;
         }
 
-        let html = `
-            <div class="verdict-box ${signalData.verdict_level}">
-                ${signalData.verdict_text}
-            </div>
-            <div class="pair-title">${signalData.pair} | Ціна: ${signalData.price.toFixed(4)}</div>
-        `;
+        let html = `<div class="verdict-box ${signalData.verdict_level}">${signalData.verdict_text}</div>
+                    <div class="pair-title">${signalData.pair} | ТФ: ${signalData.timeframe} | Ціна: ${signalData.price.toFixed(4)}</div>`;
         
         if (signalData.support || signalData.resistance) {
-            const supportText = signalData.support ? `Підтримка: <strong>${signalData.support.toFixed(4)}</strong>` : '';
-            const resistanceText = signalData.resistance ? `Опір: <strong>${signalData.resistance.toFixed(4)}</strong>` : '';
-            const separator = signalData.support && signalData.resistance ? ' | ' : '';
-            
-            html += `<div class="sr-levels">${supportText}${separator}${resistanceText}</div>`;
+            const support = signalData.support ? `Підтримка: <strong>${signalData.support.toFixed(4)}</strong>` : '';
+            const resistance = signalData.resistance ? `Опір: <strong>${signalData.resistance.toFixed(4)}</strong>` : '';
+            html += `<div class="sr-levels">${support}${support && resistance ? ' | ' : ''}${resistance}</div>`;
         }
 
         if (signalData.reasons && signalData.reasons.length) {
             html += `<h4>Ключові фактори:</h4><ul class="reason-list">${signalData.reasons.map(r => `<li>${r}</li>`).join('')}</ul>`;
         }
         
-        if (Array.isArray(mtaData) && mtaData.length > 0) {
-            html += '<h4>Мульти-таймфрейм аналіз (MTA):</h4><table class="mta-table"><tr>';
-            mtaData.forEach(item => { html += `<th>${item.tf}</th>`; });
-            html += '</tr><tr>';
-            mtaData.forEach(item => {
-                const signalClass = item.signal.toLowerCase();
-                html += `<td class="${signalClass}">${item.signal}</td>`;
-            });
-            html += '</tr></table>';
+        if (mtaData && mtaData.length) {
+            html += '<h4>Мульти-таймфрейм аналіз (MTA):</h4><table class="mta-table"><tr>' +
+                    mtaData.map(item => `<th>${item.tf}</th>`).join('') + '</tr><tr>' +
+                    mtaData.map(item => `<td class="${item.signal.toLowerCase()}">${item.signal}</td>`).join('') + '</tr></table>';
         }
 
         signalOutput.innerHTML = html;
-
-        if (signalData.history && signalData.history.dates && signalData.history.dates.length > 0) {
-            drawChart(pair, signalData.history);
-        } else {
-            chartContainer.innerHTML = `<div class="no-chart">Графік недоступний</div>`;
-        }
+        if (signalData.history && signalData.history.dates.length > 0) drawChart(signalData.history);
+        else chartContainer.innerHTML = `<div class="no-chart">Графік недоступний</div>`;
         
-        if (initData) {
-            fetchHistory(pair);
-        }
-
+        if (initData) fetchHistory(currentPair);
         showLoader(false);
     })
     .catch(err => {
-        console.error(`Error fetching signal for ${pair}:`, err);
-        signalOutput.innerHTML = `❌ Помилка отримання сигналу. Перевірте з'єднання.`;
-        signalOutput.style.textAlign = 'center';
+        console.error(`Error fetching signal for ${currentPair}:`, err);
+        signalOutput.innerHTML = `❌ Помилка отримання сигналу.`;
         showLoader(false);
     });
 }
+// --- КІНЕЦЬ ЗМІН ---
 
 function fetchHistory(pair) {
-    const historyApiUrl = `${API_BASE_URL}/api/signal_history?pair=${pair}&initData=${encodeURIComponent(initData)}`;
-    fetch(historyApiUrl)
+    fetch(`${API_BASE_URL}/api/signal_history?pair=${pair}&initData=${encodeURIComponent(initData)}`)
         .then(res => res.json())
         .then(historyData => {
-            if (historyData && historyData.length > 0) {
-                displaySignalHistory(historyData);
-            }
-        })
-        .catch(err => console.error("Error fetching signal history:", err));
+            if (historyData && historyData.length > 0) displaySignalHistory(historyData);
+        });
 }
 
 function displaySignalHistory(history) {
-    let html = '<h4>Історія сигналів</h4>';
-    html += '<table class="history-table"><thead><tr><th>Час</th><th>Ціна</th><th>Сигнал</th><th>Сила</th></tr></thead><tbody>';
-
+    let html = '<h4>Історія сигналів</h4><table class="history-table"><thead><tr><th>Час</th><th>Ціна</th><th>Сигнал</th><th>Сила</th></tr></thead><tbody>';
     history.forEach(item => {
         const date = new Date(item.timestamp.replace(' ', 'T') + 'Z');
         const formattedDate = `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')} ${date.getDate().toString().padStart(2, '0')}.${(date.getMonth() + 1).toString().padStart(2, '0')}`;
-        const signalClass = `signal-${item.signal_type.toLowerCase()}`;
-        const price = item.price ? item.price.toFixed(4) : 'N/A';
-
-        html += `
-            <tr>
-                <td>${formattedDate}</td>
-                <td>${price}</td>
-                <td class="${signalClass}">${item.signal_type}</td>
-                <td>${item.bull_percentage}%</td>
-            </tr>
-        `;
+        html += `<tr><td>${formattedDate}</td><td>${item.price ? item.price.toFixed(4) : 'N/A'}</td><td class="signal-${item.signal_type.toLowerCase()}">${item.signal_type}</td><td>${item.bull_percentage}%</td></tr>`;
     });
-
-    html += '</tbody></table>';
-    historyContainer.innerHTML = html;
+    historyContainer.innerHTML = html + '</tbody></table>';
 }
 
-function drawChart(pair, history) {
-    const trace = {
-        x: history.dates,
-        close: history.close,
-        high: history.high,
-        low: history.low,
-        open: history.open,
-        type: 'candlestick',
-        increasing: { line: { color: '#26a69a' } },
-        decreasing: { line: { color: '#ef5350' } }
-    };
-    const layout = {
-        paper_bgcolor: 'rgba(0,0,0,0)',
-        plot_bgcolor: 'rgba(0,0,0,0)',
-        font: { color: tg.themeParams.text_color || '#fff' },
-        xaxis: { rangeslider: { visible: false }, showgrid: false },
-        yaxis: { showgrid: false },
-        margin: { l: 35, r: 10, b: 35, t: 10 }
-    };
+function drawChart(history) {
+    const trace = { x: history.dates, close: history.close, high: history.high, low: history.low, open: history.open, type: 'candlestick', increasing: { line: { color: '#26a69a' } }, decreasing: { line: { color: '#ef5350' } } };
+    const layout = { paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)', font: { color: tg.themeParams.text_color || '#fff' }, xaxis: { rangeslider: { visible: false }, showgrid: false }, yaxis: { showgrid: false }, margin: { l: 35, r: 10, b: 35, t: 10 } };
     Plotly.newPlot('chart', [trace], layout, {responsive: true});
 }
 
