@@ -3,7 +3,7 @@ import os
 import logging
 from cachetools import TTLCache
 import ccxt
-from twelvedata import TDClient
+import finnhub # Додано
 from dotenv import load_dotenv
 from telegram import Bot
 from telegram.ext import Updater
@@ -13,10 +13,7 @@ from flask import Flask
 load_dotenv()
 TOKEN = os.getenv("TOKEN")
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
-TWELVEDATA_API_KEY = os.getenv("TWELVEDATA_API_KEY")
-# --- ОСЬ ЦЕЙ РЯДОК ПОТРІБНО ДОДАТИ ---
-FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY")
-# -----------------------------------------
+FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY") # Цей ключ тепер використовується
 
 # --- Логування ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -27,7 +24,8 @@ MARKET_DATA_CACHE = TTLCache(maxsize=5000, ttl=300) # Для даних окре
 RANKING_CACHE = TTLCache(maxsize=100, ttl=60)      # Для результатів сортування списків
 
 binance = ccxt.binance({'enableRateLimit': True})
-td = TDClient(apikey=TWELVEDATA_API_KEY)
+# Клієнт TwelveData видалено
+finnhub_client = finnhub.Client(api_key=FINNHUB_API_KEY) # Додано клієнт Finnhub
 
 # --- Глобальні об'єкти бота ---
 bot = Bot(token=TOKEN)
@@ -57,5 +55,6 @@ FOREX_SESSIONS = {
     "Європейська": ["EUR/USD", "GBP/USD", "USD/CHF", "EUR/GBP", "EUR/CHF", "GBP/CHF"],
     "Американська": ["USD/CAD", "USD/MXN", "USD/BRL", "USD/ZAR"]
 }
+# Таймфрейм 4h не підтримується Finnhub, тому використовується 1h для MTA
 ANALYSIS_TIMEFRAMES = ['15min', '1h', '4h', '1day']
 DB_NAME = "zigzag.db"
