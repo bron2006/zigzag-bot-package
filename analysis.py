@@ -4,10 +4,10 @@ import pandas_ta as ta
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
-import time # Додано
+import time
 
 from db import add_signal_to_history
-from config import logger, binance, finnhub_client, MARKET_DATA_CACHE, RANKING_CACHE, ANALYSIS_TIMEFRAMES # Замінено td на finnhub_client
+from config import logger, binance, finnhub_client, MARKET_DATA_CACHE, RANKING_CACHE, ANALYSIS_TIMEFRAMES
 
 _executor = None
 def get_executor():
@@ -23,45 +23,40 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False):
         return MARKET_DATA_CACHE[key]
     try:
         df = pd.DataFrame()
+        # Словник для відповідності таймфреймів Finnhub
+        finnhub_tf_map = {'1m': '1', '15m': '15', '1h': '60', '4h': '60', '1d': 'D'}
+        resolution = finnhub_tf_map.get(tf)
+        if not resolution:
+            logger.error(f"Непідтримуваний таймфрейм для Finnhub: {tf}")
+            return pd.DataFrame()
+        
+        # Розрахунок періоду для запиту
+        now = int(time.time())
+        data_limit = limit * 4 if tf == '4h' else limit
+        tf_to_seconds = {'1': 60, '15': 900, '60': 3600, 'D': 86400}
+        start_time = now - data_limit * tf_to_seconds[resolution]
+
         if asset == 'crypto':
             bars = binance.fetch_ohlcv(pair, timeframe=tf, limit=limit)
             df = pd.DataFrame(bars, columns=['ts','o','h','l','c','v'])
             df['ts'] = pd.to_datetime(df['ts'], unit='ms', utc=True)
             df = df.rename(columns={'o':'Open','h':'High','l':'Low','c':'Close','v':'Volume'})
-        elif asset in ('forex', 'stocks'):
-            # Словник для відповідності таймфреймів Finnhub
-            # 4h не підтримується, тому ми використовуємо 60 хвилин і беремо більше даних
-            finnhub_tf_map = {'1m': '1', '15m': '15', '1h': '60', '4h': '60', '1d': 'D'}
-            resolution = finnhub_tf_map.get(tf)
-            if not resolution:
-                logger.error(f"Непідтримуваний таймфрейм для Finnhub: {tf}")
-                return pd.DataFrame()
+        
+        elif asset == 'stocks':
+            bars = finnhub_client.stock_candles(pair, resolution, start_time, now)
+        
+        elif asset == 'forex':
+            # --- ПОЧАТОК ЗМІН: Використовуємо спеціалізовану функцію для forex ---
+            # Finnhub для forex_candles очікує символ без слеша, напр. 'EURUSD'
+            symbol = pair.replace('/', '')
+            bars = finnhub_client.forex_candles(symbol, resolution, start_time, now)
+            # --- КІНЕЦЬ ЗМІН ---
 
-            # Розрахунок періоду для запиту
-            now = int(time.time())
-            # Збільшуємо ліміт для 4h, щоб отримати приблизно той самий період даних
-            data_limit = limit * 4 if tf == '4h' else limit
-            
-            tf_to_seconds = {'1': 60, '15': 900, '60': 3600, 'D': 86400}
-            start_time = now - data_limit * tf_to_seconds[resolution]
-
-            symbol = pair
-            if asset == 'forex':
-                # Finnhub вимагає формат OANDA для forex
-                symbol = f"OANDA:{pair.replace('/', '_')}"
-            
-            bars = finnhub_client.stock_candles(symbol, resolution, start_time, now)
-
-            if bars.get('s') != 'ok':
-                logger.warning(f"Finnhub API повернуло помилку для {pair} на ТФ {tf}: {bars}")
-                return pd.DataFrame()
-
+        if 'bars' in locals() and bars.get('s') == 'ok':
             df = pd.DataFrame(bars)
             df = df.rename(columns={'t': 'ts', 'o': 'Open', 'h': 'High', 'l': 'Low', 'c': 'Close', 'v': 'Volume'})
-            # Видаляємо стовпець статусу 's', якщо він є
             if 's' in df.columns:
                 df = df.drop(columns=['s'])
-            
             df['ts'] = pd.to_datetime(df['ts'], unit='s', utc=True)
 
         if df.empty:
@@ -110,7 +105,6 @@ def identify_support_resistance_levels(df, window=20, threshold=0.01):
 def analyze_candle_patterns(df: pd.DataFrame):
     try:
         df_copy = df.copy()
-        # Замінено TA-Lib на pandas-ta
         candle_patterns = df_copy.ta.cdl_pattern(name="all")
         df_copy = pd.concat([df_copy, candle_patterns], axis=1)
         
@@ -124,7 +118,6 @@ def analyze_candle_patterns(df: pd.DataFrame):
         strongest_pattern = found_patterns.abs().idxmax()
         signal_strength = found_patterns[strongest_pattern]
         
-        # pandas-ta використовує 100 для бичачих та -100 для ведмежих
         if abs(signal_strength) == 0:
             return None
             
@@ -254,7 +247,7 @@ def get_api_detailed_signal_data(pair):
         analysis = _calculate_core_signal(df, daily_df)
         verdict_text, verdict_level = _generate_verdict(analysis)
         history_df = df.tail(50)
-        date_col = 'ts' if 'ts' in history_df.columns else 'datetime'
+        date_col = 'ts'
         history = { "dates": history_df[date_col].dt.strftime('%Y-%m-%d %H:%M:%S').tolist(), "open": history_df['Open'].tolist(), "high": history_df['High'].tolist(), "low": history_df['Low'].tolist(), "close": history_df['Close'].tolist() }
         return {
             "pair": pair, "price": analysis['price'],
@@ -269,7 +262,6 @@ def get_api_detailed_signal_data(pair):
 
 def get_full_mta_verdict(pair, display_name, asset, force_refresh=False):
     def worker(tf):
-        # Пропускаємо 4h для stocks/forex, оскільки Finnhub його не підтримує
         if asset in ('stocks', 'forex') and tf == '4h':
             return (tf, "N/A")
         df = get_market_data(pair, tf, asset, limit=200, force_refresh=force_refresh)
@@ -291,7 +283,6 @@ def get_full_mta_verdict(pair, display_name, asset, force_refresh=False):
 
 def get_api_mta_data(pair, asset):
     def worker(tf):
-        # Пропускаємо 4h для stocks/forex, оскільки Finnhub його не підтримує
         if asset in ('stocks', 'forex') and tf == '4h':
             return None
         df = get_market_data(pair, tf, asset, limit=200)
@@ -335,10 +326,8 @@ def rank_assets_for_api(pairs, asset_type):
             if df.empty or len(df) < 30:
                 return {'ticker': pair, 'score': -1}
             if asset_type in ('stocks', 'forex'):
-                date_col = 'datetime' if 'datetime' in df.columns else 'ts'
-                if date_col not in df.columns: return {'ticker': pair, 'score': -1}
+                date_col = 'ts'
                 last_update_time = df[date_col].iloc[-1]
-                # Finnhub дані можуть мати невелику затримку, збільшуємо вікно до 4 годин
                 if pd.Timestamp.utcnow() - last_update_time > timedelta(hours=4):
                     return {'ticker': pair, 'score': -1}
             rsi = df.ta.rsi(length=14).iloc[-1]
