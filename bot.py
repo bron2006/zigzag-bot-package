@@ -57,13 +57,9 @@ def api_get_ranked_pairs():
     watchlist = get_watchlist(user_id) if user_id else []
 
     try:
-        # Аналізуємо і сортуємо тільки криптовалюти
         ranked_crypto_data = rank_assets_for_api(CRYPTO_PAIRS_FULL, 'crypto')
-        # --- ПОЧАТОК ЗМІН: Виправляємо помилку JSON серіалізації ---
         ranked_crypto = [{'ticker': p['ticker'], 'active': bool(p['score'] != -1)} for p in ranked_crypto_data]
-        # --- КІНЕЦЬ ЗМІН ---
 
-        # Для акцій та валют повертаємо статичні списки
         static_stocks = [{'ticker': p, 'active': True} for p in STOCK_TICKERS]
         static_forex = {
             session: [{'ticker': p, 'active': True} for p in pairs] 
@@ -98,7 +94,6 @@ def api_get_active_markets():
         ranked_crypto = rank_assets_for_api(CRYPTO_PAIRS_FULL, 'crypto')
         top_crypto = [p['ticker'] for p in ranked_crypto[:5]]
         
-        # Відключаємо автоаналіз для stocks і forex
         top_stocks = []
         top_forex = []
 
@@ -152,9 +147,11 @@ def api_signal_history():
         logger.error(f"API error for signal history on {pair}: {e}\n{traceback.format_exc()}")
         return jsonify({"error": "Помилка при отриманні історії"}), 500
 
-@app.route("/", methods=["GET"])
-def index():
-    return "ZigZag Bot v4.3 Backend with Watchlist API 🟢"
+# --- ПОЧАТОК ЗМІН: Оновлено головну сторінку ---
+@app.route('/')
+def home():
+    return "<h1>✅ Webhook Ready</h1><p>This endpoint is ready to receive ICMarkets WebSocket data.</p>"
+# --- КІНЕЦЬ ЗМІН ---
 
 if __name__ != "__main__":
     init_db()
