@@ -1,12 +1,22 @@
 # --- Етап 1: Будівництво ---
-# Використовуємо стабільний образ Debian Bullseye, де є потрібні нам бібліотеки
+# Використовуємо стабільний образ, де є всі інструменти для компіляції
 FROM python:3.11-bullseye as builder
 
-# Встановлюємо TA-Lib з репозиторію Debian. Це найнадійніший спосіб.
-# libta-lib-dev містить файли, потрібні для компіляції Python-пакету.
+# Встановлюємо системні залежності, необхідні для компіляції TA-Lib
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libta-lib-dev \
+    wget \
+    build-essential \
     && rm -rf /var/lib/apt/lists/*
+
+# Завантажуємо, компілюємо та встановлюємо TA-Lib з вихідного коду.
+# Це єдиний надійний метод.
+WORKDIR /tmp
+RUN wget http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz && \
+    tar -xf ta-lib-0.4.0-src.tar.gz && \
+    cd ta-lib && \
+    ./configure --prefix=/usr && \
+    make && \
+    make install
 
 # Встановлюємо залежності Python
 WORKDIR /app
@@ -20,13 +30,13 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     TZ=Europe/Kyiv
 
-# Встановлюємо тільки рантайм-бібліотеку TA-Lib (libta-lib0) та tzdata для часової зони
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libta-lib0 \
-    tzdata \
-    && rm -rf /var/lib/apt/lists/*
-    
-# Налаштовуємо часову зону
+# Копіюємо тільки скомпільовані файли бібліотеки з етапу "builder"
+COPY --from=builder /usr/lib/libta_lib.so.0 /usr/lib/libta_lib.so.0
+COPY --from=builder /usr/lib/libta_lib.so.0.0.0 /usr/lib/libta_lib.so.0.0.0
+RUN ldconfig
+
+# Встановлюємо tzdata для налаштування часової зони
+RUN apt-get update && apt-get install -y --no-install-recommends tzdata && rm -rf /var/lib/apt/lists/*
 RUN ln -fs /usr/share/zoneinfo/Europe/Kyiv /etc/localtime && \
     dpkg-reconfigure -f noninteractive tzdata
 
@@ -37,7 +47,7 @@ COPY --from=builder /install /usr/local
 COPY . /app
 WORKDIR /app
 
-# Документуємо порт, на якому працює застосунок
+# Документуємо порт
 EXPOSE 8080
 
 # Правильна команда для запуску веб-сервера gunicorn
