@@ -23,51 +23,62 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False):
         return MARKET_DATA_CACHE[key]
     try:
         df = pd.DataFrame()
-        # Словник для відповідності таймфреймів Finnhub
         finnhub_tf_map = {'1m': '1', '15m': '15', '1h': '60', '4h': '60', '1d': 'D'}
         resolution = finnhub_tf_map.get(tf)
         if not resolution:
             logger.error(f"Непідтримуваний таймфрейм для Finnhub: {tf}")
             return pd.DataFrame()
         
-        # Розрахунок періоду для запиту
         now = int(time.time())
         data_limit = limit * 4 if tf == '4h' else limit
         tf_to_seconds = {'1': 60, '15': 900, '60': 3600, 'D': 86400}
         start_time = now - data_limit * tf_to_seconds[resolution]
 
+        bars = None # Ініціалізуємо змінну
         if asset == 'crypto':
             bars = binance.fetch_ohlcv(pair, timeframe=tf, limit=limit)
             df = pd.DataFrame(bars, columns=['ts','o','h','l','c','v'])
             df['ts'] = pd.to_datetime(df['ts'], unit='ms', utc=True)
             df = df.rename(columns={'o':'Open','h':'High','l':'Low','c':'Close','v':'Volume'})
+            # Для крипти 'bars' - це список, а не dict, тому обробляємо його інакше
+            if df.empty:
+                logger.warning(f"Binance API повернуло порожній результат для {pair} на ТФ {tf}")
+            if use_cache:
+                MARKET_DATA_CACHE[key] = df
+            return df
         
         elif asset == 'stocks':
+            logger.info(f"Запит до Finnhub (stocks): symbol={pair}, resolution={resolution}")
             bars = finnhub_client.stock_candles(pair, resolution, start_time, now)
+            logger.info(f"Відповідь від Finnhub (stocks) для {pair}: {bars}")
         
         elif asset == 'forex':
-            # --- ПОЧАТОК ЗМІН: Використовуємо спеціалізовану функцію для forex ---
-            # Finnhub для forex_candles очікує символ без слеша, напр. 'EURUSD'
             symbol = pair.replace('/', '')
+            logger.info(f"Запит до Finnhub (forex): symbol={symbol}, resolution={resolution}")
             bars = finnhub_client.forex_candles(symbol, resolution, start_time, now)
-            # --- КІНЕЦЬ ЗМІН ---
+            logger.info(f"Відповідь від Finnhub (forex) для {pair}: {bars}")
 
-        if 'bars' in locals() and bars.get('s') == 'ok':
+        if bars and bars.get('s') == 'ok':
             df = pd.DataFrame(bars)
             df = df.rename(columns={'t': 'ts', 'o': 'Open', 'h': 'High', 'l': 'Low', 'c': 'Close', 'v': 'Volume'})
             if 's' in df.columns:
                 df = df.drop(columns=['s'])
             df['ts'] = pd.to_datetime(df['ts'], unit='s', utc=True)
+        else:
+            logger.warning(f"Finnhub не повернув даних ('s' != 'ok') для {pair} на ТФ {tf}")
 
         if df.empty:
-            logger.warning(f"API повернуло порожній результат для {pair} на ТФ {tf}")
+            logger.warning(f"Фінальний DataFrame порожній для {pair} на ТФ {tf}")
             return pd.DataFrame()
+            
         if use_cache:
             MARKET_DATA_CACHE[key] = df
         return df
     except Exception as e:
         logger.error(f"Помилка отримання даних для {pair} на ТФ {tf}: {e}")
         return pd.DataFrame()
+
+# ... (решта файлу залишається без змін) ...
 
 def _format_price(price):
     if price >= 10:
