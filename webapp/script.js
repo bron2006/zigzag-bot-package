@@ -29,11 +29,9 @@ let initData = tg.initData || '';
 
 document.addEventListener('DOMContentLoaded', function() {
     showLoader(true);
-    // --- ПОЧАТОК ЗМІН: Додаємо параметр для уникнення кешування ---
     const cacheBuster = `&_=${new Date().getTime()}`;
     const initDataString = initData ? `?initData=${encodeURIComponent(initData)}` : '?';
     const rankedPairsUrl = `${API_BASE_URL}/api/get_ranked_pairs${initDataString}${cacheBuster}`;
-    // --- КІНЕЦЬ ЗМІН ---
 
     fetch(rankedPairsUrl)
         .then(res => res.json())
@@ -64,10 +62,8 @@ function toggleFavorite(event, pair) {
     const button = event.currentTarget;
     const isCurrentlyFavorite = currentWatchlist.includes(pair);
     button.innerHTML = isCurrentlyFavorite ? '⭐' : '✅';
-    // --- ПОЧАТОК ЗМІН: Додаємо параметр для уникнення кешування ---
     const cacheBuster = `&_=${new Date().getTime()}`;
     const url = `${API_BASE_URL}/api/toggle_watchlist?pair=${pair}&initData=${encodeURIComponent(initData)}${cacheBuster}`;
-    // --- КІНЕЦЬ ЗМІН ---
     fetch(url)
         .then(res => res.json())
         .then(data => {
@@ -142,10 +138,10 @@ function fetchSignal(pair, assetType) {
     historyContainer.innerHTML = ''; 
     Plotly.purge('chart');
 
-    // --- ПОЧАТОК ЗМІН: Додаємо параметр для уникнення кешування ---
+    // --- ПОЧАТОК ЗМІН: Виправляємо формування URL ---
     const cacheBuster = `&_=${new Date().getTime()}`;
     const signalApiUrl = `${API_BASE_URL}/api/signal?pair=${pair}&initData=${encodeURIComponent(initData)}${cacheBuster}`;
-    const mtaApiUrl = `${API_BASE_URL}/api/get_mta?pair=${pair}${cacheBuster.replace('&', '?')}`; // Use ? if no other params
+    const mtaApiUrl = `${API_BASE_URL}/api/get_mta?pair=${pair}${cacheBuster}`;
     // --- КІНЕЦЬ ЗМІН ---
 
     Promise.all([
@@ -213,10 +209,8 @@ function fetchSignal(pair, assetType) {
 }
 
 function fetchHistory(pair) {
-    // --- ПОЧАТОК ЗМІН: Додаємо параметр для уникнення кешування ---
     const cacheBuster = `&_=${new Date().getTime()}`;
     const historyApiUrl = `${API_BASE_URL}/api/signal_history?pair=${pair}&initData=${encodeURIComponent(initData)}${cacheBuster}`;
-    // --- КІНЕЦЬ ЗМІН ---
     fetch(historyApiUrl)
         .then(res => res.json())
         .then(historyData => {

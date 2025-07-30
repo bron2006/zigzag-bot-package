@@ -59,7 +59,9 @@ def api_get_ranked_pairs():
     try:
         # Аналізуємо і сортуємо тільки криптовалюти
         ranked_crypto_data = rank_assets_for_api(CRYPTO_PAIRS_FULL, 'crypto')
-        ranked_crypto = [{'ticker': p['ticker'], 'active': p['score'] != -1} for p in ranked_crypto_data]
+        # --- ПОЧАТОК ЗМІН: Виправляємо помилку JSON серіалізації ---
+        ranked_crypto = [{'ticker': p['ticker'], 'active': bool(p['score'] != -1)} for p in ranked_crypto_data]
+        # --- КІНЕЦЬ ЗМІН ---
 
         # Для акцій та валют повертаємо статичні списки
         static_stocks = [{'ticker': p, 'active': True} for p in STOCK_TICKERS]

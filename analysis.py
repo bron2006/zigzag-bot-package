@@ -28,7 +28,9 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False):
             df['ts'] = pd.to_datetime(df['ts'], unit='ms', utc=True)
             df = df.rename(columns={'o':'Open','h':'High','l':'Low','c':'Close','v':'Volume'})
         elif asset in ('forex', 'stocks'):
-            td_tf_map = { '1m': '1min', '15m': '15min', '1h': '1hour', '4h': '4hour', '1d': '1day', '15min': '15min' }
+            # --- ПОЧАТОК ЗМІН: Виправляємо невідповідність таймфреймів ---
+            td_tf_map = { '1m': '1min', '15m': '15min', '1h': '1hour', '4h': '4hour', '1day': '1day', '15min': '15min' }
+            # --- КІНЕЦЬ ЗМІН ---
             td_tf = td_tf_map.get(tf)
             if not td_tf:
                 logger.error(f"Непідтримуваний таймфрейм для TwelveData: {tf}")
