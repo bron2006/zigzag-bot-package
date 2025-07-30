@@ -3,7 +3,9 @@ import traceback
 import json
 from urllib.parse import parse_qs
 from concurrent.futures import ThreadPoolExecutor
-from flask import request, jsonify
+# --- ПОЧАТОК ЗМІН: Додано render_template ---
+from flask import request, jsonify, render_template
+# --- КІНЕЦЬ ЗМІН ---
 from flask_cors import CORS
 from telegram import Update
 
@@ -147,10 +149,10 @@ def api_signal_history():
         logger.error(f"API error for signal history on {pair}: {e}\n{traceback.format_exc()}")
         return jsonify({"error": "Помилка при отриманні історії"}), 500
 
-# --- ПОЧАТОК ЗМІН: Оновлено головну сторінку ---
+# --- ПОЧАТОК ЗМІН: Маршрут для відображення HTML сторінки ---
 @app.route('/')
-def home():
-    return "<h1>✅ Webhook Ready</h1><p>This endpoint is ready to receive ICMarkets WebSocket data.</p>"
+def homepage():
+    return render_template('index.html')
 # --- КІНЕЦЬ ЗМІН ---
 
 if __name__ != "__main__":
