@@ -1,52 +1,44 @@
-# Етап 1: Збірка образу ("Майстерня")
-# --- ПОЧАТОК ЗМІН: Використовуємо більш стабільний образ ---
+# --- Етап 1: Будівництво ---
+# Використовуємо стабільний образ Debian Bullseye, де є потрібні нам бібліотеки
 FROM python:3.11-bullseye as builder
-# --- КІНЕЦЬ ЗМІН ---
 
-# Встановлюємо системні залежності для компіляції TA-Lib
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-    build-essential \
-    wget \
+# Встановлюємо TA-Lib з репозиторію Debian. Це найнадійніший спосіб.
+# libta-lib-dev містить файли, потрібні для компіляції Python-пакету.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libta-lib-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Завантажуємо та компілюємо TA-Lib з вихідного коду
-WORKDIR /tmp
-RUN wget http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz && \
-    tar -xf ta-lib-0.4.0-src.tar.gz && \
-    cd ta-lib && \
-    ./configure --prefix=/usr && \
-    make && \
-    make install
-
-# Встановлюємо Python залежності
+# Встановлюємо залежності Python
 WORKDIR /app
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt --prefix /install
+RUN pip install --upgrade pip && pip install --no-cache-dir --prefix=/install -r requirements.txt
 
-# ---
-
-# Етап 2: Робочий образ ("Виставковий зал")
-# --- ПОЧАТОК ЗМІН: Використовуємо відповідний стабільний образ ---
+# --- Етап 2: Основний образ ---
 FROM python:3.11-bullseye
-# --- КІНЕЦЬ ЗМІН ---
 
-# Копіюємо скомпільовану бібліотеку TA-Lib з першого етапу
-COPY --from=builder /usr/lib/libta_lib.so.0 /usr/lib/libta_lib.so.0
-COPY --from=builder /usr/lib/libta_lib.so.0.0.0 /usr/lib/libta_lib.so.0.0.0
-RUN ldconfig
-
-# Додаємо шлях до встановлених бібліотек до системних змінних
 ENV PYTHONUNBUFFERED=1 \
-    PATH="/install/bin:$PATH" \
-    PYTHONPATH="/install/lib/python3.11/site-packages"
+    PYTHONDONTWRITEBYTECODE=1 \
+    TZ=Europe/Kyiv
 
+# Встановлюємо тільки рантайм-бібліотеку TA-Lib (libta-lib0) та tzdata для часової зони
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libta-lib0 \
+    tzdata \
+    && rm -rf /var/lib/apt/lists/*
+    
+# Налаштовуємо часову зону
+RUN ln -fs /usr/share/zoneinfo/Europe/Kyiv /etc/localtime && \
+    dpkg-reconfigure -f noninteractive tzdata
+
+# Копіюємо встановлені залежності Python з етапу builder
+COPY --from=builder /install /usr/local
+    
+# Копіюємо код проєкту
+COPY . /app
 WORKDIR /app
 
-# Спочатку копіюємо код вашого додатка
-COPY . .
-# Потім копіюємо бібліотеки
-COPY --from=builder /install /install
+# Документуємо порт, на якому працює застосунок
+EXPOSE 8080
 
-# Запускаємо додаток
+# Правильна команда для запуску веб-сервера gunicorn
 CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "1", "bot:app"]
