@@ -28,7 +28,6 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False):
             df['ts'] = pd.to_datetime(df['ts'], unit='ms', utc=True)
             df = df.rename(columns={'o':'Open','h':'High','l':'Low','c':'Close','v':'Volume'})
         elif asset in ('forex', 'stocks'):
-            # Виправляємо невідповідність таймфреймів
             td_tf_map = { '1m': '1min', '15m': '15min', '1h': '1hour', '4h': '4hour', '1d': '1day' }
             td_tf = td_tf_map.get(tf)
             if not td_tf:
@@ -85,28 +84,19 @@ def identify_support_resistance_levels(df, window=20, threshold=0.01):
 
 def analyze_candle_patterns(df: pd.DataFrame):
     try:
-        # Створюємо копію DataFrame, щоб уникнути попереджень
         df_copy = df.copy()
-        # pandas-ta сам знайде всі патерни без TA-Lib
         df_copy.ta.cdl_pattern(name="all", append=True)
-
-        # Вибираємо лише колонки, що стосуються патернів
         pattern_cols = [col for col in df_copy.columns if col.startswith('CDL_')]
         if not pattern_cols:
             return None
-
         last_candle = df_copy[pattern_cols].iloc[-1]
         found_patterns = last_candle[last_candle != 0]
-        
         if found_patterns.empty:
             return None
-
         strongest_pattern = found_patterns.abs().idxmax()
         signal_strength = found_patterns[strongest_pattern]
-        
         if abs(signal_strength) < 100:
             return None
-
         pattern_name = strongest_pattern.replace("CDL_", "")
         pattern_type = 'bullish' if signal_strength > 0 else 'bearish'
         arrow = '⬆️' if pattern_type == 'bullish' else '⬇️'
