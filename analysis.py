@@ -28,7 +28,8 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False):
             df['ts'] = pd.to_datetime(df['ts'], unit='ms', utc=True)
             df = df.rename(columns={'o':'Open','h':'High','l':'Low','c':'Close','v':'Volume'})
         elif asset in ('forex', 'stocks'):
-            td_tf_map = { '1m': '1min', '15m': '15min', '1h': '1hour', '4h': '4hour', '1day': '1day', '15min': '15min' }
+            # Виправляємо невідповідність таймфреймів
+            td_tf_map = { '1m': '1min', '15m': '15min', '1h': '1hour', '4h': '4hour', '1d': '1day' }
             td_tf = td_tf_map.get(tf)
             if not td_tf:
                 logger.error(f"Непідтримуваний таймфрейм для TwelveData: {tf}")
@@ -71,6 +72,8 @@ def group_close_values(values, threshold=0.01):
 
 def identify_support_resistance_levels(df, window=20, threshold=0.01):
     try:
+        if df.empty or not all(col in df.columns for col in ['Low', 'High']):
+            return [], []
         lows = df['Low'].rolling(window=window, center=True, min_periods=3).min()
         highs = df['High'].rolling(window=window, center=True, min_periods=3).max()
         support_levels = group_close_values(df.loc[df['Low'] == lows, 'Low'].tolist(), threshold)
@@ -80,11 +83,11 @@ def identify_support_resistance_levels(df, window=20, threshold=0.01):
         logger.error(f"Помилка в identify_support_resistance_levels: {e}")
         return [], []
 
-# --- ПОЧАТОК ЗМІН: Використовуємо вбудований рушій pandas-ta замість TA-Lib ---
 def analyze_candle_patterns(df: pd.DataFrame):
     try:
         # Створюємо копію DataFrame, щоб уникнути попереджень
         df_copy = df.copy()
+        # pandas-ta сам знайде всі патерни без TA-Lib
         df_copy.ta.cdl_pattern(name="all", append=True)
 
         # Вибираємо лише колонки, що стосуються патернів
@@ -98,7 +101,6 @@ def analyze_candle_patterns(df: pd.DataFrame):
         if found_patterns.empty:
             return None
 
-        # pandas-ta може знаходити кілька патернів одночасно, беремо найсильніший
         strongest_pattern = found_patterns.abs().idxmax()
         signal_strength = found_patterns[strongest_pattern]
         
@@ -113,8 +115,6 @@ def analyze_candle_patterns(df: pd.DataFrame):
     except Exception as e:
         logger.error(f"Помилка в analyze_candle_patterns: {e}")
         return None
-# --- КІНЕЦЬ ЗМІН ---
-
 
 def analyze_volume(df):
     if df.empty or 'Volume' not in df.columns or len(df) < 21: return "Недостатньо даних"
