@@ -39,9 +39,9 @@ def webhook_handler():
         logger.error(f"Webhook error: {e}\n{traceback.format_exc()}")
     return "OK", 200
 
-# --- ПОЧАТОК ЗМІН: Новий маршрут для OAuth2 авторизації ---
-@app.route('/authorize')
-def authorize():
+# --- ПОЧАТОК ЗМІН: Маршрут перейменовано на /callback ---
+@app.route('/callback')
+def callback():
     code = request.args.get("code")
     if not code:
         return "Authorization code not found.", 400
