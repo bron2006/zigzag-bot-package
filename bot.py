@@ -6,9 +6,8 @@ from concurrent.futures import ThreadPoolExecutor
 from flask import request, jsonify, render_template
 from flask_cors import CORS
 from telegram import Update
-import requests # Додано для HTTP-запитів
+import requests
 
-# Імпортуємо константи для cTrader
 from config import (
     app, bot, dp, WEBHOOK_SECRET, logger,
     CT_CLIENT_ID, CT_CLIENT_SECRET, CT_REDIRECT_URI,
@@ -84,7 +83,6 @@ def callback():
         logger.error(f"Error exchanging code for token: {e}")
         return f"Error exchanging code for token: {e}", 500
     # --- КІНЕЦЬ ЗМІН ---
-
 
 @app.route("/api/signal", methods=["GET"])
 def api_signal():
