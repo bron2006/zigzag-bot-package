@@ -13,7 +13,9 @@ from config import (
     CT_CLIENT_ID, CT_CLIENT_SECRET, CT_REDIRECT_URI,
     CRYPTO_PAIRS_FULL, FOREX_SESSIONS, STOCK_TICKERS, FOREX_PAIRS_MAP
 )
-from db import init_db, get_watchlist, toggle_watch, get_signal_history
+# --- ПОЧАТОК ЗМІН: Імпортуємо нові функції з db.py ---
+from db import init_db, get_watchlist, toggle_watch, get_signal_history, save_ctrader_token
+# --- КІНЕЦЬ ЗМІН ---
 from analysis import get_api_detailed_signal_data, rank_assets_for_api, get_api_mta_data
 import telegram_ui
 
@@ -52,7 +54,6 @@ def callback():
 
     logger.info(f"Successfully received authorization code: {code}")
 
-    # --- ПОЧАТОК ЗМІН: Обмін authorization_code на access_token ---
     token_url = "https://connect.spotware.com/oauth/v2/token"
     payload = {
         'grant_type': 'authorization_code',
@@ -64,7 +65,7 @@ def callback():
 
     try:
         response = requests.post(token_url, data=payload)
-        response.raise_for_status()  # Перевірка на HTTP-помилки
+        response.raise_for_status()
 
         token_data = response.json()
         access_token = token_data.get('accessToken')
@@ -73,16 +74,22 @@ def callback():
 
         logger.info(f"Successfully exchanged code for access token: {access_token}")
 
-        # Наступним кроком буде збереження цих токенів у базу даних
-        return (f"<h1>Access Token Received!</h1>"
-                f"<p><strong>Access Token:</strong> {access_token}</p>"
-                f"<p><strong>Refresh Token:</strong> {refresh_token}</p>"
-                f"<p><strong>Expires In:</strong> {expires_in} seconds</p>")
+        # --- ПОЧАТОК ЗМІН: Збереження токена в БД ---
+        # ВАЖЛИВО: Зараз ми використовуємо тимчасову "заглушку" для user_id.
+        # На наступному кроці ми реалізуємо механізм, щоб пов'язати
+        # цей токен з реальним користувачем Telegram, який почав авторизацію.
+        mock_user_id = 12345
+        save_ctrader_token(mock_user_id, access_token, refresh_token, expires_in)
+        logger.info(f"Token for mock user {mock_user_id} saved to DB.")
+
+        return (f"<h1>Success!</h1>"
+                f"<p>Your token has been securely saved. You can close this window.</p>")
+        # --- КІНЕЦЬ ЗМІН ---
 
     except requests.exceptions.RequestException as e:
         logger.error(f"Error exchanging code for token: {e}")
         return f"Error exchanging code for token: {e}", 500
-    # --- КІНЕЦЬ ЗМІН ---
+
 
 @app.route("/api/signal", methods=["GET"])
 def api_signal():
@@ -95,6 +102,8 @@ def api_signal():
     except Exception as e:
         logger.error(f"API error for pair {pair}: {e}\n{traceback.format_exc()}")
         return jsonify({"error": f"Внутрішня помилка сервера"}), 500
+
+# ... (решта файлу залишається без змін) ...
 
 @app.route("/api/get_ranked_pairs", methods=["GET"])
 def api_get_ranked_pairs():

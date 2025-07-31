@@ -1,5 +1,6 @@
 # db.py
 import sqlite3
+import time
 from config import DB_NAME
 
 def init_db():
@@ -12,7 +13,7 @@ def init_db():
             PRIMARY KEY(user_id, pair)
         );""")
 
-        # --- НОВЕ: Таблиця для історії сигналів ---
+        # Існуюча таблиця "signal_history"
         conn.execute("""
         CREATE TABLE IF NOT EXISTS signal_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -23,8 +24,18 @@ def init_db():
             signal_type TEXT,
             bull_percentage INTEGER
         );""")
-        # Створюємо індекс для швидкого пошуку
         conn.execute("CREATE INDEX IF NOT EXISTS idx_signal_history_user_pair ON signal_history (user_id, pair);")
+
+        # --- ПОЧАТОК ЗМІН: Нова таблиця для токенів cTrader ---
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS ctrader_tokens (
+            telegram_user_id INTEGER PRIMARY KEY,
+            access_token TEXT NOT NULL,
+            refresh_token TEXT NOT NULL,
+            expires_at INTEGER NOT NULL
+        );""")
+        # --- КІНЕЦЬ ЗМІН ---
+
 
 def get_watchlist(uid):
     with sqlite3.connect(DB_NAME) as conn:
@@ -39,10 +50,7 @@ def toggle_watch(uid, pair):
         else:
             conn.execute("INSERT INTO watch(user_id, pair) VALUES(?, ?)", (uid, pair))
 
-# --- НОВЕ: Функції для роботи з історією сигналів ---
-
 def add_signal_to_history(signal_data):
-    """Додає запис про сигнал в історію та обрізає старі записи до 20."""
     with sqlite3.connect(DB_NAME) as conn:
         signal_type = "NEUTRAL"
         if signal_data['bull_percentage'] > 55: signal_type = "BUY"
@@ -70,7 +78,6 @@ def add_signal_to_history(signal_data):
         """, (signal_data['user_id'], signal_data['pair']))
 
 def get_signal_history(user_id, pair, limit=10):
-    """Отримує останні N записів історії для конкретної пари."""
     with sqlite3.connect(DB_NAME) as conn:
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
@@ -83,3 +90,27 @@ def get_signal_history(user_id, pair, limit=10):
         """, (user_id, pair, limit))
         
         return [dict(row) for row in cursor.fetchall()]
+
+# --- ПОЧАТОК ЗМІН: Нові функції для роботи з токенами ---
+def save_ctrader_token(user_id, access_token, refresh_token, expires_in):
+    """Зберігає або оновлює токени для користувача."""
+    expires_at = int(time.time()) + expires_in
+    with sqlite3.connect(DB_NAME) as conn:
+        conn.execute("""
+            INSERT INTO ctrader_tokens (telegram_user_id, access_token, refresh_token, expires_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(telegram_user_id) DO UPDATE SET
+                access_token=excluded.access_token,
+                refresh_token=excluded.refresh_token,
+                expires_at=excluded.expires_at
+        """, (user_id, access_token, refresh_token, expires_at))
+
+def get_ctrader_token(user_id):
+    """Отримує токени для користувача."""
+    with sqlite3.connect(DB_NAME) as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM ctrader_tokens WHERE telegram_user_id = ?", (user_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+# --- КІНЕЦЬ ЗМІН ---
