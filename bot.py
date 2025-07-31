@@ -6,8 +6,14 @@ from concurrent.futures import ThreadPoolExecutor
 from flask import request, jsonify, render_template
 from flask_cors import CORS
 from telegram import Update
+import requests # Додано для HTTP-запитів
 
-from config import app, bot, dp, WEBHOOK_SECRET, logger, CRYPTO_PAIRS_FULL, FOREX_SESSIONS, STOCK_TICKERS, FOREX_PAIRS_MAP
+# Імпортуємо константи для cTrader
+from config import (
+    app, bot, dp, WEBHOOK_SECRET, logger,
+    CT_CLIENT_ID, CT_CLIENT_SECRET, CT_REDIRECT_URI,
+    CRYPTO_PAIRS_FULL, FOREX_SESSIONS, STOCK_TICKERS, FOREX_PAIRS_MAP
+)
 from db import init_db, get_watchlist, toggle_watch, get_signal_history
 from analysis import get_api_detailed_signal_data, rank_assets_for_api, get_api_mta_data
 import telegram_ui
@@ -39,16 +45,46 @@ def webhook_handler():
         logger.error(f"Webhook error: {e}\n{traceback.format_exc()}")
     return "OK", 200
 
-# --- ПОЧАТОК ЗМІН: Маршрут перейменовано на /callback ---
 @app.route('/callback')
 def callback():
     code = request.args.get("code")
     if not code:
         return "Authorization code not found.", 400
-    # Наступним кроком тут буде обмін `code` на access_token.
+
     logger.info(f"Successfully received authorization code: {code}")
-    return f"<h1>Authorization Successful!</h1><p>Received authorization code: {code}. You can now close this window.</p>"
-# --- КІНЕЦЬ ЗМІН ---
+
+    # --- ПОЧАТОК ЗМІН: Обмін authorization_code на access_token ---
+    token_url = "https://connect.spotware.com/oauth/v2/token"
+    payload = {
+        'grant_type': 'authorization_code',
+        'code': code,
+        'redirect_uri': CT_REDIRECT_URI,
+        'client_id': CT_CLIENT_ID,
+        'client_secret': CT_CLIENT_SECRET
+    }
+
+    try:
+        response = requests.post(token_url, data=payload)
+        response.raise_for_status()  # Перевірка на HTTP-помилки
+
+        token_data = response.json()
+        access_token = token_data.get('accessToken')
+        refresh_token = token_data.get('refreshToken')
+        expires_in = token_data.get('expiresIn')
+
+        logger.info(f"Successfully exchanged code for access token: {access_token}")
+
+        # Наступним кроком буде збереження цих токенів у базу даних
+        return (f"<h1>Access Token Received!</h1>"
+                f"<p><strong>Access Token:</strong> {access_token}</p>"
+                f"<p><strong>Refresh Token:</strong> {refresh_token}</p>"
+                f"<p><strong>Expires In:</strong> {expires_in} seconds</p>")
+
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Error exchanging code for token: {e}")
+        return f"Error exchanging code for token: {e}", 500
+    # --- КІНЕЦЬ ЗМІН ---
+
 
 @app.route("/api/signal", methods=["GET"])
 def api_signal():
