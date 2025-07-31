@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from flask import request, jsonify, render_template
 from flask_cors import CORS
 from telegram import Update
+from telegram.ext import CommandHandler
 import requests
 
 from config import (
@@ -13,12 +14,16 @@ from config import (
     CT_CLIENT_ID, CT_CLIENT_SECRET, CT_REDIRECT_URI,
     CRYPTO_PAIRS_FULL, FOREX_SESSIONS, STOCK_TICKERS, FOREX_PAIRS_MAP
 )
-from db import init_db, get_watchlist, toggle_watch, get_signal_history, save_ctrader_token
+from db import init_db, get_watchlist, toggle_watch, get_signal_history, save_ctrader_token, get_ctrader_token
 from analysis import get_api_detailed_signal_data, rank_assets_for_api, get_api_mta_data
 import telegram_ui
+# --- ПОЧАТОК ЗМІН: Імпортуємо наш новий cTrader API клієнт ---
+from ctrader_api import get_trading_accounts
+# --- КІНЕЦЬ ЗМІН ---
 
 CORS(app)
 
+# ... (код до команди /myaccounts залишається без змін) ...
 def _get_user_id_from_request(req):
     init_data = req.args.get("initData")
     if not init_data: return None
@@ -70,12 +75,9 @@ def callback():
         refresh_token = token_data.get('refreshToken')
         expires_in = token_data.get('expiresIn')
         
-        # --- ПОЧАТОК ЗМІН: Використовуємо статичний ID для одного користувача ---
-        # Ви можете замінити 12345 на ваш справжній Telegram ID для зручності
         user_id = 12345
         save_ctrader_token(user_id, access_token, refresh_token, expires_in)
         logger.info(f"Token for single user {user_id} saved to DB.")
-        # --- КІНЕЦЬ ЗМІН ---
 
         return (f"<h1>Success!</h1>"
                 f"<p>Your token has been securely saved. You can close this window.</p>")
@@ -84,6 +86,39 @@ def callback():
         logger.error(f"Error exchanging code for token: {e}")
         return f"Error exchanging code for token: {e}", 500
 
+# --- ПОЧАТОК ЗМІН: Нова команда для отримання даних акаунту ---
+def my_accounts(update, context):
+    """Отримує та відображає торгові рахунки користувача cTrader."""
+    # Використовуємо той самий статичний ID, що й при збереженні токена
+    user_id = 12345
+    
+    token_data = get_ctrader_token(user_id)
+    
+    if not token_data:
+        update.message.reply_text("Токен доступу не знайдено. Будь ласка, пройдіть авторизацію.")
+        return
+
+    # TODO: Додати перевірку, чи не закінчився термін дії токена, і оновити його
+    
+    access_token = token_data['access_token']
+    accounts = get_trading_accounts(access_token)
+    
+    if accounts is None:
+        update.message.reply_text("Не вдалося отримати дані про рахунки. Спробуйте пізніше.")
+    elif not accounts:
+        update.message.reply_text("На вашому акаунті не знайдено торгових рахунків.")
+    else:
+        message = "Ваші торгові рахунки:\n\n"
+        for acc in accounts:
+            message += (f"🔹 **ID:** `{acc.get('accountId')}`\n"
+                        f"   **Брокер:** {acc.get('brokerName')}\n"
+                        f"   **Баланс:** {acc.get('balance') / 100} {acc.get('currency')}\n\n")
+        update.message.reply_text(message, parse_mode='Markdown')
+
+dp.add_handler(CommandHandler("myaccounts", my_accounts))
+# --- КІНЕЦЬ ЗМІН ---
+
+# ... (решта API маршрутів залишається без змін) ...
 @app.route("/api/signal", methods=["GET"])
 def api_signal():
     pair = request.args.get("pair")
