@@ -1,11 +1,12 @@
 # db.py
 import sqlite3
 import time
+import secrets # Додано для генерації state
 from config import DB_NAME
 
 def init_db():
     with sqlite3.connect(DB_NAME) as conn:
-        # Існуюча таблиця "watch"
+        # Існуючі таблиці...
         conn.execute("""
         CREATE TABLE IF NOT EXISTS watch (
             user_id INTEGER,
@@ -13,7 +14,6 @@ def init_db():
             PRIMARY KEY(user_id, pair)
         );""")
 
-        # Існуюча таблиця "signal_history"
         conn.execute("""
         CREATE TABLE IF NOT EXISTS signal_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -26,7 +26,6 @@ def init_db():
         );""")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_signal_history_user_pair ON signal_history (user_id, pair);")
 
-        # --- ПОЧАТОК ЗМІН: Нова таблиця для токенів cTrader ---
         conn.execute("""
         CREATE TABLE IF NOT EXISTS ctrader_tokens (
             telegram_user_id INTEGER PRIMARY KEY,
@@ -34,8 +33,19 @@ def init_db():
             refresh_token TEXT NOT NULL,
             expires_at INTEGER NOT NULL
         );""")
+        
+        # --- ПОЧАТОК ЗМІН: Нова таблиця для OAuth state ---
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS oauth_state (
+            state TEXT PRIMARY KEY,
+            telegram_user_id INTEGER NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );""")
+        # Створюємо індекс для автоматичного очищення старих записів
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_oauth_state_created_at ON oauth_state (created_at);")
         # --- КІНЕЦЬ ЗМІН ---
 
+# ... (існуючі функції get_watchlist, toggle_watch, і т.д. залишаються без змін) ...
 
 def get_watchlist(uid):
     with sqlite3.connect(DB_NAME) as conn:
@@ -91,9 +101,7 @@ def get_signal_history(user_id, pair, limit=10):
         
         return [dict(row) for row in cursor.fetchall()]
 
-# --- ПОЧАТОК ЗМІН: Нові функції для роботи з токенами ---
 def save_ctrader_token(user_id, access_token, refresh_token, expires_in):
-    """Зберігає або оновлює токени для користувача."""
     expires_at = int(time.time()) + expires_in
     with sqlite3.connect(DB_NAME) as conn:
         conn.execute("""
@@ -106,11 +114,32 @@ def save_ctrader_token(user_id, access_token, refresh_token, expires_in):
         """, (user_id, access_token, refresh_token, expires_at))
 
 def get_ctrader_token(user_id):
-    """Отримує токени для користувача."""
     with sqlite3.connect(DB_NAME) as conn:
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM ctrader_tokens WHERE telegram_user_id = ?", (user_id,))
         row = cursor.fetchone()
         return dict(row) if row else None
+        
+# --- ПОЧАТОК ЗМІН: Нові функції для роботи з OAuth state ---
+def create_oauth_state(user_id):
+    """Створює, зберігає та повертає унікальний state для сесії OAuth."""
+    with sqlite3.connect(DB_NAME) as conn:
+        # Видаляємо старі state-записи (старші за 10 хвилин)
+        conn.execute("DELETE FROM oauth_state WHERE created_at < datetime('now', '-10 minutes')")
+        
+        state = secrets.token_urlsafe(32)
+        conn.execute("INSERT INTO oauth_state (state, telegram_user_id) VALUES (?, ?)", (state, user_id))
+        return state
+
+def get_user_id_by_state(state):
+    """Знаходить user_id за state та видаляє state з бази, щоб уникнути повторного використання."""
+    with sqlite3.connect(DB_NAME) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT telegram_user_id FROM oauth_state WHERE state = ?", (state,))
+        result = cursor.fetchone()
+        if result:
+            conn.execute("DELETE FROM oauth_state WHERE state = ?", (state,))
+            return result[0]
+        return None
 # --- КІНЕЦЬ ЗМІН ---

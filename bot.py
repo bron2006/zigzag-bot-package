@@ -1,11 +1,12 @@
 # bot.py
 import traceback
 import json
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlencode
 from concurrent.futures import ThreadPoolExecutor
 from flask import request, jsonify, render_template
 from flask_cors import CORS
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import CommandHandler # Додано
 import requests
 
 from config import (
@@ -13,14 +14,16 @@ from config import (
     CT_CLIENT_ID, CT_CLIENT_SECRET, CT_REDIRECT_URI,
     CRYPTO_PAIRS_FULL, FOREX_SESSIONS, STOCK_TICKERS, FOREX_PAIRS_MAP
 )
-# --- ПОЧАТОК ЗМІН: Імпортуємо нові функції з db.py ---
-from db import init_db, get_watchlist, toggle_watch, get_signal_history, save_ctrader_token
-# --- КІНЕЦЬ ЗМІН ---
+from db import (
+    init_db, get_watchlist, toggle_watch, get_signal_history,
+    save_ctrader_token, create_oauth_state, get_user_id_by_state # Додано нові функції
+)
 from analysis import get_api_detailed_signal_data, rank_assets_for_api, get_api_mta_data
 import telegram_ui
 
 CORS(app)
 
+# ... (функція _get_user_id_from_request залишається без змін) ...
 def _get_user_id_from_request(req):
     init_data = req.args.get("initData")
     if not init_data: return None
@@ -46,13 +49,48 @@ def webhook_handler():
         logger.error(f"Webhook error: {e}\n{traceback.format_exc()}")
     return "OK", 200
 
+# --- ПОЧАТОК ЗМІН: Нова команда /connect для генерації посилання ---
+def connect_ctrader(update, context):
+    """Створює та надсилає користувачу унікальне посилання для авторизації."""
+    user_id = update.message.from_user.id
+    state = create_oauth_state(user_id)
+    
+    auth_params = {
+        'client_id': CT_CLIENT_ID,
+        'redirect_uri': CT_REDIRECT_URI,
+        'response_type': 'code',
+        'scope': 'trading',
+        'state': state
+    }
+    auth_url = f"https://connect.spotware.com/oauth/v2/auth?{urlencode(auth_params)}"
+    
+    keyboard = [[InlineKeyboardButton("✅ Увійти через cTrader", url=auth_url)]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    update.message.reply_text(
+        "Натисніть кнопку нижче, щоб безпечно підключити свій акаунт cTrader:",
+        reply_markup=reply_markup
+    )
+dp.add_handler(CommandHandler("connect", connect_ctrader))
+# --- КІНЕЦЬ ЗМІН ---
+
+
 @app.route('/callback')
 def callback():
     code = request.args.get("code")
-    if not code:
-        return "Authorization code not found.", 400
+    state = request.args.get("state") # Отримуємо state
 
-    logger.info(f"Successfully received authorization code: {code}")
+    if not code or not state:
+        return "Authorization code or state not found.", 400
+
+    # --- ПОЧАТОК ЗМІН: Використовуємо state для ідентифікації користувача ---
+    user_id = get_user_id_by_state(state)
+    if not user_id:
+        logger.warning(f"Invalid or expired state received: {state}")
+        return "Invalid or expired authorization session. Please try again.", 400
+    
+    logger.info(f"State validated. User ID {user_id} is being authorized.")
+    # --- КІНЕЦЬ ЗМІН ---
 
     token_url = "https://connect.spotware.com/oauth/v2/token"
     payload = {
@@ -72,25 +110,22 @@ def callback():
         refresh_token = token_data.get('refreshToken')
         expires_in = token_data.get('expiresIn')
 
-        logger.info(f"Successfully exchanged code for access token: {access_token}")
+        logger.info(f"Successfully exchanged code for access token for user {user_id}")
 
-        # --- ПОЧАТОК ЗМІН: Збереження токена в БД ---
-        # ВАЖЛИВО: Зараз ми використовуємо тимчасову "заглушку" для user_id.
-        # На наступному кроці ми реалізуємо механізм, щоб пов'язати
-        # цей токен з реальним користувачем Telegram, який почав авторизацію.
-        mock_user_id = 12345
-        save_ctrader_token(mock_user_id, access_token, refresh_token, expires_in)
-        logger.info(f"Token for mock user {mock_user_id} saved to DB.")
+        # --- ПОЧАТОК ЗМІН: Зберігаємо токен для реального user_id ---
+        save_ctrader_token(user_id, access_token, refresh_token, expires_in)
+        logger.info(f"Token for user {user_id} saved to DB.")
+        # --- КІНЕЦЬ ЗМІН ---
 
         return (f"<h1>Success!</h1>"
                 f"<p>Your token has been securely saved. You can close this window.</p>")
-        # --- КІНЕЦЬ ЗМІН ---
 
     except requests.exceptions.RequestException as e:
-        logger.error(f"Error exchanging code for token: {e}")
+        logger.error(f"Error exchanging code for token for user {user_id}: {e}")
         return f"Error exchanging code for token: {e}", 500
 
 
+# ... (решта API маршрутів залишається без змін) ...
 @app.route("/api/signal", methods=["GET"])
 def api_signal():
     pair = request.args.get("pair")
@@ -102,8 +137,6 @@ def api_signal():
     except Exception as e:
         logger.error(f"API error for pair {pair}: {e}\n{traceback.format_exc()}")
         return jsonify({"error": f"Внутрішня помилка сервера"}), 500
-
-# ... (решта файлу залишається без змін) ...
 
 @app.route("/api/get_ranked_pairs", methods=["GET"])
 def api_get_ranked_pairs():
