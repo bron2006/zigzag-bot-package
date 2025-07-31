@@ -3,9 +3,7 @@ import traceback
 import json
 from urllib.parse import parse_qs
 from concurrent.futures import ThreadPoolExecutor
-# --- ПОЧАТОК ЗМІН: Додано render_template ---
 from flask import request, jsonify, render_template
-# --- КІНЕЦЬ ЗМІН ---
 from flask_cors import CORS
 from telegram import Update
 
@@ -41,6 +39,17 @@ def webhook_handler():
         logger.error(f"Webhook error: {e}\n{traceback.format_exc()}")
     return "OK", 200
 
+# --- ПОЧАТОК ЗМІН: Новий маршрут для OAuth2 авторизації ---
+@app.route('/authorize')
+def authorize():
+    code = request.args.get("code")
+    if not code:
+        return "Authorization code not found.", 400
+    # Наступним кроком тут буде обмін `code` на access_token.
+    logger.info(f"Successfully received authorization code: {code}")
+    return f"<h1>Authorization Successful!</h1><p>Received authorization code: {code}. You can now close this window.</p>"
+# --- КІНЕЦЬ ЗМІН ---
+
 @app.route("/api/signal", methods=["GET"])
 def api_signal():
     pair = request.args.get("pair")
@@ -64,7 +73,7 @@ def api_get_ranked_pairs():
 
         static_stocks = [{'ticker': p, 'active': True} for p in STOCK_TICKERS]
         static_forex = {
-            session: [{'ticker': p, 'active': True} for p in pairs] 
+            session: [{'ticker': p, 'active': True} for p in pairs]
             for session, pairs in FOREX_SESSIONS.items()
         }
 
@@ -95,7 +104,7 @@ def api_get_active_markets():
     try:
         ranked_crypto = rank_assets_for_api(CRYPTO_PAIRS_FULL, 'crypto')
         top_crypto = [p['ticker'] for p in ranked_crypto[:5]]
-        
+
         top_stocks = []
         top_forex = []
 
@@ -149,11 +158,9 @@ def api_signal_history():
         logger.error(f"API error for signal history on {pair}: {e}\n{traceback.format_exc()}")
         return jsonify({"error": "Помилка при отриманні історії"}), 500
 
-# --- ПОЧАТОК ЗМІН: Маршрут для відображення HTML сторінки ---
 @app.route('/')
 def homepage():
     return render_template('index.html')
-# --- КІНЕЦЬ ЗМІН ---
 
 if __name__ != "__main__":
     init_db()

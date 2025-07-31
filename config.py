@@ -9,6 +9,11 @@ from telegram import Bot
 from telegram.ext import Updater
 from flask import Flask
 
+# --- ICMarkets (cTrader OpenAPI) ---
+CT_CLIENT_ID = "16464_vrriDtL7aZ8G5I6Sq8yA1Zm939awNfK9gakcWC2gM0huqx4Nwg"
+CT_CLIENT_SECRET = os.getenv("CT_CLIENT_SECRET") # Секрет тепер зчитується з середовища
+CT_REDIRECT_URI = "https://zigzag-bot-package.fly.dev/callback"
+
 # --- Завантаження змінних середовища ---
 load_dotenv()
 TOKEN = os.getenv("TOKEN")
