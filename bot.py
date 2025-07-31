@@ -1,12 +1,11 @@
 # bot.py
 import traceback
 import json
-from urllib.parse import parse_qs, urlencode
+from urllib.parse import parse_qs
 from concurrent.futures import ThreadPoolExecutor
 from flask import request, jsonify, render_template
 from flask_cors import CORS
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import CommandHandler
+from telegram import Update
 import requests
 
 from config import (
@@ -14,16 +13,12 @@ from config import (
     CT_CLIENT_ID, CT_CLIENT_SECRET, CT_REDIRECT_URI,
     CRYPTO_PAIRS_FULL, FOREX_SESSIONS, STOCK_TICKERS, FOREX_PAIRS_MAP
 )
-from db import (
-    init_db, get_watchlist, toggle_watch, get_signal_history,
-    save_ctrader_token, create_oauth_state, get_user_id_by_state
-)
+from db import init_db, get_watchlist, toggle_watch, get_signal_history, save_ctrader_token
 from analysis import get_api_detailed_signal_data, rank_assets_for_api, get_api_mta_data
 import telegram_ui
 
 CORS(app)
 
-# ... (функція _get_user_id_from_request залишається без змін) ...
 def _get_user_id_from_request(req):
     init_data = req.args.get("initData")
     if not init_data: return None
@@ -49,48 +44,13 @@ def webhook_handler():
         logger.error(f"Webhook error: {e}\n{traceback.format_exc()}")
     return "OK", 200
 
-def connect_ctrader(update, context):
-    user_id = update.message.from_user.id
-    state = create_oauth_state(user_id)
-    
-    auth_params = {
-        'client_id': CT_CLIENT_ID,
-        'redirect_uri': CT_REDIRECT_URI,
-        'response_type': 'code',
-        'scope': 'trading',
-        'state': state
-    }
-    auth_url = f"https://connect.spotware.com/oauth/v2/auth?{urlencode(auth_params)}"
-    
-    keyboard = [[InlineKeyboardButton("✅ Увійти через cTrader", url=auth_url)]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    update.message.reply_text(
-        "Натисніть кнопку нижче, щоб безпечно підключити свій акаунт cTrader:",
-        reply_markup=reply_markup
-    )
-dp.add_handler(CommandHandler("connect", connect_ctrader))
-
-
 @app.route('/callback')
 def callback():
     code = request.args.get("code")
-    state = request.args.get("state")
-
-    # --- ПОЧАТОК ЗМІН: Робимо state необов'язковим для тестування ---
     if not code:
         return "Authorization code not found.", 400
 
-    user_id = None
-    if state:
-        user_id = get_user_id_by_state(state)
-
-    if not user_id:
-        logger.warning(f"State parameter was not found or was invalid. Falling back to mock_user_id for testing.")
-        user_id = 12345 # Повертаємо mock_user_id для тестування
-    else:
-        logger.info(f"State validated. User ID {user_id} is being authorized.")
-    # --- КІНЕЦЬ ЗМІН ---
+    logger.info(f"Successfully received authorization code: {code}")
 
     token_url = "https://connect.spotware.com/oauth/v2/token"
     payload = {
@@ -109,21 +69,21 @@ def callback():
         access_token = token_data.get('accessToken')
         refresh_token = token_data.get('refreshToken')
         expires_in = token_data.get('expiresIn')
-
-        logger.info(f"Successfully exchanged code for access token for user {user_id}")
-
+        
+        # --- ПОЧАТОК ЗМІН: Використовуємо статичний ID для одного користувача ---
+        # Ви можете замінити 12345 на ваш справжній Telegram ID для зручності
+        user_id = 12345
         save_ctrader_token(user_id, access_token, refresh_token, expires_in)
-        logger.info(f"Token for user {user_id} saved to DB.")
+        logger.info(f"Token for single user {user_id} saved to DB.")
+        # --- КІНЕЦЬ ЗМІН ---
 
         return (f"<h1>Success!</h1>"
                 f"<p>Your token has been securely saved. You can close this window.</p>")
 
     except requests.exceptions.RequestException as e:
-        logger.error(f"Error exchanging code for token for user {user_id}: {e}")
+        logger.error(f"Error exchanging code for token: {e}")
         return f"Error exchanging code for token: {e}", 500
 
-
-# ... (решта API маршрутів залишається без змін) ...
 @app.route("/api/signal", methods=["GET"])
 def api_signal():
     pair = request.args.get("pair")
