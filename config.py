@@ -33,7 +33,7 @@ finnhub_client = finnhub.Client(api_key=FINNHUB_API_KEY)
 
 # --- Глобальні об'єкти бота ---
 bot = Bot(token=TOKEN)
-updater = Updater(bot=bot, use_context=True)
+updater = Updater(bot=bot, use_context=True, workers=4)
 dp = updater.dispatcher
 app = Flask(__name__)
 
