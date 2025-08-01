@@ -28,7 +28,17 @@ logger = logging.getLogger(__name__)
 MARKET_DATA_CACHE = TTLCache(maxsize=5000, ttl=300) # Для даних окремих активів
 RANKING_CACHE = TTLCache(maxsize=100, ttl=60)      # Для результатів сортування списків
 
-binance = ccxt.binance({'enableRateLimit': True})
+# --- ПОЧАТОК ЗМІН: Додаємо timeout до налаштувань ccxt ---
+binance = ccxt.binance({
+    'enableRateLimit': True,
+    'options': {
+        'defaultType': 'spot',
+        'adjustForTimeDifference': True,
+    },
+    'timeout': 15000  # 15 секунд
+})
+# --- КІНЕЦЬ ЗМІН ---
+
 finnhub_client = finnhub.Client(api_key=FINNHUB_API_KEY)
 
 # --- Глобальні об'єкти бота ---

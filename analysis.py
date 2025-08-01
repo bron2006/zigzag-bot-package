@@ -2,11 +2,13 @@
 import pandas as pd
 import pandas_ta as ta
 import numpy as np
+import time
+import requests
 from concurrent.futures import ThreadPoolExecutor
 
 # --- ПОЧАТОК ЗМІН: Оновлюємо імпорти ---
 from db import add_signal_to_history
-from config import logger, binance, finnhub_client, MARKET_DATA_CACHE, RANKING_CACHE, ANALYSIS_TIMEFRAMES
+from config import logger, binance, FINNHUB_API_KEY, MARKET_DATA_CACHE, RANKING_CACHE, ANALYSIS_TIMEFRAMES
 from ctrader_api import get_trendbars, get_valid_access_token
 # --- КІНЕЦЬ ЗМІН ---
 
@@ -17,45 +19,75 @@ def get_executor():
         _executor = ThreadPoolExecutor(max_workers=2)
     return _executor
 
+# --- ПОЧАТОК ЗМІН: Повністю переписана функція get_market_data ---
 def get_market_data(pair, tf, asset, limit=300, force_refresh=False):
     key = f"{pair}_{tf}_{limit}"
+    # Для Forex кешування не використовується, щоб дані завжди були свіжими
     use_cache = asset == 'crypto'
     if use_cache and not force_refresh and key in MARKET_DATA_CACHE:
         return MARKET_DATA_CACHE[key]
+
     try:
         df = pd.DataFrame()
         if asset == 'crypto':
             bars = binance.fetch_ohlcv(pair, timeframe=tf, limit=limit)
-            df = pd.DataFrame(bars, columns=['ts','o','h','l','c','v'])
+            df = pd.DataFrame(bars, columns=['ts', 'Open', 'High', 'Low', 'Close', 'Volume'])
             df['ts'] = pd.to_datetime(df['ts'], unit='ms', utc=True)
-            df = df.rename(columns={'o':'Open','h':'High','l':'Low','c':'Close','v':'Volume'})
 
         elif asset == 'forex':
-            # --- ПОЧАТОК ЗМІН: Використовуємо get_valid_access_token ---
+            # Використовуємо user_id за замовчуванням для системних запитів
             user_id = 12345
             access_token = get_valid_access_token(user_id)
             if not access_token:
-                logger.error("Не вдалося отримати/оновити токен cTrader для отримання даних.")
+                logger.error(f"Не вдалося отримати/оновити токен cTrader для {pair}.")
                 return pd.DataFrame()
-            
             df = get_trendbars(access_token, pair, tf, limit)
-            # --- КІНЕЦЬ ЗМІН ---
 
         elif asset == 'stocks':
-            # Логіка для акцій залишається на Finnhub
-            finnhub_tf_map = {'1m': '1', '15m': '15', '1h': '60', '4h': '60', '1d': 'D'}
-            resolution = finnhub_tf_map.get(tf)
-            # ... (решта коду для Finnhub)
+            finnhub_tf_map = {'15min': '15', '1h': '60', '4h': 'D', '1day': 'D'}
+            resolution = finnhub_tf_map.get(tf, 'D') # 'D' як значення за замовчуванням
+            
+            # Розрахунок часу для Finnhub
+            to_ts = int(time.time())
+            # Приблизний розрахунок початкового часу
+            if resolution == 'D':
+                 from_ts = to_ts - (limit * 24 * 3600)
+            else:
+                 from_ts = to_ts - (limit * int(resolution) * 60)
+
+            api_url = f"https://finnhub.io/api/v1/stock/candle?symbol={pair}&resolution={resolution}&from={from_ts}&to={to_ts}&token={FINNHUB_API_KEY}"
+            
+            response = requests.get(api_url, timeout=15)
+            response.raise_for_status()
+            data = response.json()
+
+            if data.get('s') == 'ok' and 't' in data and data['t']:
+                df = pd.DataFrame({
+                    'ts': pd.to_datetime(data['t'], unit='s', utc=True),
+                    'Open': data['o'],
+                    'High': data['h'],
+                    'Low': data['l'],
+                    'Close': data['c'],
+                    'Volume': data['v']
+                })
+            else:
+                logger.warning(f"Finnhub не повернув даних для {pair} з резолюцією {resolution}. Status: {data.get('s')}")
+                return pd.DataFrame()
 
         if df.empty:
             logger.warning(f"API повернуло порожній результат для {pair} на ТФ {tf}")
             return pd.DataFrame()
+        
         if use_cache:
             MARKET_DATA_CACHE[key] = df
         return df
+
     except Exception as e:
-        logger.error(f"Помилка отримання даних для {pair} на ТФ {tf}: {e}")
+        # Логуємо помилку з деталями
+        logger.error(f"Помилка отримання даних для {pair} (asset: {asset}, tf: {tf}): {e}")
         return pd.DataFrame()
+# --- КІНЕЦЬ ЗМІН ---
+
 
 # ... (решта файлу analysis.py залишається без змін) ...
 def _format_price(price):
@@ -206,11 +238,17 @@ def _generate_verdict(analysis):
     return verdict_text, verdict_level
 
 def get_signal_strength_verdict(pair, display_name, asset, user_id=None, force_refresh=False):
-    df = get_market_data(pair, '1m', asset, limit=100, force_refresh=force_refresh)
+    # Для основного вердикту використовуємо більш короткий таймфрейм
+    main_tf = '15min' if asset in ['crypto', 'stocks'] else '1h'
+    
+    df = get_market_data(pair, main_tf, asset, limit=100, force_refresh=force_refresh)
     if df.empty or len(df) < 25:
-        return f"⚠️ Недостатньо даних для аналізу *{display_name}*.", None
+        return f"⚠️ Недостатньо даних для аналізу *{display_name}* на таймфреймі {main_tf}.", None
     try:
-        daily_df = get_market_data(pair, '1d', asset, limit=100, force_refresh=force_refresh)
+        daily_df = get_market_data(pair, '1day', asset, limit=100, force_refresh=force_refresh)
+        if daily_df.empty:
+            return f"⚠️ Не вдалося завантажити денні дані для *{display_name}*, аналіз неможливий.", None
+
         analysis = _calculate_core_signal(df, daily_df)
         if user_id:
             add_signal_to_history({'user_id': user_id, 'pair': pair, 'price': analysis['price'], 'bull_percentage': analysis['score']})
@@ -221,18 +259,24 @@ def get_signal_strength_verdict(pair, display_name, asset, user_id=None, force_r
                          f"_Це не фінансова порада. Для деталей натисніть кнопки нижче._")
         return final_message, analysis
     except Exception as e:
-        logger.error(f"Помилка розрахунку індексу для {pair}: {e}")
+        logger.error(f"Помилка розрахунку індексу для {pair}: {e}", exc_info=True)
         return f"⚠️ Помилка аналізу *{display_name}*.", None
 
 def get_api_detailed_signal_data(pair):
     asset = 'stocks'
     if '/' in pair:
         asset = 'crypto' if 'USDT' in pair else 'forex'
-    df = get_market_data(pair, '1m', asset, limit=100)
+    
+    main_tf = '15min' if asset in ['crypto', 'stocks'] else '1h'
+    
+    df = get_market_data(pair, main_tf, asset, limit=100)
     if df.empty or len(df) < 25:
-        return {"error": "Недостатньо даних для аналізу."}
+        return {"error": f"Недостатньо даних для аналізу на таймфреймі {main_tf}."}
     try:
-        daily_df = get_market_data(pair, '1d', asset, limit=100)
+        daily_df = get_market_data(pair, '1day', asset, limit=100)
+        if daily_df.empty:
+            return {"error": "Не вдалося завантажити денні дані, аналіз неможливий."}
+            
         analysis = _calculate_core_signal(df, daily_df)
         verdict_text, verdict_level = _generate_verdict(analysis)
         history_df = df.tail(50)
@@ -246,13 +290,24 @@ def get_api_detailed_signal_data(pair):
             "candle_pattern": analysis['candle_pattern'], "volume_analysis": analysis['volume_info'], "history": history
         }
     except Exception as e:
-        logger.error(f"Error in get_api_detailed_signal_data for {pair}: {e}")
+        logger.error(f"Error in get_api_detailed_signal_data for {pair}: {e}", exc_info=True)
         return {"error": str(e)}
 
 def get_full_mta_verdict(pair, display_name, asset, force_refresh=False):
     def worker(tf):
-        # ... (цей блок коду залишається без змін)
-        return (tf, sig)
+        df = get_market_data(pair, tf, asset, limit=100, force_refresh=force_refresh)
+        if df.empty or len(df) < 25: return (tf, None)
+        try:
+            df.ta.rsi(length=14, append=True, col_names=('RSI',))
+            last_rsi = df.iloc[-1]['RSI']
+            if pd.isna(last_rsi): return (tf, "⚪️ Н/Д")
+            if last_rsi > 65: sig = "🔴 Продавати"
+            elif last_rsi < 35: sig = "🟢 Купувати"
+            else: sig = "🟡 Нейтрально"
+            return (tf, sig)
+        except Exception:
+            return (tf, "⚪️ Помилка")
+
     executor = get_executor()
     results = executor.map(worker, ANALYSIS_TIMEFRAMES)
     rows_data = [r for r in results if r[1] is not None]
@@ -266,17 +321,49 @@ def get_full_mta_verdict(pair, display_name, asset, force_refresh=False):
 
 def get_api_mta_data(pair, asset):
     def worker(tf):
-        # ... (цей блок коду залишається без змін)
-        return {"tf": tf, "signal": signal}
+        df = get_market_data(pair, tf, asset, limit=100)
+        if df.empty or len(df) < 25: return {"tf": tf, "signal": "N/A"}
+        try:
+            df.ta.rsi(length=14, append=True, col_names=('RSI',))
+            last_rsi = df.iloc[-1]['RSI']
+            if pd.isna(last_rsi): return {"tf": tf, "signal": "N/A"}
+            if last_rsi > 65: signal = "SELL"
+            elif last_rsi < 35: signal = "BUY"
+            else: signal = "NEUTRAL"
+            return {"tf": tf, "signal": signal}
+        except Exception:
+            return {"tf": tf, "signal": "Error"}
+
     executor = get_executor()
     results = executor.map(worker, ANALYSIS_TIMEFRAMES)
     mta_data = [r for r in results if r is not None]
     return mta_data
 
-def rank_crypto_chunk(pairs_chunk):
-    # ... (цей блок коду залишається без змін)
-    return sorted(ranked_pairs, key=lambda x: x['score'], reverse=True)
-
 def rank_assets_for_api(pairs, asset_type):
-    # ... (цей блок коду залишається без змін)
+    cache_key = f"ranking_{asset_type}"
+    if cache_key in RANKING_CACHE:
+        return RANKING_CACHE[cache_key]
+
+    def worker(pair):
+        df = get_market_data(pair, '1h', asset_type, limit=50)
+        if df.empty or len(df) < 25:
+            return {'ticker': pair, 'score': -1}
+        try:
+            df.ta.rsi(length=14, append=True, col_names=('RSI',))
+            last_rsi = df.iloc[-1]['RSI']
+            if pd.isna(last_rsi):
+                return {'ticker': pair, 'score': -1}
+            # Оцінка від 0 до 100, де 100 - найсильніший сигнал до покупки/продажу
+            score = abs(50 - last_rsi) * 2
+            return {'ticker': pair, 'score': score}
+        except Exception:
+            return {'ticker': pair, 'score': -1}
+
+    executor = get_executor()
+    results = list(executor.map(worker, pairs))
+    
+    # Сортуємо за "цікавістю" (найбільш далекі від нейтрального RSI)
+    final_ranking = sorted(results, key=lambda x: x['score'], reverse=True)
+    
+    RANKING_CACHE[cache_key] = final_ranking
     return final_ranking
