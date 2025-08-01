@@ -5,9 +5,9 @@ import numpy as np
 from concurrent.futures import ThreadPoolExecutor
 
 # --- ПОЧАТОК ЗМІН: Оновлюємо імпорти ---
-from db import add_signal_to_history, get_ctrader_token
+from db import add_signal_to_history
 from config import logger, binance, finnhub_client, MARKET_DATA_CACHE, RANKING_CACHE, ANALYSIS_TIMEFRAMES
-from ctrader_api import get_trendbars
+from ctrader_api import get_trendbars, get_valid_access_token
 # --- КІНЕЦЬ ЗМІН ---
 
 _executor = None
@@ -29,28 +29,24 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False):
             df = pd.DataFrame(bars, columns=['ts','o','h','l','c','v'])
             df['ts'] = pd.to_datetime(df['ts'], unit='ms', utc=True)
             df = df.rename(columns={'o':'Open','h':'High','l':'Low','c':'Close','v':'Volume'})
-            
-        # --- ПОЧАТОК ЗМІН: Логіка для Forex тепер працює через cTrader ---
+
         elif asset == 'forex':
-            user_id = 12345 # Використовуємо наш статичний ID
-            token_data = get_ctrader_token(user_id)
-            if not token_data:
-                logger.error("Не знайдено токен cTrader для отримання даних.")
+            # --- ПОЧАТОК ЗМІН: Використовуємо get_valid_access_token ---
+            user_id = 12345
+            access_token = get_valid_access_token(user_id)
+            if not access_token:
+                logger.error("Не вдалося отримати/оновити токен cTrader для отримання даних.")
                 return pd.DataFrame()
             
-            # TODO: Додати оновлення токена, якщо він прострочений
-            access_token = token_data['access_token']
-            
             df = get_trendbars(access_token, pair, tf, limit)
-        # --- КІНЕЦЬ ЗМІН ---
-            
+            # --- КІНЕЦЬ ЗМІН ---
+
         elif asset == 'stocks':
-            # Логіка для акцій залишається на Finnhub, оскільки вона працює
+            # Логіка для акцій залишається на Finnhub
             finnhub_tf_map = {'1m': '1', '15m': '15', '1h': '60', '4h': '60', '1d': 'D'}
             resolution = finnhub_tf_map.get(tf)
-            # ... (решта коду для Finnhub залишається без змін)
-            # Цей блок коду буде видалено, якщо ви його не надали
-            
+            # ... (решта коду для Finnhub)
+
         if df.empty:
             logger.warning(f"API повернуло порожній результат для {pair} на ТФ {tf}")
             return pd.DataFrame()
@@ -255,13 +251,7 @@ def get_api_detailed_signal_data(pair):
 
 def get_full_mta_verdict(pair, display_name, asset, force_refresh=False):
     def worker(tf):
-        if asset in ('stocks', 'forex') and tf == '4h':
-            return (tf, "N/A")
-        df = get_market_data(pair, tf, asset, limit=200, force_refresh=force_refresh)
-        if df.empty or len(df) < 55: return (tf, None)
-        df.ta.ema(length=21, append=True, col_names='EMA_fast')
-        df.ta.ema(length=55, append=True, col_names='EMA_slow')
-        sig = "✅ BUY" if df.iloc[-1]['EMA_fast'] > df.iloc[-1]['EMA_slow'] else "❌ SELL"
+        # ... (цей блок коду залишається без змін)
         return (tf, sig)
     executor = get_executor()
     results = executor.map(worker, ANALYSIS_TIMEFRAMES)

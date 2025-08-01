@@ -14,11 +14,13 @@ from config import (
     CT_CLIENT_ID, CT_CLIENT_SECRET, CT_REDIRECT_URI,
     CRYPTO_PAIRS_FULL, FOREX_SESSIONS, STOCK_TICKERS, FOREX_PAIRS_MAP
 )
-from db import init_db, get_watchlist, toggle_watch, get_signal_history, save_ctrader_token, get_ctrader_token
+from db import init_db, get_watchlist, toggle_watch, get_signal_history, save_ctrader_token
+# --- ПОЧАТОК ЗМІН: Видаляємо get_ctrader_token, він тепер не потрібен напряму ---
+# --- КІНЕЦЬ ЗМІН ---
 from analysis import get_api_detailed_signal_data, rank_assets_for_api, get_api_mta_data
 import telegram_ui
-# --- ПОЧАТОК ЗМІН: Імпортуємо наш новий cTrader API клієнт ---
-from ctrader_api import get_trading_accounts
+# --- ПОЧАТОК ЗМІН: Імпортуємо get_valid_access_token ---
+from ctrader_api import get_trading_accounts, get_valid_access_token
 # --- КІНЕЦЬ ЗМІН ---
 
 CORS(app)
@@ -86,21 +88,18 @@ def callback():
         logger.error(f"Error exchanging code for token: {e}")
         return f"Error exchanging code for token: {e}", 500
 
-# --- ПОЧАТОК ЗМІН: Нова команда для отримання даних акаунту ---
 def my_accounts(update, context):
     """Отримує та відображає торгові рахунки користувача cTrader."""
-    # Використовуємо той самий статичний ID, що й при збереженні токена
     user_id = 12345
     
-    token_data = get_ctrader_token(user_id)
+    # --- ПОЧАТОК ЗМІН: Використовуємо get_valid_access_token ---
+    access_token = get_valid_access_token(user_id)
     
-    if not token_data:
-        update.message.reply_text("Токен доступу не знайдено. Будь ласка, пройдіть авторизацію.")
+    if not access_token:
+        update.message.reply_text("Токен доступу не знайдено або не вдалося оновити. Будь ласка, пройдіть авторизацію.")
         return
+    # --- КІНЕЦЬ ЗМІН ---
 
-    # TODO: Додати перевірку, чи не закінчився термін дії токена, і оновити його
-    
-    access_token = token_data['access_token']
     accounts = get_trading_accounts(access_token)
     
     if accounts is None:
@@ -116,7 +115,6 @@ def my_accounts(update, context):
         update.message.reply_text(message, parse_mode='Markdown')
 
 dp.add_handler(CommandHandler("myaccounts", my_accounts))
-# --- КІНЕЦЬ ЗМІН ---
 
 # ... (решта API маршрутів залишається без змін) ...
 @app.route("/api/signal", methods=["GET"])
