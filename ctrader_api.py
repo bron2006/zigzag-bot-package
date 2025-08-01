@@ -24,7 +24,9 @@ def get_trading_accounts(access_token: str):
     headers = {"Authorization": f"Bearer {access_token}"}
 
     try:
-        response = requests.get(api_url, headers=headers)
+        # --- ПОЧАТОК ЗМІН: Додано timeout=15 ---
+        response = requests.get(api_url, headers=headers, timeout=15)
+        # --- КІНЕЦЬ ЗМІН ---
         response.raise_for_status()
         data = response.json()
         logging.info(f"Отримано дані про рахунки: {data}")
@@ -54,7 +56,9 @@ def get_trendbars(access_token: str, symbol_name: str, timeframe: str, limit: in
     headers = {"Authorization": f"Bearer {access_token}"}
 
     try:
-        response = requests.get(api_url, headers=headers)
+        # --- ПОЧАТОК ЗМІН: Додано timeout=15 ---
+        response = requests.get(api_url, headers=headers, timeout=15)
+        # --- КІНЕЦЬ ЗМІН ---
         response.raise_for_status()
         data = response.json().get("data", [])
         
@@ -89,7 +93,9 @@ def _refresh_token(refresh_token: str):
         'client_secret': CT_CLIENT_SECRET
     }
     try:
-        response = requests.post(CTRADER_TOKEN_URL, data=payload)
+        # --- ПОЧАТОК ЗМІН: Додано timeout=15 ---
+        response = requests.post(CTRADER_TOKEN_URL, data=payload, timeout=15)
+        # --- КІНЕЦЬ ЗМІН ---
         response.raise_for_status()
         new_token_data = response.json()
         logging.info("Токен успішно оновлено.")

@@ -69,7 +69,9 @@ def callback():
     }
 
     try:
-        response = requests.post(token_url, data=payload)
+        # --- ПОЧАТОК ЗМІН: Додано timeout=15 ---
+        response = requests.post(token_url, data=payload, timeout=15)
+        # --- КІНЕЦЬ ЗМІН ---
         response.raise_for_status()
 
         token_data = response.json()
