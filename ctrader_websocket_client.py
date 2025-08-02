@@ -3,9 +3,8 @@ import asyncio
 import pandas as pd
 from config import logger, CT_CLIENT_ID, CT_CLIENT_SECRET
 
-# --- Ось правильний шлях імпорту ---
+# Імпорти з нашої нової локальної папки openapi_client
 from openapi_client.client import Client
-# ------------------------------------
 from openapi_client.messages import (
     ProtoOAApplicationAuthReq,
     ProtoOAAccountAuthReq,
@@ -20,7 +19,6 @@ SPOTWARE_HOST = "demo.ctraderapi.com"
 SPOTWARE_PORT = 5035
 
 async def _fetch_trendbars_async(access_token: str, account_id: int, symbol_id: int, timeframe: str) -> pd.DataFrame:
-    
     future = asyncio.Future()
 
     def on_message(message: ProtoMessage):
@@ -28,13 +26,11 @@ async def _fetch_trendbars_async(access_token: str, account_id: int, symbol_id: 
             event = ProtoOATrendbarEvent()
             event.ParseFromString(message.payload)
             logger.info(f"📥 WebSocket: Отримано {len(event.trendbar)} свічок для {symbol_id}.")
-            
             bars = [{'ts': pd.to_datetime(bar.utcTimestampInMinutes * 60, unit='s', utc=True),
                      'Open': bar.open / 100000.0, 'High': bar.high / 100000.0, 
                      'Low': bar.low / 100000.0, 'Close': bar.close / 100000.0, 
                      'Volume': bar.volume} for bar in event.trendbar]
             df = pd.DataFrame(bars)
-            
             if not future.done():
                 future.set_result(df)
 
