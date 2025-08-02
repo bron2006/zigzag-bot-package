@@ -10,3 +10,6 @@ Flask-Cors
 finnhub-python
 websockets==12.0
 requests
+protobuf==3.20.3
+grpcio-tools==1.48.2
+ctrader-open-api
