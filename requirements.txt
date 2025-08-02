@@ -10,3 +10,4 @@ Flask-Cors
 finnhub-python
 websockets==12.0
 requests
+protobuf
