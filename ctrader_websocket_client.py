@@ -3,9 +3,9 @@ import asyncio
 import pandas as pd
 from config import logger, CT_CLIENT_ID, CT_CLIENT_SECRET
 
-# --- ПОЧАТОК ЗМІН: Виправляємо фінальний шлях імпорту ---
-from openapi_client import Client
-# --- КІНЕЦЬ ЗМІН ---
+# --- Ось правильний шлях імпорту ---
+from openapi_client.client import Client
+# ------------------------------------
 from openapi_client.messages import (
     ProtoOAApplicationAuthReq,
     ProtoOAAccountAuthReq,
