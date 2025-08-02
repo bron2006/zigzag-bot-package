@@ -1,71 +1,85 @@
 # ctrader_websocket_client.py
 import asyncio
-import websockets
 import pandas as pd
 from config import logger, CT_CLIENT_ID, CT_CLIENT_SECRET
 
-# Імпорти з наших власних файлів у папці ctrader_protos
-from ctrader_protos.OpenApiCommonMessages_pb2 import ProtoMessage, ProtoOAPayloadType
-from ctrader_protos.OpenApiCommonModelMessages_pb2 import ProtoOATrendbarPeriod
-from ctrader_protos.OpenApiModelMessages_pb2 import (
-    ProtoOAApplicationAuthReq, ProtoOAAccountAuthReq, ProtoOASubscribeLiveTrendbarReq,
-    ProtoOATrendbarEvent
+# Імпорти з офіційного SDK
+from openapi_client import Client
+from openapi_client.messages import (
+    ProtoOAApplicationAuthReq,
+    ProtoOAAccountAuthReq,
+    ProtoOASubscribeLiveTrendbarReq,
+    ProtoOATrendbarEvent,
+    ProtoMessage,
+    ProtoOAPayloadType,
+    ProtoOATrendbarPeriod
 )
 
-SPOTWARE_WS_URL = "wss://demo.ctraderapi.com:5035"
+SPOTWARE_HOST = "demo.ctraderapi.com"
+SPOTWARE_PORT = 5035
 
 async def _fetch_trendbars_async(access_token: str, account_id: int, symbol_id: int, timeframe: str) -> pd.DataFrame:
+    """Асинхронна функція для отримання даних через WebSocket з використанням SDK."""
+    
+    future = asyncio.Future() # Створюємо "майбутній" об'єкт для очікування відповіді
+
+    def on_message(message: ProtoMessage):
+        """Ця функція буде обробляти всі вхідні повідомлення."""
+        if message.payloadType == ProtoOAPayloadType.PROTO_OA_TRENDBAR_EVENT:
+            event = ProtoOATrendbarEvent()
+            event.ParseFromString(message.payload)
+            logger.info(f"📥 WebSocket: Отримано {len(event.trendbar)} свічок для {symbol_id}.")
+            
+            # Конвертуємо дані в DataFrame
+            bars = [{'ts': pd.to_datetime(bar.utcTimestampInMinutes * 60, unit='s', utc=True),
+                     'Open': bar.open / 100000.0, 'High': bar.high / 100000.0, 
+                     'Low': bar.low / 100000.0, 'Close': bar.close / 100000.0, 
+                     'Volume': bar.volume} for bar in event.trendbar]
+            df = pd.DataFrame(bars)
+            
+            # Встановлюємо результат у future, щоб головна функція його отримала
+            if not future.done():
+                future.set_result(df)
+
+    client = Client(SPOTWARE_HOST, SPOTWARE_PORT, use_ssl=True)
+    client.set_listener(on_message)
+
     try:
-        async with websockets.connect(SPOTWARE_WS_URL) as ws:
-            # Крок 1: Аутентифікація додатку
-            app_auth_req = ProtoOAApplicationAuthReq(clientId=CT_CLIENT_ID, clientSecret=CT_CLIENT_SECRET)
-            wrapper_msg = ProtoMessage(payloadType=ProtoOAPayloadType.PROTO_OA_APPLICATION_AUTH_REQ, payload=app_auth_req.SerializeToString())
-            await ws.send(wrapper_msg.SerializeToString())
-            await ws.recv()
-            logger.info("✅ WebSocket: Аутентифікація додатку пройдена.")
+        await client.connect()
+        logger.info("✅ WebSocket: Підключення встановлено.")
 
-            # Крок 2: Авторизація торгового рахунку
-            acc_auth_req = ProtoOAAccountAuthReq(ctidTraderAccountId=account_id, accessToken=access_token)
-            wrapper_msg = ProtoMessage(payloadType=ProtoOAPayloadType.PROTO_OA_ACCOUNT_AUTH_REQ, payload=acc_auth_req.SerializeToString())
-            await ws.send(wrapper_msg.SerializeToString())
-            await ws.recv()
-            logger.info(f"✅ WebSocket: Авторизація рахунку {account_id} пройдена.")
+        # Крок 1: Аутентифікація додатку
+        app_auth_req = ProtoOAApplicationAuthReq(clientId=CT_CLIENT_ID, clientSecret=CT_CLIENT_SECRET)
+        await client.send(app_auth_req)
+        logger.info("✅ WebSocket: Аутентифікація додатку пройдена.")
 
-            # Крок 3: Підписка на свічки
-            tf_map = {'15m': ProtoOATrendbarPeriod.MIN15, '1h': ProtoOATrendbarPeriod.HOUR, '4h': ProtoOATrendbarPeriod.HOUR4, '1day': ProtoOATrendbarPeriod.DAY}
-            tf_enum = tf_map.get(timeframe, ProtoOATrendbarPeriod.HOUR)
-            
-            subscribe_req = ProtoOASubscribeLiveTrendbarReq(ctidTraderAccountId=account_id, symbolId=symbol_id, timeframe=tf_enum)
-            wrapper_msg = ProtoMessage(payloadType=ProtoOAPayloadType.PROTO_OA_SUBSCRIBE_LIVE_TRENDBAR_REQ, payload=subscribe_req.SerializeToString())
-            await ws.send(wrapper_msg.SerializeToString())
-            logger.info(f"📤 WebSocket: Надіслано запит на підписку (symbolId={symbol_id}, timeframe={timeframe}).")
+        # Крок 2: Авторизація рахунку
+        acc_auth_req = ProtoOAAccountAuthReq(ctidTraderAccountId=account_id, accessToken=access_token)
+        await client.send(acc_auth_req)
+        logger.info(f"✅ WebSocket: Авторизація рахунку {account_id} пройдена.")
 
-            # Крок 4: Отримання даних
-            response_data = await asyncio.wait_for(ws.recv(), timeout=15)
-            
-            response_wrapper = ProtoMessage()
-            response_wrapper.ParseFromString(response_data)
+        # Крок 3: Підписка на свічки
+        tf_map = {'15m': ProtoOATrendbarPeriod.M15, '1h': ProtoOATrendbarPeriod.H1, '4h': ProtoOATrendbarPeriod.H4, '1day': ProtoOATrendbarPeriod.D1}
+        tf_enum = tf_map.get(timeframe, ProtoOATrendbarPeriod.H1)
+        
+        subscribe_req = ProtoOASubscribeLiveTrendbarReq(ctidTraderAccountId=account_id, symbolId=symbol_id, timeframe=tf_enum)
+        await client.send(subscribe_req)
+        logger.info(f"📤 WebSocket: Надіслано запит на підписку (symbolId={symbol_id}, timeframe={timeframe}).")
 
-            if response_wrapper.payloadType == ProtoOAPayloadType.PROTO_OA_TRENDBAR_EVENT:
-                event = ProtoOATrendbarEvent()
-                event.ParseFromString(response_wrapper.payload)
-                
-                logger.info(f"📥 WebSocket: Отримано {len(event.trendbar)} свічок для {symbol_id}.")
-                
-                bars = [{'ts': pd.to_datetime(bar.utcTimestampInMinutes * 60, unit='s', utc=True),
-                         'Open': bar.open / 100000.0, 'High': bar.high / 100000.0, 
-                         'Low': bar.low / 100000.0, 'Close': bar.close / 100000.0, 
-                         'Volume': bar.volume}
-                        for bar in event.trendbar]
-                return pd.DataFrame(bars)
-            else:
-                logger.warning(f"⚠️ WebSocket: Отримано неочікуваний тип повідомлення: {response_wrapper.payloadType}")
-                return pd.DataFrame()
+        # Крок 4: Очікуємо на дані
+        # Чекаємо, доки on_message не отримає дані і не встановить результат у future
+        result_df = await asyncio.wait_for(future, timeout=20)
+        return result_df
 
     except Exception as e:
         logger.error(f"❌ Помилка WebSocket-клієнта: {e}", exc_info=True)
         return pd.DataFrame()
+    finally:
+        await client.disconnect()
+        logger.info("🔌 WebSocket: З'єднання закрито.")
+
 
 def fetch_trendbars_sync(access_token: str, account_id: int, symbol_id: int, timeframe: str) -> pd.DataFrame:
+    """Синхронна 'обгортка' для виклику з основного коду бота."""
     logger.info("▶️ Запускаю синхронний запит на отримання даних через WebSocket...")
     return asyncio.run(_fetch_trendbars_async(access_token, account_id, symbol_id, timeframe))

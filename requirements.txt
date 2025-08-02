@@ -10,4 +10,4 @@ Flask-Cors
 finnhub-python
 websockets==12.0
 requests
-protobuf==3.20.3
+spotware-open-api
