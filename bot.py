@@ -2,7 +2,6 @@
 import traceback
 import json
 from urllib.parse import parse_qs
-from concurrent.futures import ThreadPoolExecutor
 from flask import request, jsonify, render_template
 from flask_cors import CORS
 from telegram import Update
@@ -12,20 +11,28 @@ import requests
 from config import (
     app, bot, dp, WEBHOOK_SECRET, logger,
     CT_CLIENT_ID, CT_CLIENT_SECRET, CT_REDIRECT_URI,
-    CRYPTO_PAIRS_FULL, FOREX_SESSIONS, STOCK_TICKERS, FOREX_PAIRS_MAP
+    CRYPTO_PAIRS_FULL, FOREX_SESSIONS, STOCK_TICKERS
 )
 from db import init_db, get_watchlist, toggle_watch, get_signal_history, save_ctrader_token
-# --- ПОЧАТОК ЗМІН: Видаляємо get_ctrader_token, він тепер не потрібен напряму ---
-# --- КІНЕЦЬ ЗМІН ---
 from analysis import get_api_detailed_signal_data, rank_assets_for_api, get_api_mta_data
 import telegram_ui
-# --- ПОЧАТОК ЗМІН: Імпортуємо get_valid_access_token ---
 from ctrader_api import get_trading_accounts, get_valid_access_token
-# --- КІНЕЦЬ ЗМІН ---
 
 CORS(app)
 
-# ... (код до команди /myaccounts залишається без змін) ...
+# --- ПОЧАТОК ЗМІН: Правильна ініціалізація бази даних ---
+@app.before_request
+def setup_database():
+    # Ця функція буде викликана один раз перед першим запитом
+    # і гарантовано створить таблиці в БД.
+    # Використовуємо hasattr, щоб гарантувати, що init_db() виконається лише один раз.
+    from flask import g
+    if not hasattr(g, '_database_initialized'):
+        init_db()
+        g._database_initialized = True
+# --- КІНЕЦЬ ЗМІН ---
+
+
 def _get_user_id_from_request(req):
     init_data = req.args.get("initData")
     if not init_data: return None
@@ -69,9 +76,7 @@ def callback():
     }
 
     try:
-        # --- ПОЧАТОК ЗМІН: Додано timeout=15 ---
         response = requests.post(token_url, data=payload, timeout=15)
-        # --- КІНЕЦЬ ЗМІН ---
         response.raise_for_status()
 
         token_data = response.json()
@@ -94,13 +99,11 @@ def my_accounts(update, context):
     """Отримує та відображає торгові рахунки користувача cTrader."""
     user_id = 12345
     
-    # --- ПОЧАТОК ЗМІН: Використовуємо get_valid_access_token ---
     access_token = get_valid_access_token(user_id)
     
     if not access_token:
         update.message.reply_text("Токен доступу не знайдено або не вдалося оновити. Будь ласка, пройдіть авторизацію.")
         return
-    # --- КІНЕЦЬ ЗМІН ---
 
     accounts = get_trading_accounts(access_token)
     
@@ -118,14 +121,13 @@ def my_accounts(update, context):
 
 dp.add_handler(CommandHandler("myaccounts", my_accounts))
 
-# ... (решта API маршрутів залишається без змін) ...
 @app.route("/api/signal", methods=["GET"])
 def api_signal():
     pair = request.args.get("pair")
     if not pair: return jsonify({"error": "pair is required"}), 400
     try:
         data = get_api_detailed_signal_data(pair)
-        if "error" in data: return jsonify(data)
+        if "error" in data: return jsonify(data), 400
         return jsonify(data)
     except Exception as e:
         logger.error(f"API error for pair {pair}: {e}\n{traceback.format_exc()}")
@@ -162,30 +164,6 @@ def api_get_ranked_pairs():
             "error_message": "Помилка при сортуванні, показано стандартний список."
         })
 
-@app.route("/api/get_pairs", methods=["GET"])
-def api_get_pairs():
-    user_id = _get_user_id_from_request(request)
-    watchlist = get_watchlist(user_id) if user_id else []
-    return jsonify({ "watchlist": watchlist, "crypto": CRYPTO_PAIRS_FULL, "forex": FOREX_SESSIONS, "stocks": STOCK_TICKERS })
-
-@app.route("/api/get_active_markets", methods=["GET"])
-def api_get_active_markets():
-    try:
-        ranked_crypto = rank_assets_for_api(CRYPTO_PAIRS_FULL, 'crypto')
-        top_crypto = [p['ticker'] for p in ranked_crypto[:5]]
-
-        top_stocks = []
-        top_forex = []
-
-        return jsonify({
-            "active_crypto": top_crypto,
-            "active_stocks": top_stocks,
-            "active_forex": top_forex
-        })
-    except Exception as e:
-        logger.error(f"API error for active markets: {e}\n{traceback.format_exc()}")
-        return jsonify({"error": "Помилка при аналізі ринків"}), 500
-
 @app.route("/api/get_mta", methods=["GET"])
 def api_get_mta():
     pair = request.args.get("pair")
@@ -216,10 +194,8 @@ def toggle_watchlist_route():
 def api_signal_history():
     user_id = _get_user_id_from_request(request)
     pair = request.args.get("pair")
-    if not user_id:
-        return jsonify({"error": "Not authorized"}), 401
-    if not pair:
-        return jsonify({"error": "pair is required"}), 400
+    if not user_id: return jsonify({"error": "Not authorized"}), 401
+    if not pair: return jsonify({"error": "pair is required"}), 400
     try:
         history = get_signal_history(user_id, pair)
         return jsonify(history)
@@ -231,5 +207,5 @@ def api_signal_history():
 def homepage():
     return render_template('index.html')
 
-if __name__ != "__main__":
-    init_db()
+# Запускаємо чергу задач разом з додатком
+dp.job_queue.start()
