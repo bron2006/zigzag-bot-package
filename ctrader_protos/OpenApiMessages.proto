@@ -1,0 +1,9 @@
+syntax = "proto3";
+package OpenApi.Messages;
+
+import "OpenApiCommonMessages.proto";
+
+message OpenApiMessage {
+    string payloadType = 1;
+    bytes payload = 2;
+}

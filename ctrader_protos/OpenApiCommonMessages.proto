@@ -1,0 +1,6 @@
+syntax = "proto3";
+package OpenApi.CommonMessages;
+
+message HeartbeatEvent {
+    string timestamp = 1;
+}
