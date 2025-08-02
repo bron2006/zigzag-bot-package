@@ -47,13 +47,14 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False):
             finnhub_tf_map = {'15min': '15', '1h': '60', '4h': 'D', '1day': 'D'}
             resolution = finnhub_tf_map.get(tf, 'D') # 'D' як значення за замовчуванням
             
-            # Розрахунок часу для Finnhub
             to_ts = int(time.time())
-            # Приблизний розрахунок початкового часу
+            # --- ПОЧАТОК ЗМІН: Виправлено логіку розрахунку from_ts ---
             if resolution == 'D':
                  from_ts = to_ts - (limit * 24 * 3600)
             else:
+                 # int() тепер не викличе помилку для 'D'
                  from_ts = to_ts - (limit * int(resolution) * 60)
+            # --- КІНЕЦЬ ЗМІН ---
 
             api_url = f"https://finnhub.io/api/v1/stock/candle?symbol={pair}&resolution={resolution}&from={from_ts}&to={to_ts}&token={FINNHUB_API_KEY}"
             
@@ -61,7 +62,7 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False):
             response.raise_for_status()
             data = response.json()
 
-            if data.get('s') == 'ok' and 't' in data and data['t']:
+            if data.get('s') == 'ok' and data.get('t'):
                 df = pd.DataFrame({
                     'ts': pd.to_datetime(data['t'], unit='s', utc=True),
                     'Open': data['o'],
@@ -335,7 +336,7 @@ def get_api_mta_data(pair, asset):
             return {"tf": tf, "signal": "Error"}
 
     executor = get_executor()
-    results = executor.map(worker, ANALYSIS_TIMEFRAMES)
+    results = list(executor.map(worker, ANALYSIS_TIMEFRAMES))
     mta_data = [r for r in results if r is not None]
     return mta_data
 
