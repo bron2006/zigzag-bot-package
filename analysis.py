@@ -6,11 +6,9 @@ import time
 import requests
 from concurrent.futures import ThreadPoolExecutor
 
-# --- ПОЧАТОК ЗМІН: Оновлюємо імпорти ---
 from db import add_signal_to_history
 from config import logger, binance, FINNHUB_API_KEY, MARKET_DATA_CACHE, RANKING_CACHE, ANALYSIS_TIMEFRAMES
 from ctrader_api import get_trendbars, get_valid_access_token
-# --- КІНЕЦЬ ЗМІН ---
 
 _executor = None
 def get_executor():
@@ -19,10 +17,8 @@ def get_executor():
         _executor = ThreadPoolExecutor(max_workers=2)
     return _executor
 
-# --- ПОЧАТОК ЗМІН: Повністю переписана функція get_market_data ---
 def get_market_data(pair, tf, asset, limit=300, force_refresh=False):
     key = f"{pair}_{tf}_{limit}"
-    # Для Forex кешування не використовується, щоб дані завжди були свіжими
     use_cache = asset == 'crypto'
     if use_cache and not force_refresh and key in MARKET_DATA_CACHE:
         return MARKET_DATA_CACHE[key]
@@ -35,7 +31,6 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False):
             df['ts'] = pd.to_datetime(df['ts'], unit='ms', utc=True)
 
         elif asset == 'forex':
-            # Використовуємо user_id за замовчуванням для системних запитів
             user_id = 12345
             access_token = get_valid_access_token(user_id)
             if not access_token:
@@ -45,16 +40,12 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False):
 
         elif asset == 'stocks':
             finnhub_tf_map = {'15min': '15', '1h': '60', '4h': 'D', '1day': 'D'}
-            resolution = finnhub_tf_map.get(tf, 'D') # 'D' як значення за замовчуванням
+            resolution = finnhub_tf_map.get(tf, 'D')
             
             to_ts = int(time.time())
-            # --- ПОЧАТОК ЗМІН: Виправлено логіку розрахунку from_ts ---
-            if resolution == 'D':
-                 from_ts = to_ts - (limit * 24 * 3600)
-            else:
-                 # int() тепер не викличе помилку для 'D'
-                 from_ts = to_ts - (limit * int(resolution) * 60)
-            # --- КІНЕЦЬ ЗМІН ---
+            # Виправлено: тепер int() не застосовується до 'D'
+            delta_seconds = limit * (int(resolution) if resolution.isdigit() else 24 * 3600) * 60
+            from_ts = to_ts - delta_seconds
 
             api_url = f"https://finnhub.io/api/v1/stock/candle?symbol={pair}&resolution={resolution}&from={from_ts}&to={to_ts}&token={FINNHUB_API_KEY}"
             
@@ -84,11 +75,8 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False):
         return df
 
     except Exception as e:
-        # Логуємо помилку з деталями
         logger.error(f"Помилка отримання даних для {pair} (asset: {asset}, tf: {tf}): {e}")
         return pd.DataFrame()
-# --- КІНЕЦЬ ЗМІН ---
-
 
 # ... (решта файлу analysis.py залишається без змін) ...
 def _format_price(price):
@@ -221,7 +209,7 @@ def _generate_verdict(analysis):
                 verdict_text = "⬆️ Сильний сигнал: КУПУВАТИ"
                 verdict_level = "strong_buy"
             elif active_factors == 3:
-                verdict_text = "↗️ Помірний сигнал: КУПУВАТИ"
+                verdict_text = "↗️ Помірний сигнал: КУПУВАТI"
                 verdict_level = "moderate_buy"
             else:
                 verdict_text = "🧐 Слабкий сигнал: КУПУВАТИ (Ризиковано)"
@@ -239,7 +227,6 @@ def _generate_verdict(analysis):
     return verdict_text, verdict_level
 
 def get_signal_strength_verdict(pair, display_name, asset, user_id=None, force_refresh=False):
-    # Для основного вердикту використовуємо більш короткий таймфрейм
     main_tf = '15min' if asset in ['crypto', 'stocks'] else '1h'
     
     df = get_market_data(pair, main_tf, asset, limit=100, force_refresh=force_refresh)
@@ -354,7 +341,6 @@ def rank_assets_for_api(pairs, asset_type):
             last_rsi = df.iloc[-1]['RSI']
             if pd.isna(last_rsi):
                 return {'ticker': pair, 'score': -1}
-            # Оцінка від 0 до 100, де 100 - найсильніший сигнал до покупки/продажу
             score = abs(50 - last_rsi) * 2
             return {'ticker': pair, 'score': score}
         except Exception:
@@ -363,7 +349,6 @@ def rank_assets_for_api(pairs, asset_type):
     executor = get_executor()
     results = list(executor.map(worker, pairs))
     
-    # Сортуємо за "цікавістю" (найбільш далекі від нейтрального RSI)
     final_ranking = sorted(results, key=lambda x: x['score'], reverse=True)
     
     RANKING_CACHE[cache_key] = final_ranking
