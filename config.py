@@ -4,6 +4,8 @@ import logging
 from cachetools import TTLCache
 from dotenv import load_dotenv
 from flask import Flask
+from telegram import Bot
+from telegram.ext import Updater
 
 # Прапор готовності для health check
 HEALTH_READY = False
@@ -27,6 +29,9 @@ RANKING_CACHE = TTLCache(maxsize=100, ttl=60)
 
 # --- Глобальні об'єкти ---
 app = Flask(__name__)
+bot = Bot(token=TOKEN)
+updater = Updater(bot=bot, use_context=True, workers=4)
+dp = updater.dispatcher
 
 # --- Константи ---
 CRYPTO_PAIRS_FULL = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "DOGE/USDT", "ADA/USDT", "SHIB/USDT", "AVAX/USDT", "LINK/USDT", "DOT/USDT", "TRX/USDT", "MATIC/USDT", "LTC/USDT", "BCH/USDT", "XLM/USDT", "ATOM/USDT", "ETC/USDT", "FIL/USDT", "NEAR/USDT", "ALGO/USDT", "VET/USDT", "ICP/USDT", "EOS/USDT"]
@@ -37,4 +42,7 @@ FOREX_SESSIONS = {
     "Європейська": ["EUR/USD", "GBP/USD", "USD/CHF", "EUR/GBP", "EUR/CHF", "GBP/CHF"],
     "Американська": ["USD/CAD", "USD/MXN", "USD/BRL", "USD/ZAR"]
 }
+# --- ПОЧАТОК ЗМІН: Повертаємо видалений рядок ---
+ANALYSIS_TIMEFRAMES = ['15min', '1h', '4h', '1day']
+# --- КІНЕЦЬ ЗМІН ---
 DB_NAME = "zigzag.db"
