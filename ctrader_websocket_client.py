@@ -4,11 +4,10 @@ import websockets
 import pandas as pd
 from config import logger, CT_CLIENT_ID, CT_CLIENT_SECRET
 
-# --- ПОЧАТОК ЗМІН: Виправляємо фінальний імпорт ---
-from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import ProtoMessage, ProtoOAPayloadType
-# --- КІНЕЦЬ ЗМІН ---
-from ctrader_open_api.messages.OpenApiCommonModelMessages_pb2 import ProtoOATrendbarPeriod
-from ctrader_open_api.messages.OpenApiModelMessages_pb2 import (
+# Імпорти з наших власних файлів у папці ctrader_protos
+from ctrader_protos.OpenApiCommonMessages_pb2 import ProtoMessage, ProtoOAPayloadType
+from ctrader_protos.OpenApiCommonModelMessages_pb2 import ProtoOATrendbarPeriod
+from ctrader_protos.OpenApiModelMessages_pb2 import (
     ProtoOAApplicationAuthReq, ProtoOAAccountAuthReq, ProtoOASubscribeLiveTrendbarReq,
     ProtoOATrendbarEvent
 )
@@ -33,8 +32,8 @@ async def _fetch_trendbars_async(access_token: str, account_id: int, symbol_id: 
             logger.info(f"✅ WebSocket: Авторизація рахунку {account_id} пройдена.")
 
             # Крок 3: Підписка на свічки
-            tf_map = {'15m': ProtoOATrendbarPeriod.M15, '1h': ProtoOATrendbarPeriod.H1, '4h': ProtoOATrendbarPeriod.H4, '1day': ProtoOATrendbarPeriod.D1}
-            tf_enum = tf_map.get(timeframe, ProtoOATrendbarPeriod.H1)
+            tf_map = {'15m': ProtoOATrendbarPeriod.MIN15, '1h': ProtoOATrendbarPeriod.HOUR, '4h': ProtoOATrendbarPeriod.HOUR4, '1day': ProtoOATrendbarPeriod.DAY}
+            tf_enum = tf_map.get(timeframe, ProtoOATrendbarPeriod.HOUR)
             
             subscribe_req = ProtoOASubscribeLiveTrendbarReq(ctidTraderAccountId=account_id, symbolId=symbol_id, timeframe=tf_enum)
             wrapper_msg = ProtoMessage(payloadType=ProtoOAPayloadType.PROTO_OA_SUBSCRIBE_LIVE_TRENDBAR_REQ, payload=subscribe_req.SerializeToString())
