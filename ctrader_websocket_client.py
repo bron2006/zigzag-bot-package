@@ -4,10 +4,9 @@ import websockets
 import pandas as pd
 from config import logger, CT_CLIENT_ID, CT_CLIENT_SECRET
 
-# --- ПОЧАТОК ЗМІН: Виправляємо ім'я класу-обгортки ---
-from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOAData as ProtoMessage
+# --- ПОЧАТОК ЗМІН: Виправляємо фінальний імпорт ---
+from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import ProtoMessage, ProtoOAPayloadType
 # --- КІНЕЦЬ ЗМІН ---
-from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import ProtoOAPayloadType
 from ctrader_open_api.messages.OpenApiCommonModelMessages_pb2 import ProtoOATrendbarPeriod
 from ctrader_open_api.messages.OpenApiModelMessages_pb2 import (
     ProtoOAApplicationAuthReq, ProtoOAAccountAuthReq, ProtoOASubscribeLiveTrendbarReq,
@@ -21,9 +20,7 @@ async def _fetch_trendbars_async(access_token: str, account_id: int, symbol_id: 
         async with websockets.connect(SPOTWARE_WS_URL) as ws:
             # Крок 1: Аутентифікація додатку
             app_auth_req = ProtoOAApplicationAuthReq(clientId=CT_CLIENT_ID, clientSecret=CT_CLIENT_SECRET)
-            # --- ПОЧАТОК ЗМІН: Використовуємо правильний клас ---
             wrapper_msg = ProtoMessage(payloadType=ProtoOAPayloadType.PROTO_OA_APPLICATION_AUTH_REQ, payload=app_auth_req.SerializeToString())
-            # --- КІНЕЦЬ ЗМІН ---
             await ws.send(wrapper_msg.SerializeToString())
             await ws.recv()
             logger.info("✅ WebSocket: Аутентифікація додатку пройдена.")
