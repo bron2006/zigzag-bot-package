@@ -2,14 +2,19 @@
 import traceback
 import json
 from urllib.parse import parse_qs
-from flask import request, jsonify, render_template, g
+from flask import request, jsonify, g
 from flask_cors import CORS
 from telegram import Update
 from telegram.ext import CommandHandler
 import requests
 
+# --- ПОЧАТОК ЗМІН: Додаємо лог на самому старті ---
+from config import logger
+logger.info("⚙️  Bot module is being imported and initialized...")
+# --- КІНЕЦЬ ЗМІН ---
+
 from config import (
-    app, bot, dp, WEBHOOK_SECRET, logger,
+    app, bot, dp, WEBHOOK_SECRET,
     CT_CLIENT_ID, CT_CLIENT_SECRET, CT_REDIRECT_URI,
     CRYPTO_PAIRS_FULL, FOREX_SESSIONS, STOCK_TICKERS
 )
@@ -20,19 +25,13 @@ from ctrader_api import get_trading_accounts, get_valid_access_token
 
 CORS(app)
 
-# --- ПОЧАТОК ЗМІН: Об'єднана функція для ініціалізації та логування ---
 @app.before_request
 def setup_and_log():
-    """
-    Виконується перед кожним запитом.
-    1. Гарантує, що БД ініціалізована (лише один раз).
-    2. Логує кожен вхідний запит.
-    """
     if not hasattr(g, '_database_initialized'):
+        logger.info("💾 Initializing database for the first time...")
         init_db()
         g._database_initialized = True
-    logger.info(f"[{request.method}] {request.path} - args={request.args.to_dict()}")
-# --- КІНЕЦЬ ЗМІН ---
+    logger.info(f"➡️ [{request.method}] {request.path} - args={request.args.to_dict()}")
 
 def _get_user_id_from_request(req):
     init_data = req.args.get("initData")
@@ -60,60 +59,33 @@ def callback():
     code = request.args.get("code")
     if not code:
         return "Authorization code not found.", 400
-
-    logger.info(f"Successfully received authorization code: {code}")
-
     token_url = "https://connect.spotware.com/oauth/v2/token"
-    payload = {
-        'grant_type': 'authorization_code',
-        'code': code,
-        'redirect_uri': CT_REDIRECT_URI,
-        'client_id': CT_CLIENT_ID,
-        'client_secret': CT_CLIENT_SECRET
-    }
-
+    payload = {'grant_type': 'authorization_code', 'code': code, 'redirect_uri': CT_REDIRECT_URI, 'client_id': CT_CLIENT_ID, 'client_secret': CT_CLIENT_SECRET}
     try:
         response = requests.post(token_url, data=payload, timeout=15)
         response.raise_for_status()
-
         token_data = response.json()
-        access_token = token_data.get('accessToken')
-        refresh_token = token_data.get('refreshToken')
-        expires_in = token_data.get('expiresIn')
-        
         user_id = 12345
-        save_ctrader_token(user_id, access_token, refresh_token, expires_in)
-        logger.info(f"Token for single user {user_id} saved to DB.")
-
-        return (f"<h1>Success!</h1>"
-                f"<p>Your token has been securely saved. You can close this window.</p>")
-
+        save_ctrader_token(user_id, token_data.get('accessToken'), token_data.get('refreshToken'), token_data.get('expiresIn'))
+        logger.info(f"Token for user {user_id} saved to DB.")
+        return "<h1>Success!</h1><p>Token saved. You can close this window.</p>"
     except requests.exceptions.RequestException as e:
         logger.error(f"Error exchanging code for token: {e}")
-        return f"Error exchanging code for token: {e}", 500
+        return f"Error: {e}", 500
 
 def my_accounts(update, context):
-    """Отримує та відображає торгові рахунки користувача cTrader."""
     user_id = 12345
-    
     access_token = get_valid_access_token(user_id)
-    
     if not access_token:
-        update.message.reply_text("Токен доступу не знайдено або не вдалося оновити. Будь ласка, пройдіть авторизацію.")
+        update.message.reply_text("Токен доступу не знайдено або не вдалося оновити.")
         return
-
     accounts = get_trading_accounts(access_token)
-    
     if accounts is None:
-        update.message.reply_text("Не вдалося отримати дані про рахунки. Спробуйте пізніше.")
+        update.message.reply_text("Не вдалося отримати дані про рахунки.")
     elif not accounts:
         update.message.reply_text("На вашому акаунті не знайдено торгових рахунків.")
     else:
-        message = "Ваші торгові рахунки:\n\n"
-        for acc in accounts:
-            message += (f"🔹 **ID:** `{acc.get('accountId')}`\n"
-                        f"   **Брокер:** {acc.get('brokerName')}\n"
-                        f"   **Баланс:** {acc.get('balance') / 100} {acc.get('currency')}\n\n")
+        message = "Ваші торгові рахунки:\n\n" + "\n".join([f"🔹 **ID:** `{acc.get('accountId')}`\n   **Брокер:** {acc.get('brokerName')}\n   **Баланс:** {acc.get('balance') / 100} {acc.get('currency')}\n" for acc in accounts])
         update.message.reply_text(message, parse_mode='Markdown')
 
 dp.add_handler(CommandHandler("myaccounts", my_accounts))
@@ -127,59 +99,39 @@ def api_signal():
         if "error" in data: return jsonify(data), 400
         return jsonify(data)
     except Exception as e:
-        logger.error(f"API error for pair {pair}: {e}\n{traceback.format_exc()}")
-        return jsonify({"error": f"Внутрішня помилка сервера"}), 500
+        logger.error(f"API error for pair {pair}: {e}", exc_info=True)
+        return jsonify({"error": "Внутрішня помилка сервера"}), 500
 
 @app.route("/api/get_ranked_pairs", methods=["GET"])
 def api_get_ranked_pairs():
     user_id = _get_user_id_from_request(request)
     watchlist = get_watchlist(user_id) if user_id else []
-
     try:
-        ranked_crypto_data = rank_assets_for_api(CRYPTO_PAIRS_FULL, 'crypto')
-        ranked_crypto = [{'ticker': p['ticker'], 'active': bool(p['score'] != -1)} for p in ranked_crypto_data]
-
+        ranked_crypto = [{'ticker': p['ticker'], 'active': bool(p['score'] != -1)} for p in rank_assets_for_api(CRYPTO_PAIRS_FULL, 'crypto')]
         static_stocks = [{'ticker': p, 'active': True} for p in STOCK_TICKERS]
-        static_forex = {
-            session: [{'ticker': p, 'active': True} for p in pairs]
-            for session, pairs in FOREX_SESSIONS.items()
-        }
-
-        return jsonify({
-            "watchlist": watchlist,
-            "crypto": ranked_crypto,
-            "forex": static_forex,
-            "stocks": static_stocks
-        })
+        static_forex = {session: [{'ticker': p, 'active': True} for p in pairs] for session, pairs in FOREX_SESSIONS.items()}
+        return jsonify({"watchlist": watchlist, "crypto": ranked_crypto, "forex": static_forex, "stocks": static_stocks})
     except Exception as e:
-        logger.error(f"API error for ranked pairs: {e}\n{traceback.format_exc()}")
-        return jsonify({
-            "watchlist": watchlist,
-            "crypto": [{'ticker': p, 'active': True} for p in CRYPTO_PAIRS_FULL],
-            "forex": {session: [{'ticker': p, 'active': True} for p in pairs] for session, pairs in FOREX_SESSIONS.items()},
-            "stocks": [{'ticker': p, 'active': True} for p in STOCK_TICKERS],
-            "error_message": "Помилка при сортуванні, показано стандартний список."
-        })
+        logger.error(f"API error for ranked pairs: {e}", exc_info=True)
+        return jsonify({"watchlist": watchlist, "crypto": [{'ticker': p, 'active': True} for p in CRYPTO_PAIRS_FULL], "forex": {session: [{'ticker': p, 'active': True} for p in pairs] for session, pairs in FOREX_SESSIONS.items()}, "stocks": [{'ticker': p, 'active': True} for p in STOCK_TICKERS], "error_message": "Помилка сортування."})
 
 @app.route("/api/get_mta", methods=["GET"])
 def api_get_mta():
     pair = request.args.get("pair")
     if not pair: return jsonify({"error": "pair is required"}), 400
-    asset_type = 'stocks'
-    if '/' in pair: asset_type = 'crypto' if 'USDT' in pair else 'forex'
+    asset_type = 'stocks' if '/' not in pair else ('crypto' if 'USDT' in pair else 'forex')
     try:
-        mta_data = get_api_mta_data(pair, asset_type)
-        return jsonify(mta_data)
+        return jsonify(get_api_mta_data(pair, asset_type))
     except Exception as e:
-        logger.error(f"API error for MTA on {pair}: {e}\n{traceback.format_exc()}")
-        return jsonify({"error": "Помилка при розрахунку MTA"}), 500
+        logger.error(f"API error for MTA on {pair}: {e}", exc_info=True)
+        return jsonify({"error": "Помилка розрахунку MTA"}), 500
 
 @app.route("/api/toggle_watchlist", methods=["GET"])
 def toggle_watchlist_route():
     user_id = _get_user_id_from_request(request)
     pair = request.args.get("pair")
     if not user_id or not pair:
-        return jsonify({"success": False, "error": "Missing required parameters"}), 400
+        return jsonify({"success": False, "error": "Missing parameters"}), 400
     try:
         toggle_watch(user_id, pair)
         return jsonify({"success": True})
@@ -194,15 +146,16 @@ def api_signal_history():
     if not user_id: return jsonify({"error": "Not authorized"}), 401
     if not pair: return jsonify({"error": "pair is required"}), 400
     try:
-        history = get_signal_history(user_id, pair)
-        return jsonify(history)
+        return jsonify(get_signal_history(user_id, pair))
     except Exception as e:
-        logger.error(f"API error for signal history on {pair}: {e}\n{traceback.format_exc()}")
-        return jsonify({"error": "Помилка при отриманні історії"}), 500
+        logger.error(f"API error for signal history on {pair}: {e}", exc_info=True)
+        return jsonify({"error": "Помилка отримання історії"}), 500
 
+# --- ПОЧАТОК ЗМІН: Спрощена відповідь для health check ---
 @app.route('/')
 def homepage():
-    return render_template('index.html')
+    return "✅ Bot is alive", 200
+# --- КІНЕЦЬ ЗМІН ---
 
-# Запускаємо чергу задач разом з додатком
 dp.job_queue.start()
+logger.info("🚀 Bot application started successfully!")

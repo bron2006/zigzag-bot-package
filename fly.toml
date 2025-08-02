@@ -1,4 +1,4 @@
-# fly.toml (повна версія)
+# fly.toml
 
 app = "zigzag-bot-package"
 
@@ -15,10 +15,11 @@ app = "zigzag-bot-package"
 
   [[http_service.checks]]
     interval = "15s"
-    timeout = "2s"
+    # Змінюємо назву з grace_period_seconds на grace_period, як вимагає синтаксис fly.toml
+    grace_period = "60s" 
     method = "GET"
     path = "/"
-    grace_period = "20s" # <-- Ось доданий рядок
+    timeout = "5s"
 
 [[vm]]
   cpu_kind = "shared"
