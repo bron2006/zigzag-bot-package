@@ -4,7 +4,7 @@ import websockets
 import pandas as pd
 from config import logger, CT_CLIENT_ID, CT_CLIENT_SECRET
 
-# Імпорти з наших згенерованих файлів
+# Імпорти з наших згенерованих та виправлених файлів
 from ctrader_protos.OpenApiMessages_pb2 import ProtoMessage
 from ctrader_protos.OpenApiCommonMessages_pb2 import ProtoOAPayloadType
 from ctrader_protos.OpenApiCommonModelMessages_pb2 import ProtoOATrendbarPeriod
@@ -16,7 +16,6 @@ from ctrader_protos.OpenApiModelMessages_pb2 import (
 SPOTWARE_WS_URL = "wss://demo.ctraderapi.com:5035"
 
 async def _fetch_trendbars_async(access_token: str, account_id: int, symbol_id: int, timeframe: str) -> pd.DataFrame:
-    """Асинхронна функція для отримання історичних даних через WebSocket."""
     try:
         async with websockets.connect(SPOTWARE_WS_URL) as ws:
             # Крок 1: Аутентифікація додатку
@@ -69,6 +68,5 @@ async def _fetch_trendbars_async(access_token: str, account_id: int, symbol_id: 
         return pd.DataFrame()
 
 def fetch_trendbars_sync(access_token: str, account_id: int, symbol_id: int, timeframe: str) -> pd.DataFrame:
-    """Синхронна 'обгортка' для виклику з основного коду бота."""
     logger.info("▶️ Запускаю синхронний запит на отримання даних через WebSocket...")
     return asyncio.run(_fetch_trendbars_async(access_token, account_id, symbol_id, timeframe))
