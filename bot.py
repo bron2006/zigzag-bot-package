@@ -2,7 +2,7 @@
 import traceback
 import json
 from urllib.parse import parse_qs
-from flask import request, jsonify, render_template
+from flask import request, jsonify, render_template, g
 from flask_cors import CORS
 from telegram import Update
 from telegram.ext import CommandHandler
@@ -20,18 +20,19 @@ from ctrader_api import get_trading_accounts, get_valid_access_token
 
 CORS(app)
 
-# --- ПОЧАТОК ЗМІН: Правильна ініціалізація бази даних ---
+# --- ПОЧАТОК ЗМІН: Об'єднана функція для ініціалізації та логування ---
 @app.before_request
-def setup_database():
-    # Ця функція буде викликана один раз перед першим запитом
-    # і гарантовано створить таблиці в БД.
-    # Використовуємо hasattr, щоб гарантувати, що init_db() виконається лише один раз.
-    from flask import g
+def setup_and_log():
+    """
+    Виконується перед кожним запитом.
+    1. Гарантує, що БД ініціалізована (лише один раз).
+    2. Логує кожен вхідний запит.
+    """
     if not hasattr(g, '_database_initialized'):
         init_db()
         g._database_initialized = True
+    logger.info(f"[{request.method}] {request.path} - args={request.args.to_dict()}")
 # --- КІНЕЦЬ ЗМІН ---
-
 
 def _get_user_id_from_request(req):
     init_data = req.args.get("initData")
@@ -44,10 +45,6 @@ def _get_user_id_from_request(req):
     except Exception as e:
         logger.warning(f"Failed to parse initData: {e}")
     return None
-
-@app.before_request
-def log_request():
-    logger.info(f"[{request.method}] {request.path} - args={request.args.to_dict()}")
 
 @app.route(f"/{WEBHOOK_SECRET}", methods=["POST"])
 def webhook_handler():
