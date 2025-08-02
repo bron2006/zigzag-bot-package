@@ -4,7 +4,7 @@ import logging
 from cachetools import TTLCache
 from dotenv import load_dotenv
 from telegram import Bot
-from telegram.ext import Updater, JobQueue
+from telegram.ext import Updater # <-- Змінено імпорт
 from flask import Flask
 
 # --- ICMarkets (cTrader OpenAPI) ---
@@ -28,8 +28,10 @@ RANKING_CACHE = TTLCache(maxsize=100, ttl=60)
 
 # --- Глобальні об'єкти бота ---
 bot = Bot(token=TOKEN)
-job_queue = JobQueue()
-updater = Updater(bot=bot, use_context=True, workers=4, job_queue=job_queue)
+# --- ПОЧАТОК ЗМІН: Повертаємо до сумісної версії ініціалізації ---
+# Updater сам створить необхідний job_queue
+updater = Updater(bot=bot, use_context=True, workers=4)
+# --- КІНЕЦЬ ЗМІН ---
 dp = updater.dispatcher
 app = Flask(__name__)
 
@@ -37,6 +39,6 @@ app = Flask(__name__)
 CRYPTO_PAIRS_FULL = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "DOGE/USDT", "ADA/USDT", "SHIB/USDT", "AVAX/USDT", "LINK/USDT", "DOT/USDT", "TRX/USDT", "MATIC/USDT", "LTC/USDT", "BCH/USDT", "XLM/USDT", "ATOM/USDT", "ETC/USDT", "FIL/USDT", "NEAR/USDT", "ALGO/USDT", "VET/USDT", "ICP/USDT", "EOS/USDT"]
 CRYPTO_CHUNK_SIZE = 12
 STOCK_TICKERS = ["AAPL", "GOOGL", "MSFT", "AMZN", "NVDA", "TSLA", "META", "JPM", "V", "JNJ"]
-FOREX_SESSIONS = { "Азіатська": ["USD/JPY", "AUD/USD", "NZD/USD", "EUR/JPY", "CHF/JPY"], "Європейська": ["EUR/USD", "GBP/USD", "USD/CHF", "EUR/GBP", "EUR/CHF", "GBP/CHF"], "Американська": ["USD/CAD", "USD/MXN", "USD/BRL", "USD/ZAR"] }
+FOREX_SESSIONS = { "Азіатська": ["USD/JPY", "AUD/USDT", "NZD/USD", "EUR/JPY", "CHF/JPY"], "Європейська": ["EUR/USD", "GBP/USD", "USD/CHF", "EUR/GBP", "EUR/CHF", "GBP/CHF"], "Американська": ["USD/CAD", "USD/MXN", "USD/BRL", "USD/ZAR"] }
 ANALYSIS_TIMEFRAMES = ['15min', '1h', '4h', '1day']
 DB_NAME = "zigzag.db"
