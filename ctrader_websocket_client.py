@@ -4,14 +4,15 @@ import websockets
 import pandas as pd
 from config import logger, CT_CLIENT_ID, CT_CLIENT_SECRET
 
-# Імпорти з наших згенерованих та виправлених файлів
-from ctrader_protos.OpenApiMessages_pb2 import ProtoMessage
-from ctrader_protos.OpenApiCommonMessages_pb2 import ProtoOAPayloadType
-from ctrader_protos.OpenApiCommonModelMessages_pb2 import ProtoOATrendbarPeriod
-from ctrader_protos.OpenApiModelMessages_pb2 import (
+# --- ПОЧАТОК ЗМІН: Імпорти тепер ідуть з встановленої бібліотеки ---
+from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoMessage
+from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import ProtoOAPayloadType
+from ctrader_open_api.messages.OpenApiCommonModelMessages_pb2 import ProtoOATrendbarPeriod
+from ctrader_open_api.messages.OpenApiModelMessages_pb2 import (
     ProtoOAApplicationAuthReq, ProtoOAAccountAuthReq, ProtoOASubscribeLiveTrendbarReq,
     ProtoOATrendbarEvent
 )
+# --- КІНЕЦЬ ЗМІН ---
 
 SPOTWARE_WS_URL = "wss://demo.ctraderapi.com:5035"
 
