@@ -3,7 +3,6 @@ import asyncio
 import pandas as pd
 from config import logger, CT_CLIENT_ID, CT_CLIENT_SECRET
 
-# Імпорти з нашої нової локальної папки openapi_client
 from openapi_client.client import Client
 from openapi_client.messages import (
     ProtoOAApplicationAuthReq,
