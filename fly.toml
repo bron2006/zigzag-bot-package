@@ -1,5 +1,4 @@
 # fly.toml
-
 app = "zigzag-bot-package"
 
 [build]
@@ -10,7 +9,7 @@ app = "zigzag-bot-package"
   force_https = true
   auto_stop_machines = true
   auto_start_machines = true
-  min_machines_running = 0
+  min_machines_running = 0 # Для економії можна поставити 0, або 1 для постійної роботи
   processes = ["app"]
 
   [[http_service.checks]]
