@@ -48,11 +48,8 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False):
                 logger.error(f"Не вдалося отримати/оновити токен cTrader для {pair}.")
                 return pd.DataFrame()
 
-            # Використовуємо '15m' замість '15min' для сумісності з cTrader
             tf_map = {'15min': '15m', '1h': '1h', '4h': '4h', '1day': '1day'}
             ctrader_tf = tf_map.get(tf, tf)
-            # Примітка: для денних графіків (1day) fetch_trendbars_sync може повернути мало даних.
-            # Для детального аналізу краще використовувати REST API або більший ліміт.
             df = fetch_trendbars_sync(access_token, account_id, symbol_id, timeframe=ctrader_tf)
 
         elif asset == 'stocks':
@@ -122,107 +119,22 @@ def analyze_pair(symbol: str, timeframe: str, limit: int = 150) -> dict:
         logger.error(f"[ANALYZE] Помилка для {symbol}: {e}", exc_info=True)
         return {'symbol': symbol, 'signal': 'ERROR'}
 
-# --- НОВА ФУНКЦІЯ ДЛЯ ДЕТАЛЬНОГО АНАЛІЗУ ---
+# --- ТИМЧАСОВА ВЕРСІЯ ФУНКЦІЇ ДЛЯ ВІДЛАДКИ ---
 def get_detailed_signal(pair: str, limit: int = 200) -> dict:
     """
-    Виконує детальний аналіз для пари, повертаючи дані для WebApp.
+    Тимчасова версія для відладки. Повертає статичні дані, щоб перевірити розгортання.
     """
-    asset_type = get_asset_type(pair)
-    # Використовуємо денний графік для основного, більш стабільного сигналу
-    df = get_market_data(pair, '1day', asset_type, limit=limit)
-
-    if df is None or df.empty or len(df) < 50: # Потрібно достатньо даних для EMA(50)
-        return {'error': f'Недостатньо історичних даних для аналізу {pair}'}
-
-    # 1. Розрахунок індикаторів
-    df.ta.ema(length=20, append=True, col_names=('EMA_20',))
-    df.ta.ema(length=50, append=True, col_names=('EMA_50',))
-    df.ta.rsi(length=14, append=True, col_names=('RSI_14',))
-    df.ta.bbands(length=20, append=True, col_names=('BBL_20_2.0', 'BBM_20_2.0', 'BBU_20_2.0', 'BBB_20_2.0', 'BBP_20_2.0'))
-    df.ta.macd(fast=12, slow=26, append=True, col_names=('MACD_12_26_9', 'MACDh_12_26_9', 'MACDs_12_26_9'))
-
-    last_row = df.iloc[-1]
-    prev_row = df.iloc[-2]
-    last_price = last_row['close']
-    
-    reasons = []
-    buy_score = 0
-    sell_score = 0
-
-    # 2. Формування списку причин на основі індикаторів
-    # Тренд за EMA
-    if last_price > last_row['EMA_20'] and last_row['EMA_20'] > last_row['EMA_50']:
-        reasons.append("🟢 Сильний висхідний тренд (Ціна > EMA20 > EMA50)")
-        buy_score += 2
-    elif last_price > last_row['EMA_20']:
-        reasons.append("🟢 Ціна вище EMA(20), що вказує на короткостроковий висхідний імпульс.")
-        buy_score += 1
-    elif last_price < last_row['EMA_20'] and last_row['EMA_20'] < last_row['EMA_50']:
-        reasons.append("🔴 Сильний низхідний тренд (Ціна < EMA20 < EMA50)")
-        sell_score += 2
-    elif last_price < last_row['EMA_20']:
-        reasons.append("🔴 Ціна нижче EMA(20), що вказує на короткостроковий низхідний імпульс.")
-        sell_score += 1
-        
-    # RSI
-    if last_row['RSI_14'] > 70:
-        reasons.append("🟡 RSI > 70: Ринок перекуплений, можлива корекція вниз.")
-        sell_score += 1
-    elif last_row['RSI_14'] < 30:
-        reasons.append("🟡 RSI < 30: Ринок перепроданий, можливий відскок вгору.")
-        buy_score += 1
-    
-    # Смуги Боллінджера
-    if last_price > last_row['BBU_20_2.0']:
-        reasons.append("🟡 Ціна пробила верхню смугу Боллінджера, що може вказувати на майбутню корекцію.")
-        sell_score += 1
-    if last_price < last_row['BBL_20_2.0']:
-        reasons.append("🟡 Ціна пробила нижню смугу Боллінджера, що може вказувати на майбутній відскок.")
-        buy_score += 1
-
-    # MACD (перетин)
-    if last_row['MACD_12_26_9'] > last_row['MACDs_12_26_9'] and prev_row['MACD_12_26_9'] <= prev_row['MACDs_12_26_9']:
-        reasons.append("🟢 MACD перетнув сигнальну лінію знизу вгору (бичачий сигнал).")
-        buy_score += 2
-    elif last_row['MACD_12_26_9'] < last_row['MACDs_12_26_9'] and prev_row['MACD_12_26_9'] >= prev_row['MACDs_12_26_9']:
-        reasons.append("🔴 MACD перетнув сигнальну лінію зверху вниз (ведмежий сигнал).")
-        sell_score += 2
-        
-    # 3. Формулювання вердикту
-    total_score = buy_score - sell_score
-    verdict_text = "НЕЙТРАЛЬНО"
-    verdict_level = "neutral"
-
-    if total_score >= 4:
-        verdict_text = "СИЛЬНА КУПІВЛЯ"
-        verdict_level = "strong_buy"
-    elif total_score >= 2:
-        verdict_text = "КУПІВЛЯ"
-        verdict_level = "moderate_buy"
-    elif total_score <= -4:
-        verdict_text = "СИЛЬНИЙ ПРОДАЖ"
-        verdict_level = "strong_sell"
-    elif total_score <= -2:
-        verdict_text = "ПРОДАЖ"
-        verdict_level = "moderate_sell"
-        
-    # 4. Форматування даних для графіка
-    chart_df = df.tail(100)
-    history_data = {
-        'dates': chart_df['ts'].dt.strftime('%Y-%m-%d').tolist(),
-        'open': chart_df['open'].tolist(),
-        'high': chart_df['high'].tolist(),
-        'low': chart_df['low'].tolist(),
-        'close': chart_df['close'].tolist(),
-    }
-
+    logger.info(f"DEBUG: get_detailed_signal для {pair}. Повертаю тестові дані.")
+    # Просто повертаємо "заглушку" з даними
     return {
         'pair': pair,
-        'price': last_price,
-        'verdict_text': verdict_text,
-        'verdict_level': verdict_level,
-        'reasons': reasons if reasons else ["Сигнали суперечливі, ринок невизначений."],
-        'support': last_row['BBL_20_2.0'],
-        'resistance': last_row['BBU_20_2.0'],
-        'history': history_data
+        'price': 1.2345,
+        'verdict_text': "ТЕСТОВИЙ СИГНАЛ",
+        'verdict_level': "neutral",
+        'reasons': ["Це тестові дані для перевірки розгортання."],
+        'support': 1.2300,
+        'resistance': 1.2400,
+        'history': { # Порожні дані, щоб графік не будувався
+            'dates': [], 'open': [], 'high': [], 'low': [], 'close': [],
+        }
     }
