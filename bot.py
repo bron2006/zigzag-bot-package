@@ -9,7 +9,7 @@ from telegram.ext import Updater, CommandHandler
 import config
 from config import app, logger, WEBHOOK_SECRET, TOKEN, CRYPTO_PAIRS_FULL, FOREX_SESSIONS, STOCK_TICKERS, ANALYSIS_TIMEFRAMES
 from db import init_db, get_watchlist
-from analysis import analyze_pair
+from analysis import analyze_pair, get_detailed_signal
 import telegram_ui # Важливо, щоб цей імпорт залишився
 
 # --- Логіка для запуску Telegram-бота у фоні ---
@@ -56,7 +56,6 @@ def setup_and_log():
         init_db()
         g._database_initialized = True
     
-    # Не логуємо запити до статичних файлів та health check, щоб не засмічувати логи
     if request.path.startswith(('/script.js', '/style.css', '/_headers')) or request.path == '/health':
         return
     logger.info(f"➡️ [{request.method}] {request.path}")
@@ -125,7 +124,6 @@ def get_mta():
     try:
         mta_results = []
         for tf in ANALYSIS_TIMEFRAMES:
-            # Використовуємо існуючу функцію аналізу для кожного таймфрейму
             analysis_result = analyze_pair(pair, tf)
             mta_results.append({
                 "tf": tf,
@@ -136,6 +134,26 @@ def get_mta():
 
     except Exception as e:
         logger.error(f"Помилка в /api/get_mta для пари {pair}: {e}", exc_info=True)
+        return jsonify({"error": "Internal server error"}), 500
+
+@app.route('/api/signal')
+def get_signal():
+    """Віддає детальний аналіз, вердикт та дані для графіка."""
+    pair = request.args.get('pair')
+    if not pair:
+        return jsonify({"error": "Pair parameter is missing"}), 400
+    
+    try:
+        # Використовуємо нову функцію для детального аналізу
+        signal_data = get_detailed_signal(pair)
+        
+        if signal_data.get('error'):
+            return jsonify(signal_data), 404
+
+        return jsonify(signal_data)
+
+    except Exception as e:
+        logger.error(f"Помилка в /api/signal для пари {pair}: {e}", exc_info=True)
         return jsonify({"error": "Internal server error"}), 500
 
 # --- Запуск фонового потоку для Telegram ---

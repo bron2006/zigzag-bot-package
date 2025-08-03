@@ -51,6 +51,8 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False):
             # Використовуємо '15m' замість '15min' для сумісності з cTrader
             tf_map = {'15min': '15m', '1h': '1h', '4h': '4h', '1day': '1day'}
             ctrader_tf = tf_map.get(tf, tf)
+            # Примітка: для денних графіків (1day) fetch_trendbars_sync може повернути мало даних.
+            # Для детального аналізу краще використовувати REST API або більший ліміт.
             df = fetch_trendbars_sync(access_token, account_id, symbol_id, timeframe=ctrader_tf)
 
         elif asset == 'stocks':
@@ -69,7 +71,6 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False):
 
         if df.empty: return pd.DataFrame()
         
-        # Перейменовуємо стовпці до нижнього регістру для сумісності з функціями аналізу
         df.columns = [col.lower() for col in df.columns]
         
         if use_cache: MARKET_DATA_CACHE[key] = df
@@ -78,8 +79,6 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False):
     except Exception as e:
         logger.error(f"Помилка отримання даних для {pair} (asset: {asset}, tf: {tf}): {e}", exc_info=True)
         return pd.DataFrame()
-
-# --- ПОЧАТОК ЗМІН: Відновлено відсутні функції ---
 
 def get_asset_type(pair: str) -> str:
     """Визначає тип активу за його тікером."""
@@ -91,11 +90,10 @@ def analyze_pair(symbol: str, timeframe: str, limit: int = 150) -> dict:
     """Завантажити історію, розрахувати індикатори та сформувати сигнал"""
     try:
         asset_type = get_asset_type(symbol)
-        # Використовуємо універсальну функцію get_market_data
         df = get_market_data(symbol, timeframe, asset_type, limit)
         
         if df is None or df.empty:
-            logger.warning(f"[ANALYZE] Дані для {symbol} відсутні")
+            logger.warning(f"[ANALYZE] Дані для {symbol} ({timeframe}) відсутні")
             return {'symbol': symbol, 'signal': 'NO DATA'}
 
         df.ta.ema(length=20, append=True)
@@ -124,45 +122,107 @@ def analyze_pair(symbol: str, timeframe: str, limit: int = 150) -> dict:
         logger.error(f"[ANALYZE] Помилка для {symbol}: {e}", exc_info=True)
         return {'symbol': symbol, 'signal': 'ERROR'}
 
-def get_signal_strength_verdict(results: list) -> str:
-    """Підраховує BUY/SELL сигнали та повертає загальну оцінку"""
-    buy_count = sum(1 for r in results if r['signal'] == 'BUY')
-    sell_count = sum(1 for r in results if r['signal'] == 'SELL')
-    total = len([r for r in results if r['signal'] in ('BUY', 'SELL')])
+# --- НОВА ФУНКЦІЯ ДЛЯ ДЕТАЛЬНОГО АНАЛІЗУ ---
+def get_detailed_signal(pair: str, limit: int = 200) -> dict:
+    """
+    Виконує детальний аналіз для пари, повертаючи дані для WebApp.
+    """
+    asset_type = get_asset_type(pair)
+    # Використовуємо денний графік для основного, більш стабільного сигналу
+    df = get_market_data(pair, '1day', asset_type, limit=limit)
 
-    if total == 0:
-        return "📊 Немає даних для аналізу"
+    if df is None or df.empty or len(df) < 50: # Потрібно достатньо даних для EMA(50)
+        return {'error': f'Недостатньо історичних даних для аналізу {pair}'}
 
-    strength = ''
-    if buy_count > sell_count:
-        strength = f"🟢 BUY: {buy_count}/{total}"
-    elif sell_count > buy_count:
-        strength = f"🔴 SELL: {sell_count}/{total}"
-    else:
-        strength = f"⚪️ NEUTRAL: {buy_count}/{total}"
+    # 1. Розрахунок індикаторів
+    df.ta.ema(length=20, append=True, col_names=('EMA_20',))
+    df.ta.ema(length=50, append=True, col_names=('EMA_50',))
+    df.ta.rsi(length=14, append=True, col_names=('RSI_14',))
+    df.ta.bbands(length=20, append=True, col_names=('BBL_20_2.0', 'BBM_20_2.0', 'BBU_20_2.0', 'BBB_20_2.0', 'BBP_20_2.0'))
+    df.ta.macd(fast=12, slow=26, append=True, col_names=('MACD_12_26_9', 'MACDh_12_26_9', 'MACDs_12_26_9'))
 
-    return f"Загальна оцінка ринку: {strength}"
+    last_row = df.iloc[-1]
+    prev_row = df.iloc[-2]
+    last_price = last_row['close']
+    
+    reasons = []
+    buy_score = 0
+    sell_score = 0
 
-def get_full_mta_verdict(pairs: list, timeframe: str) -> str:
-    """Отримує аналіз для списку пар і форматує вивід."""
-    results = []
-    for symbol in pairs:
-        # Використовуємо кеш, якщо дані вже є
-        cache_key = f"{symbol}_{timeframe}"
-        if cache_key in MARKET_DATA_CACHE and isinstance(MARKET_DATA_CACHE[cache_key], dict):
-             results.append(MARKET_DATA_CACHE[cache_key])
-        else:
-            result = analyze_pair(symbol, timeframe)
-            MARKET_DATA_CACHE[cache_key] = result
-            results.append(result)
+    # 2. Формування списку причин на основі індикаторів
+    # Тренд за EMA
+    if last_price > last_row['EMA_20'] and last_row['EMA_20'] > last_row['EMA_50']:
+        reasons.append("🟢 Сильний висхідний тренд (Ціна > EMA20 > EMA50)")
+        buy_score += 2
+    elif last_price > last_row['EMA_20']:
+        reasons.append("🟢 Ціна вище EMA(20), що вказує на короткостроковий висхідний імпульс.")
+        buy_score += 1
+    elif last_price < last_row['EMA_20'] and last_row['EMA_20'] < last_row['EMA_50']:
+        reasons.append("🔴 Сильний низхідний тренд (Ціна < EMA20 < EMA50)")
+        sell_score += 2
+    elif last_price < last_row['EMA_20']:
+        reasons.append("🔴 Ціна нижче EMA(20), що вказує на короткостроковий низхідний імпульс.")
+        sell_score += 1
+        
+    # RSI
+    if last_row['RSI_14'] > 70:
+        reasons.append("🟡 RSI > 70: Ринок перекуплений, можлива корекція вниз.")
+        sell_score += 1
+    elif last_row['RSI_14'] < 30:
+        reasons.append("🟡 RSI < 30: Ринок перепроданий, можливий відскок вгору.")
+        buy_score += 1
+    
+    # Смуги Боллінджера
+    if last_price > last_row['BBU_20_2.0']:
+        reasons.append("🟡 Ціна пробила верхню смугу Боллінджера, що може вказувати на майбутню корекцію.")
+        sell_score += 1
+    if last_price < last_row['BBL_20_2.0']:
+        reasons.append("🟡 Ціна пробила нижню смугу Боллінджера, що може вказувати на майбутній відскок.")
+        buy_score += 1
 
-    verdict = get_signal_strength_verdict(results)
-    formatted_results = []
-    for r in results:
-        if r and r.get('signal') != 'ERROR' and r.get('signal') != 'NO DATA':
-             formatted_results.append(f"{r['symbol']} — {r['signal']} ({r.get('price', '-')})")
+    # MACD (перетин)
+    if last_row['MACD_12_26_9'] > last_row['MACDs_12_26_9'] and prev_row['MACD_12_26_9'] <= prev_row['MACDs_12_26_9']:
+        reasons.append("🟢 MACD перетнув сигнальну лінію знизу вгору (бичачий сигнал).")
+        buy_score += 2
+    elif last_row['MACD_12_26_9'] < last_row['MACDs_12_26_9'] and prev_row['MACD_12_26_9'] >= prev_row['MACDs_12_26_9']:
+        reasons.append("🔴 MACD перетнув сигнальну лінію зверху вниз (ведмежий сигнал).")
+        sell_score += 2
+        
+    # 3. Формулювання вердикту
+    total_score = buy_score - sell_score
+    verdict_text = "НЕЙТРАЛЬНО"
+    verdict_level = "neutral"
 
-    formatted = "\n".join(formatted_results)
-    return f"{verdict}\n\n{formatted}"
+    if total_score >= 4:
+        verdict_text = "СИЛЬНА КУПІВЛЯ"
+        verdict_level = "strong_buy"
+    elif total_score >= 2:
+        verdict_text = "КУПІВЛЯ"
+        verdict_level = "moderate_buy"
+    elif total_score <= -4:
+        verdict_text = "СИЛЬНИЙ ПРОДАЖ"
+        verdict_level = "strong_sell"
+    elif total_score <= -2:
+        verdict_text = "ПРОДАЖ"
+        verdict_level = "moderate_sell"
+        
+    # 4. Форматування даних для графіка
+    chart_df = df.tail(100)
+    history_data = {
+        'dates': chart_df['ts'].dt.strftime('%Y-%m-%d').tolist(),
+        'open': chart_df['open'].tolist(),
+        'high': chart_df['high'].tolist(),
+        'low': chart_df['low'].tolist(),
+        'close': chart_df['close'].tolist(),
+    }
 
-# --- КІНЕЦЬ ЗМІН ---
+    return {
+        'pair': pair,
+        'price': last_price,
+        'verdict_text': verdict_text,
+        'verdict_level': verdict_level,
+        'reasons': reasons if reasons else ["Сигнали суперечливі, ринок невизначений."],
+        'support': last_row['BBL_20_2.0'],
+        'resistance': last_row['BBU_20_2.0'],
+        'history': history_data
+    }
