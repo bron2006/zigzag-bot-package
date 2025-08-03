@@ -1,7 +1,7 @@
 # bot.py
 import threading
-import time
-from flask import request, jsonify, g
+import os
+from flask import request, g, send_from_directory
 from flask_cors import CORS
 from telegram import Bot, Update
 from telegram.ext import Updater, CommandHandler
@@ -42,7 +42,9 @@ def run_telegram_bot():
             dp.job_queue.start()
 
         # Встановлюємо вебхук
-        webhook_url = f"https://{app.config['SERVER_NAME']}/{WEBHOOK_SECRET}"
+        # URL для вебхука тепер буде братись з оточення, що більш гнучко
+        app_name = os.getenv("FLY_APP_NAME", "zigzag-bot-package")
+        webhook_url = f"https://{app_name}.fly.dev/{WEBHOOK_SECRET}"
         bot.set_webhook(url=webhook_url)
         
         logger.info(f"🚀 Telegram bot is fully initialized. Webhook set to {webhook_url}")
@@ -51,18 +53,20 @@ def run_telegram_bot():
     except Exception as e:
         # Якщо щось піде не так під час ініціалізації, ми побачимо це в логах
         logger.error(f"❌ FATAL ERROR in bot initialization thread: {e}", exc_info=True)
-        # Прапор готовності не буде встановлено, і health check продовжить фейлитись,
-        # але тепер ми знатимемо чому.
     # --- КІНЕЦЬ ЗМІН ---
 
 # --- Flask логіка ---
-CORS(app)
+CORS(app) # Дозволяє крос-доменні запити (Cross-Origin Resource Sharing)
 
 @app.before_request
 def setup_and_log():
     if not hasattr(g, '_database_initialized'):
         init_db()
         g._database_initialized = True
+    
+    # Не логуємо запити до статичних файлів та health check, щоб не засмічувати логи
+    if request.path.startswith(('/script.js', '/style.css', '/_headers')) or request.path == '/health':
+        return
     logger.info(f"➡️ [{request.method}] {request.path}")
 
 @app.route(f"/{WEBHOOK_SECRET}", methods=["POST"])
@@ -75,17 +79,28 @@ def webhook_handler():
         logger.error("⚠️ Webhook received before dispatcher was initialized.")
         return "Initializing", 503
 
-
-@app.route('/')
+@app.route('/health')
 def health_check():
+    """Новий маршрут для перевірки стану, який буде використовувати Fly.io."""
     if config.HEALTH_READY:
         return "✅ Bot is ready", 200
     else:
         return "⏳ Still initializing...", 503
 
+@app.route('/')
+def serve_index():
+    """Подає головну сторінку WebApp."""
+    return send_from_directory('webapp', 'index.html')
+
+@app.route('/<path:filename>')
+def serve_webapp_files(filename):
+    """Подає статичні файли WebApp (JS, CSS)."""
+    return send_from_directory('webapp', filename)
+
+
 # --- Запуск фонового потоку для Telegram ---
 if __name__ != "__main__":
-    app.config['SERVER_NAME'] = "zigzag-bot-package.fly.dev"
+    # app.config['SERVER_NAME'] = "zigzag-bot-package.fly.dev" # ВИДАЛЕНО. Цей рядок викликав конфлікт з проксі Fly.io
     
     telegram_thread = threading.Thread(target=run_telegram_bot)
     telegram_thread.daemon = True

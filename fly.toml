@@ -16,7 +16,7 @@ app = "zigzag-bot-package"
     interval = "20s"
     timeout = "5s"
     method = "GET"
-    path = "/"
+    path = "/health" # ЗМІНЕНО: шлях для перевірки стану
     grace_period = "90s" # <-- Збільшений час очікування
 
 [[vm]]
