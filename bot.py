@@ -7,8 +7,9 @@ from telegram import Bot, Update
 from telegram.ext import Updater, CommandHandler
 
 import config
-from config import app, logger, WEBHOOK_SECRET, TOKEN, CRYPTO_PAIRS_FULL, FOREX_SESSIONS, STOCK_TICKERS
+from config import app, logger, WEBHOOK_SECRET, TOKEN, CRYPTO_PAIRS_FULL, FOREX_SESSIONS, STOCK_TICKERS, ANALYSIS_TIMEFRAMES
 from db import init_db, get_watchlist
+from analysis import analyze_pair
 import telegram_ui # Важливо, щоб цей імпорт залишився
 
 # --- Логіка для запуску Telegram-бота у фоні ---
@@ -55,6 +56,7 @@ def setup_and_log():
         init_db()
         g._database_initialized = True
     
+    # Не логуємо запити до статичних файлів та health check, щоб не засмічувати логи
     if request.path.startswith(('/script.js', '/style.css', '/_headers')) or request.path == '/health':
         return
     logger.info(f"➡️ [{request.method}] {request.path}")
@@ -93,16 +95,14 @@ def serve_webapp_files(filename):
 @app.route('/api/get_ranked_pairs')
 def get_ranked_pairs():
     """Віддає списки активів для початкового завантаження WebApp."""
-    init_data = request.args.get('initData') # Отримуємо, але поки не використовуємо
+    init_data = request.args.get('initData')
 
     # TODO: На наступних кроках ми будемо валідувати initData і отримувати user_id звідти.
-    # Поки що використовуємо тимчасове рішення.
     user_id = 12345 
     
     try:
         user_watchlist = get_watchlist(user_id)
         
-        # Формуємо відповідь у форматі, який очікує script.js
         response_data = {
             "crypto": [{"ticker": pair, "active": True} for pair in CRYPTO_PAIRS_FULL],
             "forex": {session: [{"ticker": pair, "active": True} for pair in pairs] for session, pairs in FOREX_SESSIONS.items()},
@@ -113,6 +113,29 @@ def get_ranked_pairs():
         
     except Exception as e:
         logger.error(f"Помилка в /api/get_ranked_pairs: {e}", exc_info=True)
+        return jsonify({"error": "Internal server error"}), 500
+
+@app.route('/api/get_mta')
+def get_mta():
+    """Віддає результати мульти-таймфреймного аналізу для одного активу."""
+    pair = request.args.get('pair')
+    if not pair:
+        return jsonify({"error": "Pair parameter is missing"}), 400
+
+    try:
+        mta_results = []
+        for tf in ANALYSIS_TIMEFRAMES:
+            # Використовуємо існуючу функцію аналізу для кожного таймфрейму
+            analysis_result = analyze_pair(pair, tf)
+            mta_results.append({
+                "tf": tf,
+                "signal": analysis_result.get('signal', 'ERROR')
+            })
+        
+        return jsonify(mta_results)
+
+    except Exception as e:
+        logger.error(f"Помилка в /api/get_mta для пари {pair}: {e}", exc_info=True)
         return jsonify({"error": "Internal server error"}), 500
 
 # --- Запуск фонового потоку для Telegram ---
