@@ -17,7 +17,7 @@ def get_executor():
     global _executor
     if _executor is None: _executor = ThreadPoolExecutor(max_workers=2)
     return _executor
-    
+
 def get_market_data(pair, tf, asset, limit=300, force_refresh=False):
     key = f"{pair}_{tf}_{limit}"
     use_cache = asset == 'crypto'
@@ -48,7 +48,10 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False):
                 logger.error(f"Не вдалося отримати/оновити токен cTrader для {pair}.")
                 return pd.DataFrame()
 
-            df = fetch_trendbars_sync(access_token, account_id, symbol_id, timeframe=tf)
+            # Використовуємо '15m' замість '15min' для сумісності з cTrader
+            tf_map = {'15min': '15m', '1h': '1h', '4h': '4h', '1day': '1day'}
+            ctrader_tf = tf_map.get(tf, tf)
+            df = fetch_trendbars_sync(access_token, account_id, symbol_id, timeframe=ctrader_tf)
 
         elif asset == 'stocks':
             finnhub_tf_map = {'15min': '15', '1h': '60', '4h': 'D', '1day': 'D'}
@@ -66,7 +69,7 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False):
 
         if df.empty: return pd.DataFrame()
         
-        # Перейменовуємо стовпці до нижнього регістру для сумісності
+        # Перейменовуємо стовпці до нижнього регістру для сумісності з функціями аналізу
         df.columns = [col.lower() for col in df.columns]
         
         if use_cache: MARKET_DATA_CACHE[key] = df
@@ -88,6 +91,7 @@ def analyze_pair(symbol: str, timeframe: str, limit: int = 150) -> dict:
     """Завантажити історію, розрахувати індикатори та сформувати сигнал"""
     try:
         asset_type = get_asset_type(symbol)
+        # Використовуємо універсальну функцію get_market_data
         df = get_market_data(symbol, timeframe, asset_type, limit)
         
         if df is None or df.empty:
@@ -140,21 +144,25 @@ def get_signal_strength_verdict(results: list) -> str:
     return f"Загальна оцінка ринку: {strength}"
 
 def get_full_mta_verdict(pairs: list, timeframe: str) -> str:
+    """Отримує аналіз для списку пар і форматує вивід."""
     results = []
     for symbol in pairs:
+        # Використовуємо кеш, якщо дані вже є
         cache_key = f"{symbol}_{timeframe}"
-        if cache_key in MARKET_DATA_CACHE:
-            results.append(MARKET_DATA_CACHE[cache_key])
+        if cache_key in MARKET_DATA_CACHE and isinstance(MARKET_DATA_CACHE[cache_key], dict):
+             results.append(MARKET_DATA_CACHE[cache_key])
         else:
             result = analyze_pair(symbol, timeframe)
             MARKET_DATA_CACHE[cache_key] = result
             results.append(result)
 
     verdict = get_signal_strength_verdict(results)
-    formatted = "\n".join([
-        f"{r['symbol']} — {r['signal']} ({r.get('price', '-')})"
-        for r in results
-    ])
+    formatted_results = []
+    for r in results:
+        if r and r.get('signal') != 'ERROR' and r.get('signal') != 'NO DATA':
+             formatted_results.append(f"{r['symbol']} — {r['signal']} ({r.get('price', '-')})")
+
+    formatted = "\n".join(formatted_results)
     return f"{verdict}\n\n{formatted}"
 
 # --- КІНЕЦЬ ЗМІН ---
