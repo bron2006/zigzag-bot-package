@@ -7,13 +7,13 @@ from telegram.error import BadRequest
 # Тепер імпортуємо лише константи
 from config import CRYPTO_PAIRS_FULL, CRYPTO_CHUNK_SIZE, STOCK_TICKERS, FOREX_SESSIONS, ANALYSIS_TIMEFRAMES
 from db import get_watchlist, toggle_watch
-from analysis import get_full_mta_verdict, analyze_pair # Імпортуємо потрібні функції
+# --- ПОЧАТОК ЗМІН: Виправляємо імпорт, оскільки get_full_mta_verdict більше не існує ---
+from analysis import analyze_pair 
+# --- КІНЕЦЬ ЗМІН ---
 
 # Глобальні змінні, які будуть ініціалізовані в bot.py
 bot = None
 dp = None
-
-# --- ПОЧАТОК ЗМІН: Відновлено та об'єднано весь функціонал ---
 
 # --- Клавіатури ---
 
@@ -111,32 +111,6 @@ def menu(update: Update, context: CallbackContext) -> None:
             reply_markup=reply_markup
         )
 
-def analysis_worker(context: CallbackContext):
-    """Фоновий воркер для надсилання аналізу."""
-    job_data = context.job.context
-    chat_id = job_data['chat_id']
-    pair = job_data['pair']
-    message_id = job_data['message_id']
-
-    results = [analyze_pair(pair, tf) for tf in ANALYSIS_TIMEFRAMES]
-    
-    verdict = get_signal_strength_verdict(results)
-    
-    mta_table = "Мульти-таймфрейм аналіз:\n"
-    for res in results:
-        tf = res.get('timeframe', 'N/A')
-        signal = res.get('signal', 'N/A')
-        mta_table += f"{tf}: {signal}\n"
-
-    final_text = f"Аналіз для *{pair}*:\n\n{verdict}\n\n`{mta_table}`"
-
-    context.bot.edit_message_text(
-        chat_id=chat_id,
-        message_id=message_id,
-        text=final_text,
-        parse_mode='Markdown'
-    )
-
 # --- Обробник кнопок ---
 
 def button_handler(update: Update, context: CallbackContext) -> None:
@@ -166,18 +140,24 @@ def button_handler(update: Update, context: CallbackContext) -> None:
     elif data.startswith('analyze_'):
         pair = data.split('_', 1)[1]
         
-        # Використовуємо get_full_mta_verdict для отримання швидкого аналізу
-        # Оскільки ANALYSIS_TIMEFRAMES - це список, ми візьмемо перший (наприклад, '15min') для швидкого огляду
+        # --- ПОЧАТОК ЗМІН: Використовуємо analyze_pair напряму ---
+        # Оскільки get_full_mta_verdict відсутній у стабільній версії analysis.py,
+        # ми викликаємо аналіз напряму і форматуємо просту відповідь.
         timeframe_for_quick_look = ANALYSIS_TIMEFRAMES[0] if ANALYSIS_TIMEFRAMES else '1h'
-        verdict_text = get_full_mta_verdict([pair], timeframe_for_quick_look)
+        result = analyze_pair(pair, timeframe_for_quick_look)
         
-        query.edit_message_text(f"Аналіз для {pair}:\n\n{verdict_text}")
+        signal = result.get('signal', 'N/A')
+        price = result.get('price', 0)
+        
+        verdict_text = f"Сигнал на {timeframe_for_quick_look}: *{signal}*\nЦіна: `{price}`"
+        
+        query.edit_message_text(f"Аналіз для *{pair}*:\n\n{verdict_text}", parse_mode='Markdown')
+        # --- КІНЕЦЬ ЗМІН ---
 
     elif data == 'main_menu':
         menu(update, context)
 
     elif data == 'noop':
-        # Нічого не робимо, кнопка лише для інформації
         pass
 
 # --- Реєстрація обробників ---
@@ -188,10 +168,6 @@ def register_handlers(dispatcher):
     dp = dispatcher
     bot = dp.bot
 
-    # Реєстрація всіх ваших обробників
     dp.add_handler(CommandHandler("start", start))
     dp.add_handler(CommandHandler("menu", menu))
-    # dp.add_handler(MessageHandler(Filters.regex(r'^МЕНЮ$'), menu)) # Можна видалити, якщо використовуєте лише inline
     dp.add_handler(CallbackQueryHandler(button_handler))
-
-# --- КІНЕЦЬ ЗМІН ---
