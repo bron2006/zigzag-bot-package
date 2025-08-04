@@ -14,7 +14,8 @@ def get_trading_accounts(access_token: str):
     api_url = f"{CTRADER_API_BASE_URL}/api/v2/accounts"
     headers = {"Authorization": f"Bearer {access_token}"}
     try:
-        response = requests.get(api_url, headers=headers, timeout=15)
+        # --- ЗМІНЕНО: Таймаут зменшено до 5 секунд ---
+        response = requests.get(api_url, headers=headers, timeout=5)
         response.raise_for_status()
         return response.json().get("data", [])
     except requests.exceptions.RequestException as e:
@@ -42,7 +43,8 @@ def get_trendbars(access_token: str, symbol_name: str, timeframe: str, limit: in
     
     headers = {"Authorization": f"Bearer {access_token}"}
     try:
-        response = requests.get(api_url, headers=headers, timeout=15)
+        # --- ЗМІНЕНО: Таймаут зменшено до 5 секунд ---
+        response = requests.get(api_url, headers=headers, timeout=5)
         response.raise_for_status()
         data = response.json().get("data", [])
         
@@ -58,11 +60,10 @@ def get_trendbars(access_token: str, symbol_name: str, timeframe: str, limit: in
         return pd.DataFrame()
 
 def _refresh_token(refresh_token: str):
-    logging.info("ДЕБАГ: Запущено оновлену функцію _refresh_token з детальним логуванням...")
-    
     payload = {'grant_type': 'refresh_token', 'refresh_token': refresh_token, 'client_id': CT_CLIENT_ID, 'client_secret': CT_CLIENT_SECRET }
     try:
-        response = requests.post(CTRADER_TOKEN_URL, data=payload, timeout=15)
+        # --- ЗМІНЕНО: Таймаут зменшено до 5 секунд ---
+        response = requests.post(CTRADER_TOKEN_URL, data=payload, timeout=5)
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
@@ -85,7 +86,6 @@ def get_valid_access_token(user_id: int):
             logging.info(f"Токен для {user_id} успішно оновлено.")
             return new_token_data.get('accessToken')
         
-        # --- ЗМІНЕНО: Додаємо логування за порадою експерта ---
         logging.error(f"‼️ Не вдалося отримати/оновити access_token для користувача {user_id} — буде повернено None.")
         return None
     
