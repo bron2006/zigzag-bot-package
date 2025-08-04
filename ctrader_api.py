@@ -7,43 +7,57 @@ import time
 from db import get_ctrader_token, save_ctrader_token
 from config import CT_CLIENT_ID, CT_CLIENT_SECRET
 
-# --- ЗМІНЕНО: Встановлюємо правильну адресу для REST API ---
+# --- ВИКОРИСТОВУЄМО ПРАВИЛЬНУ АДРЕСУ ДЛЯ REST API ---
 CTRADER_API_BASE_URL = "https://api.spotware.com"
 CTRADER_TOKEN_URL = "https://connect.spotware.com/oauth/v2/token"
 
-def get_trading_accounts(access_token: str):
-    # У цьому запиті потрібно вказати ctidTraderAccountId, тому ми його поки що не можемо використовувати
-    # Для отримання списку рахунків потрібен інший ендпоїнт
-    pass
-
 def get_trendbars(access_token: str, symbol_name: str, timeframe: str, limit: int):
-    # Для REST API нам потрібно знати ID нашого демо-рахунку
-    # Оскільки він у вас один, ми можемо тимчасово його тут вказати
-    DEMO_ACCOUNT_ID = "9541520" # З вашого скріншоту
+    # Ця мапа ID залишається актуальною
+    symbol_id_map = {
+        "EUR/USD": 1, "GBP/USD": 2, "USD/JPY": 3, "USD/CAD": 4, "AUD/USD": 5, 
+        "USD/CHF": 6, "NZD/USD": 7, "EUR/GBP": 8, "EUR/JPY": 9, "CHF/JPY": 48, 
+        "EUR/CHF": 49, "GBP/CHF": 50, "USD/MXN": 100, "USD/BRL": 101, "USD/ZAR": 102
+    }
+    symbol_id = symbol_id_map.get(symbol_name)
+    if not symbol_id:
+        logging.error(f"Невідомий символ для cTrader: {symbol_name}")
+        return pd.DataFrame()
 
-    # У REST API логіка отримання даних інша, вона вимагає ID рахунку
-    # Ми тимчасово спрощуємо логіку, щоб перевірити з'єднання
-    # https://api.spotware.com/connect/tradingaccounts/{ctidTraderAccountId}/symbols?oauth_token={accessToken}
+    timeframe_map = {"1m": "m1", "15min": "m15", "1h": "h1", "4h": "h4", "1day": "d1"}
+    ctrader_tf = timeframe_map.get(timeframe)
+    if not ctrader_tf:
+        logging.error(f"Непідтримуваний таймфрейм для cTrader: {timeframe}")
+        return pd.DataFrame()
     
-    # Спробуємо отримати дані по символах, це простіший запит
-    api_url = f"{CTRADER_API_BASE_URL}/connect/tradingaccounts/{DEMO_ACCOUNT_ID}/symbols?oauth_token={access_token}"
+    # --- ВИПРАВЛЕНО: Формуємо правильний URL для отримання свічок ---
+    # REST API cTrader використовує інший формат шляху, ніж той, що був у WebSocket API
+    api_url = f"{CTRADER_API_BASE_URL}/api/v2/symbols/{symbol_id}/trendbars/{ctrader_tf}"
     
+    # Параметри запиту передаємо окремо
+    params = {
+        'count': limit
+    }
     headers = {"Authorization": f"Bearer {access_token}"}
+    
     try:
-        logging.info(f"Звертаюся до URL: {api_url}")
-        response = requests.get(api_url, headers=headers, timeout=10)
+        logging.info(f"Звертаюся до URL: {api_url} з параметрами: {params}")
+        response = requests.get(api_url, headers=headers, params=params, timeout=10)
         response.raise_for_status()
         data = response.json().get("data", [])
         
-        logging.info(f"✅ УСПІХ! Отримано відповідь від {CTRADER_API_BASE_URL}")
-        logging.info(f"Отримано {len(data)} символів.")
-
-        # Оскільки ми отримуємо список символів, а не свічок, повертаємо тимчасовий результат
-        # Повноцінну логіку отримання свічок ми реалізуємо наступним кроком
-        return pd.DataFrame() # Повертаємо пустий DataFrame, щоб не зламати інший код
+        df = pd.DataFrame(data)
+        if df.empty: 
+            logging.warning(f"Отримано порожній результат для {symbol_name}")
+            return df
+            
+        df = df.rename(columns={'timestamp': 'ts', 'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'})
+        df['ts'] = pd.to_datetime(df['ts'], unit='ms', utc=True)
+        
+        logging.info(f"✅ УСПІХ! Отримано {len(df)} свічок для {symbol_name} з cTrader.")
+        return df[['ts', 'Open', 'High', 'Low', 'Close', 'Volume']]
 
     except requests.exceptions.RequestException as e:
-        error_message = f"Помилка при отриманні даних від cTrader REST API: {e}"
+        error_message = f"Помилка при отриманні даних свічок від cTrader: {e}"
         if e.response is not None:
             error_message += f" | Status Code: {e.response.status_code} | Response: {e.response.text}"
         logging.error(error_message)
