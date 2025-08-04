@@ -8,10 +8,8 @@ from config import CRYPTO_PAIRS_FULL, CRYPTO_CHUNK_SIZE, STOCK_TICKERS, FOREX_SE
 from db import get_watchlist, toggle_watch
 from analysis import get_signal_strength_verdict, get_full_mta_verdict
 
-# Глобальні змінні, які будуть ініціалізовані в bot.py
 dp = None
 
-# ------------------- KEYBOARDS -------------------
 def main_kb():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📈 Криптовалюти", callback_data='menu_crypto_0')],
@@ -30,8 +28,7 @@ def forex_session_kb():
 def asset_list_kb(asset_type, pairs, chunk_index=0):
     keyboard = []
     for pair_name in pairs:
-        # Для cTrader API потрібен формат без слеша, але для відображення і аналізу використовуємо зі слешем
-        ticker = pair_name 
+        ticker = pair_name
         callback_data = f'analyze_{asset_type}_{ticker.replace("/", "~")}_{pair_name.replace("/", "~")}_{chunk_index}'
         keyboard.append([InlineKeyboardButton(pair_name, callback_data=callback_data)])
     
@@ -51,7 +48,6 @@ def asset_list_kb(asset_type, pairs, chunk_index=0):
         
     return InlineKeyboardMarkup(keyboard)
 
-# ------------------- HANDLERS -------------------
 def start(update: Update, context: CallbackContext):
     keyboard = [["МЕНЮ"]]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
@@ -128,8 +124,8 @@ def button_handler(update: Update, context: CallbackContext):
         if not analysis_data: return query.answer("Дані застаріли, оновіть сигнал.", show_alert=True)
 
         reasons = "\n".join([f"• _{r}_" for r in analysis_data.get('reasons', [])]) or "_Немає виражених факторів._"
-        support = f"{analysis_data.get('support'):.4f}" if analysis_data.get('support') else "N/A"
-        resistance = f"{analysis_data.get('resistance'):.4f}" if analysis_data.get('resistance') else "N/A"
+        support = f"{analysis_data.get('support'):.5f}" if analysis_data.get('support') else "N/A"
+        resistance = f"{analysis_data.get('resistance'):.5f}" if analysis_data.get('resistance') else "N/A"
         
         details_text = f"*Ключові фактори:*\n{reasons}\n\n*Рівні:*\n📉 Підтримка: `{support}`\n📈 Опір: `{resistance}`"
 
@@ -143,13 +139,12 @@ def button_handler(update: Update, context: CallbackContext):
         user_id = query.from_user.id
         toggle_watch(user_id, ticker)
         query.answer(text=f"{ticker} оновлено в списку спостереження!", show_alert=True)
-        # Оновлюємо кнопку без перемальовування всього меню
         current_kb = query.message.reply_markup.inline_keyboard
         watchlist = get_watchlist(user_id)
         watch_text = "🌟 В обраному" if ticker in watchlist else "⭐ В обране"
         for row in current_kb:
             for button in row:
-                if button.callback_data == data:
+                if button.callback_data.startswith('togglewatch_'):
                     button.text = watch_text
         query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(current_kb))
 
@@ -163,7 +158,6 @@ def button_handler(update: Update, context: CallbackContext):
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Назад до вердикту", callback_data=back_callback)]])
         query.edit_message_text(text=msg, parse_mode='Markdown', reply_markup=kb)
 
-# --- Адаптовано для роботи з bot.py ---
 def register_handlers(dispatcher):
     global dp
     dp = dispatcher

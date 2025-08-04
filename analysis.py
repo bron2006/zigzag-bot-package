@@ -35,7 +35,8 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False, user_id=Non
             tf_map = {'15min': 'm15', '1h': 'h1', '4h': 'h4', '1day': 'd1'}
             ctrader_tf = tf_map.get(tf)
             if not ctrader_tf: return pd.DataFrame()
-            df = get_trendbars(access_token, pair.replace("/", ""), ctrader_tf, limit)
+            # --- ЗМІНЕНО: Передаємо пару зі слешем, як очікує ctrader_api.py ---
+            df = get_trendbars(access_token, pair, ctrader_tf, limit)
         elif asset == 'stocks':
             td_tf_map = { '15min': '15min', '1h': '1hour', '4h': '4hour', '1day': '1day'}
             td_tf = td_tf_map.get(tf)
@@ -44,7 +45,6 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False, user_id=Non
             df = ts.as_pandas()
             if not df.empty:
                 df = df.reset_index().sort_values(by='datetime').reset_index(drop=True)
-                df['datetime'] = pd.to_datetime(df['datetime']).dt.tz_localize('UTC')
 
         if df.empty: return pd.DataFrame()
         df.columns = [str(col).lower() for col in df.columns]
@@ -54,7 +54,7 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False, user_id=Non
         logger.error(f"Помилка отримання даних для {pair} ({asset}, {tf}): {e}")
         return pd.DataFrame()
 
-# --- ФУНКЦІЇ ДЛЯ ІНТЕРФЕЙСУ БОТА ---
+# --- ФУНКЦІЇ ДЛЯ ІНТЕРФЕЙСУ БОТА (з вашого старого файлу) ---
 
 def get_signal_strength_verdict(pair, display_name, asset, user_id=None, force_refresh=False):
     df = get_market_data(pair, '15min', asset, limit=100, force_refresh=force_refresh, user_id=user_id)
@@ -66,7 +66,7 @@ def get_signal_strength_verdict(pair, display_name, asset, user_id=None, force_r
         add_signal_to_history({'user_id': user_id, 'pair': pair, 'price': analysis['price'], 'bull_percentage': analysis['score']})
         
         verdict_text, _ = _generate_verdict(analysis)
-        formatted_price = f"{analysis['price']:.4f}"
+        formatted_price = f"{analysis['price']:.5f}"
         final_message = (f"**{verdict_text}**\n\n"
                          f"*{display_name}* | *Ціна:* `{formatted_price}`\n\n"
                          f"_Це не фінансова порада. Для деталей натисніть кнопки нижче._")
@@ -102,7 +102,8 @@ def get_api_detailed_signal_data(pair, user_id=None):
         verdict_text, verdict_level = _generate_verdict(analysis)
         
         date_col = 'ts' if asset == 'crypto' else 'datetime'
-        history = { "dates": df.tail(50)[date_col].dt.strftime('%Y-%m-%d %H:%M:%S').tolist(), "open": df.tail(50)['open'].tolist(), "high": df.tail(50)['high'].tolist(), "low": df.tail(50)['low'].tolist(), "close": df.tail(50)['close'].tolist() }
+        history_df = df.tail(50)
+        history = { "dates": history_df[date_col].dt.strftime('%Y-%m-%d %H:%M:%S').tolist(), "open": history_df['open'].tolist(), "high": history_df['high'].tolist(), "low": history_df['low'].tolist(), "close": history_df['close'].tolist() }
         
         return { "pair": pair, "price": analysis['price'], "verdict_text": verdict_text, "verdict_level": verdict_level, "reasons": analysis['reasons'], "support": analysis['support'], "resistance": analysis['resistance'], "history": history }
     except Exception as e: return {"error": str(e)}
@@ -158,8 +159,8 @@ def _find_sr_levels(df, current_price):
 
 def _generate_verdict(analysis):
     score = analysis['score']
-    if score > 65: return "⬆️ Сигнал: КУПУВАТИ", "strong_buy"
-    if score > 55: return "↗️ Сигнал: КУПУВАТИ", "moderate_buy"
-    if score < 35: return "⬇️ Сигнал: ПРОДАВАТИ", "strong_sell"
-    if score < 45: return "↘️ Сигнал: ПРОДАВАТИ", "moderate_sell"
+    if score > 65: return "⬆️ Сильний сигнал: КУПУВАТИ", "strong_buy"
+    if score > 55: return "↗️ Помірний сигнал: КУПУВАТИ", "moderate_buy"
+    if score < 35: return "⬇️ Сильний сигнал: ПРОДАВАТИ", "strong_sell"
+    if score < 45: return "↘️ Помірний сигнал: ПРОДАВАТИ", "moderate_sell"
     return "🟡 НЕЙТРАЛЬНА СИТУАЦІЯ", "neutral"
