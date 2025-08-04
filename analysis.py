@@ -4,7 +4,7 @@ import pandas_ta as ta
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor
 
-# --- ЗМІНЕНО: Прибираємо імпорт 'binance', оскільки він більше не існує ---
+from db import add_signal_to_history
 from config import logger, td, MARKET_DATA_CACHE, ANALYSIS_TIMEFRAMES
 from ctrader_api import get_valid_access_token
 from ctrader_websocket_client import fetch_trendbars_sync
@@ -25,7 +25,6 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False, user_id=Non
         return MARKET_DATA_CACHE[key]
     try:
         df = pd.DataFrame()
-        # --- ЗМІНЕНО: Оскільки криптовалюта вимкнена, цей блок тепер просто повертає порожній результат ---
         if asset == 'crypto':
             logger.info("Крипто-модуль вимкнено, пропускаємо запит.")
             return pd.DataFrame()
@@ -158,6 +157,15 @@ def _find_sr_levels(df, current_price):
     resistance = highs[highs > current_price].min()
     return support if pd.notna(support) else None, resistance if pd.notna(resistance) else None
 
+# --- ВИПРАВЛЕНО: Чистий код без пошкоджених символів ---
 def _generate_verdict(analysis):
     score = analysis['score']
-    if score > 65: return "⬆️ Сильний
+    if score > 65:
+        return "⬆️ Сильний сигнал: КУПУВАТИ", "strong_buy"
+    if score > 55:
+        return "↗️ Помірний сигнал: КУПУВАТИ", "moderate_buy"
+    if score < 35:
+        return "⬇️ Сильний сигнал: ПРОДАВАТИ", "strong_sell"
+    if score < 45:
+        return "↘️ Помірний сигнал: ПРОДАВАТИ", "moderate_sell"
+    return "🟡 НЕЙТРАЛЬНА СИТУАЦІЯ", "neutral"
