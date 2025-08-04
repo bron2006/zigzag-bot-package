@@ -27,6 +27,7 @@ def _get_user_id_from_request(req):
         logger.warning(f"Failed to parse initData: {e}")
     return int(MY_TELEGRAM_ID) if MY_TELEGRAM_ID else None
 
+# --- ДОДАНО ВІДСУТНЮ ФУНКЦІЮ ---
 def init_ctrader_token():
     """Перевіряє і зберігає токен cTrader з секретів при першому запуску."""
     if not MY_TELEGRAM_ID or not CTRADER_ACCESS_TOKEN or not CTRADER_REFRESH_TOKEN:
@@ -44,7 +45,7 @@ def init_ctrader_token():
             logger.info(f"Токен cTrader для користувача {user_id} вже існує в базі даних.")
     except Exception as e:
         logger.error(f"Помилка під час ініціалізації токену cTrader: {e}")
-
+# ------------------------------------
 
 @app.before_request
 def log_request():
@@ -71,7 +72,7 @@ def api_signal():
         return jsonify(data)
     except Exception as e:
         logger.error(f"API error for pair {pair}: {e}\n{traceback.format_exc()}")
-        return jsonify({"error": "Внутрішня помилка сервера"}), 500
+        return jsonify({"error": f"Внутрішня помилка сервера"}), 500
 
 @app.route("/api/get_ranked_pairs", methods=["GET"])
 def api_get_ranked_pairs():
@@ -133,5 +134,5 @@ def index():
 if __name__ != "__main__":
     with app.app_context():
         init_db()
-        init_ctrader_token() # <-- ВИКЛИКАЄМО АВТОМАТИЧНУ ІНІЦІАЛІЗАЦІЮ
+        init_ctrader_token() # <-- Тепер ця функція існує і виклик спрацює
     telegram_ui.register_handlers(dp)
