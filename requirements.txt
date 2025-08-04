@@ -9,5 +9,5 @@ python-dotenv
 cachetools==4.2.2
 Flask-Cors
 requests
-protobuf==3.2.0
+protobuf==3.20.3
 websockets==12.0
