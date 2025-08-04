@@ -14,6 +14,13 @@ def get_executor():
         _executor = ThreadPoolExecutor(max_workers=2)
     return _executor
 
+# --- ДОДАНО ВІДСУТНЮ ФУНКЦІЮ ---
+def get_asset_type(pair: str) -> str:
+    """Визначає тип активу за його тікером."""
+    if '/' in pair:
+        return 'crypto' if 'USDT' in pair else 'forex'
+    return 'stocks'
+
 def get_market_data(pair, tf, asset, limit=300, force_refresh=False, user_id=None):
     key = f"{pair}_{tf}_{limit}"
     use_cache = asset == 'crypto'
@@ -37,9 +44,13 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False, user_id=Non
                 logger.error(f"Не вдалося отримати/оновити токен cTrader для user_id {user_id}.")
                 return pd.DataFrame()
             
-            tf_map = {'15min': '15m', '1h': '1h', '4h': '4h', '1day': 'd1'}
-            ctrader_tf = tf_map.get(tf, tf)
-            
+            tf_map = {'15min': 'm15', '1h': 'h1', '4h': 'h4', '1day': 'd1'}
+            ctrader_tf = tf_map.get(tf)
+            if not ctrader_tf:
+                logger.error(f"Непідтримуваний таймфрейм для cTrader: {tf}")
+                return pd.DataFrame()
+
+            # У cTrader API назви символів без слеша, напр. "EURUSD"
             df = get_trendbars(access_token, pair.replace("/", ""), ctrader_tf, limit)
             if not df.empty:
                 df = df.rename(columns={'ts':'datetime'})
@@ -61,6 +72,10 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False, user_id=Non
         if df.empty:
             logger.warning(f"API повернуло порожній результат для {pair} на ТФ {tf}")
             return pd.DataFrame()
+        
+        # Переводимо назви колонок в нижній регістр для сумісності
+        df.columns = [str(col).lower() for col in df.columns]
+
         if use_cache:
             MARKET_DATA_CACHE[key] = df
         return df
@@ -68,13 +83,48 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False, user_id=Non
         logger.error(f"Помилка отримання даних для {pair} на ТФ {tf}: {e}")
         return pd.DataFrame()
 
+# --- ДОДАНО ВІДСУТНЮ ФУНКЦІЮ ---
+def analyze_pair(symbol: str, timeframe: str, limit: int = 150) -> dict:
+    """Простий аналіз для кнопок в Telegram боті."""
+    try:
+        asset_type = get_asset_type(symbol)
+        # Викликаємо get_market_data з None user_id, оскільки telegram_ui не має доступу до initData
+        df = get_market_data(symbol, timeframe, asset_type, limit, user_id=None)
+        
+        if df is None or df.empty or len(df) < 20:
+            return {'symbol': symbol, 'signal': 'NO DATA'}
+
+        # Використовуємо назви колонок в нижньому регістрі
+        df.ta.ema(close=df['close'], length=20, append=True, col_names=('EMA_20',))
+        df.ta.rsi(close=df['close'], length=14, append=True, col_names=('RSI_14',))
+
+        last_rsi = df['RSI_14'].iloc[-1]
+        last_price = df['close'].iloc[-1]
+        last_ema = df['EMA_20'].iloc[-1]
+
+        signal = 'NEUTRAL'
+        if last_price > last_ema and last_rsi > 55:
+            signal = 'BUY'
+        elif last_price < last_ema and last_rsi < 45:
+            signal = 'SELL'
+
+        return {
+            'symbol': symbol,
+            'signal': signal,
+            'price': round(last_price, 5)
+        }
+    except Exception as e:
+        logger.error(f"Помилка в analyze_pair для {symbol}: {e}", exc_info=True)
+        return {'symbol': symbol, 'signal': 'ERROR'}
+
+
 def _calculate_core_signal(df, daily_df):
-    df.ta.rsi(length=14, append=True, col_names=('RSI',))
-    df.ta.kama(length=14, append=True, col_names=('KAMA',))
+    df.ta.rsi(close=df['close'], length=14, append=True, col_names=('RSI',))
+    df.ta.kama(close=df['close'], length=14, append=True, col_names=('KAMA',))
     last = df.iloc[-1]
     if pd.isna(last['RSI']) or pd.isna(last['KAMA']):
         raise ValueError("Помилка розрахунку індикаторів")
-    current_price = float(last['Close'])
+    current_price = float(last['close'])
     score = 50
     reasons = []
     if current_price > last['KAMA']: score += 10; reasons.append("Ціна вище KAMA(14)")
@@ -86,8 +136,7 @@ def _calculate_core_signal(df, daily_df):
     return { "score": score, "reasons": reasons, "price": current_price }
 
 def get_api_detailed_signal_data(pair, user_id=None):
-    asset = 'stocks'
-    if '/' in pair: asset = 'crypto' if 'USDT' in pair else 'forex'
+    asset = get_asset_type(pair)
     
     df = get_market_data(pair, '15min', asset, limit=100, user_id=user_id)
     if df.empty or len(df) < 25:
@@ -102,8 +151,14 @@ def get_api_detailed_signal_data(pair, user_id=None):
         elif analysis['score'] < 40: verdict_text, verdict_level = "ПРОДАЖ", "moderate_sell"
 
         history_df = df.tail(50)
-        date_col = 'ts' if 'ts' in history_df.columns else 'datetime'
-        history = { "dates": history_df[date_col].dt.strftime('%Y-%m-%d %H:%M:%S').tolist(), "open": history_df['Open'].tolist(), "high": history_df['High'].tolist(), "low": history_df['Low'].tolist(), "close": history_df['Close'].tolist() }
+        date_col = 'datetime'
+        history = { 
+            "dates": history_df[date_col].dt.strftime('%Y-%m-%d %H:%M:%S').tolist(), 
+            "open": history_df['open'].tolist(), 
+            "high": history_df['high'].tolist(), 
+            "low": history_df['low'].tolist(), 
+            "close": history_df['close'].tolist() 
+        }
         return { "pair": pair, "price": analysis['price'], "verdict_text": verdict_text, "verdict_level": verdict_level, "reasons": analysis['reasons'], "support": None, "resistance": None, "history": history }
     except Exception as e:
         logger.error(f"Error in get_api_detailed_signal_data for {pair}: {e}")
@@ -113,8 +168,8 @@ def get_api_mta_data(pair, asset, user_id=None):
     def worker(tf):
         df = get_market_data(pair, tf, asset, limit=200, user_id=user_id)
         if df.empty or len(df) < 55: return None
-        df.ta.ema(length=21, append=True, col_names='EMA_fast')
-        df.ta.ema(length=55, append=True, col_names='EMA_slow')
+        df.ta.ema(close=df['close'], length=21, append=True, col_names='EMA_fast')
+        df.ta.ema(close=df['close'], length=55, append=True, col_names='EMA_slow')
         last_row = df.iloc[-1]
         if pd.isna(last_row['EMA_fast']) or pd.isna(last_row['EMA_slow']): return None
         signal = "BUY" if last_row['EMA_fast'] > last_row['EMA_slow'] else "SELL"
@@ -130,7 +185,7 @@ def rank_assets_for_api(pairs, asset_type, user_id=None):
             timeframe = '1h' if asset_type == 'crypto' else '15min'
             df = get_market_data(pair, timeframe, asset_type, limit=50, user_id=user_id)
             if df.empty or len(df) < 30: return {'ticker': pair, 'score': -1}
-            rsi = df.ta.rsi(length=14).iloc[-1]
+            rsi = df.ta.rsi(close=df['close'], length=14).iloc[-1]
             if pd.isna(rsi): return {'ticker': pair, 'score': -1}
             return {'ticker': pair, 'score': abs(rsi - 50)}
         except Exception as e:
