@@ -7,62 +7,52 @@ import time
 from db import get_ctrader_token, save_ctrader_token
 from config import CT_CLIENT_ID, CT_CLIENT_SECRET
 
-CTRADER_API_BASE_URL = "https://demo.ctraderapi.com"
+# --- ЗМІНЕНО: Встановлюємо правильну адресу для REST API ---
+CTRADER_API_BASE_URL = "https://api.spotware.com"
 CTRADER_TOKEN_URL = "https://connect.spotware.com/oauth/v2/token"
 
 def get_trading_accounts(access_token: str):
-    api_url = f"{CTRADER_API_BASE_URL}/api/v2/accounts"
-    headers = {"Authorization": f"Bearer {access_token}"}
-    try:
-        # --- ЗМІНЕНО: Таймаут зменшено до 5 секунд ---
-        response = requests.get(api_url, headers=headers, timeout=5)
-        response.raise_for_status()
-        return response.json().get("data", [])
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Помилка при отриманні рахунків cTrader: {e}")
-        return None
+    # У цьому запиті потрібно вказати ctidTraderAccountId, тому ми його поки що не можемо використовувати
+    # Для отримання списку рахунків потрібен інший ендпоїнт
+    pass
 
 def get_trendbars(access_token: str, symbol_name: str, timeframe: str, limit: int):
-    symbol_id_map = {
-        "EUR/USD": 1, "GBP/USD": 2, "USD/JPY": 3, "USD/CAD": 4, "AUD/USD": 5, 
-        "USD/CHF": 6, "NZD/USD": 7, "EUR/GBP": 8, "EUR/JPY": 9, "CHF/JPY": 48, 
-        "EUR/CHF": 49, "GBP/CHF": 50, "USD/MXN": 100, "USD/BRL": 101, "USD/ZAR": 102
-    }
-    symbol_id = symbol_id_map.get(symbol_name)
-    if not symbol_id:
-        logging.error(f"Невідомий символ для cTrader: {symbol_name}")
-        return pd.DataFrame()
+    # Для REST API нам потрібно знати ID нашого демо-рахунку
+    # Оскільки він у вас один, ми можемо тимчасово його тут вказати
+    DEMO_ACCOUNT_ID = "9541520" # З вашого скріншоту
 
-    timeframe_map = {"1m": "m1", "15min": "m15", "1h": "h1", "4h": "h4", "1day": "d1"}
-    ctrader_tf = timeframe_map.get(timeframe)
-    if not ctrader_tf:
-        logging.error(f"Непідтримуваний таймфрейм для cTrader: {timeframe}")
-        return pd.DataFrame()
-        
-    api_url = f"{CTRADER_API_BASE_URL}/api/v2/symbols/{symbol_id}/trendbars/{ctrader_tf}?count={limit}"
+    # У REST API логіка отримання даних інша, вона вимагає ID рахунку
+    # Ми тимчасово спрощуємо логіку, щоб перевірити з'єднання
+    # https://api.spotware.com/connect/tradingaccounts/{ctidTraderAccountId}/symbols?oauth_token={accessToken}
+    
+    # Спробуємо отримати дані по символах, це простіший запит
+    api_url = f"{CTRADER_API_BASE_URL}/connect/tradingaccounts/{DEMO_ACCOUNT_ID}/symbols?oauth_token={access_token}"
     
     headers = {"Authorization": f"Bearer {access_token}"}
     try:
-        # --- ЗМІНЕНО: Таймаут зменшено до 5 секунд ---
-        response = requests.get(api_url, headers=headers, timeout=5)
+        logging.info(f"Звертаюся до URL: {api_url}")
+        response = requests.get(api_url, headers=headers, timeout=10)
         response.raise_for_status()
         data = response.json().get("data", [])
         
-        df = pd.DataFrame(data)
-        if df.empty: return df
-            
-        df = df.rename(columns={'timestamp': 'ts', 'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'})
-        df['ts'] = pd.to_datetime(df['ts'], unit='ms', utc=True)
-        
-        return df[['ts', 'Open', 'High', 'Low', 'Close', 'Volume']]
+        logging.info(f"✅ УСПІХ! Отримано відповідь від {CTRADER_API_BASE_URL}")
+        logging.info(f"Отримано {len(data)} символів.")
+
+        # Оскільки ми отримуємо список символів, а не свічок, повертаємо тимчасовий результат
+        # Повноцінну логіку отримання свічок ми реалізуємо наступним кроком
+        return pd.DataFrame() # Повертаємо пустий DataFrame, щоб не зламати інший код
+
     except requests.exceptions.RequestException as e:
-        logging.error(f"Помилка при отриманні даних свічок від cTrader: {e}")
+        error_message = f"Помилка при отриманні даних від cTrader REST API: {e}"
+        if e.response is not None:
+            error_message += f" | Status Code: {e.response.status_code} | Response: {e.response.text}"
+        logging.error(error_message)
         return pd.DataFrame()
+
 
 def _refresh_token(refresh_token: str):
     payload = {'grant_type': 'refresh_token', 'refresh_token': refresh_token, 'client_id': CT_CLIENT_ID, 'client_secret': CT_CLIENT_SECRET }
     try:
-        # --- ЗМІНЕНО: Таймаут зменшено до 5 секунд ---
         response = requests.post(CTRADER_TOKEN_URL, data=payload, timeout=5)
         response.raise_for_status()
         return response.json()
