@@ -4,8 +4,8 @@ import pandas_ta as ta
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor
 
-from db import add_signal_to_history
-from config import logger, binance, td, MARKET_DATA_CACHE, ANALYSIS_TIMEFRAMES
+# --- ЗМІНЕНО: Прибираємо імпорт 'binance', оскільки він більше не існує ---
+from config import logger, td, MARKET_DATA_CACHE, ANALYSIS_TIMEFRAMES
 from ctrader_api import get_valid_access_token
 from ctrader_websocket_client import fetch_trendbars_sync
 
@@ -25,22 +25,21 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False, user_id=Non
         return MARKET_DATA_CACHE[key]
     try:
         df = pd.DataFrame()
+        # --- ЗМІНЕНО: Оскільки криптовалюта вимкнена, цей блок тепер просто повертає порожній результат ---
         if asset == 'crypto':
-            bars = binance.fetch_ohlcv(pair, timeframe=tf, limit=limit)
-            df = pd.DataFrame(bars, columns=['ts','open','high','low','close','volume'])
-            df['ts'] = pd.to_datetime(df['ts'], unit='ms', utc=True)
+            logger.info("Крипто-модуль вимкнено, пропускаємо запит.")
+            return pd.DataFrame()
         
         elif asset == 'forex':
             if not user_id: return pd.DataFrame()
             access_token = get_valid_access_token(user_id)
             if not access_token: return pd.DataFrame()
-
+            
             DEMO_ACCOUNT_ID = 9541520
             symbol_id_map = { "EUR/USD": 1, "GBP/USD": 2, "USD/JPY": 3, "USD/CAD": 4, "AUD/USD": 5, "USD/CHF": 6, "NZD/USD": 7, "EUR/GBP": 8, "EUR/JPY": 9, "CHF/JPY": 48, "EUR/CHF": 49, "GBP/CHF": 50, "USD/MXN": 100, "USD/BRL": 101, "USD/ZAR": 102 }
             symbol_id = symbol_id_map.get(pair)
             if not symbol_id: return pd.DataFrame()
 
-            # --- ВИПРАВЛЕНО: Передаємо таймфрейм (напр. '1m') напряму, без перетворень ---
             df = fetch_trendbars_sync(access_token, DEMO_ACCOUNT_ID, symbol_id, tf)
             
         elif asset == 'stocks':
@@ -122,6 +121,8 @@ def get_api_mta_data(pair, asset, user_id=None):
     return [r for r in results if r is not None]
 
 def rank_assets_for_api(pairs, asset_type, user_id=None):
+    if not pairs:
+        return []
     def fetch_score(pair):
         df = get_market_data(pair, '1h', asset_type, limit=50, user_id=user_id)
         if df.empty or len(df) < 30: return {'ticker': pair, 'score': -1}
@@ -159,8 +160,4 @@ def _find_sr_levels(df, current_price):
 
 def _generate_verdict(analysis):
     score = analysis['score']
-    if score > 65: return "⬆️ Сильний сигнал: КУПУВАТИ", "strong_buy"
-    if score > 55: return "↗️ Помірний сигнал: КУПУВАТИ", "moderate_buy"
-    if score < 35: return "⬇️ Сильний сигнал: ПРОДАВАТИ", "strong_sell"
-    if score < 45: return "↘️ Помірний сигнал: ПРОДАВАТИ", "moderate_sell"
-    return "🟡 НЕЙТРАЛЬНА СИТУАЦІЯ", "neutral"
+    if score > 65: return "⬆️ Сильний
