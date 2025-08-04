@@ -11,12 +11,13 @@ from analysis import get_signal_strength_verdict, get_full_mta_verdict
 dp = None
 
 def main_kb():
+    # --- ЗМІНЕНО: Видаляємо кнопку "Криптовалюти" з головного меню ---
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📈 Криптовалюти", callback_data='menu_crypto_0')],
+        # [InlineKeyboardButton("📈 Криптовалюти", callback_data='menu_crypto_0')],
         [InlineKeyboardButton("💹 Валютні пари", callback_data='menu_forex')],
         [InlineKeyboardButton("🏢 Акції", callback_data='menu_stocks')]
     ])
-
+# ... решта файлу telegram_ui.py залишається без змін ...
 def forex_session_kb():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🗾 Азіатська", callback_data="session_Азіатська")],

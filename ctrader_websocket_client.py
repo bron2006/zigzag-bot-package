@@ -15,12 +15,20 @@ from openapi_client.protobuf.OpenApiMessages_pb2 import (
     ProtoOASubscribeLiveTrendbarRes,
     ProtoOAErrorRes
 )
+# --- ДОДАНО: Імпорт для Heartbeat ---
+from openapi_client.protobuf.OpenApiCommonMessages_pb2 import ProtoHeartbeatEvent
 
 SPOTWARE_WS_URL = "wss://demo.ctraderapi.com:5035"
 
 async def _fetch_trendbars_async(access_token: str, account_id: int, symbol_id: int, timeframe: str) -> pd.DataFrame:
     try:
         async with websockets.connect(SPOTWARE_WS_URL) as ws:
+            # --- ЗМІНЕНО: Надсилаємо Heartbeat перед авторизацією за порадою з форуму ---
+            heartbeat_msg = ProtoMessage(payloadType=51, payload=ProtoHeartbeatEvent().SerializeToString())
+            await ws.send(heartbeat_msg.SerializeToString())
+            logger.info("📤 WebSocket: Надіслано Heartbeat.")
+            # --------------------------------------------------------------------------
+
             app_auth_req = ProtoOAApplicationAuthReq(clientId=CT_CLIENT_ID, clientSecret=CT_CLIENT_SECRET)
             wrapper_msg = ProtoMessage(payloadType=ProtoOAPayloadType.PROTO_OA_APPLICATION_AUTH_REQ, payload=app_auth_req.SerializeToString())
             await ws.send(wrapper_msg.SerializeToString())
@@ -35,12 +43,9 @@ async def _fetch_trendbars_async(access_token: str, account_id: int, symbol_id: 
 
             await asyncio.sleep(0.5)
 
-            # --- ВИПРАВЛЕНО: Створюємо правильний і повний словник відповідності ---
             tf_map = {
-                '1m': ProtoOATrendbarPeriod.M1,
-                '15min': ProtoOATrendbarPeriod.M15,
-                '1h': ProtoOATrendbarPeriod.H1,
-                '4h': ProtoOATrendbarPeriod.H4,
+                '1m': ProtoOATrendbarPeriod.M1, '15min': ProtoOATrendbarPeriod.M15,
+                '1h': ProtoOATrendbarPeriod.H1, '4h': ProtoOATrendbarPeriod.H4,
                 '1day': ProtoOATrendbarPeriod.D1
             }
             tf_enum = tf_map.get(timeframe)
@@ -72,25 +77,24 @@ async def _fetch_trendbars_async(access_token: str, account_id: int, symbol_id: 
                 if response_wrapper.payloadType == ProtoOAPayloadType.PROTO_OA_SPOT_EVENT:
                     event = ProtoOASpotEvent()
                     event.ParseFromString(response_wrapper.payload)
-
                     if not event.trendbar:
                         logger.warning(f"⚠️ WebSocket: Отримано SpotEvent, але він не містить трендбарів для {symbol_id}.")
                         return pd.DataFrame()
-
                     logger.info(f"📥 WebSocket: Отримано {len(event.trendbar)} свічок для {symbol_id}.")
-                    
                     bars = [{'ts': pd.to_datetime(bar.utcTimestampInMinutes * 60, unit='s', utc=True),
                              'Open': (bar.low + bar.deltaOpen) / 100000.0, 'High': (bar.low + bar.deltaHigh) / 100000.0,
                              'Low': bar.low / 100000.0, 'Close': (bar.low + bar.deltaClose) / 100000.0,
                              'Volume': bar.volume} for bar in event.trendbar]
-                    
                     return pd.DataFrame(bars)
                 
+                # Ігноруємо heartbeat-відповіді від сервера
+                if response_wrapper.payloadType == 51:
+                    continue
+
                 logger.info(f"ℹ️ WebSocket: Отримано проміжне повідомлення типу: {response_wrapper.payloadType}")
             
             logger.error("❌ WebSocket: Час очікування даних про свічки вичерпано.")
             return pd.DataFrame()
-
     except Exception as e:
         logger.error(f"❌ Помилка WebSocket-клієнта: {e}", exc_info=True)
         return pd.DataFrame()
