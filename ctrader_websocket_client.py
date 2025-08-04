@@ -13,7 +13,7 @@ from openapi_client.protobuf.OpenApiMessages_pb2 import (
     ProtoOASubscribeLiveTrendbarReq,
     ProtoOASpotEvent,
     ProtoOASubscribeLiveTrendbarRes,
-    ProtoOAErrorRes # <-- ДОДАНО: імпорт для розшифровки помилки
+    ProtoOAErrorRes
 )
 
 SPOTWARE_WS_URL = "wss://demo.ctraderapi.com:5035"
@@ -33,7 +33,11 @@ async def _fetch_trendbars_async(access_token: str, account_id: int, symbol_id: 
             await ws.recv()
             logger.info(f"✅ WebSocket: Авторизація рахунку {account_id} пройдена.")
 
-            tf_map = {'m1': ProtoOATrendbarPeriod.M1, '15m': ProtoOATrendbarPeriod.M15, '1h': ProtoOATrendbarPeriod.H1, '4h': ProtoOATrendbarPeriod.H4, '1day': ProtoOATrendbarPeriod.D1}
+            # --- ДОДАНО: Мікро-пауза, щоб сервер cTrader встиг обробити авторизацію ---
+            await asyncio.sleep(0.5)
+            # --------------------------------------------------------------------------
+
+            tf_map = {'1m': ProtoOATrendbarPeriod.M1, '15min': 'm15', '1h': 'h1', '4h': 'h4', '1day': 'd1'}
             tf_enum = tf_map.get(timeframe)
             if not tf_enum:
                 logger.error(f"Невідомий таймфрейм для WebSocket: {timeframe}")
@@ -50,13 +54,11 @@ async def _fetch_trendbars_async(access_token: str, account_id: int, symbol_id: 
                 response_wrapper = ProtoMessage()
                 response_wrapper.ParseFromString(response_data)
                 
-                # --- ПОЧАТОК ЗМІН: Додаємо обробку повідомлення про помилку ---
                 if response_wrapper.payloadType == ProtoOAPayloadType.PROTO_OA_ERROR_RES:
                     error_res = ProtoOAErrorRes()
                     error_res.ParseFromString(response_wrapper.payload)
                     logger.error(f"❌ WebSocket: Сервер cTrader повернув помилку! Код: {error_res.errorCode}, Опис: {error_res.description}")
-                    return pd.DataFrame() # Виходимо з помилкою
-                # --- КІНЕЦЬ ЗМІН ---
+                    return pd.DataFrame()
 
                 if response_wrapper.payloadType == ProtoOAPayloadType.PROTO_OA_SUBSCRIBE_LIVE_TRENDBAR_RES:
                     logger.info(f"✅ WebSocket: Підписка на {symbol_id} успішна. Очікуємо дані...")
