@@ -32,10 +32,8 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False, user_id=Non
             if not user_id: return pd.DataFrame()
             access_token = get_valid_access_token(user_id)
             if not access_token: return pd.DataFrame()
-            tf_map = {'1m': 'm1', '15min': 'm15', '1h': 'h1', '4h': 'h4', '1day': 'd1'}
-            ctrader_tf = tf_map.get(tf)
-            if not ctrader_tf: return pd.DataFrame()
-            df = get_trendbars(access_token, pair, ctrader_tf, limit)
+            # --- ЗМІНЕНО: Прибираємо зайве перетворення. Тепер передаємо таймфрейм (напр. '1m') напряму ---
+            df = get_trendbars(access_token, pair, tf, limit)
         elif asset == 'stocks':
             td_tf_map = {'1m': '1min', '15min': '15min', '1h': '1hour', '4h': '4hour', '1day': '1day'}
             td_tf = td_tf_map.get(tf)
@@ -54,7 +52,6 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False, user_id=Non
         return pd.DataFrame()
 
 def get_signal_strength_verdict(pair, display_name, asset, user_id=None, force_refresh=False):
-    # --- ЗМІНЕНО: Повертаємо аналіз на 1-хвилинний таймфрейм ---
     df = get_market_data(pair, '1m', asset, limit=100, force_refresh=force_refresh, user_id=user_id)
     if df.empty or len(df) < 25:
         return f"⚠️ Недостатньо даних для аналізу *{display_name}*.", None
