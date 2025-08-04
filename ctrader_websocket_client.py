@@ -33,11 +33,16 @@ async def _fetch_trendbars_async(access_token: str, account_id: int, symbol_id: 
             await ws.recv()
             logger.info(f"✅ WebSocket: Авторизація рахунку {account_id} пройдена.")
 
-            # --- ДОДАНО: Мікро-пауза, щоб сервер cTrader встиг обробити авторизацію ---
             await asyncio.sleep(0.5)
-            # --------------------------------------------------------------------------
 
-            tf_map = {'1m': ProtoOATrendbarPeriod.M1, '15min': 'm15', '1h': 'h1', '4h': 'h4', '1day': 'd1'}
+            # --- ВИПРАВЛЕНО: Створюємо правильний і повний словник відповідності ---
+            tf_map = {
+                '1m': ProtoOATrendbarPeriod.M1,
+                '15min': ProtoOATrendbarPeriod.M15,
+                '1h': ProtoOATrendbarPeriod.H1,
+                '4h': ProtoOATrendbarPeriod.H4,
+                '1day': ProtoOATrendbarPeriod.D1
+            }
             tf_enum = tf_map.get(timeframe)
             if not tf_enum:
                 logger.error(f"Невідомий таймфрейм для WebSocket: {timeframe}")

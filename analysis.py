@@ -6,7 +6,6 @@ from concurrent.futures import ThreadPoolExecutor
 
 from db import add_signal_to_history
 from config import logger, binance, td, MARKET_DATA_CACHE, ANALYSIS_TIMEFRAMES
-# --- ЗМІНЕНО: Імпортуємо правильні функції ---
 from ctrader_api import get_valid_access_token
 from ctrader_websocket_client import fetch_trendbars_sync
 
@@ -33,24 +32,16 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False, user_id=Non
         
         elif asset == 'forex':
             if not user_id: return pd.DataFrame()
-            
-            # Отримуємо токен доступу
             access_token = get_valid_access_token(user_id)
             if not access_token: return pd.DataFrame()
 
-            # --- ВИКОРИСТОВУЄМО ПРАВИЛЬНИЙ WEBSOCKET-КЛІЄНТ ---
-            DEMO_ACCOUNT_ID = 9541520 # ID вашого демо-рахунку зі скріншоту
-            
+            DEMO_ACCOUNT_ID = 9541520
             symbol_id_map = { "EUR/USD": 1, "GBP/USD": 2, "USD/JPY": 3, "USD/CAD": 4, "AUD/USD": 5, "USD/CHF": 6, "NZD/USD": 7, "EUR/GBP": 8, "EUR/JPY": 9, "CHF/JPY": 48, "EUR/CHF": 49, "GBP/CHF": 50, "USD/MXN": 100, "USD/BRL": 101, "USD/ZAR": 102 }
             symbol_id = symbol_id_map.get(pair)
             if not symbol_id: return pd.DataFrame()
 
-            tf_map = {'1m': 'm1', '15min': 'm15', '1h': 'h1', '4h': 'h4', '1day': 'd1'}
-            ctrader_tf = tf_map.get(tf)
-            if not ctrader_tf: return pd.DataFrame()
-
-            # Викликаємо функцію з WebSocket-клієнта
-            df = fetch_trendbars_sync(access_token, DEMO_ACCOUNT_ID, symbol_id, ctrader_tf)
+            # --- ВИПРАВЛЕНО: Передаємо таймфрейм (напр. '1m') напряму, без перетворень ---
+            df = fetch_trendbars_sync(access_token, DEMO_ACCOUNT_ID, symbol_id, tf)
             
         elif asset == 'stocks':
             td_tf_map = {'1m': '1min', '15min': '15min', '1h': '1hour', '4h': '4hour', '1day': '1day'}
@@ -69,7 +60,6 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False, user_id=Non
         logger.error(f"Помилка отримання даних для {pair} ({asset}, {tf}): {e}")
         return pd.DataFrame()
 
-# ... решта файлу analysis.py залишається без змін ...
 def get_signal_strength_verdict(pair, display_name, asset, user_id=None, force_refresh=False):
     df = get_market_data(pair, '1m', asset, limit=100, force_refresh=force_refresh, user_id=user_id)
     if df.empty or len(df) < 25:
