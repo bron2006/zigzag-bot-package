@@ -35,7 +35,8 @@ def init_ctrader_token():
         user_id = int(MY_TELEGRAM_ID)
         if get_ctrader_token(user_id) is None:
             logger.info(f"Токен cTrader для користувача {user_id} не знайдено. Зберігаю з секретів...")
-            save_ctrader_token(user_id, CTRADER_ACCESS_TOKEN, CTRADER_REFRESH_TOKEN, expires_in=1)
+            # --- ЗМІНЕНО: Даємо токену 1 годину життя, щоб уникнути миттєвого оновлення ---
+            save_ctrader_token(user_id, CTRADER_ACCESS_TOKEN, CTRADER_REFRESH_TOKEN, expires_in=3600)
             logger.info("Токен cTrader успішно збережено в базу даних.")
         else:
             logger.info(f"Токен cTrader для користувача {user_id} вже існує в базі даних.")
@@ -57,7 +58,6 @@ def webhook_handler():
         logger.error(f"Webhook error: {e}\n{traceback.format_exc()}")
     return "OK", 200
 
-# --- API Endpoints (залишаються без змін) ---
 @app.route("/api/signal", methods=["GET"])
 def api_signal():
     pair = request.args.get("pair")
@@ -71,7 +71,6 @@ def api_signal():
         logger.error(f"API error for pair {pair}: {e}\n{traceback.format_exc()}")
         return jsonify({"error": f"Внутрішня помилка сервера"}), 500
 
-# ... (решта ваших API-ендпоїнтів залишаються тут без змін) ...
 @app.route("/api/get_ranked_pairs", methods=["GET"])
 def api_get_ranked_pairs():
     user_id = _get_user_id_from_request(request)
@@ -125,22 +124,17 @@ def api_signal_history():
         logger.error(f"API error for signal history on {pair}: {e}\n{traceback.format_exc()}")
         return jsonify({"error": "Помилка при отриманні історії"}), 500
 
-# --- ЗМІНЕНО: Повертаємо надійну систему з окремим health check ---
 @app.route('/health')
 def health_check():
-    """Окремий маршрут для перевірки стану, який буде використовувати Fly.io."""
     return "OK", 200
 
 @app.route('/')
 def serve_index():
-    """Подає головну сторінку WebApp."""
     return send_from_directory('webapp', 'index.html')
 
 @app.route('/<path:filename>')
 def serve_webapp_files(filename):
-    """Подає статичні файли WebApp (JS, CSS)."""
     return send_from_directory('webapp', filename)
-
 
 if __name__ != "__main__":
     with app.app_context():
