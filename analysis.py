@@ -32,7 +32,7 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False, user_id=Non
             if not user_id: return pd.DataFrame()
             access_token = get_valid_access_token(user_id)
             if not access_token: return pd.DataFrame()
-            # --- ЗМІНЕНО: Прибираємо зайве перетворення. Тепер передаємо таймфрейм (напр. '1m') напряму ---
+            # --- ВИПРАВЛЕНО: Передаємо таймфрейм напряму, без перетворення ---
             df = get_trendbars(access_token, pair, tf, limit)
         elif asset == 'stocks':
             td_tf_map = {'1m': '1min', '15min': '15min', '1h': '1hour', '4h': '4hour', '1day': '1day'}
