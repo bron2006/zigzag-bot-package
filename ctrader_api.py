@@ -32,7 +32,6 @@ def get_trendbars(access_token: str, symbol_name: str, timeframe: str, limit: in
         logging.error(f"Невідомий символ для cTrader: {symbol_name}")
         return pd.DataFrame()
 
-    # --- ЗМІНЕНО: Додано підтримку 1-хвилинного таймфрейму ---
     timeframe_map = {"1m": "m1", "15min": "m15", "1h": "h1", "4h": "h4", "1day": "d1"}
     ctrader_tf = timeframe_map.get(timeframe)
     if not ctrader_tf:
@@ -59,6 +58,8 @@ def get_trendbars(access_token: str, symbol_name: str, timeframe: str, limit: in
         return pd.DataFrame()
 
 def _refresh_token(refresh_token: str):
+    logging.info("ДЕБАГ: Запущено оновлену функцію _refresh_token з детальним логуванням...")
+    
     payload = {'grant_type': 'refresh_token', 'refresh_token': refresh_token, 'client_id': CT_CLIENT_ID, 'client_secret': CT_CLIENT_SECRET }
     try:
         response = requests.post(CTRADER_TOKEN_URL, data=payload, timeout=15)
@@ -84,7 +85,8 @@ def get_valid_access_token(user_id: int):
             logging.info(f"Токен для {user_id} успішно оновлено.")
             return new_token_data.get('accessToken')
         
-        logging.error(f"Не вдалося оновити токен для {user_id}.")
+        # --- ЗМІНЕНО: Додаємо логування за порадою експерта ---
+        logging.error(f"‼️ Не вдалося отримати/оновити access_token для користувача {user_id} — буде повернено None.")
         return None
     
     return token_data['access_token']
