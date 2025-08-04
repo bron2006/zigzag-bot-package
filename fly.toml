@@ -9,15 +9,15 @@ app = "zigzag-bot-package"
   force_https = true
   auto_stop_machines = true
   auto_start_machines = true
-  min_machines_running = 0 # Для економії можна поставити 0, або 1 для постійної роботи
+  min_machines_running = 0
   processes = ["app"]
 
   [[http_service.checks]]
     interval = "20s"
     timeout = "5s"
     method = "GET"
-    path = "/health" # ЗМІНЕНО: шлях для перевірки стану
-    grace_period = "90s" # <-- Збільшений час очікування
+    path = "/health" # ЗМІНЕНО: Повертаємо на надійний шлях для перевірки
+    grace_period = "90s"
 
 [[vm]]
   cpu_kind = "shared"
