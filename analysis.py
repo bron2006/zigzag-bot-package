@@ -6,7 +6,9 @@ from concurrent.futures import ThreadPoolExecutor
 
 from db import add_signal_to_history
 from config import logger, binance, td, MARKET_DATA_CACHE, ANALYSIS_TIMEFRAMES
-from ctrader_api import get_valid_access_token, get_trendbars
+# --- ЗМІНЕНО: Імпортуємо правильні функції ---
+from ctrader_api import get_valid_access_token
+from ctrader_websocket_client import fetch_trendbars_sync
 
 _executor = None
 def get_executor():
@@ -28,12 +30,28 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False, user_id=Non
             bars = binance.fetch_ohlcv(pair, timeframe=tf, limit=limit)
             df = pd.DataFrame(bars, columns=['ts','open','high','low','close','volume'])
             df['ts'] = pd.to_datetime(df['ts'], unit='ms', utc=True)
+        
         elif asset == 'forex':
             if not user_id: return pd.DataFrame()
+            
+            # Отримуємо токен доступу
             access_token = get_valid_access_token(user_id)
             if not access_token: return pd.DataFrame()
-            # --- ВИПРАВЛЕНО: Передаємо таймфрейм напряму, без перетворення ---
-            df = get_trendbars(access_token, pair, tf, limit)
+
+            # --- ВИКОРИСТОВУЄМО ПРАВИЛЬНИЙ WEBSOCKET-КЛІЄНТ ---
+            DEMO_ACCOUNT_ID = 9541520 # ID вашого демо-рахунку зі скріншоту
+            
+            symbol_id_map = { "EUR/USD": 1, "GBP/USD": 2, "USD/JPY": 3, "USD/CAD": 4, "AUD/USD": 5, "USD/CHF": 6, "NZD/USD": 7, "EUR/GBP": 8, "EUR/JPY": 9, "CHF/JPY": 48, "EUR/CHF": 49, "GBP/CHF": 50, "USD/MXN": 100, "USD/BRL": 101, "USD/ZAR": 102 }
+            symbol_id = symbol_id_map.get(pair)
+            if not symbol_id: return pd.DataFrame()
+
+            tf_map = {'1m': 'm1', '15min': 'm15', '1h': 'h1', '4h': 'h4', '1day': 'd1'}
+            ctrader_tf = tf_map.get(tf)
+            if not ctrader_tf: return pd.DataFrame()
+
+            # Викликаємо функцію з WebSocket-клієнта
+            df = fetch_trendbars_sync(access_token, DEMO_ACCOUNT_ID, symbol_id, ctrader_tf)
+            
         elif asset == 'stocks':
             td_tf_map = {'1m': '1min', '15min': '15min', '1h': '1hour', '4h': '4hour', '1day': '1day'}
             td_tf = td_tf_map.get(tf)
@@ -51,6 +69,7 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False, user_id=Non
         logger.error(f"Помилка отримання даних для {pair} ({asset}, {tf}): {e}")
         return pd.DataFrame()
 
+# ... решта файлу analysis.py залишається без змін ...
 def get_signal_strength_verdict(pair, display_name, asset, user_id=None, force_refresh=False):
     df = get_market_data(pair, '1m', asset, limit=100, force_refresh=force_refresh, user_id=user_id)
     if df.empty or len(df) < 25:
@@ -94,7 +113,7 @@ def get_api_detailed_signal_data(pair, user_id=None):
         analysis = _calculate_core_signal(df, daily_df)
         verdict_text, verdict_level = _generate_verdict(analysis)
         
-        date_col = 'ts' if asset == 'crypto' else 'datetime'
+        date_col = 'ts'
         history_df = df.tail(50)
         history = { "dates": history_df[date_col].dt.strftime('%Y-%m-%d %H:%M:%S').tolist(), "open": history_df['open'].tolist(), "high": history_df['high'].tolist(), "low": history_df['low'].tolist(), "close": history_df['close'].tolist() }
         
