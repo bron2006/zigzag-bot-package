@@ -58,18 +58,20 @@ def get_trendbars(access_token: str, symbol_name: str, timeframe: str, limit: in
         return pd.DataFrame()
 
 def _refresh_token(refresh_token: str):
+    # --- ДОДАНО СПЕЦІАЛЬНИЙ МАРКЕР ДЛЯ ПЕРЕВІРКИ ---
+    logging.info("ДЕБАГ: Запущено оновлену функцію _refresh_token з детальним логуванням...")
+    # -----------------------------------------------
+    
     payload = {'grant_type': 'refresh_token', 'refresh_token': refresh_token, 'client_id': CT_CLIENT_ID, 'client_secret': CT_CLIENT_SECRET }
     try:
         response = requests.post(CTRADER_TOKEN_URL, data=payload, timeout=15)
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
-        # --- ЗМІНЕНО: Додано детальне логування помилки відповіді від сервера ---
         error_message = f"Не вдалося оновити токен: {e}"
         if e.response is not None:
             error_message += f" | Status Code: {e.response.status_code} | Response: {e.response.text}"
         logging.error(error_message)
-        # --------------------------------------------------------------------
         return None
 
 def get_valid_access_token(user_id: int):
