@@ -5,7 +5,8 @@ import pandas as pd
 import time
 
 from db import get_ctrader_token, save_ctrader_token
-from config import CT_CLIENT_ID, CT_CLIENT_SECRET, CT_REDIRECT_URI
+# --- ЗМІНЕНО: Видалено непотрібний імпорт CT_REDIRECT_URI ---
+from config import CT_CLIENT_ID, CT_CLIENT_SECRET
 
 CTRADER_API_BASE_URL = "https://demo.ctraderapi.com"
 CTRADER_TOKEN_URL = "https://connect.spotware.com/oauth/v2/token"
@@ -22,8 +23,7 @@ def get_trading_accounts(access_token: str):
         return None
 
 def get_trendbars(access_token: str, symbol_name: str, timeframe: str, limit: int):
-    # Я розширив список ID для всіх ваших пар
-    symbol_id_map = {"EUR/USD": 1, "GBP/USD": 2, "USD/JPY": 3, "USD/CAD": 4, "AUD/USD": 5, "USD/CHF": 6, "NZD/USD": 7, "EUR/GBP": 8, "EUR/JPY": 9, "CHF/JPY": 48, "EUR/CHF": 49, "GBP/CHF": 50, "USD/MXN": 100, "USD/BRL": 101, "USD/ZAR": 102}
+    symbol_id_map = {"EURUSD": 1, "GBPUSD": 2, "USDJPY": 3, "USDCAD": 4, "AUDUSD": 5, "USDCHF": 6, "NZDUSD": 7, "EURGBP": 8, "EURJPY": 9, "CHFJPY": 48, "EURCHF": 49, "GBPCHF": 50, "USDMXN": 100, "USDBRL": 101, "USDZAR": 102}
     symbol_id = symbol_id_map.get(symbol_name)
     if not symbol_id:
         logging.error(f"Невідомий символ для cTrader: {symbol_name}")
@@ -35,7 +35,6 @@ def get_trendbars(access_token: str, symbol_name: str, timeframe: str, limit: in
         logging.error(f"Непідтримуваний таймфрейм для cTrader: {timeframe}")
         return pd.DataFrame()
         
-    # ВИПРАВЛЕНО: Повертаємо до публічного URL, який не потребує ID рахунку
     api_url = f"{CTRADER_API_BASE_URL}/api/v2/symbols/{symbol_id}/trendbars/{ctrader_tf}?count={limit}"
     
     headers = {"Authorization": f"Bearer {access_token}"}
@@ -49,8 +48,9 @@ def get_trendbars(access_token: str, symbol_name: str, timeframe: str, limit: in
             
         df = df.rename(columns={'timestamp': 'ts', 'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'})
         df['ts'] = pd.to_datetime(df['ts'], unit='ms', utc=True)
-        price_cols = ['Open', 'High', 'Low', 'Close']
-        df[price_cols] = df[price_cols] / 100000.0
+        # У cTrader ціни вже надходять у правильному форматі, ділення на 100000.0 не потрібне для REST API
+        # price_cols = ['Open', 'High', 'Low', 'Close']
+        # df[price_cols] = df[price_cols] / 100000.0
         
         return df[['ts', 'Open', 'High', 'Low', 'Close', 'Volume']]
     except requests.exceptions.RequestException as e:
@@ -71,12 +71,16 @@ def get_valid_access_token(user_id: int):
     if not token_data:
         logging.warning(f"Токен для користувача {user_id} не знайдено."); return None
 
+    # Оновлюємо токен, якщо до закінчення терміну дії залишилося менше 5 хвилин
     if time.time() > token_data['expires_at'] - 300:
-        logging.info("Токен cTrader закінчується, оновлюю...")
+        logging.info(f"Токен cTrader для {user_id} закінчується, оновлюю...")
         new_token_data = _refresh_token(token_data['refresh_token'])
-        if new_token_data:
+        if new_token_data and 'accessToken' in new_token_data:
             save_ctrader_token(user_id, new_token_data.get('accessToken'), new_token_data.get('refreshToken'), new_token_data.get('expiresIn'))
+            logging.info(f"Токен для {user_id} успішно оновлено.")
             return new_token_data.get('accessToken')
+        
+        logging.error(f"Не вдалося оновити токен для {user_id}.")
         return None
     
     return token_data['access_token']
