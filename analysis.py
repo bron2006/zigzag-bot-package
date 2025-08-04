@@ -2,139 +2,142 @@
 import pandas as pd
 import pandas_ta as ta
 import numpy as np
-import time
-import requests
-import ccxt
 from concurrent.futures import ThreadPoolExecutor
 
-from db import add_signal_to_history
-from config import logger, FINNHUB_API_KEY, MARKET_DATA_CACHE, RANKING_CACHE, ANALYSIS_TIMEFRAMES
-from ctrader_api import get_valid_access_token
-from ctrader_websocket_client import fetch_trendbars_sync
+from config import logger, binance, td, MARKET_DATA_CACHE, ANALYSIS_TIMEFRAMES
+from ctrader_api import get_valid_access_token, get_trendbars
 
 _executor = None
 def get_executor():
     global _executor
-    if _executor is None: _executor = ThreadPoolExecutor(max_workers=2)
+    if _executor is None:
+        _executor = ThreadPoolExecutor(max_workers=2)
     return _executor
 
-def get_market_data(pair, tf, asset, limit=300, force_refresh=False):
+def get_market_data(pair, tf, asset, limit=300, force_refresh=False, user_id=None):
     key = f"{pair}_{tf}_{limit}"
     use_cache = asset == 'crypto'
     if use_cache and not force_refresh and key in MARKET_DATA_CACHE:
         return MARKET_DATA_CACHE[key]
-
     try:
         df = pd.DataFrame()
         if asset == 'crypto':
-            binance = ccxt.binance({'enableRateLimit': True, 'timeout': 15000})
             bars = binance.fetch_ohlcv(pair, timeframe=tf, limit=limit)
-            df = pd.DataFrame(bars, columns=['ts', 'Open', 'High', 'Low', 'Close', 'Volume'])
+            df = pd.DataFrame(bars, columns=['ts','o','h','l','c','v'])
             df['ts'] = pd.to_datetime(df['ts'], unit='ms', utc=True)
-
+            df = df.rename(columns={'o':'Open','h':'High','l':'Low','c':'Close','v':'Volume'})
+        
         elif asset == 'forex':
-            user_id = 12345
-            account_id = 62157581 # <-- ЗАМІНІТЬ НА ID ВАШОГО РЕАЛЬНОГО ДЕМО-РАХУНКУ
-            
-            symbol_id_map = {"EUR/USD": 1, "GBP/USD": 2, "USD/JPY": 3, "USD/CAD": 4, "AUD/USD": 5, "USD/CHF": 6, "NZD/USD": 7, "EUR/GBP": 8, "EUR/JPY": 9, "CHF/JPY": 48, "EUR/CHF": 49, "GBP/CHF": 50, "USD/MXN": 100, "USD/BRL": 101, "USD/ZAR": 102}
-            symbol_id = symbol_id_map.get(pair)
-            
-            if not symbol_id:
-                logger.error(f"Невідомий symbol_id для Forex-пари: {pair}")
+            if not user_id:
+                logger.warning(f"Для отримання даних по {pair} потрібен user_id, але його не надано.")
                 return pd.DataFrame()
-
+            
             access_token = get_valid_access_token(user_id)
             if not access_token:
-                logger.error(f"Не вдалося отримати/оновити токен cTrader для {pair}.")
+                logger.error(f"Не вдалося отримати/оновити токен cTrader для user_id {user_id}.")
                 return pd.DataFrame()
-
-            tf_map = {'15min': '15m', '1h': '1h', '4h': '4h', '1day': '1day'}
+            
+            tf_map = {'15min': '15m', '1h': '1h', '4h': '4h', '1day': 'd1'}
             ctrader_tf = tf_map.get(tf, tf)
-            df = fetch_trendbars_sync(access_token, account_id, symbol_id, timeframe=ctrader_tf)
+            
+            df = get_trendbars(access_token, pair.replace("/", ""), ctrader_tf, limit)
+            if not df.empty:
+                df = df.rename(columns={'ts':'datetime'})
 
         elif asset == 'stocks':
-            finnhub_tf_map = {'15min': '15', '1h': '60', '4h': 'D', '1day': 'D'}
-            resolution = finnhub_tf_map.get(tf, 'D')
-            to_ts = int(time.time())
-            delta_seconds = limit * (int(resolution) * 60 if resolution.isdigit() else 24 * 3600)
-            from_ts = to_ts - delta_seconds
-            api_url = f"https://finnhub.io/api/v1/stock/candle?symbol={pair}&resolution={resolution}&from={from_ts}&to={to_ts}&token={FINNHUB_API_KEY}"
-            response = requests.get(api_url, timeout=15)
-            response.raise_for_status()
-            data = response.json()
-            if data.get('s') == 'ok' and data.get('t'):
-                df = pd.DataFrame({'ts': pd.to_datetime(data['t'], unit='s', utc=True), 'Open': data['o'], 'High': data['h'], 'Low': data['l'], 'Close': data['c'], 'Volume': data['v']})
-            else: return pd.DataFrame()
-
-        if df.empty: return pd.DataFrame()
+            td_tf_map = { '15min': '15min', '1h': '1hour', '4h': '4hour', '1day': '1day'}
+            td_tf = td_tf_map.get(tf)
+            if not td_tf:
+                logger.error(f"Непідтримуваний таймфрейм для TwelveData: {tf}")
+                return pd.DataFrame()
+            ts = td.time_series(symbol=pair, interval=td_tf, outputsize=limit)
+            df = ts.as_pandas()
+            if not df.empty:
+                df = df.rename(columns={'open':'Open','high':'High','low':'Low','close':'Close','volume':'Volume'}).reset_index()
+                df = df.sort_values(by='datetime').reset_index(drop=True)
+                if 'datetime' in df.columns:
+                    df['datetime'] = pd.to_datetime(df['datetime']).dt.tz_localize('UTC')
         
-        df.columns = [col.lower() for col in df.columns]
-        
-        if use_cache: MARKET_DATA_CACHE[key] = df
+        if df.empty:
+            logger.warning(f"API повернуло порожній результат для {pair} на ТФ {tf}")
+            return pd.DataFrame()
+        if use_cache:
+            MARKET_DATA_CACHE[key] = df
         return df
-
     except Exception as e:
-        logger.error(f"Помилка отримання даних для {pair} (asset: {asset}, tf: {tf}): {e}", exc_info=True)
+        logger.error(f"Помилка отримання даних для {pair} на ТФ {tf}: {e}")
         return pd.DataFrame()
 
-def get_asset_type(pair: str) -> str:
-    """Визначає тип активу за його тікером."""
-    if '/' in pair:
-        return 'crypto' if 'USDT' in pair else 'forex'
-    return 'stocks'
+def _calculate_core_signal(df, daily_df):
+    df.ta.rsi(length=14, append=True, col_names=('RSI',))
+    df.ta.kama(length=14, append=True, col_names=('KAMA',))
+    last = df.iloc[-1]
+    if pd.isna(last['RSI']) or pd.isna(last['KAMA']):
+        raise ValueError("Помилка розрахунку індикаторів")
+    current_price = float(last['Close'])
+    score = 50
+    reasons = []
+    if current_price > last['KAMA']: score += 10; reasons.append("Ціна вище KAMA(14)")
+    else: score -= 10; reasons.append("Ціна нижче KAMA(14)")
+    rsi = float(last['RSI'])
+    if rsi < 30: score += 15; reasons.append("RSI в зоні перепроданості")
+    elif rsi > 70: score -= 15; reasons.append("RSI в зоні перекупленості")
+    score = int(np.clip(score, 0, 100))
+    return { "score": score, "reasons": reasons, "price": current_price }
 
-def analyze_pair(symbol: str, timeframe: str, limit: int = 150) -> dict:
-    """Завантажити історію, розрахувати індикатори та сформувати сигнал"""
+def get_api_detailed_signal_data(pair, user_id=None):
+    asset = 'stocks'
+    if '/' in pair: asset = 'crypto' if 'USDT' in pair else 'forex'
+    
+    df = get_market_data(pair, '15min', asset, limit=100, user_id=user_id)
+    if df.empty or len(df) < 25:
+        return {"error": "Недостатньо даних для аналізу."}
+    
     try:
-        asset_type = get_asset_type(symbol)
-        df = get_market_data(symbol, timeframe, asset_type, limit)
+        daily_df = get_market_data(pair, '1day', asset, limit=100, user_id=user_id)
+        analysis = _calculate_core_signal(df, daily_df)
         
-        if df is None or df.empty:
-            logger.warning(f"[ANALYZE] Дані для {symbol} ({timeframe}) відсутні")
-            return {'symbol': symbol, 'signal': 'NO DATA'}
+        verdict_text, verdict_level = "НЕЙТРАЛЬНО", "neutral"
+        if analysis['score'] > 60: verdict_text, verdict_level = "КУПІВЛЯ", "moderate_buy"
+        elif analysis['score'] < 40: verdict_text, verdict_level = "ПРОДАЖ", "moderate_sell"
 
-        df.ta.ema(length=20, append=True)
-        df.ta.rsi(length=14, append=True)
-
-        last_rsi = df['RSI_14'].iloc[-1]
-        last_price = df['close'].iloc[-1]
-        last_ema = df['EMA_20'].iloc[-1]
-
-        signal = 'NEUTRAL'
-        if last_price > last_ema and last_rsi > 55:
-            signal = 'BUY'
-        elif last_price < last_ema and last_rsi < 45:
-            signal = 'SELL'
-
-        return {
-            'symbol': symbol,
-            'signal': signal,
-            'price': round(last_price, 5),
-            'rsi': round(last_rsi, 2),
-            'ema': round(last_ema, 5),
-            'time': df['ts'].iloc[-1].strftime('%Y-%m-%d %H:%M')
-        }
-
+        history_df = df.tail(50)
+        date_col = 'ts' if 'ts' in history_df.columns else 'datetime'
+        history = { "dates": history_df[date_col].dt.strftime('%Y-%m-%d %H:%M:%S').tolist(), "open": history_df['Open'].tolist(), "high": history_df['High'].tolist(), "low": history_df['Low'].tolist(), "close": history_df['Close'].tolist() }
+        return { "pair": pair, "price": analysis['price'], "verdict_text": verdict_text, "verdict_level": verdict_level, "reasons": analysis['reasons'], "support": None, "resistance": None, "history": history }
     except Exception as e:
-        logger.error(f"[ANALYZE] Помилка для {symbol}: {e}", exc_info=True)
-        return {'symbol': symbol, 'signal': 'ERROR'}
+        logger.error(f"Error in get_api_detailed_signal_data for {pair}: {e}")
+        return {"error": str(e)}
 
-# --- ТИМЧАСОВА ВЕРСІЯ ФУНКЦІЇ ДЛЯ ВІДЛАДКИ ---
-def get_detailed_signal(pair: str, limit: int = 200) -> dict:
-    """
-    Тимчасова версія для відладки. Повертає статичні дані, щоб перевірити розгортання.
-    """
-    logger.info(f"DEBUG: get_detailed_signal для {pair}. Повертаю тестові дані.")
-    # Просто повертаємо "заглушку" з даними
-    return {
-        'pair': pair,
-        'price': 1.2345,
-        'verdict_text': "ТЕСТОВИЙ СИГНАЛ",
-        'verdict_level': "neutral",
-        'reasons': ["Це тестові дані для перевірки розгортання."],
-        'support': 1.2300,
-        'resistance': 1.2400,
-        'history': { # Порожні дані, щоб графік не будувався
-            'dates': [], 'open': [], 'high': [], 'low': [], 'close': [],
-        }
-    }
+def get_api_mta_data(pair, asset, user_id=None):
+    def worker(tf):
+        df = get_market_data(pair, tf, asset, limit=200, user_id=user_id)
+        if df.empty or len(df) < 55: return None
+        df.ta.ema(length=21, append=True, col_names='EMA_fast')
+        df.ta.ema(length=55, append=True, col_names='EMA_slow')
+        last_row = df.iloc[-1]
+        if pd.isna(last_row['EMA_fast']) or pd.isna(last_row['EMA_slow']): return None
+        signal = "BUY" if last_row['EMA_fast'] > last_row['EMA_slow'] else "SELL"
+        return {"tf": tf, "signal": signal}
+    executor = get_executor()
+    results = executor.map(worker, ANALYSIS_TIMEFRAMES)
+    mta_data = [r for r in results if r is not None]
+    return mta_data
+
+def rank_assets_for_api(pairs, asset_type, user_id=None):
+    def fetch_score(pair):
+        try:
+            timeframe = '1h' if asset_type == 'crypto' else '15min'
+            df = get_market_data(pair, timeframe, asset_type, limit=50, user_id=user_id)
+            if df.empty or len(df) < 30: return {'ticker': pair, 'score': -1}
+            rsi = df.ta.rsi(length=14).iloc[-1]
+            if pd.isna(rsi): return {'ticker': pair, 'score': -1}
+            return {'ticker': pair, 'score': abs(rsi - 50)}
+        except Exception as e:
+            logger.error(f"Не вдалося проаналізувати активність {pair}: {e}")
+            return {'ticker': pair, 'score': -1}
+    executor = get_executor()
+    results = list(executor.map(fetch_score, pairs))
+    active_part = sorted([res for res in results if res['score'] != -1], key=lambda x: x['score'], reverse=True)
+    inactive_part = [res for res in results if res['score'] == -1]
+    return active_part + inactive_part

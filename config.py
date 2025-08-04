@@ -2,47 +2,60 @@
 import os
 import logging
 from cachetools import TTLCache
+import ccxt
+from twelvedata import TDClient
 from dotenv import load_dotenv
-from flask import Flask
 from telegram import Bot
 from telegram.ext import Updater
-
-# Прапор готовності для health check
-HEALTH_READY = False
+from flask import Flask
 
 # --- Завантаження змінних середовища ---
 load_dotenv()
-CT_CLIENT_ID = "16464_vrriDtL7aZ8G5I6Sq8yA1Zm939awNfK9gakcWC2gM0huqx4Nwg"
-CT_CLIENT_SECRET = os.getenv("CT_CLIENT_SECRET")
-CT_REDIRECT_URI = "https://zigzag-bot-package.fly.dev/callback"
 TOKEN = os.getenv("TOKEN")
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
+TWELVEDATA_API_KEY = os.getenv("TWELVEDATA_API_KEY")
 FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY")
+
+# --- ДОДАНО: Завантаження секретів для cTrader ---
+CT_CLIENT_ID = os.getenv("CT_CLIENT_ID")
+CT_CLIENT_SECRET = os.getenv("CT_CLIENT_SECRET")
+CTRADER_ACCESS_TOKEN = os.getenv("CTRADER_ACCESS_TOKEN")
+CTRADER_REFRESH_TOKEN = os.getenv("CTRADER_REFRESH_TOKEN")
+MY_TELEGRAM_ID = os.getenv("MY_TELEGRAM_ID")
+# -----------------------------------------------
 
 # --- Логування ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# --- Кеш ---
+# --- Кеш та клієнти API ---
 MARKET_DATA_CACHE = TTLCache(maxsize=5000, ttl=300)
 RANKING_CACHE = TTLCache(maxsize=100, ttl=60)
 
-# --- Глобальні об'єкти ---
-app = Flask(__name__)
+binance = ccxt.binance({'enableRateLimit': True})
+td = TDClient(apikey=TWELVEDATA_API_KEY)
+
+# --- Глобальні об'єкти бота ---
 bot = Bot(token=TOKEN)
-updater = Updater(bot=bot, use_context=True, workers=4)
+updater = Updater(bot=bot, use_context=True)
 dp = updater.dispatcher
+app = Flask(__name__)
 
 # --- Константи ---
-CRYPTO_PAIRS_FULL = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "DOGE/USDT", "ADA/USDT", "SHIB/USDT", "AVAX/USDT", "LINK/USDT", "DOT/USDT", "TRX/USDT", "MATIC/USDT", "LTC/USDT", "BCH/USDT", "XLM/USDT", "ATOM/USDT", "ETC/USDT", "FIL/USDT", "NEAR/USDT", "ALGO/USDT", "VET/USDT", "ICP/USDT", "EOS/USDT"]
+CRYPTO_PAIRS_FULL = [
+    "BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "DOGE/USDT",
+    "ADA/USDT", "SHIB/USDT", "AVAX/USDT", "LINK/USDT", "DOT/USDT", "TRX/USDT",
+    "MATIC/USDT", "LTC/USDT", "BCH/USDT", "XLM/USDT", "ATOM/USDT", "ETC/USDT",
+    "FIL/USDT", "NEAR/USDT", "ALGO/USDT", "VET/USDT", "ICP/USDT", "EOS/USDT"
+]
 CRYPTO_CHUNK_SIZE = 12
+
 STOCK_TICKERS = ["AAPL", "GOOGL", "MSFT", "AMZN", "NVDA", "TSLA", "META", "JPM", "V", "JNJ"]
+
 FOREX_SESSIONS = {
     "Азіатська": ["USD/JPY", "AUD/USD", "NZD/USD", "EUR/JPY", "CHF/JPY"],
     "Європейська": ["EUR/USD", "GBP/USD", "USD/CHF", "EUR/GBP", "EUR/CHF", "GBP/CHF"],
     "Американська": ["USD/CAD", "USD/MXN", "USD/BRL", "USD/ZAR"]
 }
-# --- ПОЧАТОК ЗМІН: Повертаємо видалений рядок ---
 ANALYSIS_TIMEFRAMES = ['15min', '1h', '4h', '1day']
-# --- КІНЕЦЬ ЗМІН ---
 DB_NAME = "zigzag.db"

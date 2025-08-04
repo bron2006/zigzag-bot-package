@@ -3,11 +3,11 @@ Flask==2.3.3
 ccxt==4.2.18
 pandas==2.1.4
 pandas-ta==0.3.14b
+twelvedata==1.2.24
 gunicorn==21.2.0
 python-dotenv
 cachetools==4.2.2
 Flask-Cors
-finnhub-python
-websockets==12.0
 requests
-protobuf==3.20.3
+protobuf==3.2.0
+websockets==12.0
