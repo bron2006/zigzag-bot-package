@@ -22,7 +22,6 @@ def get_trading_accounts(access_token: str):
         return None
 
 def get_trendbars(access_token: str, symbol_name: str, timeframe: str, limit: int):
-    # --- ЗМІНЕНО: Повертаємо назви пар зі слешем, як було у вашому оригінальному файлі ---
     symbol_id_map = {
         "EUR/USD": 1, "GBP/USD": 2, "USD/JPY": 3, "USD/CAD": 4, "AUD/USD": 5, 
         "USD/CHF": 6, "NZD/USD": 7, "EUR/GBP": 8, "EUR/JPY": 9, "CHF/JPY": 48, 
@@ -65,7 +64,13 @@ def _refresh_token(refresh_token: str):
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
-        logging.error(f"Не вдалося оновити токен: {e}"); return None
+        # --- ЗМІНЕНО: Додано детальне логування помилки відповіді від сервера ---
+        error_message = f"Не вдалося оновити токен: {e}"
+        if e.response is not None:
+            error_message += f" | Status Code: {e.response.status_code} | Response: {e.response.text}"
+        logging.error(error_message)
+        # --------------------------------------------------------------------
+        return None
 
 def get_valid_access_token(user_id: int):
     token_data = get_ctrader_token(user_id)
