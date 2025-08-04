@@ -32,7 +32,8 @@ def get_trendbars(access_token: str, symbol_name: str, timeframe: str, limit: in
         logging.error(f"Невідомий символ для cTrader: {symbol_name}")
         return pd.DataFrame()
 
-    timeframe_map = {"15min": "m15", "1h": "h1", "4h": "h4", "1day": "d1"}
+    # --- ЗМІНЕНО: Додано підтримку 1-хвилинного таймфрейму ---
+    timeframe_map = {"1m": "m1", "15min": "m15", "1h": "h1", "4h": "h4", "1day": "d1"}
     ctrader_tf = timeframe_map.get(timeframe)
     if not ctrader_tf:
         logging.error(f"Непідтримуваний таймфрейм для cTrader: {timeframe}")
@@ -58,10 +59,6 @@ def get_trendbars(access_token: str, symbol_name: str, timeframe: str, limit: in
         return pd.DataFrame()
 
 def _refresh_token(refresh_token: str):
-    # --- ДОДАНО СПЕЦІАЛЬНИЙ МАРКЕР ДЛЯ ПЕРЕВІРКИ ---
-    logging.info("ДЕБАГ: Запущено оновлену функцію _refresh_token з детальним логуванням...")
-    # -----------------------------------------------
-    
     payload = {'grant_type': 'refresh_token', 'refresh_token': refresh_token, 'client_id': CT_CLIENT_ID, 'client_secret': CT_CLIENT_SECRET }
     try:
         response = requests.post(CTRADER_TOKEN_URL, data=payload, timeout=15)

@@ -32,13 +32,12 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False, user_id=Non
             if not user_id: return pd.DataFrame()
             access_token = get_valid_access_token(user_id)
             if not access_token: return pd.DataFrame()
-            tf_map = {'15min': 'm15', '1h': 'h1', '4h': 'h4', '1day': 'd1'}
+            tf_map = {'1m': 'm1', '15min': 'm15', '1h': 'h1', '4h': 'h4', '1day': 'd1'}
             ctrader_tf = tf_map.get(tf)
             if not ctrader_tf: return pd.DataFrame()
-            # --- ЗМІНЕНО: Передаємо пару зі слешем, як очікує ctrader_api.py ---
             df = get_trendbars(access_token, pair, ctrader_tf, limit)
         elif asset == 'stocks':
-            td_tf_map = { '15min': '15min', '1h': '1hour', '4h': '4hour', '1day': '1day'}
+            td_tf_map = {'1m': '1min', '15min': '15min', '1h': '1hour', '4h': '4hour', '1day': '1day'}
             td_tf = td_tf_map.get(tf)
             if not td_tf: return pd.DataFrame()
             ts = td.time_series(symbol=pair, interval=td_tf, outputsize=limit)
@@ -54,10 +53,9 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False, user_id=Non
         logger.error(f"Помилка отримання даних для {pair} ({asset}, {tf}): {e}")
         return pd.DataFrame()
 
-# --- ФУНКЦІЇ ДЛЯ ІНТЕРФЕЙСУ БОТА (з вашого старого файлу) ---
-
 def get_signal_strength_verdict(pair, display_name, asset, user_id=None, force_refresh=False):
-    df = get_market_data(pair, '15min', asset, limit=100, force_refresh=force_refresh, user_id=user_id)
+    # --- ЗМІНЕНО: Повертаємо аналіз на 1-хвилинний таймфрейм ---
+    df = get_market_data(pair, '1m', asset, limit=100, force_refresh=force_refresh, user_id=user_id)
     if df.empty or len(df) < 25:
         return f"⚠️ Недостатньо даних для аналізу *{display_name}*.", None
     try:
@@ -89,8 +87,6 @@ def get_full_mta_verdict(pair, display_name, asset, force_refresh=False, user_id
         return f"**📊 Детальний огляд тренду:** *{display_name}*\n\nНе вдалося згенерувати жодного сигналу."
     report = "\n".join([f"• *{tf}:* {sig}" for tf, sig in rows_data])
     return f"**📊 Детальний огляд тренду:** *{display_name}*\n\n{report}"
-
-# --- ФУНКЦІЇ ДЛЯ WEBAPP API ---
 
 def get_api_detailed_signal_data(pair, user_id=None):
     asset = get_asset_type(pair)
@@ -128,8 +124,6 @@ def rank_assets_for_api(pairs, asset_type, user_id=None):
     results = list(get_executor().map(fetch_score, pairs))
     active = sorted([r for r in results if r['score'] != -1], key=lambda x: x['score'], reverse=True)
     return active + [r for r in results if r['score'] == -1]
-
-# --- ДОПОМІЖНІ АНАЛІТИЧНІ ФУНКЦІЇ ---
 
 def _calculate_core_signal(df, daily_df):
     df.ta.rsi(close=df['close'], length=14, append=True, col_names=('RSI',))
