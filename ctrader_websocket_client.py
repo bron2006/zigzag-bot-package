@@ -15,7 +15,6 @@ from openapi_client.protobuf.OpenApiMessages_pb2 import (
     ProtoOASubscribeLiveTrendbarRes,
     ProtoOAErrorRes
 )
-# --- ДОДАНО: Імпорт для Heartbeat ---
 from openapi_client.protobuf.OpenApiCommonMessages_pb2 import ProtoHeartbeatEvent
 
 SPOTWARE_WS_URL = "wss://demo.ctraderapi.com:5035"
@@ -23,11 +22,9 @@ SPOTWARE_WS_URL = "wss://demo.ctraderapi.com:5035"
 async def _fetch_trendbars_async(access_token: str, account_id: int, symbol_id: int, timeframe: str) -> pd.DataFrame:
     try:
         async with websockets.connect(SPOTWARE_WS_URL) as ws:
-            # --- ЗМІНЕНО: Надсилаємо Heartbeat перед авторизацією за порадою з форуму ---
             heartbeat_msg = ProtoMessage(payloadType=51, payload=ProtoHeartbeatEvent().SerializeToString())
             await ws.send(heartbeat_msg.SerializeToString())
             logger.info("📤 WebSocket: Надіслано Heartbeat.")
-            # --------------------------------------------------------------------------
 
             app_auth_req = ProtoOAApplicationAuthReq(clientId=CT_CLIENT_ID, clientSecret=CT_CLIENT_SECRET)
             wrapper_msg = ProtoMessage(payloadType=ProtoOAPayloadType.PROTO_OA_APPLICATION_AUTH_REQ, payload=app_auth_req.SerializeToString())
@@ -41,7 +38,9 @@ async def _fetch_trendbars_async(access_token: str, account_id: int, symbol_id: 
             await ws.recv()
             logger.info(f"✅ WebSocket: Авторизація рахунку {account_id} пройдена.")
 
-            await asyncio.sleep(0.5)
+            # --- ЗМІНЕНО: Збільшуємо паузу до 2 секунд ---
+            await asyncio.sleep(2.0)
+            # -----------------------------------------------
 
             tf_map = {
                 '1m': ProtoOATrendbarPeriod.M1, '15min': ProtoOATrendbarPeriod.M15,
@@ -87,7 +86,6 @@ async def _fetch_trendbars_async(access_token: str, account_id: int, symbol_id: 
                              'Volume': bar.volume} for bar in event.trendbar]
                     return pd.DataFrame(bars)
                 
-                # Ігноруємо heartbeat-відповіді від сервера
                 if response_wrapper.payloadType == 51:
                     continue
 
