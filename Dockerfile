@@ -26,4 +26,4 @@ COPY . .
 EXPOSE 8080
 
 # Оптимізована команда запуску Gunicorn
-CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "2", "--timeout", "120", "--worker-class", "gevent", "bot:app"]
+CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "2", "--timeout", "180", "bot:app"]
