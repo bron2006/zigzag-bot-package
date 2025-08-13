@@ -5,12 +5,17 @@ import numpy as np
 from concurrent.futures import ThreadPoolExecutor
 import threading
 
+# --- ОСТАТОЧНИЙ, ОБ'ЄДНАНИЙ БЛОК ІМПОРТІВ ---
 from ctrader_open_api import Client, TcpProtocol
-from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOAGetTrendbarsReq, ProtoOAApplicationAuthReq, ProtoOAAccountAuthReq
-from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOAGetTrendbarsRes, ProtoOATrendbarPeriod as TrendbarPeriod, ProtoOAErrorRes
+from ctrader_open_api.messages.OpenApiMessages_pb2 import (
+    ProtoOAGetTrendbarsReq, ProtoOAGetTrendbarsRes, 
+    ProtoOAApplicationAuthReq, ProtoOAAccountAuthReq,
+    ProtoOAErrorRes
+)
+from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOATrendbarPeriod as TrendbarPeriod
 
 from db import add_signal_to_history
-from config import logger, MARKET_DATA_CACHE, CACHE_LOCK, ANALYSIS_TIMEFRAMES, CT_CLIENT_ID, CT_CLIENT_SECRET
+from config import logger, MARKET_DATA_CACHE, ANALYSIS_TIMEFRAMES, CT_CLIENT_ID, CT_CLIENT_SECRET
 from ctrader_api import get_valid_access_token
 
 _executor = None
@@ -81,6 +86,8 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False, user_id=Non
     
     if not client.wait_for_connect(timeout=15):
         logger.error("Не вдалося підключитися до cTrader API (таймаут).")
+        client.stop()
+        client_thread.join(timeout=5)
         return pd.DataFrame()
 
     try:
@@ -120,6 +127,7 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False, user_id=Non
         MARKET_DATA_CACHE[key] = df
     return df
 
+# ... решта файлу `analysis.py` залишається без змін ...
 def get_signal_strength_verdict(pair, display_name, asset, user_id=None, force_refresh=False):
     df = get_market_data(pair, '1m', asset, limit=100, force_refresh=force_refresh, user_id=user_id)
     if df.empty or len(df) < 25:
@@ -138,8 +146,6 @@ def get_signal_strength_verdict(pair, display_name, asset, user_id=None, force_r
     except Exception as e:
         logger.error(f"Помилка розрахунку індексу для {pair}: {e}")
         return f"⚠️ Помилка аналізу *{display_name}*.", None
-
-# ... решта файлу `analysis.py` залишається без змін ...
 
 def get_full_mta_verdict(pair, display_name, asset, force_refresh=False, user_id=None):
     def worker(tf):
