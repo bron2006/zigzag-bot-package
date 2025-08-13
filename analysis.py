@@ -4,10 +4,10 @@ import pandas_ta as ta
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor
 
-# --- ОСЬ ВОНО, ФІНАЛЬНЕ ВИПРАВЛЕННЯ ІМПОРТУ ---
+# --- ВИПРАВЛЕНО БЛОК ІМПОРТІВ ДЛЯ CTRADER ---
+from ctrader_open_api.client import Client
 from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOAGetTrendbarsReq, ProtoOAGetTrendbarsRes, ProtoOAApplicationAuthReq, ProtoOAAccountAuthReq
-from ctrader_open_api.enums import TrendbarPeriod
-from ctrader_open_api import Client
+from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOATrendbarPeriod as TrendbarPeriod
 
 from db import add_signal_to_history
 from config import logger, MARKET_DATA_CACHE, ANALYSIS_TIMEFRAMES, CT_CLIENT_ID, CT_CLIENT_SECRET
