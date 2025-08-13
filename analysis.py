@@ -4,11 +4,10 @@ import pandas_ta as ta
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor
 
-from ctrader_open_api.client import Client
+# --- ВИПРАВЛЕНО БЛОК ІМПОРТІВ ДЛЯ CTRADER ---
+from ctrader_open_api.client import Client, Protocol
 from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOAGetTrendbarsReq, ProtoOAGetTrendbarsRes, ProtoOAApplicationAuthReq, ProtoOAAccountAuthReq
 from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOATrendbarPeriod as TrendbarPeriod
-# --- ДОДАНО ІМПОРТ ДЛЯ PROTOCOL ---
-from ctrader_open_api.protocol import Protocol
 
 from db import add_signal_to_history
 from config import logger, MARKET_DATA_CACHE, ANALYSIS_TIMEFRAMES, CT_CLIENT_ID, CT_CLIENT_SECRET
@@ -46,7 +45,6 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False, user_id=Non
                 logger.error(f"Не вдалося отримати валідний access_token для user_id: {user_id}")
                 return pd.DataFrame()
             
-            # --- ВИПРАВЛЕНО РЯДОК ІНІЦІАЛІЗАЦІЇ КЛІЄНТА ---
             client = Client("demo.ctraderapi.com", 5035, Protocol.WEBSOCKET)
 
             tf_map = {
