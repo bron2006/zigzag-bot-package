@@ -4,20 +4,20 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKe
 from telegram.ext import CallbackContext, CommandHandler, MessageHandler, Filters, CallbackQueryHandler
 from telegram.error import BadRequest
 
-from config import CRYPTO_PAIRS_FULL, CRYPTO_CHUNK_SIZE, STOCK_TICKERS, FOREX_SESSIONS
+# --- ВИДАЛЕНО STOCK_TICKERS З ІМПОРТУ ---
+from config import CRYPTO_PAIRS_FULL, CRYPTO_CHUNK_SIZE, FOREX_SESSIONS
 from db import get_watchlist, toggle_watch
 from analysis import get_signal_strength_verdict, get_full_mta_verdict
 
 dp = None
 
 def main_kb():
-    # --- ЗМІНЕНО: Видаляємо кнопку "Криптовалюти" з головного меню ---
+    # --- ВИДАЛЕНО КНОПКУ "АКЦІЇ" ---
     return InlineKeyboardMarkup([
-        # [InlineKeyboardButton("📈 Криптовалюти", callback_data='menu_crypto_0')],
         [InlineKeyboardButton("💹 Валютні пари", callback_data='menu_forex')],
-        [InlineKeyboardButton("🏢 Акції", callback_data='menu_stocks')]
     ])
-# ... решта файлу telegram_ui.py залишається без змін ...
+
+# ... решта файлу без змін ...
 def forex_session_kb():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🗾 Азіатська", callback_data="session_Азіатська")],
@@ -35,8 +35,7 @@ def asset_list_kb(asset_type, pairs, chunk_index=0):
     
     if asset_type == 'forex':
         keyboard.append([InlineKeyboardButton("⬅️ НАЗАД", callback_data='menu_forex')])
-    elif asset_type == 'stocks':
-        keyboard.append([InlineKeyboardButton("⬅️ НАЗАД", callback_data='main_menu')])
+    # --- ВИДАЛЕНО ЛОГІКУ ДЛЯ 'stocks' ---
     else: # crypto
         nav_row = []
         total_chunks = math.ceil(len(CRYPTO_PAIRS_FULL) / CRYPTO_CHUNK_SIZE)
@@ -82,8 +81,7 @@ def button_handler(update: Update, context: CallbackContext):
     elif data == 'menu_forex':
         query.edit_message_text("💹 Виберіть сесію:", reply_markup=forex_session_kb())
     
-    elif data == 'menu_stocks':
-        query.edit_message_text("🏢 Виберіть акцію:", reply_markup=asset_list_kb('stocks', STOCK_TICKERS))
+    # --- ВИДАЛЕНО ОБРОБНИК ДЛЯ 'menu_stocks' ---
 
     elif data.startswith('session_'):
         session = data.split('_')[1]
@@ -107,7 +105,8 @@ def button_handler(update: Update, context: CallbackContext):
         
         if asset == 'crypto': back_button_cb = f'menu_crypto_{chunk_idx_str}'
         elif asset == 'forex': back_button_cb = f'session_{next((s for s, p in FOREX_SESSIONS.items() if display in p), "Азіатська")}'
-        else: back_button_cb = 'menu_stocks'
+        # --- ВИДАЛЕНО ЛОГІКУ ДЛЯ 'stocks' ---
+        else: back_button_cb = 'main_menu'
 
         kb_data_prefix = f'{asset}_{ticker_safe}_{display_safe}_{chunk_idx_str}'
         kb = InlineKeyboardMarkup([
@@ -119,6 +118,7 @@ def button_handler(update: Update, context: CallbackContext):
         ])
         query.edit_message_text(text=msg, parse_mode='Markdown', reply_markup=kb)
 
+    # ... решта файлу без змін ...
     elif data.startswith('details_'):
         _, asset, ticker_safe, display_safe, chunk_idx_str = data.split('_', 4)
         analysis_data = context.user_data.get(f"analysis_{ticker_safe}")
@@ -158,6 +158,7 @@ def button_handler(update: Update, context: CallbackContext):
         back_callback = f"analyze_{asset}_{ticker_safe}_{display_safe}_{chunk_idx_str}"
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Назад до вердикту", callback_data=back_callback)]])
         query.edit_message_text(text=msg, parse_mode='Markdown', reply_markup=kb)
+
 
 def register_handlers(dispatcher):
     global dp

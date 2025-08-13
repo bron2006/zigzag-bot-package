@@ -6,7 +6,7 @@ from flask import request, jsonify, send_from_directory
 from flask_cors import CORS
 from telegram import Update
 
-from config import app, bot, dp, WEBHOOK_SECRET, logger, CRYPTO_PAIRS_FULL, FOREX_SESSIONS, STOCK_TICKERS, MY_TELEGRAM_ID, CTRADER_ACCESS_TOKEN, CTRADER_REFRESH_TOKEN
+from config import app, bot, dp, WEBHOOK_SECRET, logger, CRYPTO_PAIRS_FULL, FOREX_SESSIONS, MY_TELEGRAM_ID, CTRADER_ACCESS_TOKEN, CTRADER_REFRESH_TOKEN
 from db import init_db, get_watchlist, toggle_watch, get_signal_history, get_ctrader_token, save_ctrader_token
 from analysis import get_api_detailed_signal_data, rank_assets_for_api, get_api_mta_data
 import telegram_ui
@@ -77,12 +77,12 @@ def api_get_ranked_pairs():
     try:
         ranked_crypto_data = rank_assets_for_api(CRYPTO_PAIRS_FULL, 'crypto', user_id=user_id)
         ranked_crypto = [{'ticker': p['ticker'], 'active': bool(p['score'] != -1)} for p in ranked_crypto_data]
-        static_stocks = [{'ticker': p, 'active': True} for p in STOCK_TICKERS]
+        # --- ВИДАЛЕНО 'stocks' З ВІДПОВІДІ ---
         static_forex = { session: [{'ticker': p, 'active': True} for p in pairs] for session, pairs in FOREX_SESSIONS.items() }
-        return jsonify({ "watchlist": watchlist, "crypto": ranked_crypto, "forex": static_forex, "stocks": static_stocks })
+        return jsonify({ "watchlist": watchlist, "crypto": ranked_crypto, "forex": static_forex, "stocks": [] })
     except Exception as e:
         logger.error(f"API error for ranked pairs: {e}\n{traceback.format_exc()}")
-        return jsonify({ "watchlist": watchlist, "crypto": [{'ticker': p, 'active': True} for p in CRYPTO_PAIRS_FULL], "forex": {session: [{'ticker': p, 'active': True} for p in pairs] for session, pairs in FOREX_SESSIONS.items()}, "stocks": [{'ticker': p, 'active': True} for p in STOCK_TICKERS], "error_message": "Помилка при сортуванні, показано стандартний список." })
+        return jsonify({ "watchlist": watchlist, "crypto": [{'ticker': p, 'active': True} for p in CRYPTO_PAIRS_FULL], "forex": {session: [{'ticker': p, 'active': True} for p in pairs] for session, pairs in FOREX_SESSIONS.items()}, "stocks": [], "error_message": "Помилка при сортуванні, показано стандартний список." })
 
 @app.route("/api/get_mta", methods=["GET"])
 def api_get_mta():
@@ -140,15 +140,4 @@ if __name__ != "__main__":
         init_db()
         init_ctrader_token()
     telegram_ui.register_handlers(dp)
-
-# --- ДОДАНО БЛОК ДЛЯ НАЛАГОДЖЕННЯ ---
-if __name__ == "__main__":
-    # Цей блок виконається тільки при запуску командою "python bot.py"
-    with app.app_context():
-        init_db()
-        init_ctrader_token()
-    telegram_ui.register_handlers(dp)
-    
-    # Запускаємо вбудований сервер Flask в режимі налагодження
-    logger.info("Starting Flask development server for debugging...")
-    app.run(host="0.0.0.0", port=8080, debug=True)
+# --- БЛОК ДЛЯ НАЛАГОДЖЕННЯ ВИДАЛЕНО ---

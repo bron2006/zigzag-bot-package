@@ -2,8 +2,6 @@
 import os
 import logging
 from cachetools import TTLCache
-# import ccxt # --- ВИМКНЕНО: Бібліотека для крипти більше не потрібна ---
-from twelvedata import TDClient
 from dotenv import load_dotenv
 from telegram import Bot
 from telegram.ext import Updater
@@ -12,8 +10,9 @@ from flask import Flask
 load_dotenv()
 TOKEN = os.getenv("TOKEN")
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
-TWELVEDATA_API_KEY = os.getenv("TWELVEDATA_API_KEY")
-FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY")
+# --- ВИДАЛЕНО ЗМІННІ ДЛЯ АКЦІЙ ---
+# TWELVEDATA_API_KEY = os.getenv("TWELVEDATA_API_KEY")
+# FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY")
 
 CT_CLIENT_ID = os.getenv("CT_CLIENT_ID")
 CT_CLIENT_SECRET = os.getenv("CT_CLIENT_SECRET")
@@ -27,20 +26,18 @@ logger = logging.getLogger(__name__)
 MARKET_DATA_CACHE = TTLCache(maxsize=5000, ttl=300)
 RANKING_CACHE = TTLCache(maxsize=100, ttl=60)
 
-# binance = ccxt.binance({'enableRateLimit': True}) # --- ВИМКНЕНО ---
-td = TDClient(apikey=TWELVEDATA_API_KEY)
+# --- ВИДАЛЕНО td = TDClient(...) ---
 
 bot = Bot(token=TOKEN)
 updater = Updater(bot=bot, use_context=True)
 dp = updater.dispatcher
 app = Flask(__name__)
 
-# --- ЗМІНЕНО: Робимо список криптовалют порожнім ---
 CRYPTO_PAIRS_FULL = []
-# --------------------------------------------------
 CRYPTO_CHUNK_SIZE = 12
 
-STOCK_TICKERS = ["AAPL", "GOOGL", "MSFT", "AMZN", "NVDA", "TSLA", "META", "JPM", "V", "JNJ"]
+# --- ВИДАЛЕНО СПИСОК АКЦІЙ ---
+# STOCK_TICKERS = ["AAPL", "GOOGL", "MSFT", "AMZN", "NVDA", "TSLA", "META", "JPM", "V", "JNJ"]
 
 FOREX_SESSIONS = {
     "Азіатська": ["USD/JPY", "AUD/USD", "NZD/USD", "EUR/JPY", "CHF/JPY"],
