@@ -4,21 +4,21 @@ FROM python:3.11-bullseye
 # Встановлюємо робочий каталог
 WORKDIR /app
 
-# Оновлюємо систему та встановлюємо всі необхідні інструменти для збірки
+# Оновлюємо систему та встановлюємо необхідні інструменти
 RUN apt-get update && apt-get install -y \
     build-essential \
     libssl-dev \
     libffi-dev \
     python3-dev \
     cargo \
-    git \
     && rm -rf /var/lib/apt/lists/*
 
-# Копіюємо файл залежностей та встановлюємо їх
+# Копіюємо файл залежностей та .whl файл
 COPY requirements.txt .
-# --- ВИПРАВЛЕНО КОМАНДУ ВСТАНОВЛЕННЯ ---
-# Встановлюємо змінну середовища, щоб git не запитував пароль
-RUN GIT_TERMINAL_PROMPT=0 pip install --no-cache-dir -r requirements.txt
+COPY ctrader_open_api-0.0.0-py3-none-any.whl .
+
+# Встановлюємо залежності
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Копіюємо решту файлів проєкту
 COPY . .
