@@ -9,12 +9,12 @@ gevent
 pandas==2.1.4
 pandas-ta==0.3.14b
 
-# cTrader (виправлена версія та її точна залежність)
+# cTrader (виправлена версія та її точні залежності)
 ctrader-open-api==0.9.2
 protobuf==3.20.1
 
 # Інструменти та залежності
-requests==2.31.0
+requests==2.32.3
 cachetools
 Flask-Cors==4.0.0
 service-identity==24.1.0
