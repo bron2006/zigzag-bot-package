@@ -20,9 +20,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Копіюємо решту файлів проєкту
 COPY . .
-
 # Документуємо порт
 EXPOSE 8080
 
-# Команда для запуску веб-сервера gunicorn
-CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "1", "bot:app"]
+# Команда для запуску веб-сервера gunicorn з gevent воркером
+CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "4", "--worker-class", "gevent", "bot:app"]
