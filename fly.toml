@@ -7,17 +7,17 @@ app = "zigzag-bot-package"
 [http_service]
   internal_port = 8080
   force_https = true
-  auto_stop_machines = true
+  auto_stop_machines = false # ЗМІНЕНО: Забороняємо авто-зупинку
   auto_start_machines = true
-  min_machines_running = 0
+  min_machines_running = 1   # ЗМІНЕНО: Гарантуємо, що 1 машина завжди працює
   processes = ["app"]
 
   [[http_service.checks]]
-    interval = "20s"
-    timeout = "5s"
+    interval = "30s" # Збільшено інтервал для надійності
+    timeout = "10s"  # Збільшено таймаут
     method = "GET"
-    path = "/health" # ЗМІНЕНО: Повертаємо на надійний шлях для перевірки
-    grace_period = "90s"
+    path = "/health"
+    grace_period = "60s"
 
 [[vm]]
   cpu_kind = "shared"
