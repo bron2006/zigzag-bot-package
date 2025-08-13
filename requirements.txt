@@ -1,19 +1,19 @@
-# Основні залежності (оновлено до сучасних версій)
-Flask>=2.3
-gunicorn>=21
-python-telegram-bot>=20.8
-python-dotenv>=1.0
+# Основні залежності
+Flask==2.3.3
+gunicorn==21.2.0
+python-telegram-bot==13.15
+python-dotenv==1.0.1
 gevent
 
 # Аналітика
-pandas>=2.1
+pandas==2.1.4
 pandas-ta
 
-# cTrader (сучасна версія та її залежності)
-ctrader-open-api>=1.18
-protobuf>=4.21
+# cTrader (Встановлення останньої версії з GitHub)
+ctrader-open-api @ git+https://github.com/spotware/open-api-py.git
 
-# Інструменти та залежності
+# Залежності
+protobuf>=4.21.0
 requests
 cachetools
 Flask-Cors

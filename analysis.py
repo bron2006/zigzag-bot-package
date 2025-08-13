@@ -5,8 +5,9 @@ import numpy as np
 from concurrent.futures import ThreadPoolExecutor
 import threading
 
-# --- ІМПОРТИ ДЛЯ НОВОЇ ВЕРСІЇ БІБЛІОТЕКИ ---
-from ctrader_open_api import Client, Protobuf, Connection
+# --- ІМПОРТИ ДЛЯ СУЧАСНОЇ ВЕРСІЇ БІБЛІОТЕКИ ---
+from ctrader_open_api import Client, Connection
+from ctrader_open_api.messages import Protobuf
 from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOAGetTrendbarsReq, ProtoOAApplicationAuthReq, ProtoOAAccountAuthReq
 from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOAGetTrendbarsRes, ProtoOATrendbarPeriod as TrendbarPeriod, ProtoOAErrorRes
 
@@ -53,7 +54,7 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False, user_id=Non
     result_df = pd.DataFrame()
     error_from_api = None
 
-    def callback(message: Protobuf):
+    def on_message_handler(message: Protobuf):
         nonlocal result_df
         if message.payloadType == ProtoOAGetTrendbarsRes().payloadType:
             response = ProtoOAGetTrendbarsRes()
@@ -68,9 +69,9 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False, user_id=Non
         elif message.payloadType == ProtoOAErrorRes().payloadType:
             error_res = ProtoOAErrorRes()
             error_res.ParseFromString(message.payload)
-            on_error(f"Помилка API cTrader: {error_res.errorCode} - {error_res.description}")
+            on_error_handler(f"Помилка API cTrader: {error_res.errorCode} - {error_res.description}")
 
-    def on_error(error):
+    def on_error_handler(error):
         nonlocal error_from_api
         error_from_api = str(error)
         logger.error(error_from_api)
@@ -81,20 +82,18 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False, user_id=Non
     try:
         connection = Connection("demo.ctraderapi.com", 5035, ssl=True)
         client = Client(connection)
-        client.register_message_handler(callback)
+        client.register_message_handler(on_message_handler)
+        client.set_error_handler(on_error_handler)
         client.start()
 
         auth_app_req = ProtoOAApplicationAuthReq(clientId=CT_CLIENT_ID, clientSecret=CT_CLIENT_SECRET)
-        if not client.send_message(auth_app_req):
-            raise Exception("Не вдалося надіслати запит на авторизацію додатку.")
+        client.send_message(auth_app_req)
         
         auth_acc_req = ProtoOAAccountAuthReq(ctidTraderAccountId=DEMO_ACCOUNT_ID, accessToken=access_token)
-        if not client.send_message(auth_acc_req):
-            raise Exception("Не вдалося надіслати запит на авторизацію акаунту.")
+        client.send_message(auth_acc_req)
 
         trendbars_req = ProtoOAGetTrendbarsReq(ctidTraderAccountId=DEMO_ACCOUNT_ID, symbolName=pair, period=tf_map[tf], count=limit)
-        if not client.send_message(trendbars_req, wait_for_response=False):
-             raise Exception("Не вдалося надіслати запит на отримання свічок.")
+        client.send_message(trendbars_req, wait_for_response=False)
         
         response_received.wait(timeout=25)
         
