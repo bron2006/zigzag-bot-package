@@ -4,9 +4,9 @@ import logging
 from cachetools import TTLCache
 from dotenv import load_dotenv
 from telegram import Bot
-from telegram.ext import Dispatcher
+from telegram.ext import Application # <-- ЗМІНЕНО
 from flask import Flask
-import threading # <-- ДОДАНО
+import threading
 
 load_dotenv()
 TOKEN = os.getenv("TOKEN")
@@ -22,10 +22,13 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 MARKET_DATA_CACHE = TTLCache(maxsize=5000, ttl=300)
-CACHE_LOCK = threading.Lock() # <-- ДОДАНО ЗАХИСТ КЕШУ
+CACHE_LOCK = threading.Lock()
 
-bot = Bot(token=TOKEN)
-dp = Dispatcher(bot, None, use_context=True)
+# --- ПОВНІСТЮ ЗМІНЕНО ІНІЦІАЛІЗАЦІЮ БОТА ---
+application = Application.builder().token(TOKEN).build()
+bot = application.bot
+dp = application.dispatcher
+
 app = Flask(__name__)
 
 CRYPTO_PAIRS_FULL = []

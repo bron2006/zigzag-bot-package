@@ -1,21 +1,20 @@
-# Основні залежності
-Flask==2.3.3
-gunicorn==21.2.0
-python-telegram-bot==13.15
-python-dotenv==1.0.1
+# Основні залежності (оновлено до сучасних версій)
+Flask>=2.3
+gunicorn>=21
+python-telegram-bot>=20.8
+python-dotenv>=1.0
 gevent
 
 # Аналітика
-pandas==2.1.4
-pandas-ta==0.3.14b
+pandas>=2.1
+pandas-ta
 
-# cTrader (ОНОВЛЕНО ДО СУЧАСНОЇ ВЕРСІЇ)
-ctrader-open-api==1.18.0
-# Protobuf оновлено до версії, сумісної з новою бібліотекою
-protobuf==4.25.3
+# cTrader (сучасна версія та її залежності)
+ctrader-open-api>=1.18
+protobuf>=4.21
 
 # Інструменти та залежності
-requests==2.32.3
+requests
 cachetools
-Flask-Cors==4.0.0
-service-identity==24.1.0
+Flask-Cors
+service-identity
