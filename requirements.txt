@@ -9,8 +9,8 @@ gevent
 pandas==2.1.4
 pandas-ta
 
-# cTrader (Змінено адресу для git)
-ctrader-open-api @ git+https://github.com/spotware/open-api-py.git
+# cTrader (Встановлення останньої версії з GitHub з вказанням гілки)
+ctrader-open-api @ git+https://github.com/spotware/open-api-py.git@master
 
 # Залежності
 protobuf>=4.21.0
