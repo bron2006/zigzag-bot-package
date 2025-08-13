@@ -8,8 +8,8 @@ python-dotenv==1.0.1
 pandas==2.1.4
 pandas-ta==0.3.14b
 
-# cTrader
-spotware-open-api==1.17
+# cTrader (виправлена назва)
+ctrader-open-api==1.17
 protobuf==3.20.3
 
 # Інструменти та залежності
