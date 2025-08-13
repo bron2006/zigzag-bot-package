@@ -35,7 +35,6 @@ def init_ctrader_token():
         user_id = int(MY_TELEGRAM_ID)
         if get_ctrader_token(user_id) is None:
             logger.info(f"Токен cTrader для користувача {user_id} не знайдено. Зберігаю з секретів...")
-            # --- ЗМІНЕНО: Даємо токену 1 годину життя, щоб уникнути миттєвого оновлення ---
             save_ctrader_token(user_id, CTRADER_ACCESS_TOKEN, CTRADER_REFRESH_TOKEN, expires_in=3600)
             logger.info("Токен cTrader успішно збережено в базу даних.")
         else:
@@ -141,3 +140,15 @@ if __name__ != "__main__":
         init_db()
         init_ctrader_token()
     telegram_ui.register_handlers(dp)
+
+# --- ДОДАНО БЛОК ДЛЯ НАЛАГОДЖЕННЯ ---
+if __name__ == "__main__":
+    # Цей блок виконається тільки при запуску командою "python bot.py"
+    with app.app_context():
+        init_db()
+        init_ctrader_token()
+    telegram_ui.register_handlers(dp)
+    
+    # Запускаємо вбудований сервер Flask в режимі налагодження
+    logger.info("Starting Flask development server for debugging...")
+    app.run(host="0.0.0.0", port=8080, debug=True)
