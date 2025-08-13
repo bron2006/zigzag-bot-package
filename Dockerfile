@@ -23,5 +23,5 @@ COPY . .
 # Документуємо порт
 EXPOSE 8080
 
-# --- ПОВЕРТАЄМО ПРОМИСЛОВУ КОМАНДУ ЗАПУСКУ ---
-CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "4", "--worker-class", "gevent", "bot:app"]
+# --- ОПТИМІЗОВАНА КОМАНДА ЗАПУСКУ GUNICORN ---
+CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "2", "--timeout", "120", "--worker-class", "gevent", "bot:app"]
