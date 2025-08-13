@@ -5,6 +5,7 @@ FROM python:3.11-bullseye
 WORKDIR /app
 
 # Оновлюємо систему та встановлюємо всі необхідні інструменти для збірки
+# Це потрібно для компіляції складних бібліотек, як Twisted та Pandas
 RUN apt-get update && apt-get install -y \
     build-essential \
     libssl-dev \
