@@ -4,13 +4,13 @@ import pandas_ta as ta
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor
 
-from ctrader_open_api import Client
-from ctrader_open_api.messages import ProtoOAGetTrendbarsReq, ProtoOAGetTrendbarsRes, ProtoOAApplicationAuthReq, ProtoOAAccountAuthReq
+# --- ОСЬ ВОНО, ФІНАЛЬНЕ ВИПРАВЛЕННЯ ІМПОРТУ ---
+from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOAGetTrendbarsReq, ProtoOAGetTrendbarsRes, ProtoOAApplicationAuthReq, ProtoOAAccountAuthReq
 from ctrader_open_api.enums import TrendbarPeriod
+from ctrader_open_api import Client
 
 from db import add_signal_to_history
-# --- ВИДАЛЕНО 'td' З ІМПОРТУ ---
-from config import logger, MARKET_DATA_CACHE, ANALYSIS_TIMEFRAMES, CT_CLIENT_ID, CT_CLIENT_SECRET, CTRADER_ACCESS_TOKEN
+from config import logger, MARKET_DATA_CACHE, ANALYSIS_TIMEFRAMES, CT_CLIENT_ID, CT_CLIENT_SECRET
 from ctrader_api import get_valid_access_token
 
 _executor = None
@@ -84,7 +84,6 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False, user_id=Non
                 else:
                     logger.error(f"❌ Помилка або невірна відповідь від API cTrader: {response}")
             
-        # --- БЛОК 'elif asset == 'stocks':' ПОВНІСТЮ ВИДАЛЕНО ---
         elif asset == 'stocks':
             logger.warning(f"Модуль аналізу акцій вимкнено. Пропускаю запит для {pair}.")
             return pd.DataFrame()
@@ -99,7 +98,6 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False, user_id=Non
         logger.error(f"Помилка отримання даних для {pair} ({asset}, {tf}): {e}", exc_info=True)
         return pd.DataFrame()
 
-# ... решта файлу без змін ...
 def get_signal_strength_verdict(pair, display_name, asset, user_id=None, force_refresh=False):
     df = get_market_data(pair, '1m', asset, limit=100, force_refresh=force_refresh, user_id=user_id)
     if df.empty or len(df) < 25:
