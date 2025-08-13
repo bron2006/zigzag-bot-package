@@ -5,16 +5,21 @@ import numpy as np
 from concurrent.futures import ThreadPoolExecutor
 import threading
 
-# --- Фінальний, правильний блок імпортів ---
 from ctrader_open_api import Client, TcpProtocol
-from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOAGetTrendbarsReq, ProtoOAApplicationAuthReq, ProtoOAAccountAuthReq, ProtoOAGetTrendbarsRes, ProtoOAErrorRes
+from ctrader_open_api.messages.OpenApiMessages_pb2 import (
+    ProtoOAGetTrendbarsReq, ProtoOAGetTrendbarsRes, 
+    ProtoOAApplicationAuthReq, ProtoOAAccountAuthReq,
+    ProtoOAErrorRes
+)
 from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOATrendbarPeriod as TrendbarPeriod
 
 from db import add_signal_to_history
+# --- ДОДАНО CACHE_LOCK ДО ІМПОРТУ ---
 from config import logger, MARKET_DATA_CACHE, CACHE_LOCK, ANALYSIS_TIMEFRAMES, CT_CLIENT_ID, CT_CLIENT_SECRET
 from ctrader_api import get_valid_access_token
 
 _executor = None
+# ... (решта файлу не змінюється, лише цей рядок імпорту)
 def get_executor():
     global _executor
     if _executor is None: _executor = ThreadPoolExecutor(max_workers=4)
@@ -123,7 +128,6 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False, user_id=Non
         MARKET_DATA_CACHE[key] = df
     return df
 
-# ... (решта файлу без змін)
 def get_signal_strength_verdict(pair, display_name, asset, user_id=None, force_refresh=False):
     df = get_market_data(pair, '1m', asset, limit=100, force_refresh=force_refresh, user_id=user_id)
     if df.empty or len(df) < 25:
