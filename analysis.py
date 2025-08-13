@@ -4,7 +4,6 @@ import pandas_ta as ta
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor
 
-# --- ВИПРАВЛЕНО БЛОК ІМПОРТІВ ДЛЯ CTRADER ---
 from ctrader_open_api.client import Client
 from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOAGetTrendbarsReq, ProtoOAGetTrendbarsRes, ProtoOAApplicationAuthReq, ProtoOAAccountAuthReq
 from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOATrendbarPeriod as TrendbarPeriod
@@ -45,7 +44,8 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False, user_id=Non
                 logger.error(f"Не вдалося отримати валідний access_token для user_id: {user_id}")
                 return pd.DataFrame()
             
-            client = Client("demo.ctraderapi.com", 5035, ssl=True)
+            # --- ВИПРАВЛЕНО РЯДОК ---
+            client = Client("demo.ctraderapi.com", 5035)
 
             tf_map = {
                 "1m": TrendbarPeriod.M1, "15min": TrendbarPeriod.M15,
