@@ -49,7 +49,8 @@ def _execute_request_with_callback(user_id, request, on_message_handler, timeout
         nonlocal error_message
         error_message = f"Помилка від cTrader API: {exception}"
         logger.error(error_message)
-        if not response_received.is_set(): response_received.set()
+        if not response_received.is_set():
+            response_received.set()
 
     def on_message_wrapper(message: ProtoMessage):
         if message.payloadType == ProtoOAErrorRes.payload_type:
@@ -60,26 +61,31 @@ def _execute_request_with_callback(user_id, request, on_message_handler, timeout
             on_message_handler(message, response_received)
 
     protocol = TcpProtocol()
-    protocol.set_message_handler(on_message_wrapper)
-    protocol.set_error_handler(on_error)
-    client = Client("demo.ctraderapi.com", 5035, protocol)
+    client = Client("demo.ctraderapi.com", 5035, protocol, on_message=on_message_wrapper, on_error=on_error)
 
-    client_thread = threading.Thread(target=client.start, daemon=True)
+    client_thread = threading.Thread(target=client.connect, daemon=True)
     client_thread.start()
-    
-    try:
-        if not client.wait_for_connect(timeout=15):
-            raise ConnectionError("Не вдалося підключитися до cTrader API (таймаут).")
 
+    try:
+        # Очікуємо підключення вручну
+        for _ in range(15):
+            if client.is_connected:
+                break
+            threading.Event().wait(1)
+        else:
+            raise ConnectionError("Не вдалося підключитися до cTrader API (таймаут).")
+        
+        # Авторизація
         auth_req = ProtoOAApplicationAuthReq(clientId=CT_CLIENT_ID, clientSecret=CT_CLIENT_SECRET)
-        if not client.send(auth_req).wait(timeout=15):
-            raise ConnectionError("Авторизація додатку не вдалася.")
+        # У цій версії бібліотеки send не повертає deferred, тому чекаємо на колбек
+        client.send(auth_req)
         
         acc_auth_req = ProtoOAAccountAuthReq(ctidTraderAccountId=DEMO_ACCOUNT_ID, accessToken=access_token)
-        if not client.send(acc_auth_req).wait(timeout=15):
-            raise ConnectionError("Авторизація акаунту не вдалася.")
-
+        client.send(acc_auth_req)
+        
+        # Відправляємо основний запит
         client.send(request)
+
         if not response_received.wait(timeout=timeout):
             raise TimeoutError(f"Таймаут очікування відповіді для запиту {type(request).__name__}")
         if error_message:
@@ -89,8 +95,10 @@ def _execute_request_with_callback(user_id, request, on_message_handler, timeout
         logger.error(f"Помилка під час взаємодії з cTrader: {e}", exc_info=True)
         return False
     finally:
-        client.stop()
+        if hasattr(client, "stop"):
+            client.stop()
         client_thread.join(timeout=5)
+
     return True
 
 def update_symbols_cache(user_id):
