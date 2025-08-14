@@ -52,7 +52,6 @@ def _execute_requests(user_id, requests):
         if not client.wait_for_connect(timeout=15):
             raise ConnectionError("Не вдалося підключитися до cTrader API (таймаут).")
 
-        # Авторизація
         auth_req = ProtoOAApplicationAuthReq(clientId=CT_CLIENT_ID, clientSecret=CT_CLIENT_SECRET)
         deferred = client.send(auth_req)
         if not deferred.wait(timeout=15) or deferred.result is None:
@@ -63,7 +62,6 @@ def _execute_requests(user_id, requests):
         if not deferred.wait(timeout=15) or deferred.result is None:
             raise ConnectionError("Авторизація акаунту не вдалася.")
 
-        # Виконання запитів
         results = []
         for request in requests:
             deferred = client.send(request)
@@ -111,6 +109,7 @@ def update_symbols_cache(user_id):
             details_response.ParseFromString(details_msg.payload)
             with CACHE_LOCK:
                 for symbol in details_response.symbol:
+                    # --- ОСЬ ТУТ БУЛА ПОМИЛКА ---
                     # У ProtoOASymbol поле називається 'symbolName'
                     if hasattr(symbol, 'symbolName'):
                          SYMBOL_DATA_CACHE[symbol.symbolName] = {'symbolId': symbol.symbolId, 'digits': symbol.digits}
