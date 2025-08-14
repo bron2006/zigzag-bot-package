@@ -4,7 +4,7 @@ import logging
 from cachetools import TTLCache
 from dotenv import load_dotenv
 from telegram import Bot
-from telegram.ext import Application # <-- ЗМІНЕНО
+from telegram.ext import Dispatcher
 from flask import Flask
 import threading
 
@@ -24,15 +24,12 @@ logger = logging.getLogger(__name__)
 MARKET_DATA_CACHE = TTLCache(maxsize=5000, ttl=300)
 CACHE_LOCK = threading.Lock()
 
-# --- ПОВНІСТЮ ЗМІНЕНО ІНІЦІАЛІЗАЦІЮ БОТА ---
-application = Application.builder().token(TOKEN).build()
-bot = application.bot
-dp = application.dispatcher
+bot = Bot(token=TOKEN)
+dp = Dispatcher(bot, None, use_context=True, workers=0)
 
 app = Flask(__name__)
 
 CRYPTO_PAIRS_FULL = []
-CRYPTO_CHUNK_SIZE = 12
 
 FOREX_SESSIONS = {
     "Азіатська": ["USD/JPY", "AUD/USD", "NZD/USD", "EUR/JPY", "CHF/JPY"],

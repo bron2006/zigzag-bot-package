@@ -5,10 +5,8 @@ from urllib.parse import parse_qs, unquote
 from flask import request, jsonify, send_from_directory
 from flask_cors import CORS
 from telegram import Update
-import asyncio
 
-# --- ЗМІНЕНО ІМПОРТИ ---
-from config import application, dp, bot, app, WEBHOOK_SECRET, logger, FOREX_SESSIONS, MY_TELEGRAM_ID, CTRADER_ACCESS_TOKEN, CTRADER_REFRESH_TOKEN
+from config import dp, bot, app, WEBHOOK_SECRET, logger, FOREX_SESSIONS, MY_TELEGRAM_ID, CTRADER_ACCESS_TOKEN, CTRADER_REFRESH_TOKEN
 from db import init_db, get_watchlist, toggle_watch, get_signal_history, get_ctrader_token, save_ctrader_token
 from analysis import get_api_detailed_signal_data, rank_assets_for_api, get_api_mta_data
 import telegram_ui
@@ -51,14 +49,15 @@ def log_request():
     logger.info(f"[{request.method}] {request.path}")
 
 @app.route(f"/{WEBHOOK_SECRET}", methods=["POST"])
-async def webhook_handler(): # <-- ЗМІНЕНО: функція стала асинхронною
+def webhook_handler():
     try:
         update = Update.de_json(request.get_json(force=True), bot)
-        await dp.process_update(update) # <-- ЗМІНЕНО: асинхронний виклик
+        dp.process_update(update)
     except Exception as e:
         logger.error(f"Webhook error: {e}\n{traceback.format_exc()}")
     return "OK", 200
 
+# ... (решта ендпоінтів без змін) ...
 @app.route("/api/signal", methods=["GET"])
 def api_signal():
     pair = request.args.get("pair")
@@ -77,7 +76,7 @@ def api_get_ranked_pairs():
     user_id = _get_user_id_from_request(request)
     watchlist = get_watchlist(user_id) if user_id else []
     try:
-        ranked_crypto_data = [] # Крипто вимкнено
+        ranked_crypto_data = []
         ranked_crypto = []
         static_forex = { session: [{'ticker': p, 'active': True} for p in pairs] for session, pairs in FOREX_SESSIONS.items() }
         return jsonify({ "watchlist": watchlist, "crypto": ranked_crypto, "forex": static_forex, "stocks": [] })
@@ -85,7 +84,6 @@ def api_get_ranked_pairs():
         logger.error(f"API error for ranked pairs: {e}\n{traceback.format_exc()}")
         return jsonify({ "watchlist": watchlist, "crypto": [], "forex": {session: [{'ticker': p, 'active': True} for p in pairs] for session, pairs in FOREX_SESSIONS.items()}, "stocks": [], "error_message": "Помилка при сортуванні, показано стандартний список." })
 
-# ... (решта ендпоінтів без змін) ...
 @app.route("/api/get_mta", methods=["GET"])
 def api_get_mta():
     pair = request.args.get("pair")
@@ -138,7 +136,8 @@ def serve_webapp_files(filename):
     return send_from_directory('webapp', filename)
 
 # --- ІНІЦІАЛІЗАЦІЯ ПРИ СТАРТІ ---
-telegram_ui.register_handlers(dp)
-with app.app_context():
-    init_db()
-    init_ctrader_token()
+if __name__ != "__main__":
+    telegram_ui.register_handlers(dp)
+    with app.app_context():
+        init_db()
+        init_ctrader_token()

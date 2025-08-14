@@ -12,9 +12,8 @@ pandas-ta
 # cTrader (Встановлення з локального .whl файлу)
 ./ctrader_open_api-0.0.0-py3-none-any.whl
 
-# Залежності (виправлено версію protobuf)
+# Залежності
 protobuf==3.20.1
-
 requests
 cachetools
 Flask-Cors
