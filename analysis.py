@@ -46,24 +46,25 @@ def _connect_and_run(user_id, requests_to_send, on_message_handler, timeout=20):
     response_received = threading.Event()
     error_message = None
 
-    def on_error(message):
+    def on_error(client_instance, error):
         nonlocal error_message
-        error_message = f"Помилка від cTrader API: {message}"
+        error_message = f"Помилка від cTrader API: {error}"
         logger.error(error_message)
         if not response_received.is_set():
             response_received.set()
 
-    def on_message_wrapper(message: ProtoMessage):
+    def on_message_wrapper(client_instance, message: ProtoMessage):
         if message.payloadType == ProtoOAErrorRes.payload_type:
             error_res = ProtoOAErrorRes()
             error_res.ParseFromString(message.payload)
-            on_error(f"{error_res.errorCode} - {error_res.description}")
+            # Викликаємо основний обробник помилок, щоб уніфікувати логіку
+            on_error(client_instance, f"Код: {error_res.errorCode}, Опис: {error_res.description}")
         else:
             on_message_handler(message, response_received)
 
-    client = Client("demo.ctraderapi.com", 5035, TcpProtocol)
-    client.set_message_handler(on_message_wrapper)
-    client.set_error_handler(on_error)
+    # --- ВИПРАВЛЕННЯ: Передаємо обробники в конструктор ---
+    client = Client("demo.ctraderapi.com", 5035, TcpProtocol, on_message=on_message_wrapper, on_error=on_error)
+    # ----------------------------------------------------
     
     client_thread = threading.Thread(target=client.start, daemon=True)
     client_thread.start()
@@ -127,7 +128,7 @@ def update_symbols_cache(user_id):
             logger.info(f"Закешовано деталі для {len(response.symbol)} символів.")
             event.set()
 
-    chunk_size = 70  # Оптимальний розмір пакету
+    chunk_size = 70
     detail_requests = []
     for i in range(0, len(all_symbol_ids), chunk_size):
         chunk = all_symbol_ids[i:i + chunk_size]
