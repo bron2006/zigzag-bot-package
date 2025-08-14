@@ -5,6 +5,7 @@ from urllib.parse import parse_qs, unquote
 from flask import request, jsonify, send_from_directory
 from flask_cors import CORS
 from telegram import Update
+import os
 
 from config import dp, bot, app, WEBHOOK_SECRET, logger, FOREX_SESSIONS, MY_TELEGRAM_ID, CTRADER_ACCESS_TOKEN, CTRADER_REFRESH_TOKEN, SYMBOL_DATA_CACHE
 from db import init_db, get_watchlist, toggle_watch, get_signal_history, get_ctrader_token, save_ctrader_token
@@ -12,6 +13,33 @@ from analysis import get_api_detailed_signal_data, rank_assets_for_api, get_api_
 import telegram_ui
 
 CORS(app)
+
+# --- НОВА ФУНКЦІЯ ДЛЯ ІНІЦІАЛІЗАЦІЇ ---
+def on_startup(worker):
+    """Функція, яка виконується один раз при старті, після запуску воркерів."""
+    # Використовуємо тимчасовий файл як прапорець (flag),
+    # щоб гарантувати, що ініціалізація виконається лише один раз.
+    # Це надійний спосіб для середовищ, подібних до Fly.io.
+    flag_file = '/tmp/app_initialized.flag'
+
+    # `worker.pid` - це унікальний ID процесу.
+    # Перший воркер, що створить файл, виконає ініціалізацію.
+    if not os.path.exists(flag_file):
+        try:
+            # Створюємо файл, щоб інші воркери знали, що ініціалізація почалася
+            with open(flag_file, 'w') as f:
+                f.write(str(worker.pid))
+
+            # --- ОСНОВНА ЛОГІКА ІНІЦІАЛІЗАЦІЇ ---
+            if MY_TELEGRAM_ID:
+                logger.info(f"Воркер {worker.pid}: Запускаю початкове завантаження даних про символи cTrader...")
+                update_symbols_cache(int(MY_TELEGRAM_ID))
+                logger.info(f"Воркер {worker.pid}: Кеш символів cTrader успішно заповнено. Завантажено {len(SYMBOL_DATA_CACHE)} символів.")
+        except Exception as e:
+            logger.critical(f"Воркер {worker.pid}: КРИТИЧНА ПОМИЛКА під час завантаження кешу: {e}", exc_info=True)
+    else:
+        logger.info(f"Воркер {worker.pid}: Ініціалізацію вже виконано іншим процесом.")
+
 
 def _get_user_id_from_request(req):
     init_data = req.args.get("initData")
@@ -75,7 +103,6 @@ def api_get_ranked_pairs():
     user_id = _get_user_id_from_request(request)
     watchlist = get_watchlist(user_id) if user_id else []
     try:
-        # Функціонал крипти поки відключений
         ranked_crypto = []
         static_forex = { session: [{'ticker': p, 'active': True} for p in pairs] for session, pairs in FOREX_SESSIONS.items() }
         return jsonify({ "watchlist": watchlist, "crypto": ranked_crypto, "forex": static_forex, "stocks": [] })
@@ -134,16 +161,10 @@ def serve_index():
 def serve_webapp_files(filename):
     return send_from_directory('webapp', filename)
 
-if __name__ != "__main__":
-    telegram_ui.register_handlers(dp)
-    with app.app_context():
-        init_db()
-        init_ctrader_token()
-        # Початкове заповнення кешу символів cTrader
-        if MY_TELEGRAM_ID:
-            try:
-                logger.info("Запускаю початкове завантаження даних про символи cTrader...")
-                update_symbols_cache(int(MY_TELEGRAM_ID))
-                logger.info(f"Кеш символів cTrader успішно заповнено. Завантажено {len(SYMBOL_DATA_CACHE)} символів.")
-            except Exception as e:
-                logger.critical(f"КРИТИЧНА ПОМИЛКА під час завантаження кешу символів cTrader: {e}", exc_info=True)
+
+# --- ІНІЦІАЛІЗАЦІЯ ПРИ СТАРТІ (СПРОЩЕНА) ---
+# Логіка завантаження кешу тепер виконується в gunicorn.conf.py
+telegram_ui.register_handlers(dp)
+with app.app_context():
+    init_db()
+    init_ctrader_token()

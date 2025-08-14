@@ -24,5 +24,5 @@ COPY . .
 # Документуємо порт
 EXPOSE 8080
 
-# Оптимізована команда запуску Gunicorn
-CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "2", "--timeout", "180", "bot:app"]
+# Оновлена команда запуску Gunicorn з файлом конфігурації
+CMD ["gunicorn", "-c", "gunicorn.conf.py", "bot:app"]
