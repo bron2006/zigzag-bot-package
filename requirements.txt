@@ -3,7 +3,6 @@ Flask==2.3.3
 gunicorn==21.2.0
 python-telegram-bot==13.15
 python-dotenv==1.0.1
-gevent
 
 # Аналітика
 pandas==2.1.4

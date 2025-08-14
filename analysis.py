@@ -4,26 +4,137 @@ import pandas_ta as ta
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor
 import threading
+import time
 
-# --- ОСТАТОЧНИЙ, ПЕРЕВІРЕНИЙ БЛОК ІМПОРТІВ ---
 from ctrader_open_api import Client, TcpProtocol
-from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOAGetTrendbarsReq, ProtoOAApplicationAuthReq, ProtoOAAccountAuthReq, ProtoOAGetTrendbarsRes, ProtoOAErrorRes
-from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOATrendbarPeriod as TrendbarPeriod
 from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import ProtoMessage
+from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOATrendbarPeriod as TrendbarPeriod
+from ctrader_open_api.messages.OpenApiMessages_pb2 import (
+    ProtoOAApplicationAuthReq, ProtoOAAccountAuthReq, ProtoOAErrorRes,
+    ProtoOAGetTrendbarsReq, ProtoOAGetTrendbarsRes,
+    ProtoOASymbolsListReq, ProtoOASymbolsListRes,
+    ProtoOASymbolByIdReq, ProtoOASymbolByIdRes
+)
 
 from db import add_signal_to_history
-from config import logger, MARKET_DATA_CACHE, CACHE_LOCK, ANALYSIS_TIMEFRAMES, CT_CLIENT_ID, CT_CLIENT_SECRET
+from config import (
+    logger, MARKET_DATA_CACHE, SYMBOL_DATA_CACHE, CACHE_LOCK,
+    ANALYSIS_TIMEFRAMES, CT_CLIENT_ID, CT_CLIENT_SECRET, DEMO_ACCOUNT_ID
+)
 from ctrader_api import get_valid_access_token
 
 _executor = None
+
 def get_executor():
     global _executor
-    if _executor is None: _executor = ThreadPoolExecutor(max_workers=4)
+    if _executor is None:
+        _executor = ThreadPoolExecutor(max_workers=4)
     return _executor
 
-def get_asset_type(pair: str) in str:
-    if '/' in pair: return 'crypto' if 'USDT' in pair else 'forex'
+def get_asset_type(pair: str) -> str:
+    if '/' in pair:
+        return 'crypto' if 'USDT' in pair else 'forex'
     return 'stocks'
+
+def _connect_and_run(user_id, requests_to_send, on_message_handler, timeout=20):
+    """Утиліта для підключення, виконання запитів та обробки відповідей."""
+    access_token = get_valid_access_token(user_id)
+    if not access_token:
+        logger.error(f"Не вдалося виконати запит: невалідний токен для user_id: {user_id}")
+        return False
+
+    response_received = threading.Event()
+    error_message = None
+
+    def on_error(message):
+        nonlocal error_message
+        error_message = f"Помилка від cTrader API: {message}"
+        logger.error(error_message)
+        if not response_received.is_set():
+            response_received.set()
+
+    def on_message_wrapper(message: ProtoMessage):
+        if message.payloadType == ProtoOAErrorRes.payload_type:
+            error_res = ProtoOAErrorRes()
+            error_res.ParseFromString(message.payload)
+            on_error(f"{error_res.errorCode} - {error_res.description}")
+        else:
+            on_message_handler(message, response_received)
+
+    client = Client("demo.ctraderapi.com", 5035, TcpProtocol)
+    client.set_message_handler(on_message_wrapper)
+    client.set_error_handler(on_error)
+    
+    client_thread = threading.Thread(target=client.start, daemon=True)
+    client_thread.start()
+    
+    if not client.wait_for_connect(timeout=15):
+        logger.error("Не вдалося підключитися до cTrader API (таймаут).")
+        client.stop()
+        client_thread.join(timeout=5)
+        return False
+
+    try:
+        auth_req = ProtoOAApplicationAuthReq(clientId=CT_CLIENT_ID, clientSecret=CT_CLIENT_SECRET)
+        if not client.send(auth_req).wait(timeout=15):
+            raise Exception("Авторизація додатку не вдалася.")
+        
+        acc_auth_req = ProtoOAAccountAuthReq(ctidTraderAccountId=DEMO_ACCOUNT_ID, accessToken=access_token)
+        if not client.send(acc_auth_req).wait(timeout=15):
+            raise Exception("Авторизація акаунту не вдалася.")
+
+        for request in requests_to_send:
+            response_received.clear()
+            client.send(request)
+            if not response_received.wait(timeout=timeout):
+                raise Exception(f"Таймаут очікування відповіді для запиту {type(request).__name__}")
+            if error_message:
+                raise Exception(error_message)
+    except Exception as e:
+        logger.error(f"Помилка під час взаємодії з cTrader: {e}", exc_info=True)
+        return False
+    finally:
+        client.stop()
+        client_thread.join(timeout=5)
+    return True
+
+def update_symbols_cache(user_id):
+    """Отримує всі символи, їх ID та digits, і кешує їх."""
+    all_symbol_ids = []
+    
+    def on_symbols_list_message(message: ProtoMessage, event: threading.Event):
+        nonlocal all_symbol_ids
+        if message.payloadType == ProtoOASymbolsListRes.payload_type:
+            response = ProtoOASymbolsListRes()
+            response.ParseFromString(message.payload)
+            all_symbol_ids.extend([s.symbolId for s in response.symbol])
+            event.set()
+
+    logger.info("Отримую список ID всіх символів...")
+    list_req = ProtoOASymbolsListReq(ctidTraderAccountId=DEMO_ACCOUNT_ID)
+    if not _connect_and_run(user_id, [list_req], on_symbols_list_message):
+        logger.error("Не вдалося отримати список ID символів.")
+        return
+    logger.info(f"Отримано {len(all_symbol_ids)} ID символів. Завантажую деталі...")
+
+    def on_symbol_details_message(message: ProtoMessage, event: threading.Event):
+        if message.payloadType == ProtoOASymbolByIdRes.payload_type:
+            response = ProtoOASymbolByIdRes()
+            response.ParseFromString(message.payload)
+            with CACHE_LOCK:
+                for symbol in response.symbol:
+                    SYMBOL_DATA_CACHE[symbol.symbolName] = {'symbolId': symbol.symbolId, 'digits': symbol.digits}
+            logger.info(f"Закешовано деталі для {len(response.symbol)} символів.")
+            event.set()
+
+    chunk_size = 70  # Оптимальний розмір пакету
+    detail_requests = []
+    for i in range(0, len(all_symbol_ids), chunk_size):
+        chunk = all_symbol_ids[i:i + chunk_size]
+        detail_requests.append(ProtoOASymbolByIdReq(ctidTraderAccountId=DEMO_ACCOUNT_ID, symbolId=chunk))
+
+    if not _connect_and_run(user_id, detail_requests, on_symbol_details_message):
+        logger.error("Не вдалося отримати деталі символів.")
 
 def get_market_data(pair, tf, asset, limit=300, force_refresh=False, user_id=None):
     key = f"{pair}_{tf}_{limit}"
@@ -35,87 +146,49 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False, user_id=Non
     if asset != 'forex':
         return pd.DataFrame()
 
-    if not user_id: 
+    if not user_id:
         logger.warning("user_id не надано для запиту Forex.")
         return pd.DataFrame()
 
-    DEMO_ACCOUNT_ID = 9541520
-    access_token = get_valid_access_token(user_id)
-    if not access_token:
-        logger.error(f"Не вдалося отримати валідний access_token для user_id: {user_id}")
+    with CACHE_LOCK:
+        symbol_details = SYMBOL_DATA_CACHE.get(pair)
+    
+    if not symbol_details:
+        logger.error(f"Деталі для символу {pair} не знайдено в кеші. Можливо, кеш ще не завантажено.")
         return pd.DataFrame()
 
-    tf_map = { "1m": TrendbarPeriod.M1, "15min": TrendbarPeriod.M15, "1h": TrendbarPeriod.H1, "4h": TrendbarPeriod.H4, "1day": TrendbarPeriod.D1 }
+    tf_map = {"1m": TrendbarPeriod.M1, "15min": TrendbarPeriod.M15, "1h": TrendbarPeriod.H1, "4h": TrendbarPeriod.H4, "1day": TrendbarPeriod.D1}
     if tf not in tf_map:
-        logger.error(f"Непідтримуваний таймфрейм для cTrader: {tf}")
         return pd.DataFrame()
 
-    response_received = threading.Event()
     result_df = pd.DataFrame()
-    error_message_from_api = None
 
-    def on_message(message: ProtoMessage):
+    def on_trendbars_message(message: ProtoMessage, event: threading.Event):
         nonlocal result_df
         if message.payloadType == ProtoOAGetTrendbarsRes.payload_type:
             response = ProtoOAGetTrendbarsRes()
             response.ParseFromString(message.payload)
-            logger.info(f"✅ УСПІХ! Отримано {len(response.trendbar)} свічок для {pair} з cTrader.")
+            
+            divisor = 10**symbol_details['digits']
             bars = [{'ts': pd.to_datetime(bar.utcTimestampInMinutes * 60, unit='s', utc=True),
-                     'open': bar.open / 100000.0, 'high': bar.high / 100000.0,
-                     'low': bar.low / 100000.0, 'close': bar.close / 100000.0,
+                     'open': (bar.low + bar.deltaOpen) / divisor,
+                     'high': (bar.low + bar.deltaHigh) / divisor,
+                     'low': bar.low / divisor,
+                     'close': (bar.low + bar.deltaClose) / divisor,
                      'volume': bar.volume} for bar in response.trendbar]
+            
             result_df = pd.DataFrame(bars)
-            response_received.set()
-        elif message.payloadType == ProtoOAErrorRes.payload_type:
-             error_res = ProtoOAErrorRes()
-             error_res.ParseFromString(message.payload)
-             on_error(f"Помилка API cTrader: {error_res.errorCode} - {error_res.description}")
+            event.set()
 
-    def on_error(message):
-        nonlocal error_message_from_api
-        error_message_from_api = f"Помилка від cTrader API: {message}"
-        logger.error(error_message_from_api)
-        if not response_received.is_set():
-            response_received.set()
+    trendbars_req = ProtoOAGetTrendbarsReq(
+        ctidTraderAccountId=DEMO_ACCOUNT_ID,
+        symbolId=symbol_details['symbolId'],
+        period=tf_map[tf],
+        count=limit
+    )
     
-    client = Client("demo.ctraderapi.com", 5035, TcpProtocol)
-    client.set_message_handler(on_message)
-    client.set_error_handler(on_error)
-    
-    client_thread = threading.Thread(target=client.start, daemon=True)
-    client_thread.start()
-    
-    if not client.wait_for_connect(timeout=15):
-        logger.error("Не вдалося підключитися до cTrader API (таймаут).")
-        client.stop()
-        client_thread.join(timeout=5)
+    if not _connect_and_run(user_id, [trendbars_req], on_trendbars_message):
         return pd.DataFrame()
-
-    try:
-        request = ProtoOAApplicationAuthReq(clientId=CT_CLIENT_ID, clientSecret=CT_CLIENT_SECRET)
-        deferred = client.send(request)
-        if not deferred.wait(timeout=15) or deferred.result is None:
-            raise Exception("Авторизація додатку не вдалася (таймаут або помилка).")
-        
-        request = ProtoOAAccountAuthReq(ctidTraderAccountId=DEMO_ACCOUNT_ID, accessToken=access_token)
-        deferred = client.send(request)
-        if not deferred.wait(timeout=15) or deferred.result is None:
-            raise Exception("Авторизація акаунту не вдалася (таймаут або помилка).")
-
-        request = ProtoOAGetTrendbarsReq(ctidTraderAccountId=DEMO_ACCOUNT_ID, symbolName=pair, period=tf_map[tf], count=limit)
-        client.send(request)
-        
-        response_received.wait(timeout=20)
-        
-        if error_message_from_api:
-             raise Exception(error_message_from_api)
-
-    except Exception as e:
-        logger.error(f"Помилка під час взаємодії з cTrader для {pair}: {e}", exc_info=True)
-        return pd.DataFrame()
-    finally:
-        client.stop()
-        client_thread.join(timeout=5)
 
     if result_df.empty:
         return pd.DataFrame()
@@ -128,7 +201,6 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False, user_id=Non
         MARKET_DATA_CACHE[key] = df
     return df
 
-# ... (решта файлу без змін)
 def get_signal_strength_verdict(pair, display_name, asset, user_id=None, force_refresh=False):
     df = get_market_data(pair, '1m', asset, limit=100, force_refresh=force_refresh, user_id=user_id)
     if df.empty or len(df) < 25:

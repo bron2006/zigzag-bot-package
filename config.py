@@ -17,11 +17,13 @@ CT_CLIENT_SECRET = os.getenv("CT_CLIENT_SECRET")
 CTRADER_ACCESS_TOKEN = os.getenv("CTRADER_ACCESS_TOKEN")
 CTRADER_REFRESH_TOKEN = os.getenv("CTRADER_REFRESH_TOKEN")
 MY_TELEGRAM_ID = os.getenv("MY_TELEGRAM_ID")
+DEMO_ACCOUNT_ID = 9541520
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 MARKET_DATA_CACHE = TTLCache(maxsize=5000, ttl=300)
+SYMBOL_DATA_CACHE = {}  # Кеш для деталей символів (name -> {id, digits})
 CACHE_LOCK = threading.Lock()
 
 bot = Bot(token=TOKEN)
@@ -30,7 +32,6 @@ dp = Dispatcher(bot, None, use_context=True, workers=0)
 app = Flask(__name__)
 
 CRYPTO_PAIRS_FULL = []
-# --- ВИДАЛЕНО CRYPTO_CHUNK_SIZE ---
 
 FOREX_SESSIONS = {
     "Азіатська": ["USD/JPY", "AUD/USD", "NZD/USD", "EUR/JPY", "CHF/JPY"],

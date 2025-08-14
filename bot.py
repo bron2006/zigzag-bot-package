@@ -6,9 +6,9 @@ from flask import request, jsonify, send_from_directory
 from flask_cors import CORS
 from telegram import Update
 
-from config import dp, bot, app, WEBHOOK_SECRET, logger, FOREX_SESSIONS, MY_TELEGRAM_ID, CTRADER_ACCESS_TOKEN, CTRADER_REFRESH_TOKEN
+from config import dp, bot, app, WEBHOOK_SECRET, logger, FOREX_SESSIONS, MY_TELEGRAM_ID, CTRADER_ACCESS_TOKEN, CTRADER_REFRESH_TOKEN, SYMBOL_DATA_CACHE
 from db import init_db, get_watchlist, toggle_watch, get_signal_history, get_ctrader_token, save_ctrader_token
-from analysis import get_api_detailed_signal_data, rank_assets_for_api, get_api_mta_data
+from analysis import get_api_detailed_signal_data, rank_assets_for_api, get_api_mta_data, update_symbols_cache
 import telegram_ui
 
 CORS(app)
@@ -57,7 +57,6 @@ def webhook_handler():
         logger.error(f"Webhook error: {e}\n{traceback.format_exc()}")
     return "OK", 200
 
-# ... (решта ендпоінтів без змін) ...
 @app.route("/api/signal", methods=["GET"])
 def api_signal():
     pair = request.args.get("pair")
@@ -76,7 +75,7 @@ def api_get_ranked_pairs():
     user_id = _get_user_id_from_request(request)
     watchlist = get_watchlist(user_id) if user_id else []
     try:
-        ranked_crypto_data = []
+        # Функціонал крипти поки відключений
         ranked_crypto = []
         static_forex = { session: [{'ticker': p, 'active': True} for p in pairs] for session, pairs in FOREX_SESSIONS.items() }
         return jsonify({ "watchlist": watchlist, "crypto": ranked_crypto, "forex": static_forex, "stocks": [] })
@@ -135,9 +134,16 @@ def serve_index():
 def serve_webapp_files(filename):
     return send_from_directory('webapp', filename)
 
-# --- ІНІЦІАЛІЗАЦІЯ ПРИ СТАРТІ ---
 if __name__ != "__main__":
     telegram_ui.register_handlers(dp)
     with app.app_context():
         init_db()
         init_ctrader_token()
+        # Початкове заповнення кешу символів cTrader
+        if MY_TELEGRAM_ID:
+            try:
+                logger.info("Запускаю початкове завантаження даних про символи cTrader...")
+                update_symbols_cache(int(MY_TELEGRAM_ID))
+                logger.info(f"Кеш символів cTrader успішно заповнено. Завантажено {len(SYMBOL_DATA_CACHE)} символів.")
+            except Exception as e:
+                logger.critical(f"КРИТИЧНА ПОМИЛКА під час завантаження кешу символів cTrader: {e}", exc_info=True)
