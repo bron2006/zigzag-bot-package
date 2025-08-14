@@ -47,8 +47,8 @@ def _execute_requests(user_id, requests):
     
     # Використовуємо простий try...finally для гарантованого закриття
     try:
-        # З'єднання встановлюється автоматично, чекаємо на нього
-        if not protocol.wait_for_connect(timeout=15):
+        # З'єднання встановлюється автоматично, чекаємо на нього через КЛІЄНТ
+        if not client.wait_for_connect(timeout=15):
             raise ConnectionError("Не вдалося підключитися до cTrader API (таймаут).")
 
         # Авторизація
@@ -78,9 +78,9 @@ def _execute_requests(user_id, requests):
             results.append(response_message)
         return results
     finally:
-        # Надійна зупинка
-        if hasattr(protocol, "stop"):
-            protocol.stop()
+        # Зупиняємо з'єднання через КЛІЄНТ
+        if hasattr(client, "stop"):
+            client.stop()
 
 
 def update_symbols_cache(user_id):
