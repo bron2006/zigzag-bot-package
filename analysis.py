@@ -46,14 +46,9 @@ def _execute_requests(user_id, requests):
     client = Client("demo.ctraderapi.com", 5035, protocol)
     
     try:
-        # Очікуємо підключення вручну, перевіряючи статус
-        for _ in range(30): # Чекаємо до 30 секунд
-            if client.is_connected:
-                logger.info("Клієнт успішно підключився.")
-                break
-            time.sleep(1)
-        else:
-            raise ConnectionError("Не вдалося підключитися до cTrader API (таймаут).")
+        # Даємо з'єднанню 3 секунди на встановлення у фоновому режимі.
+        # Це "сліпа" пауза, оскільки бібліотека не надає методів для перевірки.
+        time.sleep(3)
 
         # Авторизація
         auth_req = ProtoOAApplicationAuthReq(clientId=CT_CLIENT_ID, clientSecret=CT_CLIENT_SECRET)
@@ -166,7 +161,7 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False, user_id=Non
                  'volume': bar.volume} for bar in trendbars_response.trendbar]
         
         df = pd.DataFrame(bars)
-        if df.empty: return df
+        if df.empty: return pd.DataFrame()
         
         df.columns = [str(col).lower() for col in df.columns]
         df = df.sort_values(by='ts').reset_index(drop=True)
