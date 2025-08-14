@@ -4,6 +4,7 @@ import pandas_ta as ta
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor
 import threading
+import time
 
 from ctrader_open_api import Client, TcpProtocol
 from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import ProtoMessage
@@ -53,6 +54,9 @@ def _execute_request_with_callback(user_id, request, on_message_handler, timeout
             response_received.set()
 
     def on_message_wrapper(message: ProtoMessage):
+        # Авторизаційні відповіді не мають payload, їх ігноруємо
+        if message.payloadType in [2101, 2103]:
+            return
         if message.payloadType == ProtoOAErrorRes.payload_type:
             error_res = ProtoOAErrorRes()
             error_res.ParseFromString(message.payload)
@@ -61,7 +65,11 @@ def _execute_request_with_callback(user_id, request, on_message_handler, timeout
             on_message_handler(message, response_received)
 
     protocol = TcpProtocol()
-    client = Client("demo.ctraderapi.com", 5035, protocol, on_message=on_message_wrapper, on_error=on_error)
+    client = Client("demo.ctraderapi.com", 5035, protocol)
+    
+    # Додаємо обробники після створення клієнта
+    client.add_message_handler(on_message_wrapper)
+    client.add_error_handler(on_error)
 
     client_thread = threading.Thread(target=client.connect, daemon=True)
     client_thread.start()
@@ -70,19 +78,22 @@ def _execute_request_with_callback(user_id, request, on_message_handler, timeout
         # Очікуємо підключення вручну
         for _ in range(15):
             if client.is_connected:
+                logger.info("Клієнт успішно підключився.")
                 break
-            threading.Event().wait(1)
+            time.sleep(1)
         else:
             raise ConnectionError("Не вдалося підключитися до cTrader API (таймаут).")
         
         # Авторизація
         auth_req = ProtoOAApplicationAuthReq(clientId=CT_CLIENT_ID, clientSecret=CT_CLIENT_SECRET)
-        # У цій версії бібліотеки send не повертає deferred, тому чекаємо на колбек
         client.send(auth_req)
         
         acc_auth_req = ProtoOAAccountAuthReq(ctidTraderAccountId=DEMO_ACCOUNT_ID, accessToken=access_token)
         client.send(acc_auth_req)
         
+        # Чекаємо трохи на завершення авторизації
+        time.sleep(2)
+
         # Відправляємо основний запит
         client.send(request)
 
