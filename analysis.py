@@ -45,8 +45,10 @@ def _execute_requests(user_id, requests):
     protocol = TcpProtocol()
     client = Client("demo.ctraderapi.com", 5035, protocol)
     
-    # Використовуємо context manager для гарантованого закриття
-    with client:
+    client_thread = threading.Thread(target=client.start, daemon=True)
+    client_thread.start()
+    
+    try:
         if not client.wait_for_connect(timeout=15):
             raise ConnectionError("Не вдалося підключитися до cTrader API (таймаут).")
 
@@ -76,6 +78,10 @@ def _execute_requests(user_id, requests):
             
             results.append(response_message)
         return results
+    finally:
+        client.stop()
+        client_thread.join(timeout=5)
+
 
 def update_symbols_cache(user_id):
     """Отримує всі символи, їх ID та digits, і кешує їх."""
@@ -105,7 +111,9 @@ def update_symbols_cache(user_id):
             details_response.ParseFromString(details_msg.payload)
             with CACHE_LOCK:
                 for symbol in details_response.symbol:
-                    SYMBOL_DATA_CACHE[symbol.symbolName] = {'symbolId': symbol.symbolId, 'digits': symbol.digits}
+                    # У ProtoOASymbol поле називається 'symbolName'
+                    if hasattr(symbol, 'symbolName'):
+                         SYMBOL_DATA_CACHE[symbol.symbolName] = {'symbolId': symbol.symbolId, 'digits': symbol.digits}
             logger.info(f"Закешовано деталі для {len(details_response.symbol)} символів.")
 
     except Exception as e:
@@ -155,6 +163,8 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False, user_id=Non
                  'volume': bar.volume} for bar in trendbars_response.trendbar]
         
         df = pd.DataFrame(bars)
+        if df.empty: return df
+        
         df.columns = [str(col).lower() for col in df.columns]
         df = df.sort_values(by='ts').reset_index(drop=True)
         
@@ -165,7 +175,6 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False, user_id=Non
         logger.error(f"Помилка отримання ринкових даних для {pair}: {e}", exc_info=True)
         return pd.DataFrame()
 
-# ... РЕШТА ФАЙЛУ ЗАЛИШАЄТЬСЯ БЕЗ ЗМІН ...
 def get_signal_strength_verdict(pair, display_name, asset, user_id=None, force_refresh=False):
     df = get_market_data(pair, '1m', asset, limit=100, force_refresh=force_refresh, user_id=user_id)
     if df.empty or len(df) < 25:
