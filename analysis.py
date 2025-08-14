@@ -46,25 +46,27 @@ def _connect_and_run(user_id, requests_to_send, on_message_handler, timeout=20):
     response_received = threading.Event()
     error_message = None
 
-    def on_error(client_instance, error):
+    def on_error(exception):
         nonlocal error_message
-        error_message = f"Помилка від cTrader API: {error}"
+        error_message = f"Помилка від cTrader API: {exception}"
         logger.error(error_message)
         if not response_received.is_set():
             response_received.set()
 
-    def on_message_wrapper(client_instance, message: ProtoMessage):
+    def on_message_wrapper(message: ProtoMessage):
         if message.payloadType == ProtoOAErrorRes.payload_type:
             error_res = ProtoOAErrorRes()
             error_res.ParseFromString(message.payload)
-            # Викликаємо основний обробник помилок, щоб уніфікувати логіку
-            on_error(client_instance, f"Код: {error_res.errorCode}, Опис: {error_res.description}")
+            on_error(Exception(f"Код: {error_res.errorCode}, Опис: {error_res.description}"))
         else:
             on_message_handler(message, response_received)
 
-    # --- ВИПРАВЛЕННЯ: Передаємо обробники в конструктор ---
-    client = Client("demo.ctraderapi.com", 5035, TcpProtocol, on_message=on_message_wrapper, on_error=on_error)
-    # ----------------------------------------------------
+    # --- ФІНАЛЬНЕ ВИПРАВЛЕННЯ: Створюємо протокол і налаштовуємо його ---
+    protocol = TcpProtocol()
+    protocol.set_message_handler(on_message_wrapper)
+    protocol.set_error_handler(on_error)
+    client = Client("demo.ctraderapi.com", 5035, protocol)
+    # --------------------------------------------------------------------
     
     client_thread = threading.Thread(target=client.start, daemon=True)
     client_thread.start()
@@ -124,6 +126,7 @@ def update_symbols_cache(user_id):
             response.ParseFromString(message.payload)
             with CACHE_LOCK:
                 for symbol in response.symbol:
+                    # Важливо: використовуємо symbol.symbolName, а не symbol.name
                     SYMBOL_DATA_CACHE[symbol.symbolName] = {'symbolId': symbol.symbolId, 'digits': symbol.digits}
             logger.info(f"Закешовано деталі для {len(response.symbol)} символів.")
             event.set()
@@ -172,10 +175,10 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False, user_id=Non
             
             divisor = 10**symbol_details['digits']
             bars = [{'ts': pd.to_datetime(bar.utcTimestampInMinutes * 60, unit='s', utc=True),
-                     'open': (bar.low + bar.deltaOpen) / divisor,
-                     'high': (bar.low + bar.deltaHigh) / divisor,
+                     'open': (bar.low + bar.deltaOpen) / divisor if bar.deltaOpen > 0 else bar.low / divisor,
+                     'high': (bar.low + bar.deltaHigh) / divisor if bar.deltaHigh > 0 else bar.low / divisor,
                      'low': bar.low / divisor,
-                     'close': (bar.low + bar.deltaClose) / divisor,
+                     'close': (bar.low + bar.deltaClose) / divisor if bar.deltaClose > 0 else bar.low / divisor,
                      'volume': bar.volume} for bar in response.trendbar]
             
             result_df = pd.DataFrame(bars)
