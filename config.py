@@ -30,6 +30,7 @@ dp = Dispatcher(bot, None, use_context=True, workers=0)
 app = Flask(__name__)
 
 CRYPTO_PAIRS_FULL = []
+# --- ВИДАЛЕНО CRYPTO_CHUNK_SIZE ---
 
 FOREX_SESSIONS = {
     "Азіатська": ["USD/JPY", "AUD/USD", "NZD/USD", "EUR/JPY", "CHF/JPY"],
