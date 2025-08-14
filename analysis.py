@@ -45,10 +45,14 @@ def _execute_requests(user_id, requests):
     protocol = TcpProtocol()
     client = Client("demo.ctraderapi.com", 5035, protocol)
     
-    # Використовуємо простий try...finally для гарантованого закриття
     try:
-        # З'єднання встановлюється автоматично, чекаємо на нього через КЛІЄНТ
-        if not client.wait_for_connect(timeout=15):
+        # Очікуємо підключення вручну, перевіряючи статус
+        for _ in range(30): # Чекаємо до 30 секунд
+            if client.is_connected:
+                logger.info("Клієнт успішно підключився.")
+                break
+            time.sleep(1)
+        else:
             raise ConnectionError("Не вдалося підключитися до cTrader API (таймаут).")
 
         # Авторизація
@@ -78,7 +82,7 @@ def _execute_requests(user_id, requests):
             results.append(response_message)
         return results
     finally:
-        # Зупиняємо з'єднання через КЛІЄНТ
+        # Надійна зупинка
         if hasattr(client, "stop"):
             client.stop()
 
