@@ -16,6 +16,9 @@ RUN apt-get update && apt-get install -y \
 # Копіюємо файл залежностей
 COPY requirements.txt .
 
+# Агресивне очищення перед установкою
+RUN pip uninstall -y ctrader_open_api ctrader-open-api || true
+
 # Встановлюємо залежності
 RUN pip install --no-cache-dir -r requirements.txt
 
