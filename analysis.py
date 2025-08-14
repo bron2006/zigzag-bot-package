@@ -45,9 +45,9 @@ def _execute_requests(user_id, requests):
     protocol = TcpProtocol()
     client = Client("demo.ctraderapi.com", 5035, protocol)
     
-    # --- ОСТАТОЧНЕ ВИПРАВЛЕННЯ: Управління потоком через TcpProtocol ---
-    protocol_thread = threading.Thread(target=protocol.start, daemon=True)
-    protocol_thread.start()
+    # --- ВИПРАВЛЕННЯ ЗГІДНО АНАЛІЗУ ЕКСПЕРТА ---
+    # Мережевий цикл запускає і зупиняє клієнт
+    client.start()
     
     try:
         if not protocol.wait_for_connect(timeout=15):
@@ -78,8 +78,16 @@ def _execute_requests(user_id, requests):
             results.append(response_message)
         return results
     finally:
-        protocol.stop()
-        protocol_thread.join(timeout=5)
+        # Надійна зупинка, як порадив експерт
+        try:
+            if hasattr(client, "stop"):
+                client.stop()
+        finally:
+            try:
+                if hasattr(protocol, "stop"):
+                    protocol.stop()
+            except Exception:
+                pass
     # --- КІНЕЦЬ ВИПРАВЛЕННЯ ---
 
 
@@ -111,6 +119,7 @@ def update_symbols_cache(user_id):
             details_response.ParseFromString(details_msg.payload)
             with CACHE_LOCK:
                 for symbol in details_response.symbol:
+                    # У ProtoOASymbol поле називається 'symbolName'
                     if hasattr(symbol, 'symbolName'):
                          SYMBOL_DATA_CACHE[symbol.symbolName] = {'symbolId': symbol.symbolId, 'digits': symbol.digits}
             logger.info(f"Закешовано деталі для {len(details_response.symbol)} символів.")
