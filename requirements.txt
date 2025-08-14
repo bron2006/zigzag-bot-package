@@ -8,8 +8,8 @@ python-dotenv==1.0.1
 pandas==2.1.4
 pandas-ta
 
-# cTrader (Встановлення офіційної версії з PyPI)
-ctrader-open-api==0.9.2
+# cTrader (Встановлення з локального .whl файлу)
+./ctrader_open_api-0.0.0-py3-none-any.whl
 
 # Залежності
 protobuf==3.20.1
