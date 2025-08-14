@@ -5,21 +5,16 @@ import numpy as np
 from concurrent.futures import ThreadPoolExecutor
 import threading
 
-from ctrader_open_api import Client, TcpProtocol
-from ctrader_open_api.messages.OpenApiMessages_pb2 import (
-    ProtoOAGetTrendbarsReq, ProtoOAGetTrendbarsRes, 
-    ProtoOAApplicationAuthReq, ProtoOAAccountAuthReq,
-    ProtoOAErrorRes
-)
-from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOATrendbarPeriod as TrendbarPeriod
+# --- ІМПОРТИ ДЛЯ СУЧАСНОЇ ВЕРСІЇ БІБЛІОТЕКИ ---
+from ctrader_open_api import Client, Connection, Protobuf
+from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOAGetTrendbarsReq, ProtoOAApplicationAuthReq, ProtoOAAccountAuthReq
+from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOAGetTrendbarsRes, ProtoOATrendbarPeriod as TrendbarPeriod, ProtoOAErrorRes
 
 from db import add_signal_to_history
-# --- ДОДАНО CACHE_LOCK ДО ІМПОРТУ ---
 from config import logger, MARKET_DATA_CACHE, CACHE_LOCK, ANALYSIS_TIMEFRAMES, CT_CLIENT_ID, CT_CLIENT_SECRET
 from ctrader_api import get_valid_access_token
 
 _executor = None
-# ... (решта файлу не змінюється, лише цей рядок імпорту)
 def get_executor():
     global _executor
     if _executor is None: _executor = ThreadPoolExecutor(max_workers=4)
@@ -56,66 +51,68 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False, user_id=Non
 
     response_received = threading.Event()
     result_df = pd.DataFrame()
-    error_message_from_api = None
+    error_from_api = None
 
-    def on_message(message):
+    def on_message_handler(message: Protobuf):
         nonlocal result_df
-        if isinstance(message, ProtoOAGetTrendbarsRes):
-            logger.info(f"✅ УСПІХ! Отримано {len(message.trendbar)} свічок для {pair} з cTrader.")
+        if message.payloadType == ProtoOAGetTrendbarsRes().payloadType:
+            response = ProtoOAGetTrendbarsRes()
+            response.ParseFromString(message.payload)
+            logger.info(f"✅ УСПІХ! Отримано {len(response.trendbar)} свічок для {pair} з cTrader.")
             bars = [{'ts': pd.to_datetime(bar.utcTimestampInMinutes * 60, unit='s', utc=True),
                      'open': bar.open / 100000.0, 'high': bar.high / 100000.0,
                      'low': bar.low / 100000.0, 'close': bar.close / 100000.0,
-                     'volume': bar.volume} for bar in message.trendbar]
+                     'volume': bar.volume} for bar in response.trendbar]
             result_df = pd.DataFrame(bars)
             response_received.set()
-        elif isinstance(message, ProtoOAErrorRes):
-             on_error(f"Помилка API cTrader: {message.errorCode} - {message.description}")
+        elif message.payloadType == ProtoOAErrorRes().payloadType:
+            error_res = ProtoOAErrorRes()
+            error_res.ParseFromString(message.payload)
+            on_error_handler(f"Помилка API cTrader: {error_res.errorCode} - {error_res.description}")
 
-    def on_error(message):
-        nonlocal error_message_from_api
-        error_message_from_api = f"Помилка від cTrader API: {message}"
-        logger.error(error_message_from_api)
+    def on_error_handler(error):
+        nonlocal error_from_api
+        error_from_api = str(error)
+        logger.error(error_from_api)
         if not response_received.is_set():
             response_received.set()
-    
-    client = Client("demo.ctraderapi.com", 5035, TcpProtocol)
-    client.set_message_handler(on_message)
-    client.set_error_handler(on_error)
-    
-    client_thread = threading.Thread(target=client.start, daemon=True)
-    client_thread.start()
-    
-    if not client.wait_for_connect(timeout=15):
-        logger.error("Не вдалося підключитися до cTrader API (таймаут).")
-        client.stop()
-        client_thread.join(timeout=5)
-        return pd.DataFrame()
 
+    connection = None
     try:
-        request = ProtoOAApplicationAuthReq(clientId=CT_CLIENT_ID, clientSecret=CT_CLIENT_SECRET)
-        deferred = client.send(request)
-        if not deferred.wait(timeout=15) or deferred.result is None:
-            raise Exception("Авторизація додатку не вдалася (таймаут або помилка).")
+        # Створюємо з'єднання
+        connection = Connection("demo.ctraderapi.com", 5035, ssl=True)
+        client = Client(connection)
         
-        request = ProtoOAAccountAuthReq(ctidTraderAccountId=DEMO_ACCOUNT_ID, accessToken=access_token)
-        deferred = client.send(request)
-        if not deferred.wait(timeout=15) or deferred.result is None:
-            raise Exception("Авторизація акаунту не вдалася (таймаут або помилка).")
+        # --- ВИКОРИСТОВУЄМО ПРАВИЛЬНИЙ ПАТЕРН ДЛЯ ОБРОБКИ ПОДІЙ ---
+        client.on_message = on_message_handler
+        client.on_error = on_error_handler
+        
+        # Запускаємо клієнт (його внутрішній потік)
+        client.start()
 
-        request = ProtoOAGetTrendbarsReq(ctidTraderAccountId=DEMO_ACCOUNT_ID, symbolName=pair, period=tf_map[tf], count=limit)
-        client.send(request)
+        # Надсилаємо запити
+        auth_app_req = ProtoOAApplicationAuthReq(clientId=CT_CLIENT_ID, clientSecret=CT_CLIENT_SECRET)
+        client.send_message(auth_app_req)
         
-        response_received.wait(timeout=20)
+        auth_acc_req = ProtoOAAccountAuthReq(ctidTraderAccountId=DEMO_ACCOUNT_ID, accessToken=access_token)
+        client.send_message(auth_acc_req)
+
+        trendbars_req = ProtoOAGetTrendbarsReq(ctidTraderAccountId=DEMO_ACCOUNT_ID, symbolName=pair, period=tf_map[tf], count=limit)
+        client.send_message(trendbars_req, wait_for_response=False)
         
-        if error_message_from_api:
-             raise Exception(error_message_from_api)
+        # Чекаємо на відповідь, яка буде оброблена в on_message_handler
+        response_received.wait(timeout=25)
+        
+        if error_from_api:
+             raise Exception(error_from_api)
 
     except Exception as e:
         logger.error(f"Помилка під час взаємодії з cTrader для {pair}: {e}", exc_info=True)
         return pd.DataFrame()
     finally:
-        client.stop()
-        client_thread.join(timeout=5)
+        # Гарантовано закриваємо з'єднання
+        if connection:
+            connection.close()
 
     if result_df.empty:
         return pd.DataFrame()
