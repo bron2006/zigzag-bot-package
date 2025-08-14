@@ -46,17 +46,15 @@ def _execute_requests(user_id, requests):
     client = Client("demo.ctraderapi.com", 5035, protocol)
 
     try:
-        time.sleep(3) # Даємо час на автоматичне фонове підключення
+        time.sleep(3)
 
-        # Авторизація
         auth_req = ProtoOAApplicationAuthReq(clientId=CT_CLIENT_ID, clientSecret=CT_CLIENT_SECRET)
-        deferred = client.send(auth_req)
-        # У цій версії ми не можемо чекати (deferred.wait), тому просто відправляємо
+        client.send(auth_req)
         
         acc_auth_req = ProtoOAAccountAuthReq(ctidTraderAccountId=DEMO_ACCOUNT_ID, accessToken=access_token)
         client.send(acc_auth_req)
         
-        time.sleep(2) # Даємо час на авторизацію
+        time.sleep(2)
 
         results = []
         for request in requests:
@@ -75,7 +73,8 @@ def _execute_requests(user_id, requests):
             deferred.addCallback(on_success)
             deferred.addErrback(on_error)
             
-            if not response_received.wait(timeout=25):
+            # Збільшуємо таймаут до 60 секунд
+            if not response_received.wait(timeout=60):
                 raise TimeoutError(f"Таймаут очікування відповіді для запиту {type(request).__name__}")
             
             if request_result["error"]:
@@ -112,6 +111,7 @@ def update_symbols_cache(user_id):
             chunk = all_symbol_ids[i:i + chunk_size]
             detail_requests.append(ProtoOASymbolByIdReq(ctidTraderAccountId=DEMO_ACCOUNT_ID, symbolId=chunk))
 
+        if not detail_requests: return
         details_results = _execute_requests(user_id, detail_requests)
         if not details_results: return
 
@@ -183,7 +183,6 @@ def get_market_data(pair, tf, asset, limit=300, force_refresh=False, user_id=Non
         logger.error(f"Помилка отримання ринкових даних для {pair}: {e}", exc_info=True)
         return pd.DataFrame()
 
-# ... решта файлу (від get_signal_strength_verdict і до кінця) залишається без змін ...
 def get_signal_strength_verdict(pair, display_name, asset, user_id=None, force_refresh=False):
     df = get_market_data(pair, '1m', asset, limit=100, force_refresh=force_refresh, user_id=user_id)
     if df.empty or len(df) < 25:
