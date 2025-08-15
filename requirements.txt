@@ -9,6 +9,12 @@ python-dotenv==1.0.1
 pandas==2.1.4
 pandas-ta
 
+# cTrader (Встановлення напряму з GitHub)
+ctrader-open-api @ git+https://github.com/spotware/OpenApiPy.git
+
+# Інструменти для генерації Protobuf
+grpcio-tools==1.62.0
+
 # Залежності
 protobuf==3.20.1
 requests
