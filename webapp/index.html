@@ -1,29 +1,59 @@
 <!DOCTYPE html>
-<html lang="uk">
+<html lang="en">
 <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no"/>
-    <title>ZigZag WebApp</title>
-    <link rel="stylesheet" href="style.css">
-    <script src="https://cdn.plot.ly/plotly-2.24.1.min.js"></script>
-    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>My cTrader Bot</title>
+    <style>
+        body {
+            background-color: #1a1f2c;
+            color: #e0e0e0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            text-align: center;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+        .container {
+            max-width: 650px;
+        }
+        h1 {
+            font-size: 2.8em;
+            color: #ffffff;
+            margin-bottom: 0.5em;
+        }
+        .tagline {
+            font-size: 1.3em;
+            color: #00b8d4; /* Accent Color */
+            margin-bottom: 2em;
+            font-weight: 300;
+        }
+        p {
+            font-size: 1.1em;
+            line-height: 1.7;
+            color: #c0c0c0;
+        }
+        .footer {
+            margin-top: 3em;
+            font-size: 0.9em;
+            color: #777;
+        }
+    </style>
 </head>
 <body>
     <div class="container">
-        <h1>Термінал</h1>
-        
-        <div id="listsContainer"></div>
-        
-        <div class="separator"></div>
-
-        <div id="signalContainer">
-            <div id="signalOutput">Виберіть актив для аналізу...</div>
-            <div id="chart"></div>
-            <div id="historyContainer"></div>
-            </div>
-
-        <div id="loader" class="hidden"></div>
+        <h1>My cTrader Bot</h1>
+        <p class="tagline">Advanced Market Analysis for cTrader Platform</p>
+        <p>
+            Our Telegram-based application provides real-time technical analysis for Forex pairs within the cTrader ecosystem. By leveraging a combination of technical indicators and multi-timeframe analysis (MTA), our bot helps traders identify potential market opportunities and make more informed decisions.
+        </p>
+        <div class="footer">
+            <p>Status: The application is currently in the final stages of integration with the cTrader Open API.</p>
+        </div>
     </div>
-    <script src="script.js"></script>
 </body>
 </html>
