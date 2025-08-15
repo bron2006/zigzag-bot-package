@@ -26,13 +26,13 @@ class CTraderService:
         self._access_token = os.getenv("CTRADER_ACCESS_TOKEN")
         self._account_id = int(os.getenv("DEMO_ACCOUNT_ID", 9541520))
         
-        # --- ФІНАЛЬНЕ ВИПРАВЛЕННЯ (v0.9.2): Конструктор без аргументів ---
-        self._protocol = TcpProtocol()
+        # --- ВИПРАВЛЕННЯ ПІД v0.9.8: Передаємо обробник одразу в конструктор ---
+        self._protocol = TcpProtocol(message_handler=self._message_received)
         self._client = Client("demo.ctraderapi.com", 5035, self._protocol)
 
-        # --- ФІНАЛЬНЕ ВИПРАВЛЕННЯ (v0.9.2): Використовуємо camelCase назви ---
-        self._client.setConnectedCallback(self._on_connected)
-        self._client.setDisconnectedCallback(self._on_disconnected)
+        # --- ВИПРАВЛЕННЯ ПІД v0.9.8: Використовуємо snake_case назви ---
+        self._client.set_connected_callback(self._on_connected)
+        self._client.set_disconnected_callback(self._on_disconnected)
 
     def _on_connected(self):
         logger.info("З'єднання встановлено. Авторизація додатку...")
@@ -83,9 +83,6 @@ class CTraderService:
             reactor.run(installSignalHandlers=0)
 
     def start(self):
-        # --- ФІНАЛЬНЕ ВИПРАВЛЕННЯ (v0.9.2): Встановлюємо обробник тут ---
-        self._protocol.set_message_handler(self._message_received)
-        
         reactor_thread = threading.Thread(target=self._start_reactor, daemon=True)
         reactor_thread.start()
         
