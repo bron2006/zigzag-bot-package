@@ -17,17 +17,19 @@ load_dotenv()
 
 class CTraderService:
     def __init__(self):
-        self._protocol = TcpProtocol()
-        self._client = Client("demo.ctraderapi.com", 5035, self._protocol)
         self._pending_requests = {}
         self._is_authorized = False
         self._client_id = os.getenv("CT_CLIENT_ID")
         self._client_secret = os.getenv("CT_CLIENT_SECRET")
         self._access_token = os.getenv("CTRADER_ACCESS_TOKEN")
         self._account_id = int(os.getenv("DEMO_ACCOUNT_ID", 9541520))
+        
+        # --- ФІНАЛЬНЕ ВИПРАВЛЕННЯ: Передаємо обробник одразу в конструктор ---
+        self._protocol = TcpProtocol(message_handler=self._message_received)
+        self._client = Client("demo.ctraderapi.com", 5035, self._protocol)
 
     def _message_received(self, message: ProtoMessage):
-        if message.clientMsgId in self._pending_requests:
+        if message.clientMsgId and message.clientMsgId in self._pending_requests:
             event, result_dict = self._pending_requests.pop(message.clientMsgId)
             
             if message.payloadType == ProtoOAErrorRes.payload_type:
@@ -38,19 +40,20 @@ class CTraderService:
                 result_dict["data"] = message
             
             event.set()
-        elif not self._is_authorized:
-            # Handle initial auth responses that don't have a clientMsgId
-            if message.payloadType == 2101: # ProtoOAApplicationAuthRes
-                logger.info("Авторизація додатку успішна.")
-                self._authorize_account()
-            elif message.payloadType == 2103: # ProtoOAAccountAuthRes
-                logger.info("Авторизація акаунту успішна.")
-                self._is_authorized = True
-            elif message.payloadType == ProtoOAErrorRes.payload_type:
-                 error_res = ProtoOAErrorRes()
-                 error_res.ParseFromString(message.payload)
-                 logger.critical(f"Помилка авторизації: {error_res.errorCode} - {error_res.description}")
-
+        
+        elif message.payloadType == 2101: # ProtoOAApplicationAuthRes
+            logger.info("Авторизація додатку успішна.")
+            self._authorize_account()
+        elif message.payloadType == 2103: # ProtoOAAccountAuthRes
+            logger.info("Авторизація акаунту успішна.")
+            self._is_authorized = True
+        elif message.payloadType == ProtoOAErrorRes.payload_type:
+            error_res = ProtoOAErrorRes()
+            error_res.ParseFromString(message.payload)
+            logger.critical(f"Помилка авторизації: {error_res.errorCode} - {error_res.description}")
+            # Зупиняємо реактор, якщо авторизація провалилася
+            if reactor.running:
+                reactor.stop()
 
     def _authorize_account(self):
         logger.info("Авторизація акаунту...")
@@ -63,7 +66,7 @@ class CTraderService:
             reactor.run(installSignalHandlers=0)
 
     def start(self):
-        self._protocol.set_message_handler(self._message_received)
+        # self._protocol.set_message_handler - Цей рядок видалено
         reactor_thread = threading.Thread(target=self._start_reactor, daemon=True)
         reactor_thread.start()
 
@@ -72,18 +75,23 @@ class CTraderService:
             request = ProtoOAApplicationAuthReq(clientId=self._client_id, clientSecret=self._client_secret)
             self._client.send(request)
 
-        self._protocol.set_connected_handler(on_connect)
-        self._client.start()
+        # Використовуємо set_connected_handler, який існує в protocol
+        if hasattr(self._protocol, 'set_connected_handler'):
+             self._protocol.set_connected_handler(on_connect)
+        
+        # Використовуємо client.start(), який існує в client
+        if hasattr(self._client, 'start'):
+            self._client.start()
         
     def _send_request(self, request, timeout=30):
         if not self._is_authorized:
-            logger.warning("Сервіс не авторизований. Чекаю на авторизацію...")
+            logger.warning("Сервіс не авторизований. Чекаю на авторизацію (до 15с)...")
             for _ in range(15):
                 if self._is_authorized:
                     break
                 time.sleep(1)
             else:
-                raise Exception("Не вдалося авторизуватися в cTrader.")
+                raise Exception("Не вдалося авторизуватися в cTrader. Перевірте ключі доступу.")
 
         client_msg_id = str(time.time()) # Simple unique ID
         request.clientMsgId = client_msg_id
@@ -95,6 +103,7 @@ class CTraderService:
         self._client.send(request)
 
         if not event.wait(timeout=timeout):
+            self._pending_requests.pop(client_msg_id, None) # Очищаємо запит
             raise TimeoutError(f"Таймаут очікування відповіді для запиту {type(request).__name__}")
         
         if result_dict["error"]:
