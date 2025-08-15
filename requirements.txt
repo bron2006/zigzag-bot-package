@@ -9,8 +9,8 @@ python-dotenv==1.0.1
 pandas==2.1.4
 pandas-ta
 
-# cTrader (Оновлено до стабільної версії)
-ctrader-open-api==0.9.8
+# cTrader (Встановлення напряму з GitHub)
+ctrader-open-api @ git+https://github.com/spotware/OpenApiPy.git
 
 # Залежності
 protobuf==3.20.1
