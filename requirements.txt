@@ -15,8 +15,8 @@ ctrader-open-api @ git+https://github.com/spotware/OpenApiPy.git
 # Інструменти для генерації Protobuf
 grpcio-tools==1.62.0
 
-# Залежності
-protobuf==3.20.1
+# Залежності (з виправленим protobuf)
+protobuf
 requests
 cachetools
 Flask-Cors
