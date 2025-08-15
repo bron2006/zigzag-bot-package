@@ -11,6 +11,7 @@ RUN apt-get update && apt-get install -y \
     libffi-dev \
     python3-dev \
     cargo \
+    netcat-openbsd \
     && rm -rf /var/lib/apt/lists/*
 
 # Копіюємо файл залежностей та .whl файл
