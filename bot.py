@@ -7,36 +7,51 @@ from flask_cors import CORS
 from telegram import Update
 import os
 
-from config import dp, bot, app, WEBHOOK_SECRET, logger, FOREX_SESSIONS, MY_TELEGRAM_ID, CTRADER_ACCESS_TOKEN, CTRADER_REFRESH_TOKEN, SYMBOL_DATA_CACHE
-from db import init_db, get_watchlist, toggle_watch, get_signal_history, get_ctrader_token, save_ctrader_token
-from analysis import get_api_detailed_signal_data, rank_assets_for_api, get_api_mta_data, update_symbols_cache
+from config import dp, bot, app, WEBHOOK_SECRET, logger, FOREX_SESSIONS, SYMBOL_DATA_CACHE, CACHE_LOCK
+from db import init_db, get_watchlist, toggle_watch, get_signal_history
+from analysis import get_api_detailed_signal_data, get_api_mta_data
 import telegram_ui
-
-CORS(app)
+from ctrader_service import ctrader_service # <-- ІМПОРТУЄМО НАШ СЕРВІС
 
 # --- НОВА ФУНКЦІЯ ДЛЯ ІНІЦІАЛІЗАЦІЇ ---
 def on_startup(worker):
-    """Функція, яка виконується один раз при старті, після запуску воркерів."""
-    # Використовуємо тимчасовий файл як прапорець (flag),
-    # щоб гарантувати, що ініціалізація виконається лише один раз.
-    # Це надійний спосіб для середовищ, подібних до Fly.io.
     flag_file = '/tmp/app_initialized.flag'
-
-    # `worker.pid` - це унікальний ID процесу.
-    # Перший воркер, що створить файл, виконає ініціалізацію.
     if not os.path.exists(flag_file):
         try:
-            # Створюємо файл, щоб інші воркери знали, що ініціалізація почалася
             with open(flag_file, 'w') as f:
                 f.write(str(worker.pid))
+            
+            logger.info(f"Воркер {worker.pid}: Запускаю сервіс cTrader...")
+            ctrader_service.start()
+            
+            # Чекаємо на повну авторизацію сервісу
+            for _ in range(30):
+                if ctrader_service._is_authorized:
+                    break
+                time.sleep(1)
+            else:
+                raise Exception("Сервіс cTrader не зміг авторизуватися.")
 
-            # --- ОСНОВНА ЛОГІКА ІНІЦІАЛІЗАЦІЇ ---
-            if MY_TELEGRAM_ID:
-                logger.info(f"Воркер {worker.pid}: Запускаю початкове завантаження даних про символи cTrader...")
-                update_symbols_cache(int(MY_TELEGRAM_ID))
-                logger.info(f"Воркер {worker.pid}: Кеш символів cTrader успішно заповнено. Завантажено {len(SYMBOL_DATA_CACHE)} символів.")
+            # --- Логіка завантаження кешу ---
+            logger.info("Отримую список символів через сервіс...")
+            symbols_list_res = ctrader_service.get_symbols_list()
+            all_symbol_ids = [s.symbolId for s in symbols_list_res.symbol]
+            logger.info(f"Отримано {len(all_symbol_ids)} ID символів. Завантажую деталі...")
+
+            chunk_size = 70
+            for i in range(0, len(all_symbol_ids), chunk_size):
+                chunk = all_symbol_ids[i:i + chunk_size]
+                details_res = ctrader_service.get_symbols_by_id(chunk)
+                with CACHE_LOCK:
+                    for symbol in details_res.symbol:
+                        if hasattr(symbol, 'symbolName'):
+                            SYMBOL_DATA_CACHE[symbol.symbolName] = {'symbolId': symbol.symbolId, 'digits': symbol.digits}
+                logger.info(f"Закешовано деталі для {len(details_res.symbol)} символів.")
+            
+            logger.info(f"Воркер {worker.pid}: Кеш символів cTrader успішно заповнено. Завантажено {len(SYMBOL_DATA_CACHE)} символів.")
+
         except Exception as e:
-            logger.critical(f"Воркер {worker.pid}: КРИТИЧНА ПОМИЛКА під час завантаження кешу: {e}", exc_info=True)
+            logger.critical(f"Воркер {worker.pid}: КРИТИЧНА ПОМИЛКА під час запуску: {e}", exc_info=True)
     else:
         logger.info(f"Воркер {worker.pid}: Ініціалізацію вже виконано іншим процесом.")
 
@@ -44,6 +59,8 @@ def on_startup(worker):
 def _get_user_id_from_request(req):
     init_data = req.args.get("initData")
     if not init_data:
+        # Для локального тестування повертаємо ID з конфігурації
+        from config import MY_TELEGRAM_ID
         return int(MY_TELEGRAM_ID) if MY_TELEGRAM_ID else None
     try:
         decoded_init_data = unquote(init_data)
@@ -53,22 +70,9 @@ def _get_user_id_from_request(req):
             return json.loads(user_json_str).get("id")
     except Exception as e:
         logger.warning(f"Failed to parse initData: {e}")
-    return int(MY_TELEGRAM_ID) if MY_TELEGRAM_ID else None
+        from config import MY_TELEGRAM_ID
+        return int(MY_TELEGRAM_ID) if MY_TELEGRAM_ID else None
 
-def init_ctrader_token():
-    if not MY_TELEGRAM_ID or not CTRADER_ACCESS_TOKEN or not CTRADER_REFRESH_TOKEN:
-        logger.warning("Змінні середовища для cTrader не встановлені. Пропускаю ініціалізацію токену.")
-        return
-    try:
-        user_id = int(MY_TELEGRAM_ID)
-        if get_ctrader_token(user_id) is None:
-            logger.info(f"Токен cTrader для користувача {user_id} не знайдено. Зберігаю з секретів...")
-            save_ctrader_token(user_id, CTRADER_ACCESS_TOKEN, CTRADER_REFRESH_TOKEN, expires_in=3600)
-            logger.info("Токен cTrader успішно збережено в базу даних.")
-        else:
-            logger.info(f"Токен cTrader для користувача {user_id} вже існує в базі даних.")
-    except Exception as e:
-        logger.error(f"Помилка під час ініціалізації токену cTrader: {e}")
 
 @app.before_request
 def log_request():
@@ -85,6 +89,7 @@ def webhook_handler():
         logger.error(f"Webhook error: {e}\n{traceback.format_exc()}")
     return "OK", 200
 
+# ... (решта ендпоінтів залишається майже без змін) ...
 @app.route("/api/signal", methods=["GET"])
 def api_signal():
     pair = request.args.get("pair")
@@ -115,10 +120,8 @@ def api_get_mta():
     pair = request.args.get("pair")
     user_id = _get_user_id_from_request(request)
     if not pair: return jsonify({"error": "pair is required"}), 400
-    asset_type = 'stocks'
-    if '/' in pair: asset_type = 'crypto' if 'USDT' in pair else 'forex'
     try:
-        mta_data = get_api_mta_data(pair, asset_type, user_id=user_id)
+        mta_data = get_api_mta_data(pair, user_id=user_id)
         return jsonify(mta_data)
     except Exception as e:
         logger.error(f"API error for MTA on {pair}: {e}\n{traceback.format_exc()}")
@@ -151,7 +154,11 @@ def api_signal_history():
 
 @app.route('/health')
 def health_check():
-    return "OK", 200
+    # Health check тепер перевіряє, чи заповнений кеш
+    if len(SYMBOL_DATA_CACHE) > 0:
+        return "OK", 200
+    else:
+        return "Cache not ready", 503
 
 @app.route('/')
 def serve_index():
@@ -161,10 +168,8 @@ def serve_index():
 def serve_webapp_files(filename):
     return send_from_directory('webapp', filename)
 
-
 # --- ІНІЦІАЛІЗАЦІЯ ПРИ СТАРТІ (СПРОЩЕНА) ---
-# Логіка завантаження кешу тепер виконується в gunicorn.conf.py
 telegram_ui.register_handlers(dp)
 with app.app_context():
     init_db()
-    init_ctrader_token()
+    # init_ctrader_token() - Більше не потрібен, сервіс бере дані з env
