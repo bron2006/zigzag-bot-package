@@ -4,10 +4,21 @@ import pandas_ta as ta
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor
 
+from ctrader_open_api import Client, TcpProtocol
 from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOATrendbarPeriod as TrendbarPeriod
+from ctrader_open_api.messages.OpenApiMessages_pb2 import (
+    ProtoOAApplicationAuthReq, ProtoOAAccountAuthReq, ProtoOAErrorRes,
+    ProtoOAGetTrendbarsReq, ProtoOAGetTrendbarsRes,
+    ProtoOASymbolsListReq, ProtoOASymbolsListRes,
+    ProtoOASymbolByIdReq, ProtoOASymbolByIdRes
+)
+
 from db import add_signal_to_history
-from config import logger, MARKET_DATA_CACHE, SYMBOL_DATA_CACHE, CACHE_LOCK, ANALYSIS_TIMEFRAMES
-from ctrader_service import ctrader_service # <-- ІМПОРТУЄМО ГОТОВИЙ СЕРВІС
+from config import (
+    logger, MARKET_DATA_CACHE, SYMBOL_DATA_CACHE, CACHE_LOCK,
+    ANALYSIS_TIMEFRAMES, CT_CLIENT_ID, CT_CLIENT_SECRET, DEMO_ACCOUNT_ID
+)
+from ctrader_api import get_valid_access_token
 
 _executor = None
 
@@ -21,6 +32,89 @@ def get_asset_type(pair: str) -> str:
     if '/' in pair:
         return 'crypto' if 'USDT' in pair else 'forex'
     return 'stocks'
+
+def _execute_requests(user_id, requests):
+    """Виконує послідовність запитів і повертає їх результати."""
+    access_token = get_valid_access_token(user_id)
+    if not access_token:
+        logger.error(f"Не вдалося виконати запит: невалідний токен для user_id: {user_id}")
+        return None
+
+    protocol = TcpProtocol()
+    client = Client("demo.ctraderapi.com", 5035, protocol)
+    
+    try:
+        if not client.connect():
+             raise ConnectionError("Не вдалося підключитися до cTrader API (connect).")
+
+        if not client.wait_for_connect(timeout=15):
+            raise ConnectionError("Не вдалося підключитися до cTrader API (таймаут).")
+
+        auth_req = ProtoOAApplicationAuthReq(clientId=CT_CLIENT_ID, clientSecret=CT_CLIENT_SECRET)
+        deferred = client.send(auth_req)
+        if not deferred.wait(timeout=15) or deferred.result is None:
+            raise ConnectionError("Авторизація додатку не вдалася.")
+
+        acc_auth_req = ProtoOAAccountAuthReq(ctidTraderAccountId=DEMO_ACCOUNT_ID, accessToken=access_token)
+        deferred = client.send(acc_auth_req)
+        if not deferred.wait(timeout=15) or deferred.result is None:
+            raise ConnectionError("Авторизація акаунту не вдалася.")
+
+        results = []
+        for request in requests:
+            deferred = client.send(request)
+            if not deferred.wait(timeout=20):
+                raise TimeoutError(f"Таймаут очікування відповіді для запиту {type(request).__name__}")
+            
+            response_message = deferred.result
+            if response_message.payloadType == ProtoOAErrorRes.payload_type:
+                error_res = ProtoOAErrorRes()
+                error_res.ParseFromString(response_message.payload)
+                raise Exception(f"Помилка API cTrader: {error_res.errorCode} - {error_res.description}")
+            
+            results.append(response_message)
+        return results
+    finally:
+        if hasattr(client, "stop"):
+            client.stop()
+
+
+def update_symbols_cache(user_id):
+    """Отримує всі символи, їх ID та digits, і кешує їх."""
+    try:
+        logger.info("Отримую список ID всіх символів...")
+        list_req = [ProtoOASymbolsListReq(ctidTraderAccountId=DEMO_ACCOUNT_ID)]
+        list_results = _execute_requests(user_id, list_req)
+        if not list_results: return
+
+        list_response_msg = list_results[0]
+        symbols_list = ProtoOASymbolsListRes()
+        symbols_list.ParseFromString(list_response_msg.payload)
+        all_symbol_ids = [s.symbolId for s in symbols_list.symbol]
+        logger.info(f"Отримано {len(all_symbol_ids)} ID символів. Завантажую деталі...")
+
+        chunk_size = 70
+        detail_requests = []
+        for i in range(0, len(all_symbol_ids), chunk_size):
+            chunk = all_symbol_ids[i:i + chunk_size]
+            detail_requests.append(ProtoOASymbolByIdReq(ctidTraderAccountId=DEMO_ACCOUNT_ID, symbolId=chunk))
+
+        if not detail_requests: return
+        details_results = _execute_requests(user_id, detail_requests)
+        if not details_results: return
+
+        for details_msg in details_results:
+            details_response = ProtoOASymbolByIdRes()
+            details_response.ParseFromString(details_msg.payload)
+            with CACHE_LOCK:
+                for symbol in details_response.symbol:
+                    if hasattr(symbol, 'symbolName'):
+                         SYMBOL_DATA_CACHE[symbol.symbolName] = {'symbolId': symbol.symbolId, 'digits': symbol.digits}
+            logger.info(f"Закешовано деталі для {len(details_response.symbol)} символів.")
+
+    except Exception as e:
+        logger.critical(f"КРИТИЧНА ПОМИЛКА під час оновлення кешу символів: {e}", exc_info=True)
+
 
 def get_market_data(pair, tf, limit=300, force_refresh=False):
     key = f"{pair}_{tf}_{limit}"
@@ -40,11 +134,18 @@ def get_market_data(pair, tf, limit=300, force_refresh=False):
     if tf not in tf_map: return pd.DataFrame()
 
     try:
-        trendbars_res = ctrader_service.get_trendbars(
-            symbol_id=symbol_details['symbolId'],
+        trendbars_req = [ProtoOAGetTrendbarsReq(
+            ctidTraderAccountId=DEMO_ACCOUNT_ID,
+            symbolId=symbol_details['symbolId'],
             period=tf_map[tf],
             count=limit
-        )
+        )]
+        results = _execute_requests(user_id, trendbars_req)
+        if not results: return pd.DataFrame()
+        
+        response_msg = results[0]
+        trendbars_response = ProtoOAGetTrendbarsRes()
+        trendbars_response.ParseFromString(response_msg.payload)
         
         divisor = 10**symbol_details['digits']
         bars = [{'ts': pd.to_datetime(bar.utcTimestampInMinutes * 60, unit='s', utc=True),
@@ -52,7 +153,7 @@ def get_market_data(pair, tf, limit=300, force_refresh=False):
                  'high': (bar.low + bar.deltaHigh) / divisor,
                  'low': bar.low / divisor,
                  'close': (bar.low + bar.deltaClose) / divisor,
-                 'volume': bar.volume} for bar in trendbars_res.trendbar]
+                 'volume': bar.volume} for bar in trendbars_response.trendbar]
         
         df = pd.DataFrame(bars)
         if df.empty: return df

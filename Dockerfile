@@ -14,9 +14,8 @@ RUN apt-get update && apt-get install -y \
     netcat-openbsd \
     && rm -rf /var/lib/apt/lists/*
 
-# Копіюємо файл залежностей та .whl файл
+# Копіюємо файл залежностей
 COPY requirements.txt .
-COPY ctrader_open_api-0.0.0-py3-none-any.whl .
 
 # Агресивне очищення перед установкою
 RUN pip uninstall -y ctrader_open_api ctrader-open-api || true

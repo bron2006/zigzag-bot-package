@@ -11,7 +11,7 @@ import time
 from config import dp, bot, app, WEBHOOK_SECRET, logger, FOREX_SESSIONS, SYMBOL_DATA_CACHE, CACHE_LOCK
 from db import init_db, get_watchlist, toggle_watch, get_signal_history
 from analysis import get_api_detailed_signal_data, get_api_mta_data
-# import telegram_ui # <-- ВИДАЛЯЄМО ЦЕЙ ІМПОРТ
+# import telegram_ui # <-- ВИДАЛЕНО
 from ctrader_service import ctrader_service
 
 def on_startup(worker):
@@ -163,7 +163,6 @@ def serve_index():
 def serve_webapp_files(filename):
     return send_from_directory('webapp', filename)
 
-
-# telegram_ui.register_handlers(dp) # <-- І РЕЄСТРАЦІЮ ХЕНДЛЕРІВ
+# telegram_ui.register_handlers(dp) # <-- ВИДАЛЕНО
 with app.app_context():
     init_db()
