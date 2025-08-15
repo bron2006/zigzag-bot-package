@@ -12,14 +12,14 @@
             display: flex;
             justify-content: center;
             align-items: center;
-            min-height: 100vh;
+            height: 100vh;
             margin: 0;
+            text-align: center;
             padding: 20px;
             box-sizing: border-box;
         }
         .container {
-            max-width: 700px;
-            text-align: center;
+            max-width: 650px;
         }
         h1 {
             font-size: 2.8em;
@@ -28,34 +28,24 @@
         }
         .tagline {
             font-size: 1.3em;
-            color: #00b8d4; /* Accent Color */
+            color: #00b8d4;
             margin-bottom: 2em;
             font-weight: 300;
         }
         p {
             font-size: 1.1em;
             line-height: 1.7;
-            text-align: left;
             color: #c0c0c0;
         }
         .footer {
             margin-top: 3em;
             font-size: 0.9em;
             color: #777;
-            text-align: center;
-        }
-        .privacy {
-            margin-top: 2em;
-            padding-top: 1.5em;
-            border-top: 1px solid #333;
-        }
-        h2 {
-            text-align: center;
-            color: #ffffff;
         }
         a {
             color: #00b8d4;
             text-decoration: none;
+            margin: 0 10px;
         }
         a:hover {
             text-decoration: underline;
@@ -65,23 +55,16 @@
 <body>
     <div class="container">
         <h1>My cTrader Bot</h1>
-        <p class="tagline" style="text-align: center;">Advanced Market Analysis for cTrader Platform</p>
+        <p class="tagline">Advanced Market Analysis for cTrader Platform</p>
         <p>
-            Our Telegram-based application provides real-time technical analysis for Forex pairs within the cTrader ecosystem. By leveraging a combination of technical indicators and multi-timeframe analysis (MTA), our bot helps traders identify potential market opportunities and make more informed decisions.
+            Our Telegram-based application provides real-time technical analysis to help traders make more informed decisions.
         </p>
-        
-        <div class="privacy">
-            <h2>Privacy Policy</h2>
-            <p>
-                We are committed to protecting your privacy. Our application uses standard Telegram user IDs for the sole purpose of personalizing the user experience (e.g., managing a watchlist). We do not collect, store, or share any personal data beyond what is necessary for the bot's core functionality. All cTrader API credentials and access tokens are managed securely on the server-side and are never exposed to the client.
-            </p>
-        </div>
-
         <div class="footer">
             <p>
-                Status: The application is currently in the final stages of integration with the cTrader Open API.<br>
-                For inquiries, please contact us at: <a href="mailto:bron1176@gmail.com">bron1176@gmail.com</a>
+                <a href="mailto:bron1176@gmail.com">Contact Us</a> | 
+                <a href="privacy.html">Privacy Policy</a>
             </p>
+             <p>Status: The application is in the final stages of integration with the cTrader Open API.</p>
         </div>
     </div>
 </body>
