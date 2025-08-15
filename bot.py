@@ -6,14 +6,14 @@ from flask import request, jsonify, send_from_directory
 from flask_cors import CORS
 from telegram import Update
 import os
+import time
 
 from config import dp, bot, app, WEBHOOK_SECRET, logger, FOREX_SESSIONS, SYMBOL_DATA_CACHE, CACHE_LOCK
 from db import init_db, get_watchlist, toggle_watch, get_signal_history
 from analysis import get_api_detailed_signal_data, get_api_mta_data
-import telegram_ui
-from ctrader_service import ctrader_service # <-- ІМПОРТУЄМО НАШ СЕРВІС
+# import telegram_ui # <-- ВИДАЛЯЄМО ЦЕЙ ІМПОРТ
+from ctrader_service import ctrader_service
 
-# --- НОВА ФУНКЦІЯ ДЛЯ ІНІЦІАЛІЗАЦІЇ ---
 def on_startup(worker):
     flag_file = '/tmp/app_initialized.flag'
     if not os.path.exists(flag_file):
@@ -24,7 +24,6 @@ def on_startup(worker):
             logger.info(f"Воркер {worker.pid}: Запускаю сервіс cTrader...")
             ctrader_service.start()
             
-            # Чекаємо на повну авторизацію сервісу
             for _ in range(30):
                 if ctrader_service._is_authorized:
                     break
@@ -32,7 +31,6 @@ def on_startup(worker):
             else:
                 raise Exception("Сервіс cTrader не зміг авторизуватися.")
 
-            # --- Логіка завантаження кешу ---
             logger.info("Отримую список символів через сервіс...")
             symbols_list_res = ctrader_service.get_symbols_list()
             all_symbol_ids = [s.symbolId for s in symbols_list_res.symbol]
@@ -59,7 +57,6 @@ def on_startup(worker):
 def _get_user_id_from_request(req):
     init_data = req.args.get("initData")
     if not init_data:
-        # Для локального тестування повертаємо ID з конфігурації
         from config import MY_TELEGRAM_ID
         return int(MY_TELEGRAM_ID) if MY_TELEGRAM_ID else None
     try:
@@ -89,7 +86,6 @@ def webhook_handler():
         logger.error(f"Webhook error: {e}\n{traceback.format_exc()}")
     return "OK", 200
 
-# ... (решта ендпоінтів залишається майже без змін) ...
 @app.route("/api/signal", methods=["GET"])
 def api_signal():
     pair = request.args.get("pair")
@@ -154,7 +150,6 @@ def api_signal_history():
 
 @app.route('/health')
 def health_check():
-    # Health check тепер перевіряє, чи заповнений кеш
     if len(SYMBOL_DATA_CACHE) > 0:
         return "OK", 200
     else:
@@ -168,8 +163,7 @@ def serve_index():
 def serve_webapp_files(filename):
     return send_from_directory('webapp', filename)
 
-# --- ІНІЦІАЛІЗАЦІЯ ПРИ СТАРТІ (СПРОЩЕНА) ---
-telegram_ui.register_handlers(dp)
+
+# telegram_ui.register_handlers(dp) # <-- І РЕЄСТРАЦІЮ ХЕНДЛЕРІВ
 with app.app_context():
     init_db()
-    # init_ctrader_token() - Більше не потрібен, сервіс бере дані з env
