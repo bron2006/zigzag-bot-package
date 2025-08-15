@@ -1,3 +1,4 @@
+# ctrader_service.py
 import threading
 import time
 import os
@@ -19,14 +20,30 @@ class CTraderService:
     def __init__(self):
         self._pending_requests = {}
         self._is_authorized = False
+        self._is_connected = False
         self._client_id = os.getenv("CT_CLIENT_ID")
         self._client_secret = os.getenv("CT_CLIENT_SECRET")
         self._access_token = os.getenv("CTRADER_ACCESS_TOKEN")
         self._account_id = int(os.getenv("DEMO_ACCOUNT_ID", 9541520))
         
-        # --- ФІНАЛЬНЕ ВИПРАВЛЕННЯ: Передаємо обробник одразу в конструктор ---
+        # --- КЛЮЧОВЕ ВИПРАВЛЕННЯ: Передаємо обробник одразу в конструктор ---
         self._protocol = TcpProtocol(message_handler=self._message_received)
         self._client = Client("demo.ctraderapi.com", 5035, self._protocol)
+
+        # --- КЛЮЧОВЕ ВИПРАВЛЕННЯ: Встановлюємо колбеки на клієнті ---
+        self._client.set_connected_callback(self._on_connected)
+        self._client.set_disconnected_callback(self._on_disconnected)
+
+    def _on_connected(self):
+        logger.info("З'єднання встановлено. Авторизація додатку...")
+        self._is_connected = True
+        request = ProtoOAApplicationAuthReq(clientId=self._client_id, clientSecret=self._client_secret)
+        self._client.send(request)
+
+    def _on_disconnected(self):
+        logger.warning("З'єднання з сервером cTrader втрачено.")
+        self._is_connected = False
+        self._is_authorized = False
 
     def _message_received(self, message: ProtoMessage):
         if message.clientMsgId and message.clientMsgId in self._pending_requests:
@@ -45,18 +62,18 @@ class CTraderService:
             logger.info("Авторизація додатку успішна.")
             self._authorize_account()
         elif message.payloadType == 2103: # ProtoOAAccountAuthRes
-            logger.info("Авторизація акаунту успішна.")
+            logger.info(f"Авторизація акаунту {self._account_id} успішна.")
             self._is_authorized = True
         elif message.payloadType == ProtoOAErrorRes.payload_type:
             error_res = ProtoOAErrorRes()
             error_res.ParseFromString(message.payload)
-            logger.critical(f"Помилка авторизації: {error_res.errorCode} - {error_res.description}")
-            # Зупиняємо реактор, якщо авторизація провалилася
-            if reactor.running:
+            logger.critical(f"Помилка cTrader: {error_res.errorCode} - {error_res.description}")
+            if not self._is_authorized and reactor.running:
+                logger.error("Авторизація провалилася, зупиняю реактор.")
                 reactor.stop()
 
     def _authorize_account(self):
-        logger.info("Авторизація акаунту...")
+        logger.info(f"Авторизація акаунту {self._account_id}...")
         request = ProtoOAAccountAuthReq(ctidTraderAccountId=self._account_id, accessToken=self._access_token)
         self._client.send(request)
 
@@ -66,21 +83,13 @@ class CTraderService:
             reactor.run(installSignalHandlers=0)
 
     def start(self):
-        # self._protocol.set_message_handler - Цей рядок видалено
         reactor_thread = threading.Thread(target=self._start_reactor, daemon=True)
         reactor_thread.start()
-
-        def on_connect():
-            logger.info("З'єднання встановлено. Авторизація додатку...")
-            request = ProtoOAApplicationAuthReq(clientId=self._client_id, clientSecret=self._client_secret)
-            self._client.send(request)
-
-        # Використовуємо set_connected_handler, який існує в protocol
-        if hasattr(self._protocol, 'set_connected_handler'):
-             self._protocol.set_connected_handler(on_connect)
         
-        # Використовуємо client.start(), який існує в client
-        if hasattr(self._client, 'start'):
+        # Затримка, щоб дати реактору час запуститися перед початком з'єднання
+        time.sleep(1)
+        
+        if not self._is_connected:
             self._client.start()
         
     def _send_request(self, request, timeout=30):
@@ -91,19 +100,20 @@ class CTraderService:
                     break
                 time.sleep(1)
             else:
-                raise Exception("Не вдалося авторизуватися в cTrader. Перевірте ключі доступу.")
+                raise Exception("Не вдалося авторизуватися в cTrader. Перевірте ключі доступу та з'єднання.")
 
-        client_msg_id = str(time.time()) # Simple unique ID
+        client_msg_id = f"{type(request).__name__}_{time.time()}"
         request.clientMsgId = client_msg_id
         
         event = threading.Event()
         result_dict = {"data": None, "error": None}
         self._pending_requests[client_msg_id] = (event, result_dict)
 
-        self._client.send(request)
+        # Переконуємось, що відправка відбувається в потоці реактора
+        reactor.callFromThread(self._client.send, request)
 
         if not event.wait(timeout=timeout):
-            self._pending_requests.pop(client_msg_id, None) # Очищаємо запит
+            self._pending_requests.pop(client_msg_id, None) 
             raise TimeoutError(f"Таймаут очікування відповіді для запиту {type(request).__name__}")
         
         if result_dict["error"]:
@@ -126,8 +136,14 @@ class CTraderService:
         response.ParseFromString(response_msg.payload)
         return response
 
-    def get_trendbars(self, symbol_id, period, count):
-        request = ProtoOAGetTrendbarsReq(ctidTraderAccountId=self._account_id, symbolId=symbol_id, period=period, count=count)
+    def get_trendbars(self, symbol_id, period, from_timestamp, to_timestamp):
+        request = ProtoOAGetTrendbarsReq(
+            ctidTraderAccountId=self._account_id, 
+            symbolId=symbol_id, 
+            period=period, 
+            fromTimestamp=from_timestamp, 
+            toTimestamp=to_timestamp
+        )
         response_msg = self._send_request(request, timeout=10)
         response = ProtoOAGetTrendbarsRes()
         response.ParseFromString(response_msg.payload)

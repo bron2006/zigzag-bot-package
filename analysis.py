@@ -3,120 +3,20 @@ import pandas as pd
 import pandas_ta as ta
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor
+import time
 
-from ctrader_open_api import Client, TcpProtocol
 from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOATrendbarPeriod as TrendbarPeriod
-from ctrader_open_api.messages.OpenApiMessages_pb2 import (
-    ProtoOAApplicationAuthReq, ProtoOAAccountAuthReq, ProtoOAErrorRes,
-    ProtoOAGetTrendbarsReq, ProtoOAGetTrendbarsRes,
-    ProtoOASymbolsListReq, ProtoOASymbolsListRes,
-    ProtoOASymbolByIdReq, ProtoOASymbolByIdRes
-)
-
 from db import add_signal_to_history
 from config import (
     logger, MARKET_DATA_CACHE, SYMBOL_DATA_CACHE, CACHE_LOCK,
-    ANALYSIS_TIMEFRAMES, CT_CLIENT_ID, CT_CLIENT_SECRET, DEMO_ACCOUNT_ID
+    ANALYSIS_TIMEFRAMES, DEMO_ACCOUNT_ID
 )
-from ctrader_api import get_valid_access_token
-
-_executor = None
-
-def get_executor():
-    global _executor
-    if _executor is None:
-        _executor = ThreadPoolExecutor(max_workers=4)
-    return _executor
-
-def get_asset_type(pair: str) -> str:
-    if '/' in pair:
-        return 'crypto' if 'USDT' in pair else 'forex'
-    return 'stocks'
-
-def _execute_requests(user_id, requests):
-    """Виконує послідовність запитів і повертає їх результати."""
-    access_token = get_valid_access_token(user_id)
-    if not access_token:
-        logger.error(f"Не вдалося виконати запит: невалідний токен для user_id: {user_id}")
-        return None
-
-    protocol = TcpProtocol()
-    client = Client("demo.ctraderapi.com", 5035, protocol)
-    
-    try:
-        if not client.connect():
-             raise ConnectionError("Не вдалося підключитися до cTrader API (connect).")
-
-        if not client.wait_for_connect(timeout=15):
-            raise ConnectionError("Не вдалося підключитися до cTrader API (таймаут).")
-
-        auth_req = ProtoOAApplicationAuthReq(clientId=CT_CLIENT_ID, clientSecret=CT_CLIENT_SECRET)
-        deferred = client.send(auth_req)
-        if not deferred.wait(timeout=15) or deferred.result is None:
-            raise ConnectionError("Авторизація додатку не вдалася.")
-
-        acc_auth_req = ProtoOAAccountAuthReq(ctidTraderAccountId=DEMO_ACCOUNT_ID, accessToken=access_token)
-        deferred = client.send(acc_auth_req)
-        if not deferred.wait(timeout=15) or deferred.result is None:
-            raise ConnectionError("Авторизація акаунту не вдалася.")
-
-        results = []
-        for request in requests:
-            deferred = client.send(request)
-            if not deferred.wait(timeout=20):
-                raise TimeoutError(f"Таймаут очікування відповіді для запиту {type(request).__name__}")
-            
-            response_message = deferred.result
-            if response_message.payloadType == ProtoOAErrorRes.payload_type:
-                error_res = ProtoOAErrorRes()
-                error_res.ParseFromString(response_message.payload)
-                raise Exception(f"Помилка API cTrader: {error_res.errorCode} - {error_res.description}")
-            
-            results.append(response_message)
-        return results
-    finally:
-        if hasattr(client, "stop"):
-            client.stop()
-
-
-def update_symbols_cache(user_id):
-    """Отримує всі символи, їх ID та digits, і кешує їх."""
-    try:
-        logger.info("Отримую список ID всіх символів...")
-        list_req = [ProtoOASymbolsListReq(ctidTraderAccountId=DEMO_ACCOUNT_ID)]
-        list_results = _execute_requests(user_id, list_req)
-        if not list_results: return
-
-        list_response_msg = list_results[0]
-        symbols_list = ProtoOASymbolsListRes()
-        symbols_list.ParseFromString(list_response_msg.payload)
-        all_symbol_ids = [s.symbolId for s in symbols_list.symbol]
-        logger.info(f"Отримано {len(all_symbol_ids)} ID символів. Завантажую деталі...")
-
-        chunk_size = 70
-        detail_requests = []
-        for i in range(0, len(all_symbol_ids), chunk_size):
-            chunk = all_symbol_ids[i:i + chunk_size]
-            detail_requests.append(ProtoOASymbolByIdReq(ctidTraderAccountId=DEMO_ACCOUNT_ID, symbolId=chunk))
-
-        if not detail_requests: return
-        details_results = _execute_requests(user_id, detail_requests)
-        if not details_results: return
-
-        for details_msg in details_results:
-            details_response = ProtoOASymbolByIdRes()
-            details_response.ParseFromString(details_msg.payload)
-            with CACHE_LOCK:
-                for symbol in details_response.symbol:
-                    if hasattr(symbol, 'symbolName'):
-                         SYMBOL_DATA_CACHE[symbol.symbolName] = {'symbolId': symbol.symbolId, 'digits': symbol.digits}
-            logger.info(f"Закешовано деталі для {len(details_response.symbol)} символів.")
-
-    except Exception as e:
-        logger.critical(f"КРИТИЧНА ПОМИЛКА під час оновлення кешу символів: {e}", exc_info=True)
+# --- АРХІТЕКТУРНЕ ВИПРАВЛЕННЯ: Використовуємо єдиний сервіс ---
+from ctrader_service import ctrader_service
 
 
 def get_market_data(pair, tf, limit=300, force_refresh=False):
+    """Отримує ринкові дані, використовуючи централізований ctrader_service."""
     key = f"{pair}_{tf}_{limit}"
     
     with CACHE_LOCK:
@@ -134,19 +34,28 @@ def get_market_data(pair, tf, limit=300, force_refresh=False):
     if tf not in tf_map: return pd.DataFrame()
 
     try:
-        trendbars_req = [ProtoOAGetTrendbarsReq(
-            ctidTraderAccountId=DEMO_ACCOUNT_ID,
-            symbolId=symbol_details['symbolId'],
+        # --- АРХІТЕКТУРНЕ ВИПРАВЛЕННЯ: Запит через сервіс ---
+        # Конвертуємо limit в часові рамки, оскільки API вимагає from/to
+        now = int(time.time() * 1000)
+        # Приблизний розрахунок минулого часу. Може бути неточним для D1.
+        # Для D1, limit 100 означає приблизно 100 торгових днів.
+        # Для M15, limit 300 означає 300 * 15 * 60 = 270000 секунд.
+        # Це спрощення, але для нашої задачі достатнє.
+        seconds_per_bar = {'1m': 60, '15min': 900, '1h': 3600, '4h': 14400, '1day': 86400}
+        from_ts = now - (limit * seconds_per_bar[tf] * 1000)
+        
+        trendbars_response = ctrader_service.get_trendbars(
+            symbol_id=symbol_details['symbolId'],
             period=tf_map[tf],
-            count=limit
-        )]
-        results = _execute_requests(user_id, trendbars_req)
-        if not results: return pd.DataFrame()
+            from_timestamp=from_ts,
+            to_timestamp=now
+        )
+        # --- Кінець виправлення ---
         
-        response_msg = results[0]
-        trendbars_response = ProtoOAGetTrendbarsRes()
-        trendbars_response.ParseFromString(response_msg.payload)
-        
+        if not trendbars_response.trendbar:
+            logger.warning(f"Для {pair} ({tf}) не отримано жодного бару.")
+            return pd.DataFrame()
+
         divisor = 10**symbol_details['digits']
         bars = [{'ts': pd.to_datetime(bar.utcTimestampInMinutes * 60, unit='s', utc=True),
                  'open': (bar.low + bar.deltaOpen) / divisor,
@@ -158,32 +67,32 @@ def get_market_data(pair, tf, limit=300, force_refresh=False):
         df = pd.DataFrame(bars)
         if df.empty: return df
         
-        df.columns = [str(col).lower() for col in df.columns]
-        df = df.sort_values(by='ts').reset_index(drop=True)
+        df = df.sort_values(by='ts').reset_index(drop=True).tail(limit)
         
         with CACHE_LOCK:
             MARKET_DATA_CACHE[key] = df
         return df
     except Exception as e:
-        logger.error(f"Помилка отримання ринкових даних для {pair}: {e}", exc_info=True)
+        logger.error(f"Помилка отримання ринкових даних для {pair} ({tf}): {e}", exc_info=True)
         return pd.DataFrame()
 
 
 def get_api_detailed_signal_data(pair, user_id=None):
     try:
         df = get_market_data(pair, '15min', 100)
-        if df.empty or len(df) < 25: return {"error": "Недостатньо даних для аналізу."}
+        if df.empty or len(df) < 25: return {"error": "Недостатньо історичних даних для аналізу."}
         
         daily_df = get_market_data(pair, '1day', 100)
         analysis = _calculate_core_signal(df, daily_df)
         verdict_text, verdict_level = _generate_verdict(analysis)
         
-        add_signal_to_history({
-            'user_id': user_id, 
-            'pair': pair, 
-            'price': analysis['price'], 
-            'bull_percentage': analysis['score']
-        })
+        if user_id:
+            add_signal_to_history({
+                'user_id': user_id, 
+                'pair': pair, 
+                'price': analysis['price'], 
+                'bull_percentage': analysis['score']
+            })
         
         history_df = df.tail(50)
         history = { 
@@ -202,7 +111,7 @@ def get_api_detailed_signal_data(pair, user_id=None):
         logger.error(f"Помилка в get_api_detailed_signal_data для {pair}: {e}", exc_info=True)
         return {"error": str(e)}
 
-def get_api_mta_data(pair, user_id=None):
+def get_api_mta_data(pair):
     def worker(tf):
         df = get_market_data(pair, tf, 200)
         if df.empty or len(df) < 55: return None
@@ -213,11 +122,14 @@ def get_api_mta_data(pair, user_id=None):
     
     results = []
     with ThreadPoolExecutor(max_workers=len(ANALYSIS_TIMEFRAMES)) as executor:
-        futures = [executor.submit(worker, tf) for tf in ANALYSIS_TIMEFRAMES]
+        futures = {executor.submit(worker, tf): tf for tf in ANALYSIS_TIMEFRAMES}
         for future in futures:
             result = future.result()
             if result:
                 results.append(result)
+    
+    # Сортуємо результати відповідно до порядку таймфреймів
+    results.sort(key=lambda x: ANALYSIS_TIMEFRAMES.index(x['tf']))
     return results
 
 def _calculate_core_signal(df, daily_df):
@@ -244,7 +156,7 @@ def _find_sr_levels(df, current_price):
     highs = df['high'].tail(30)
     support = lows[lows < current_price].max()
     resistance = highs[highs > current_price].min()
-    return support if pd.notna(support) else None, resistance if pd.notna(resistance) else None
+    return float(support) if pd.notna(support) else None, float(resistance) if pd.notna(resistance) else None
 
 def _generate_verdict(analysis):
     score = analysis['score']
