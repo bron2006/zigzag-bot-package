@@ -27,11 +27,20 @@ if not CLIENT_ID or not CLIENT_SECRET:
         reactor.stop()
     sys.exit(1)
 
-def on_success(response):
+def on_response(response):
+    # Цей колбек тепер обробляє і успіх, і помилку від API
     if response.payloadType == ProtoOAApplicationAuthRes.payload_type:
         print("\n==========================================")
         print("✅ ТЕСТ УСПІШНИЙ! Авторизація додатку пройдена!")
         print("✅ Ваші Client ID та Secret - ПРАВИЛЬНІ.")
+        print("==========================================")
+    elif response.payloadType == ProtoOAErrorRes.payload_type:
+        err = ProtoOAErrorRes()
+        err.ParseFromString(response.payload)
+        print("\n==========================================")
+        print("❌ СЕРВЕР ПОВЕРНУВ ПОМИЛКУ!")
+        print(f"❌ Код: {err.errorCode}")
+        print(f"❌ Опис: {err.description}")
         print("==========================================")
     else:
         print(f"ℹ️  Отримано несподівану відповідь (payloadType={response.payloadType})")
@@ -39,10 +48,11 @@ def on_success(response):
     if reactor.running:
         reactor.stop()
 
-def on_error(error_failure):
+def on_deferred_error(error_failure):
+    # Цей колбек обробляє помилки на рівні Twisted (наприклад, збій з'єднання)
     error_message = error_failure.getErrorMessage()
     print(f"\n==========================================")
-    print(f"❌ ТЕСТ ПРОВАЛЕНО!")
+    print(f"❌ ТЕСТ ПРОВАЛЕНО! (Помилка Twisted)")
     print(f"❌ Причина: {error_message}")
     print("==========================================")
     if reactor.running:
@@ -56,8 +66,8 @@ def main():
         print("Відправляю ProtoOAApplicationAuthReq...")
         req = ProtoOAApplicationAuthReq(clientId=CLIENT_ID, clientSecret=CLIENT_SECRET)
         deferred = client.send(req)
-        deferred.addCallbacks(on_success, on_error)
-        # Встановлюємо таймаут реактора на випадок, якщо нічого не повернеться
+        # Підписуємося на результат: on_response для успішної передачі, on_deferred_error для збою
+        deferred.addCallbacks(on_response, on_deferred_error)
         reactor.callLater(20, timeout)
 
     def timeout():
@@ -65,11 +75,9 @@ def main():
             print("\n==========================================")
             print("❌ ТЕСТ ПРОВАЛЕНО!")
             print("❌ Причина: Таймаут. Сервер не відповів на запит.")
-            print("❌ Це на 99% означає, що ваші Client ID або Secret невірні, або є проблеми з мережею/файрволом на боці cTrader.")
             print("==========================================")
             reactor.stop()
 
-    # Запускаємо надсилання запиту, коли реактор буде готовий
     reactor.callWhenRunning(send_auth)
     print("Запуск реактора Twisted...")
     reactor.run()
