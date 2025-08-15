@@ -12,11 +12,9 @@ pandas-ta
 # cTrader (Встановлення напряму з GitHub)
 ctrader-open-api @ git+https://github.com/spotware/OpenApiPy.git
 
-# Інструменти для генерації Protobuf
-grpcio-tools==1.62.0
-
-# Залежності (з виправленим protobuf)
-protobuf
+# Залежності
+# Ми жорстко вказуємо версію, яку вимагає ctrader-open-api з GitHub
+protobuf==3.20.1
 requests
 cachetools
 Flask-Cors
