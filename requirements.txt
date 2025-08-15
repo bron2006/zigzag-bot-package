@@ -17,3 +17,4 @@ requests
 cachetools
 Flask-Cors
 service-identity
+Dockerfile
