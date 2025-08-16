@@ -195,6 +195,10 @@ def api_get_mta(request):
 def static_files(request):
     return File("./webapp")
 
+# --- ВИПРАВЛЕННЯ: Додано відсутні імпорти ---
+from twisted.internet import endpoints
+from twisted.web.server import Site
+
 if __name__ == "__main__":
     init_db()
     # Запускаємо веб-сервер, а він вже запустить cTrader сервіс
