@@ -26,13 +26,13 @@ class CTraderService:
         self._access_token = os.getenv("CTRADER_ACCESS_TOKEN")
         self._account_id = int(os.getenv("DEMO_ACCOUNT_ID", 9541520))
         
-        # --- ВИПРАВЛЕННЯ ПІД v0.9.8: Передаємо обробник одразу в конструктор ---
-        self._protocol = TcpProtocol(message_handler=self._message_received)
+        # --- ФІНАЛЬНЕ ВИПРАВЛЕННЯ: Повертаємось до API старої версії (порожній конструктор) ---
+        self._protocol = TcpProtocol()
         self._client = Client("demo.ctraderapi.com", 5035, self._protocol)
 
-        # --- ВИПРАВЛЕННЯ ПІД v0.9.8: Використовуємо snake_case назви ---
-        self._client.set_connected_callback(self._on_connected)
-        self._client.set_disconnected_callback(self._on_disconnected)
+        # --- ФІНАЛЬНЕ ВИПРАВЛЕННЯ: Повертаємось до camelCase назв колбеків ---
+        self._client.setConnectedCallback(self._on_connected)
+        self._client.setDisconnectedCallback(self._on_disconnected)
 
     def _on_connected(self):
         logger.info("З'єднання встановлено. Авторизація додатку...")
@@ -83,6 +83,9 @@ class CTraderService:
             reactor.run(installSignalHandlers=0)
 
     def start(self):
+        # --- ФІНАЛЬНЕ ВИПРАВЛЕННЯ: Повертаємо set_message_handler для старої версії API ---
+        self._protocol.set_message_handler(self._message_received)
+        
         reactor_thread = threading.Thread(target=self._start_reactor, daemon=True)
         reactor_thread.start()
         
@@ -119,7 +122,6 @@ class CTraderService:
         
         return result_dict["data"]
 
-    # --- Публічні методи для виклику з інших частин додатку ---
     def get_symbols_list(self):
         request = ProtoOASymbolsListReq(ctidTraderAccountId=self._account_id)
         response_msg = self._send_request(request)
@@ -147,5 +149,4 @@ class CTraderService:
         response.ParseFromString(response_msg.payload)
         return response
 
-# Створюємо єдиний екземпляр сервісу для всього додатку
 ctrader_service = CTraderService()
