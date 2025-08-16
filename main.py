@@ -4,7 +4,6 @@ import json
 from urllib.parse import parse_qs, unquote
 from dotenv import load_dotenv
 
-# --- ЗМІНА 1: Додаємо ssl ---
 from twisted.internet import reactor, ssl
 from twisted.internet.protocol import ClientFactory
 from twisted.web.static import File
@@ -54,7 +53,6 @@ class CTraderService:
         
         if not reactor.running:
             logger.info("Запуск реактора Twisted та ініціація SSL-підключення...")
-            # --- ЗМІНА 2: Створюємо SSL-контекст і використовуємо connectSSL ---
             ctxFactory = ssl.optionsForClientTLS(hostname=HOST)
             reactor.connectSSL(HOST, PORT, CTraderFactory(self), ctxFactory)
             
@@ -99,8 +97,10 @@ class CTraderService:
                     with CACHE_LOCK:
                         for symbol in details.symbol:
                             if hasattr(symbol, 'symbolName') and symbol.symbolName:
+                                # --- ДІАГНОСТИКА: Логуємо кожен символ, що додається в кеш ---
+                                logger.info(f"Adding to cache: {symbol.symbolName}")
                                 SYMBOL_DATA_CACHE[symbol.symbolName] = {'symbolId': symbol.symbolId, 'digits': symbol.digits}
-                    logger.info(f"Кеш символів cTrader заповнено ({len(SYMBOL_DATA_CACHE)}).")
+                    logger.info(f"Кеш символів cTrader тепер містить {len(SYMBOL_DATA_CACHE)} елементів.")
 
                 chunk_size = 70
                 for i in range(0, len(all_symbol_ids), chunk_size):
@@ -151,7 +151,6 @@ def health_check(request): return "OK"
 def api_get_ranked_pairs(request):
     user_id = _get_user_id_from_request(request)
     watchlist = get_watchlist(user_id) if user_id else []
-    # --- ВИПРАВЛЕННЯ: Змінено некоректну конструкцію словника ---
     data = {
         "watchlist": watchlist,
         "crypto": [],
@@ -182,9 +181,15 @@ def api_signal(request):
     user_id = _get_user_id_from_request(request)
     if not SYMBOL_DATA_CACHE:
         return json_response(request, {"error": "Сервіс ще завантажує дані, спробуйте за хвилину."})
+    
+    def on_error(failure):
+        # --- ДІАГНОСТИКА: Логуємо помилку, яка раніше була тихою ---
+        logger.error(f"Error in api_signal for pair '{pair}': {failure.value}")
+        return json_response(request, {"error": str(failure.value)})
+
     d = reactor.defer.maybeDeferred(analysis.get_api_detailed_signal_data, ctrader, pair, user_id)
     d.addCallback(lambda data: json_response(request, data))
-    d.addErrback(lambda failure: json_response(request, {"error": str(failure.value)}))
+    d.addErrback(on_error)
     return d
 
 @app.route('/api/get_mta')
@@ -192,9 +197,15 @@ def api_get_mta(request):
     pair = request.args.get(b"pair", [b""])[0].decode()
     if not SYMBOL_DATA_CACHE:
         return json_response(request, {"error": "Сервіс ще завантажує дані, спробуйте за хвилину."})
+
+    def on_error(failure):
+        # --- ДІАГНОСТИКА: Логуємо помилку, яка раніше була тихою ---
+        logger.error(f"Error in api_get_mta for pair '{pair}': {failure.value}")
+        return json_response(request, {"error": str(failure.value)})
+
     d = reactor.defer.maybeDeferred(analysis.get_api_mta_data, ctrader, pair)
     d.addCallback(lambda data: json_response(request, data))
-    d.addErrback(lambda failure: json_response(request, {"error": str(failure.value)}))
+    d.addErrback(on_error)
     return d
 
 @app.route("/", branch=True)
@@ -206,13 +217,10 @@ from twisted.web.server import Site
 
 if __name__ == "__main__":
     init_db()
-    # Запускаємо веб-сервер, а він вже запустить cTrader сервіс
     endpoint_str = f"tcp:port={APP_PORT}:interface=0.0.0.0"
     endpoint = endpoints.serverFromString(reactor, endpoint_str)
     endpoint.listen(Site(app.resource()))
     
-    # Запускаємо cTrader сервіс після короткої паузи, щоб веб-сервер встиг стартувати
     reactor.callWhenRunning(ctrader.connect)
     
-    # Запускаємо реактор
     reactor.run()
