@@ -11,8 +11,7 @@ from config import (
     logger, MARKET_DATA_CACHE, SYMBOL_DATA_CACHE, CACHE_LOCK,
     ANALYSIS_TIMEFRAMES, DEMO_ACCOUNT_ID
 )
-# --- ЗМІНА ІМПОРТУ ---
-from ctrader_prod_service import ctrader_service
+from ctrader_service import ctrader_service
 
 
 def get_market_data(pair, tf, limit=300, force_refresh=False):

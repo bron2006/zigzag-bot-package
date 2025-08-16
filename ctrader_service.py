@@ -1,4 +1,4 @@
-# ctrader_prod_service.py
+# ctrader_service.py
 import threading
 import time
 import os
@@ -18,7 +18,6 @@ load_dotenv()
 
 class CTraderService:
     def __init__(self):
-        logger.info("ЗАПУЩЕНО НОВИЙ ФАЙЛ ctrader_prod_service.py")
         self._pending_requests = {}
         self._is_authorized = False
         self._is_connected = False
