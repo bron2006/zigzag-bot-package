@@ -151,7 +151,13 @@ def health_check(request): return "OK"
 def api_get_ranked_pairs(request):
     user_id = _get_user_id_from_request(request)
     watchlist = get_watchlist(user_id) if user_id else []
-    data = { "watchlist": watchlist, "crypto": [], "forex": {session: [{'ticker': p, 'active': True} for session, pairs in FOREX_SESSIONS.items()]}, "stocks": [] }
+    # --- ВИПРАВЛЕННЯ: Змінено некоректну конструкцію словника ---
+    data = {
+        "watchlist": watchlist,
+        "crypto": [],
+        "forex": {session: [{'ticker': p, 'active': True} for p in pairs] for session, pairs in FOREX_SESSIONS.items()},
+        "stocks": []
+    }
     return json_response(request, data)
 
 @app.route('/api/toggle_watchlist')
@@ -195,7 +201,6 @@ def api_get_mta(request):
 def static_files(request):
     return File("./webapp")
 
-# --- ВИПРАВЛЕННЯ: Додано відсутні імпорти ---
 from twisted.internet import endpoints
 from twisted.web.server import Site
 
