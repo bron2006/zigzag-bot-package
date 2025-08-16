@@ -71,8 +71,11 @@ class CTraderService:
         self._protocol = None; self._is_authorized = False
 
     def _message_received(self, message):
+        # --- ДІАГНОСТИКА: Логуємо тип КОЖНОГО вхідного повідомлення від cTrader ---
+        logger.info(f"Received cTrader message: {type(message).__name__}")
+
         if isinstance(message, ProtoOAApplicationAuthRes):
-            logger.info("Авторизація додатку успішна.")
+            logger.info("Авторизація додатку успішна. Надсилаю запит на авторизацію акаунту...")
             request = ProtoOAAccountAuthReq(ctidTraderAccountId=ACCOUNT_ID, accessToken=ACCESS_TOKEN)
             self._protocol.send(request)
         elif isinstance(message, ProtoOAAccountAuthRes):
@@ -80,7 +83,8 @@ class CTraderService:
             logger.info(f"Авторизація акаунту {ACCOUNT_ID} успішна.")
             self._populate_symbol_cache()
         elif isinstance(message, ProtoOAErrorRes):
-            logger.error(f"Помилка cTrader: {message.errorCode} - {message.description}")
+            # --- ДІАГНОСТИКА: Логуємо деталі помилки ---
+            logger.error(f"Помилка cTrader: {message.errorCode}. Опис: {message.description}")
         elif self._protocol:
             self._protocol.handle_response(message)
 
@@ -97,7 +101,6 @@ class CTraderService:
                     with CACHE_LOCK:
                         for symbol in details.symbol:
                             if hasattr(symbol, 'symbolName') and symbol.symbolName:
-                                # --- ДІАГНОСТИКА: Логуємо кожен символ, що додається в кеш ---
                                 logger.info(f"Adding to cache: {symbol.symbolName}")
                                 SYMBOL_DATA_CACHE[symbol.symbolName] = {'symbolId': symbol.symbolId, 'digits': symbol.digits}
                     logger.info(f"Кеш символів cTrader тепер містить {len(SYMBOL_DATA_CACHE)} елементів.")
@@ -183,7 +186,6 @@ def api_signal(request):
         return json_response(request, {"error": "Сервіс ще завантажує дані, спробуйте за хвилину."})
     
     def on_error(failure):
-        # --- ДІАГНОСТИКА: Логуємо помилку, яка раніше була тихою ---
         logger.error(f"Error in api_signal for pair '{pair}': {failure.value}")
         return json_response(request, {"error": str(failure.value)})
 
@@ -199,7 +201,6 @@ def api_get_mta(request):
         return json_response(request, {"error": "Сервіс ще завантажує дані, спробуйте за хвилину."})
 
     def on_error(failure):
-        # --- ДІАГНОСТИКА: Логуємо помилку, яка раніше була тихою ---
         logger.error(f"Error in api_get_mta for pair '{pair}': {failure.value}")
         return json_response(request, {"error": str(failure.value)})
 
