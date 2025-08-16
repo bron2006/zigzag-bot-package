@@ -4,8 +4,9 @@ import time
 import os
 from dotenv import load_dotenv
 from twisted.internet import reactor
-# --- ВИПРАВЛЕНО: Імпортуємо ProtobufProtocol замість застарілого TcpProtocol ---
-from ctrader_open_api import Client, ProtobufProtocol
+# --- ВИПРАВЛЕНО: Вказуємо правильний, повний шлях для імпорту ProtobufProtocol ---
+from ctrader_open_api import Client
+from ctrader_open_api.protocol import ProtobufProtocol
 from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import ProtoMessage
 from ctrader_open_api.messages.OpenApiMessages_pb2 import (
     ProtoOAApplicationAuthReq, ProtoOAAccountAuthReq, ProtoOAErrorRes,
@@ -27,11 +28,9 @@ class CTraderService:
         self._access_token = os.getenv("CTRADER_ACCESS_TOKEN")
         self._account_id = int(os.getenv("DEMO_ACCOUNT_ID", 9541520))
         
-        # --- ВИПРАВЛЕНО: Використовуємо ProtobufProtocol ---
         self._protocol = ProtobufProtocol()
         self._client = Client("demo.ctraderapi.com", 5035, self._protocol)
 
-        # --- ВИПРАВЛЕНО: Реєструємо обробники подій напряму через клієнт, як вимагає бібліотека ---
         self._client.set_connected_callback(self._on_connected)
         self._client.set_disconnected_callback(self._on_disconnected)
         self._client.set_message_received_handler(self._message_received)
@@ -85,8 +84,6 @@ class CTraderService:
             reactor.run(installSignalHandlers=0)
 
     def start(self):
-        # --- ВИПРАВЛЕНО: Неправильний виклик, що викликав помилку, видалено. Обробник вже зареєстровано в __init__ ---
-        
         reactor_thread = threading.Thread(target=self._start_reactor, daemon=True)
         reactor_thread.start()
         
