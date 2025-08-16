@@ -5,6 +5,7 @@ import os
 from dotenv import load_dotenv
 
 from twisted.internet import reactor
+from twisted.internet.protocol import ClientFactory
 from ctrader_open_api import Protobuf
 from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import ProtoMessage
 from ctrader_open_api.messages.OpenApiMessages_pb2 import (
@@ -39,18 +40,14 @@ class CTraderService:
     def _run_reactor(self):
         """Створює екземпляр протоколу, налаштовує його та запускає реактор."""
         
-        # Створюємо екземпляр протоколу з бібліотеки
         protocol_instance = Protobuf()
 
-        # Динамічно прив'язуємо наші методи до цього екземпляра.
-        # Twisted буде викликати саме їх у відповідні моменти.
         protocol_instance.connectionMade = lambda: self._on_connected(protocol_instance)
         protocol_instance.connectionLost = self._on_disconnected
         protocol_instance.messageReceived = self._message_received
 
         if not reactor.running:
             logger.info("Запуск реактора Twisted та ініціація підключення...")
-            # Передаємо вже налаштований ЕКЗЕМПЛЯР протоколу
             reactor.connectTCP(self._host, self._port, protocol_instance)
             reactor.run(installSignalHandlers=0)
 
