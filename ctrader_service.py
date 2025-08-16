@@ -6,7 +6,8 @@ from dotenv import load_dotenv
 
 from twisted.internet import reactor
 from twisted.internet.protocol import ClientFactory
-from ctrader_open_api import Protobuf
+# Імпортуємо обидва класи, які будемо змішувати
+from ctrader_open_api import Protobuf, TcpProtocol
 from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import ProtoMessage
 from ctrader_open_api.messages.OpenApiMessages_pb2 import (
     ProtoOAApplicationAuthReq, ProtoOAAccountAuthReq, ProtoOAErrorRes,
@@ -17,6 +18,29 @@ from ctrader_open_api.messages.OpenApiMessages_pb2 import (
 from config import logger
 
 load_dotenv()
+
+# --- Створюємо гібридний клас-міксін ---
+class CTraderProtocol(TcpProtocol, Protobuf):
+    """
+    Цей клас успадковує функціонал від обох батьків:
+    - TcpProtocol: для правильної інтеграції з Twisted (методи makeConnection, connectionLost і т.д.).
+    - Protobuf: для розбору повідомлень cTrader (метод messageReceived).
+    """
+    def __init__(self, service):
+        super().__init__()
+        self.service = service
+
+    def connectionMade(self):
+        # Цей метод тепер існує завдяки TcpProtocol
+        self.service._on_connected(self)
+        
+    def connectionLost(self, reason):
+        # І цей також
+        self.service._on_disconnected(reason)
+
+    def messageReceived(self, message: ProtoMessage):
+        # А цей метод від Protobuf
+        self.service._message_received(message)
 
 class CTraderService:
     def __init__(self):
@@ -33,26 +57,17 @@ class CTraderService:
         self._account_id = int(os.getenv("DEMO_ACCOUNT_ID", 9541520))
 
     def start(self):
-        """Запускає реактор Twisted у фоновому потоці."""
         reactor_thread = threading.Thread(target=self._run_reactor, daemon=True)
         reactor_thread.start()
 
     def _run_reactor(self):
-        """Готує фабрику та запускає підключення через реактор."""
-
-        # Створюємо фабрику, яка буде керувати нашим протоколом
         class CTraderFactory(ClientFactory):
             def __init__(self, service):
                 self.service = service
 
             def buildProtocol(self, addr):
-                # Фабрика створює екземпляр Protobuf, коли з'єднання готове
-                protocol = Protobuf()
-                # І прив'язує до нього наші обробники
-                protocol.connectionMade = lambda: self.service._on_connected(protocol)
-                protocol.connectionLost = self.service._on_disconnected
-                protocol.messageReceived = self.service._message_received
-                return protocol
+                # Фабрика створює наш новий гібридний протокол
+                return CTraderProtocol(self.service)
 
             def clientConnectionFailed(self, connector, reason):
                 self.service._on_connection_failed(reason)
@@ -97,10 +112,10 @@ class CTraderService:
             
             event.set()
         
-        elif message.payloadType == 2101: # ProtoOAApplicationAuthRes
+        elif message.payloadType == 2101:
             logger.info("Авторизація додатку успішна.")
             self._authorize_account()
-        elif message.payloadType == 2103: # ProtoOAAccountAuthRes
+        elif message.payloadType == 2103:
             logger.info(f"Авторизація акаунту {self._account_id} успішна.")
             self._is_authorized = True
         elif message.payloadType == ProtoOAErrorRes.payload_type:
@@ -136,6 +151,7 @@ class CTraderService:
         
         return result_dict["data"]
 
+    # ... (решта методів get_... залишаються без змін) ...
     def get_symbols_list(self):
         request = ProtoOASymbolsListReq(ctidTraderAccountId=self._account_id)
         response_msg = self._send_request(request)
