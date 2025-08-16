@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
+ctrader_open_api/__pycache__/
 
 # Папки віртуального середовища
 venv/
