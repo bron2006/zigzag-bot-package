@@ -4,6 +4,7 @@ import time
 import os
 from dotenv import load_dotenv
 from twisted.internet import reactor
+# Тепер ці імпорти будуть братися з встановленої бібліотеки, а не локальної папки
 from ctrader_open_api import Client, TcpProtocol
 from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import ProtoMessage
 from ctrader_open_api.messages.OpenApiMessages_pb2 import (
