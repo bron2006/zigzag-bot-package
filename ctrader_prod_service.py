@@ -1,4 +1,4 @@
-# ctrader_service.py
+# ctrader_prod_service.py
 import threading
 import time
 import os
@@ -18,6 +18,7 @@ load_dotenv()
 
 class CTraderService:
     def __init__(self):
+        logger.info("ЗАПУЩЕНО НОВИЙ ФАЙЛ ctrader_prod_service.py")
         self._pending_requests = {}
         self._is_authorized = False
         self._is_connected = False
@@ -26,11 +27,11 @@ class CTraderService:
         self._access_token = os.getenv("CTRADER_ACCESS_TOKEN")
         self._account_id = int(os.getenv("DEMO_ACCOUNT_ID", 9541520))
         
-        self._protocol = TcpProtocol(message_handler=self._message_received)
+        self._protocol = TcpProtocol()
         self._client = Client("demo.ctraderapi.com", 5035, self._protocol)
 
-        self._client.set_connected_callback(self._on_connected)
-        self._client.set_disconnected_callback(self._on_disconnected)
+        self._client.setConnectedCallback(self._on_connected)
+        self._client.setDisconnectedCallback(self._on_disconnected)
 
     def _on_connected(self):
         logger.info("З'єднання встановлено. Авторизація додатку...")
@@ -81,6 +82,8 @@ class CTraderService:
             reactor.run(installSignalHandlers=0)
 
     def start(self):
+        self._protocol.set_message_handler(self._message_received)
+        
         reactor_thread = threading.Thread(target=self._start_reactor, daemon=True)
         reactor_thread.start()
         
@@ -97,7 +100,7 @@ class CTraderService:
                     break
                 time.sleep(1)
             else:
-                raise Exception("Не вдалося авторизуватися в cTrader. Перевірте ключі доступу та з'єднання.")
+                raise Exception("Не вдалося авторизуватися в cTrader.")
 
         client_msg_id = f"{type(request).__name__}_{time.time()}"
         request.clientMsgId = client_msg_id
@@ -132,13 +135,7 @@ class CTraderService:
         return response
 
     def get_trendbars(self, symbol_id, period, from_timestamp, to_timestamp):
-        request = ProtoOAGetTrendbarsReq(
-            ctidTraderAccountId=self._account_id, 
-            symbolId=symbol_id, 
-            period=period, 
-            fromTimestamp=from_timestamp, 
-            toTimestamp=to_timestamp
-        )
+        request = ProtoOAGetTrendbarsReq(ctidTraderAccountId=self._account_id, symbolId=symbol_id, period=period, fromTimestamp=from_timestamp, toTimestamp=to_timestamp)
         response_msg = self._send_request(request, timeout=10)
         response = ProtoOAGetTrendbarsRes()
         response.ParseFromString(response_msg.payload)

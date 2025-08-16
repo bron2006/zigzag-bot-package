@@ -11,12 +11,11 @@ from config import (
     logger, MARKET_DATA_CACHE, SYMBOL_DATA_CACHE, CACHE_LOCK,
     ANALYSIS_TIMEFRAMES, DEMO_ACCOUNT_ID
 )
-# --- АРХІТЕКТУРНЕ ВИПРАВЛЕННЯ: Використовуємо єдиний сервіс ---
-from ctrader_service import ctrader_service
+# --- ЗМІНА ІМПОРТУ ---
+from ctrader_prod_service import ctrader_service
 
 
 def get_market_data(pair, tf, limit=300, force_refresh=False):
-    """Отримує ринкові дані, використовуючи централізований ctrader_service."""
     key = f"{pair}_{tf}_{limit}"
     
     with CACHE_LOCK:
@@ -34,13 +33,7 @@ def get_market_data(pair, tf, limit=300, force_refresh=False):
     if tf not in tf_map: return pd.DataFrame()
 
     try:
-        # --- АРХІТЕКТУРНЕ ВИПРАВЛЕННЯ: Запит через сервіс ---
-        # Конвертуємо limit в часові рамки, оскільки API вимагає from/to
         now = int(time.time() * 1000)
-        # Приблизний розрахунок минулого часу. Може бути неточним для D1.
-        # Для D1, limit 100 означає приблизно 100 торгових днів.
-        # Для M15, limit 300 означає 300 * 15 * 60 = 270000 секунд.
-        # Це спрощення, але для нашої задачі достатнє.
         seconds_per_bar = {'1m': 60, '15min': 900, '1h': 3600, '4h': 14400, '1day': 86400}
         from_ts = now - (limit * seconds_per_bar[tf] * 1000)
         
@@ -50,7 +43,6 @@ def get_market_data(pair, tf, limit=300, force_refresh=False):
             from_timestamp=from_ts,
             to_timestamp=now
         )
-        # --- Кінець виправлення ---
         
         if not trendbars_response.trendbar:
             logger.warning(f"Для {pair} ({tf}) не отримано жодного бару.")
@@ -128,7 +120,6 @@ def get_api_mta_data(pair):
             if result:
                 results.append(result)
     
-    # Сортуємо результати відповідно до порядку таймфреймів
     results.sort(key=lambda x: ANALYSIS_TIMEFRAMES.index(x['tf']))
     return results
 
