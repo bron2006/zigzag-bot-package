@@ -4,12 +4,12 @@ import json
 from urllib.parse import parse_qs, unquote
 from dotenv import load_dotenv
 
-from twisted.internet import reactor
+# --- ЗМІНА 1: Додаємо ssl ---
+from twisted.internet import reactor, ssl
 from twisted.internet.protocol import ClientFactory
-from twisted.web.server import Site
+from twisted.web.static import File
 from klein import Klein
 
-# Локальні імпорти
 from ctrader_open_api import Protobuf, TcpProtocol
 from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import ProtoMessage
 from ctrader_open_api.messages.OpenApiMessages_pb2 import (
@@ -33,7 +33,6 @@ ACCESS_TOKEN = os.getenv("CTRADER_ACCESS_TOKEN")
 ACCOUNT_ID = int(os.getenv("DEMO_ACCOUNT_ID", 9541520))
 APP_PORT = int(os.getenv("PORT", 8080))
 
-# --- CTrader Service ---
 class CTraderProtocol(TcpProtocol, Protobuf):
     def __init__(self, service):
         super().__init__()
@@ -52,8 +51,13 @@ class CTraderService:
             def __init__(self, service): self.service = service
             def buildProtocol(self, addr): return CTraderProtocol(self.service)
             def clientConnectionFailed(self, connector, reason): self.service._on_connection_failed(reason)
-        reactor.connectTCP(HOST, PORT, CTraderFactory(self))
-
+        
+        if not reactor.running:
+            logger.info("Запуск реактора Twisted та ініціація SSL-підключення...")
+            # --- ЗМІНА 2: Створюємо SSL-контекст і використовуємо connectSSL ---
+            ctxFactory = ssl.optionsForClientTLS(hostname=HOST)
+            reactor.connectSSL(HOST, PORT, CTraderFactory(self), ctxFactory)
+            
     def _on_connected(self, protocol):
         self._protocol = protocol
         logger.info("З'єднання встановлено. Авторизація додатку...")
@@ -111,9 +115,9 @@ class CTraderService:
         d.addCallback(on_symbols_listed)
 
     def send_request(self, request, timeout=30):
-        if not self._is_authorized or not self._protocol:
+        if not self._protocol:
             d = reactor.defer.Deferred()
-            d.errback(Exception("Сервіс не авторизований."))
+            d.errback(Exception("Сервіс не підключений."))
             return d
         return self._protocol.send(request, timeout=timeout)
     
@@ -123,7 +127,6 @@ class CTraderService:
         d.addCallback(lambda response: ProtoOAGetTrendbarsRes.FromString(response.payload))
         return d
 
-# --- Web Application (Klein) ---
 app = Klein()
 ctrader = CTraderService()
 
@@ -140,12 +143,6 @@ def json_response(request, data):
     request.setHeader('Content-Type', 'application/json; charset=utf-8')
     request.setHeader('Access-Control-Allow-Origin', '*')
     return json.dumps(data, ensure_ascii=False)
-
-@app.route('/', resource_type='static')
-def serve_index(request): return app.render_static('index.html')
-
-@app.route('/<path:filename>', resource_type='static')
-def serve_webapp_files(request, filename): return app.render_static(filename)
 
 @app.route('/health')
 def health_check(request): return "OK"
@@ -177,18 +174,36 @@ def api_signal_history(request):
 def api_signal(request):
     pair = request.args.get(b"pair", [b""])[0].decode()
     user_id = _get_user_id_from_request(request)
+    if not SYMBOL_DATA_CACHE:
+        return json_response(request, {"error": "Сервіс ще завантажує дані, спробуйте за хвилину."})
     d = reactor.defer.maybeDeferred(analysis.get_api_detailed_signal_data, ctrader, pair, user_id)
     d.addCallback(lambda data: json_response(request, data))
+    d.addErrback(lambda failure: json_response(request, {"error": str(failure.value)}))
     return d
 
 @app.route('/api/get_mta')
 def api_get_mta(request):
     pair = request.args.get(b"pair", [b""])[0].decode()
+    if not SYMBOL_DATA_CACHE:
+        return json_response(request, {"error": "Сервіс ще завантажує дані, спробуйте за хвилину."})
     d = reactor.defer.maybeDeferred(analysis.get_api_mta_data, ctrader, pair)
     d.addCallback(lambda data: json_response(request, data))
+    d.addErrback(lambda failure: json_response(request, {"error": str(failure.value)}))
     return d
+
+@app.route("/", branch=True)
+def static_files(request):
+    return File("./webapp")
 
 if __name__ == "__main__":
     init_db()
-    ctrader.connect()
-    app.run(host="0.0.0.0", port=APP_PORT)
+    # Запускаємо веб-сервер, а він вже запустить cTrader сервіс
+    endpoint_str = f"tcp:port={APP_PORT}:interface=0.0.0.0"
+    endpoint = endpoints.serverFromString(reactor, endpoint_str)
+    endpoint.listen(Site(app.resource()))
+    
+    # Запускаємо cTrader сервіс після короткої паузи, щоб веб-сервер встиг стартувати
+    reactor.callWhenRunning(ctrader.connect)
+    
+    # Запускаємо реактор
+    reactor.run()
