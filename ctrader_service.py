@@ -5,7 +5,6 @@ import os
 from dotenv import load_dotenv
 
 from twisted.internet import reactor
-# --- ЗМІНА 1: Додаємо ClientFactory ---
 from twisted.internet.protocol import ClientFactory
 from ctrader_open_api import Protobuf
 from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import ProtoMessage
@@ -38,26 +37,32 @@ class CTraderService:
         reactor_thread.start()
 
     def _run_reactor(self):
+        # --- ВИПРАВЛЕНО: Використовуємо правильний підхід для зв'язку об'єктів ---
         class CustomCtraderProtocol(Protobuf):
-            outer = self
+            def __init__(self, service):
+                super().__init__()
+                self.service = service
 
             def connectionMade(self):
-                self.outer._on_connected(self)
+                self.service._on_connected(self)
                 
             def connectionLost(self, reason):
-                self.outer._on_disconnected(reason)
+                self.service._on_disconnected(reason)
 
             def messageReceived(self, message: ProtoMessage):
-                self.outer._message_received(message)
+                self.service._message_received(message)
         
-        # --- ЗМІНА 2: Вказуємо, що наша фабрика наслідує ClientFactory ---
         class CTraderFactory(ClientFactory):
+            def __init__(self, service):
+                self.service = service
+
             def buildProtocol(self, addr):
-                return CustomCtraderProtocol()
+                return CustomCtraderProtocol(self.service)
 
         if not reactor.running:
             logger.info("Запуск реактора Twisted та ініціація підключення...")
-            reactor.connectTCP(self._host, self._port, CTraderFactory())
+            # Передаємо екземпляр CTraderService у фабрику
+            reactor.connectTCP(self._host, self._port, CTraderFactory(self))
             reactor.run(installSignalHandlers=0)
 
     def _on_connected(self, protocol_instance):
