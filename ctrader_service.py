@@ -4,7 +4,6 @@ import time
 import os
 from dotenv import load_dotenv
 from twisted.internet import reactor
-# Тепер ці імпорти будуть братися з встановленої бібліотеки, а не локальної папки
 from ctrader_open_api import Client, TcpProtocol
 from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import ProtoMessage
 from ctrader_open_api.messages.OpenApiMessages_pb2 import (
@@ -27,13 +26,13 @@ class CTraderService:
         self._access_token = os.getenv("CTRADER_ACCESS_TOKEN")
         self._account_id = int(os.getenv("DEMO_ACCOUNT_ID", 9541520))
         
-        # --- ПРАВИЛЬНА ВЕРСІЯ: Передаємо обробник одразу в конструктор ---
-        self._protocol = TcpProtocol(message_handler=self._message_received)
+        # --- ФІНАЛЬНА ВЕРСІЯ: Код для СТАРОГО API (порожній конструктор) ---
+        self._protocol = TcpProtocol()
         self._client = Client("demo.ctraderapi.com", 5035, self._protocol)
 
-        # --- ПРАВИЛЬНА ВЕРСІЯ: Використовуємо snake_case назви ---
-        self._client.set_connected_callback(self._on_connected)
-        self._client.set_disconnected_callback(self._on_disconnected)
+        # --- ФІНАЛЬНА ВЕРСІЯ: Код для СТАРОГО API (camelCase назви) ---
+        self._client.setConnectedCallback(self._on_connected)
+        self._client.setDisconnectedCallback(self._on_disconnected)
 
     def _on_connected(self):
         logger.info("З'єднання встановлено. Авторизація додатку...")
@@ -84,6 +83,9 @@ class CTraderService:
             reactor.run(installSignalHandlers=0)
 
     def start(self):
+        # --- ФІНАЛЬНА ВЕРСІЯ: Код для СТАРОГО API (використовуємо set_message_handler) ---
+        self._protocol.set_message_handler(self._message_received)
+        
         reactor_thread = threading.Thread(target=self._start_reactor, daemon=True)
         reactor_thread.start()
         
