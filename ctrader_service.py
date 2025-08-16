@@ -4,7 +4,8 @@ import time
 import os
 from dotenv import load_dotenv
 from twisted.internet import reactor
-from ctrader_open_api import Client, TcpProtocol
+# --- ВИПРАВЛЕНО: Імпортуємо ProtobufProtocol замість застарілого TcpProtocol ---
+from ctrader_open_api import Client, ProtobufProtocol
 from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import ProtoMessage
 from ctrader_open_api.messages.OpenApiMessages_pb2 import (
     ProtoOAApplicationAuthReq, ProtoOAAccountAuthReq, ProtoOAErrorRes,
@@ -26,11 +27,14 @@ class CTraderService:
         self._access_token = os.getenv("CTRADER_ACCESS_TOKEN")
         self._account_id = int(os.getenv("DEMO_ACCOUNT_ID", 9541520))
         
-        self._protocol = TcpProtocol()
+        # --- ВИПРАВЛЕНО: Використовуємо ProtobufProtocol ---
+        self._protocol = ProtobufProtocol()
         self._client = Client("demo.ctraderapi.com", 5035, self._protocol)
 
-        self._client.setConnectedCallback(self._on_connected)
-        self._client.setDisconnectedCallback(self._on_disconnected)
+        # --- ВИПРАВЛЕНО: Реєструємо обробники подій напряму через клієнт, як вимагає бібліотека ---
+        self._client.set_connected_callback(self._on_connected)
+        self._client.set_disconnected_callback(self._on_disconnected)
+        self._client.set_message_received_handler(self._message_received)
 
     def _on_connected(self):
         logger.info("З'єднання встановлено. Авторизація додатку...")
@@ -56,10 +60,10 @@ class CTraderService:
             
             event.set()
         
-        elif message.payloadType == 2101:
+        elif message.payloadType == 2101: # ProtoOAApplicationAuthRes
             logger.info("Авторизація додатку успішна.")
             self._authorize_account()
-        elif message.payloadType == 2103:
+        elif message.payloadType == 2103: # ProtoOAAccountAuthRes
             logger.info(f"Авторизація акаунту {self._account_id} успішна.")
             self._is_authorized = True
         elif message.payloadType == ProtoOAErrorRes.payload_type:
@@ -81,7 +85,7 @@ class CTraderService:
             reactor.run(installSignalHandlers=0)
 
     def start(self):
-        self._protocol.set_message_handler(self._message_received)
+        # --- ВИПРАВЛЕНО: Неправильний виклик, що викликав помилку, видалено. Обробник вже зареєстровано в __init__ ---
         
         reactor_thread = threading.Thread(target=self._start_reactor, daemon=True)
         reactor_thread.start()
