@@ -18,6 +18,8 @@ load_dotenv()
 
 class CTraderService:
     def __init__(self):
+        # --- ДІАГНОСТИЧНИЙ РЯДОК ---
+        logger.info("ЗАПУЩЕНО ВЕРСІЮ ФАЙЛУ ВІД 01:58 - ОЧІКУЄТЬСЯ УСПІХ")
         self._pending_requests = {}
         self._is_authorized = False
         self._is_connected = False
@@ -26,16 +28,17 @@ class CTraderService:
         self._access_token = os.getenv("CTRADER_ACCESS_TOKEN")
         self._account_id = int(os.getenv("DEMO_ACCOUNT_ID", 9541520))
         
-        # --- ВЕРСІЯ, СУМІСНА З БІБЛІОТЕКОЮ НА GITHUB (ПОРОЖНІЙ КОНСТРУКТОР) ---
-        self._protocol = TcpProtocol()
+        # --- Версія, сумісна з бібліотекою на GitHub (з аргументом у конструкторі) ---
+        self._protocol = TcpProtocol(message_handler=self._message_received)
         self._client = Client("demo.ctraderapi.com", 5035, self._protocol)
 
-        # --- ВЕРСІЯ, СУМІСНА З БІБЛІОТЕКОЮ НА GITHUB (CAMELCASE) ---
-        self._client.setConnectedCallback(self._on_connected)
-        self._client.setDisconnectedCallback(self._on_disconnected)
+        # --- Версія, сумісна з бібліотекою на GitHub (snake_case) ---
+        self._client.set_connected_callback(self._on_connected)
+        self._client.set_disconnected_callback(self._on_disconnected)
 
     def _on_connected(self):
-        logger.info("З'єднання встановлено. Авторизація додатку...")
+        # --- ДІАГНОСТИЧНИЙ РЯДОК ---
+        logger.info("ДІАГНОСТИКА: _on_connected спрацював")
         self._is_connected = True
         request = ProtoOAApplicationAuthReq(clientId=self._client_id, clientSecret=self._client_secret)
         self._client.send(request)
@@ -83,9 +86,6 @@ class CTraderService:
             reactor.run(installSignalHandlers=0)
 
     def start(self):
-        # --- ВЕРСІЯ, СУМІСНА З БІБЛІОТЕКОЮ НА GITHUB (SET_MESSAGE_HANDLER) ---
-        self._protocol.set_message_handler(self._message_received)
-        
         reactor_thread = threading.Thread(target=self._start_reactor, daemon=True)
         reactor_thread.start()
         
