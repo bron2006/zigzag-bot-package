@@ -33,36 +33,55 @@ class CTraderService:
         self._account_id = int(os.getenv("DEMO_ACCOUNT_ID", 9541520))
 
     def start(self):
-        """Запускає реактор у фоновому потоці."""
         reactor_thread = threading.Thread(target=self._run_reactor, daemon=True)
         reactor_thread.start()
 
     def _run_reactor(self):
-        """Створює екземпляр протоколу, налаштовує його та запускає реактор."""
-        
-        protocol_instance = Protobuf()
+        # --- ФІНАЛЬНА СПРОЩЕНА ЛОГІКА ---
+        class CTraderFactory(ClientFactory):
+            def __init__(self, service):
+                self.service = service
 
-        protocol_instance.connectionMade = lambda: self._on_connected(protocol_instance)
-        protocol_instance.connectionLost = self._on_disconnected
-        protocol_instance.messageReceived = self._message_received
+            def startedConnecting(self, connector):
+                logger.info('Початок підключення...')
+
+            def buildProtocol(self, addr):
+                logger.info('Створення протоколу.')
+                protocol = Protobuf()
+                protocol.messageReceived = self.service._message_received
+                self.service._protocol = protocol  # Зберігаємо екземпляр
+                return protocol
+
+            def clientConnectionLost(self, connector, reason):
+                logger.warning(f"З'єднання втрачено. Причина: {reason.getErrorMessage()}.")
+                self.service._is_connected = False
+                self.service._is_authorized = False
+                # Можна додати логіку перепідключення тут
+                # reactor.callLater(5, connector.connect)
+
+            def clientConnectionFailed(self, connector, reason):
+                logger.error(f"Не вдалося підключитися. Причина: {reason.getErrorMessage()}.")
+                self.service._is_connected = False
 
         if not reactor.running:
             logger.info("Запуск реактора Twisted та ініціація підключення...")
-            reactor.connectTCP(self._host, self._port, protocol_instance)
+            reactor.connectTCP(self._host, self._port, CTraderFactory(self))
+            # Запуск авторизації після встановлення з'єднання
+            reactor.callWhenRunning(self._initial_auth)
             reactor.run(installSignalHandlers=0)
 
-    def _on_connected(self, protocol_instance):
-        logger.info("З'єднання встановлено. Авторизація додатку...")
-        self._is_connected = True
-        self._protocol = protocol_instance
-        request = ProtoOAApplicationAuthReq(clientId=self._client_id, clientSecret=self._client_secret)
-        self._protocol.send(request)
-
-    def _on_disconnected(self, reason):
-        logger.warning(f"З'єднання з сервером cTrader втрачено. Причина: {reason.getErrorMessage()}")
-        self._is_connected = False
-        self._is_authorized = False
-        self._protocol = None
+    def _initial_auth(self):
+        # Чекаємо, доки з'єднання встановиться
+        def check_connection():
+            if self._protocol:
+                logger.info("З'єднання встановлено. Авторизація додатку...")
+                self._is_connected = True
+                request = ProtoOAApplicationAuthReq(clientId=self._client_id, clientSecret=self._client_secret)
+                self._protocol.send(request)
+            else:
+                reactor.callLater(1, check_connection)
+        
+        reactor.callLater(1, check_connection)
 
     def _authorize_account(self):
         logger.info(f"Авторизація акаунту {self._account_id}...")
