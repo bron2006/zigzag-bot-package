@@ -4,8 +4,8 @@ import time
 import os
 from dotenv import load_dotenv
 from twisted.internet import reactor
-# --- ВИПРАВЛЕНО: Повертаємось до оригінального імпорту, який тепер працює ---
-from ctrader_open_api import Client, ProtobufProtocol
+# --- ВИПРАВЛЕНО: Імпортуємо правильний клас 'Protobuf' з вашої версії бібліотеки ---
+from ctrader_open_api import Client, Protobuf
 from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import ProtoMessage
 from ctrader_open_api.messages.OpenApiMessages_pb2 import (
     ProtoOAApplicationAuthReq, ProtoOAAccountAuthReq, ProtoOAErrorRes,
@@ -27,8 +27,8 @@ class CTraderService:
         self._access_token = os.getenv("CTRADER_ACCESS_TOKEN")
         self._account_id = int(os.getenv("DEMO_ACCOUNT_ID", 9541520))
         
-        # Створюємо екземпляр напряму, як в офіційному прикладі
-        self._protocol = ProtobufProtocol()
+        # --- ВИПРАВЛЕНО: Створюємо екземпляр правильного класу 'Protobuf' ---
+        self._protocol = Protobuf()
         self._client = Client("demo.ctraderapi.com", 5035, self._protocol)
 
         self._client.set_connected_callback(self._on_connected)
