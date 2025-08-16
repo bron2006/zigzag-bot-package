@@ -4,11 +4,40 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKe
 from telegram.ext import CallbackContext, CommandHandler, MessageHandler, Filters, CallbackQueryHandler
 from telegram.error import BadRequest
 
+# --- ВИПРАВЛЕНО ІМПОРТИ ---
 from config import CRYPTO_PAIRS_FULL, FOREX_SESSIONS, STOCKS_US_SYMBOLS
 from db import get_watchlist, toggle_watch
-from analysis import get_signal_strength_verdict, get_full_mta_verdict
+# Використовуємо ті самі функції, що й для Web App
+from analysis import get_api_detailed_signal_data, get_api_mta_data
 
-dp = None
+# --- АДАПТЕРИ: Перетворюють дані з API на текст для бота ---
+def get_signal_strength_verdict(ticker, display, asset, user_id=None, force_refresh=False):
+    """Адаптер, що викликає основну функцію аналізу і форматує результат."""
+    analysis_data = get_api_detailed_signal_data(ticker, user_id) # force_refresh поки не реалізовано
+    if "error" in analysis_data:
+        return f"❌ Помилка для {display}: {analysis_data['error']}", None
+
+    # Форматуємо текстове повідомлення на основі даних
+    price = analysis_data.get('price', 0)
+    verdict_text = analysis_data.get('verdict_text', 'Н/Д')
+    msg = f"*{display}* | Ціна: `{price:.5f}`\n\n{verdict_text}"
+    return msg, analysis_data
+
+def get_full_mta_verdict(ticker, display, asset, user_id=None):
+    """Адаптер, що викликає MTA і форматує результат."""
+    mta_data = get_api_mta_data(ticker)
+    if not mta_data or "error" in mta_data:
+        return f"❌ Помилка MTA для {display}"
+
+    header = f"*Мульти-таймфрейм аналіз для {display}:*\n"
+    rows = []
+    for item in mta_data:
+        signal = item.get('signal', 'N/A')
+        tf = item.get('tf', 'N/A')
+        emoji = "🔼" if signal == "BUY" else "🔽" if signal == "SELL" else " neutral"
+        rows.append(f"`{tf:<5}`: {signal} {emoji}")
+    return header + "\n".join(rows)
+
 
 def main_kb():
     return InlineKeyboardMarkup([
@@ -50,7 +79,6 @@ def crypto_chunks_kb(pairs, page=0):
     buttons.append([InlineKeyboardButton("⬅️ НАЗАД", callback_data="main_menu")])
     return InlineKeyboardMarkup(buttons)
 
-
 def asset_list_kb(asset_type, pairs, chunk_index=0):
     keyboard = []
     
@@ -66,14 +94,13 @@ def asset_list_kb(asset_type, pairs, chunk_index=0):
         callback_data = f'analyze_{asset_type}_{ticker.replace("/", "~")}_{pair_name.replace("/", "~")}_{chunk_index}'
         keyboard.append([InlineKeyboardButton(pair_name, callback_data=callback_data)])
     
-    if asset_type == 'forex':
-        keyboard.append([InlineKeyboardButton("⬅️ НАЗАД", callback_data='menu_forex')])
-    elif asset_type == 'crypto':
-        keyboard.append([InlineKeyboardButton("⬅️ НАЗАД", callback_data='menu_crypto')])
-    elif asset_type == 'stocks':
-        keyboard.append([InlineKeyboardButton("⬅️ НАЗАД", callback_data='menu_stocks')])
-    elif asset_type == 'watchlist':
-        keyboard.append([InlineKeyboardButton("⬅️ НАЗАД", callback_data='main_menu')])
+    back_map = {
+        'forex': 'menu_forex',
+        'crypto': 'menu_crypto',
+        'stocks': 'menu_stocks',
+        'watchlist': 'main_menu'
+    }
+    keyboard.append([InlineKeyboardButton("⬅️ НАЗАД", callback_data=back_map.get(asset_type, 'main_menu'))])
         
     return InlineKeyboardMarkup(keyboard)
 
@@ -84,10 +111,6 @@ def start(update: Update, context: CallbackContext):
 
 def menu_command(update: Update, context: CallbackContext):
     chat_id = update.message.chat_id
-    try:
-        context.bot.delete_message(chat_id=chat_id, message_id=update.message.message_id)
-    except BadRequest:
-        pass
     if 'last_menu_id' in context.user_data:
         try:
             context.bot.delete_message(chat_id=chat_id, message_id=context.user_data['last_menu_id'])
@@ -109,6 +132,7 @@ def button_handler(update: Update, context: CallbackContext):
         query.edit_message_text("💹 Виберіть сесію:", reply_markup=forex_session_kb())
 
     elif data == 'menu_crypto':
+        if not CRYPTO_PAIRS_FULL: return query.answer("Вибачте, криптовалюти тимчасово недоступні.", show_alert=True)
         query.edit_message_text("💎 Виберіть діапазон криптовалют:", reply_markup=crypto_chunks_kb(CRYPTO_PAIRS_FULL))
         
     elif data.startswith('crypto_page_'):
@@ -116,6 +140,7 @@ def button_handler(update: Update, context: CallbackContext):
         query.edit_message_text("💎 Виберіть діапазон криптовалют:", reply_markup=crypto_chunks_kb(CRYPTO_PAIRS_FULL, page))
     
     elif data == 'menu_stocks':
+        if not STOCKS_US_SYMBOLS: return query.answer("Вибачте, акції тимчасово недоступні.", show_alert=True)
         query.edit_message_text("🏢 Акції США:", reply_markup=asset_list_kb('stocks', STOCKS_US_SYMBOLS))
 
     elif data == 'menu_watchlist':
@@ -220,8 +245,6 @@ def button_handler(update: Update, context: CallbackContext):
 
 
 def register_handlers(dispatcher):
-    global dp
-    dp = dispatcher
-    dp.add_handler(CommandHandler("start", start))
-    dp.add_handler(MessageHandler(Filters.text("МЕНЮ"), menu_command))
-    dp.add_handler(CallbackQueryHandler(button_handler))
+    dispatcher.add_handler(CommandHandler("start", start))
+    dispatcher.add_handler(MessageHandler(Filters.text("МЕНЮ"), menu_command))
+    dispatcher.add_handler(CallbackQueryHandler(button_handler))

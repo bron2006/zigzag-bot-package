@@ -31,7 +31,7 @@ dp = Dispatcher(bot, None, use_context=True, workers=0)
 
 app = Flask(__name__)
 
-# --- ДОДАНО ВІДСУТНІ ЗМІННІ ---
+# --- ДОДАНО ВІДСУТНІ ЗМІННІ ДЛЯ СУМІСНОСТІ ---
 CRYPTO_PAIRS_FULL = [] 
 STOCKS_US_SYMBOLS = []
 
