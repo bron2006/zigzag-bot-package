@@ -12,6 +12,7 @@ from config import dp, bot, app, WEBHOOK_SECRET, logger, FOREX_SESSIONS, SYMBOL_
 from db import init_db, get_watchlist, toggle_watch, get_signal_history
 from analysis import get_api_detailed_signal_data, get_api_mta_data
 from ctrader_service import ctrader_service
+import telegram_ui # <-- ДОДАНО ІМПОРТ
 
 def initialize_ctrader_cache():
     """Ця функція виконується у фоновому потоці, не блокуючи запуск."""
@@ -19,7 +20,6 @@ def initialize_ctrader_cache():
         logger.info("Фонова ініціалізація: Запускаю сервіс cTrader...")
         ctrader_service.start()
         
-        # Даємо сервісу час на авторизацію
         for i in range(30):
             if ctrader_service._is_authorized:
                 logger.info("Фонова ініціалізація: Сервіс cTrader успішно авторизований.")
@@ -59,7 +59,6 @@ def on_startup(worker):
             f.write(str(worker.pid))
         
         logger.info(f"Воркер {worker.pid} (Мастер: {worker.ppid}): Запускаю фонову ініціалізацію cTrader...")
-        # --- КЛЮЧОВА ЗМІНА: Виносимо довгу операцію в окремий потік ---
         initialization_thread = threading.Thread(target=initialize_ctrader_cache, daemon=True)
         initialization_thread.start()
     else:
@@ -163,7 +162,6 @@ def api_signal_history():
 
 @app.route('/health')
 def health_check():
-    # Цей endpoint тепер завжди відповідає, що дозволяє сервісу пройти перевірку
     return "OK", 200
 
 @app.route('/')
@@ -173,6 +171,9 @@ def serve_index():
 @app.route('/<path:filename>')
 def serve_webapp_files(filename):
     return send_from_directory('webapp', filename)
+
+# --- ДОДАНО РЕЄСТРАЦІЮ ОБРОБНИКІВ ---
+telegram_ui.register_handlers(dp)
 
 with app.app_context():
     init_db()
