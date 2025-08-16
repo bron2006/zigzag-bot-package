@@ -5,7 +5,8 @@ import os
 from dotenv import load_dotenv
 
 from twisted.internet import reactor
-# --- ВИПРАВЛЕНО: Використовуємо класи напряму, як того вимагає ця версія бібліотеки ---
+# --- ЗМІНА 1: Додаємо ClientFactory ---
+from twisted.internet.protocol import ClientFactory
 from ctrader_open_api import Protobuf
 from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import ProtoMessage
 from ctrader_open_api.messages.OpenApiMessages_pb2 import (
@@ -18,8 +19,6 @@ from config import logger
 
 load_dotenv()
 
-# --- Нова архітектура сервісу ---
-
 class CTraderService:
     def __init__(self):
         self._pending_requests = {}
@@ -27,7 +26,6 @@ class CTraderService:
         self._is_connected = False
         self._protocol = None
 
-        # Завантажуємо дані з .env
         self._host = "demo.ctraderapi.com"
         self._port = 5035
         self._client_id = os.getenv("CT_CLIENT_ID")
@@ -36,15 +34,11 @@ class CTraderService:
         self._account_id = int(os.getenv("DEMO_ACCOUNT_ID", 9541520))
 
     def start(self):
-        """Ініціює підключення та запускає реактор у фоновому потоці."""
         reactor_thread = threading.Thread(target=self._run_reactor, daemon=True)
         reactor_thread.start()
 
     def _run_reactor(self):
-        # Створюємо кастомний протокол, який наслідує Protobuf з бібліотеки
-        # Це дозволяє нам додати власну логіку на події підключення/відключення
         class CustomCtraderProtocol(Protobuf):
-            # Використовуємо 'outer' для доступу до екземпляру CTraderService
             outer = self
 
             def connectionMade(self):
@@ -56,8 +50,8 @@ class CTraderService:
             def messageReceived(self, message: ProtoMessage):
                 self.outer._message_received(message)
         
-        # Створюємо фабрику, яка буде генерувати наш протокол
-        class CTraderFactory(object):
+        # --- ЗМІНА 2: Вказуємо, що наша фабрика наслідує ClientFactory ---
+        class CTraderFactory(ClientFactory):
             def buildProtocol(self, addr):
                 return CustomCtraderProtocol()
 
@@ -69,7 +63,7 @@ class CTraderService:
     def _on_connected(self, protocol_instance):
         logger.info("З'єднання встановлено. Авторизація додатку...")
         self._is_connected = True
-        self._protocol = protocol_instance # Зберігаємо екземпляр протоколу для відправки повідомлень
+        self._protocol = protocol_instance
         request = ProtoOAApplicationAuthReq(clientId=self._client_id, clientSecret=self._client_secret)
         self._protocol.send(request)
 
@@ -157,5 +151,4 @@ class CTraderService:
         response.ParseFromString(response_msg.payload)
         return response
 
-# Створюємо єдиний екземпляр сервісу для всього додатку
 ctrader_service = CTraderService()
