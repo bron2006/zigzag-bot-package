@@ -3,6 +3,13 @@ app = "zigzag-bot-package"
 [build]
   dockerfile = "Dockerfile"
 
+# --- ЗМІНЕНО: Додано секцію для змінних оточення ---
+[env]
+  # Цей рядок змушує protobuf використовувати надійну Python-реалізацію
+  # для уникнення проблем з C++ розширеннями в Docker.
+  PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION = "python"
+# --- КІНЕЦЬ ЗМІН ---
+
 [http_service]
   internal_port = 8080
   force_https = true
