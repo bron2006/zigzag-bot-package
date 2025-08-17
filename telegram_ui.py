@@ -8,7 +8,6 @@ from telegram.ext import filters
 
 from config import CRYPTO_PAIRS_FULL, FOREX_SESSIONS, STOCKS_US_SYMBOLS
 
-# Простий http client, бот робить запити до локального веб-сервісу:
 LOCAL_API_BASE = "http://127.0.0.1:8080"
 
 def main_kb():
@@ -49,11 +48,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.chat_id
-    # не видаляємо попередні повідомлення — просто показуємо меню
     await context.bot.send_message(chat_id=chat_id, text="🏠 Головне меню:", reply_markup=main_kb())
 
 async def fetch_json(path, params=None):
-    # блокуючий HTTP — запускати в executor
     def _req():
         r = requests.get(f"{LOCAL_API_BASE}{path}", params=params or {}, timeout=20)
         r.raise_for_status()
@@ -78,7 +75,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not CRYPTO_PAIRS_FULL:
             await query.answer("Криптовалюти тимчасово недоступні.", show_alert=True)
             return
-        # показуємо перші 10
         await query.edit_message_text("💎 Виберіть криптовалюту:", reply_markup=asset_list_kb('crypto', CRYPTO_PAIRS_FULL, 0))
         return
 
@@ -96,16 +92,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ticker = ticker_safe.replace('~', '/')
         await query.edit_message_text(f"⏳ {'Оновлення' if is_refresh else 'Аналіз'} {ticker}...")
         try:
-            # використовуємо локальний веб-ендпоінт /api/signal
             resp = await fetch_json("/api/signal", params={"pair": ticker})
             if isinstance(resp, dict) and resp.get("error"):
                 await query.edit_message_text(f"❌ Помилка: {resp.get('error')}")
                 return
-            # очікуємо, що resp містить "verdict_text" та "price"
             price = resp.get("price")
             verdict = resp.get("verdict_text") or str(resp)
             text = f"*{ticker}* | Ціна: `{price:.5f}`\n\n{verdict}" if price else f"*{ticker}*\n\n{verdict}"
-            # прості кнопки: оновити, MTA, назад
             kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton("🔄 Оновити", callback_data=f'refresh_{asset}_{ticker_safe}_{ticker_safe}_0')],
                 [InlineKeyboardButton("📊 MTA", callback_data=f'fullmta_{asset}_{ticker_safe}_{ticker_safe}_0')],
@@ -118,7 +111,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data.startswith('fullmta_'):
         parts = data.split('_')
-        asset = parts[1]
         ticker_safe = parts[2]
         ticker = ticker_safe.replace('~', '/')
         await query.edit_message_text(f"⏳ Збираю MTF для {ticker}...")
@@ -136,8 +128,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text(f"Помилка MTA: {e}")
         return
 
-async def register_handlers(application):
-    # PTB v20: use add_handler
+# --------- ЗМІНА: register_handlers робить синхронну реєстрацію (не coroutine) ----------
+def register_handlers(application):
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.Text("МЕНЮ"), menu_command))
     application.add_handler(CallbackQueryHandler(button_handler))
