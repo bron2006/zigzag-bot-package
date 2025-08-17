@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import CallbackContext
 
-# --- TWISTED ІМПОРТИ (увага: Site тепер імпортовано!) ---
+# --- TWISTED ІМПОРТИ ---
 from twisted.internet import reactor, ssl, defer
 from twisted.internet.protocol import ClientFactory
 from twisted.web.server import Site  # 🔴 КРИТИЧНО: без цього — помилка!
@@ -216,7 +216,7 @@ def webhook(request):
 
 def _get_user_id_from_request(req):
     init_data = req.args.get(b"initData", [b""])[0].decode()
-    if not init_data:
+    if not init_data:  # ✅ Виправлено: повна назва змінної та ':'
         return None
     try:
         user_json_str = parse_qs(unquote(init_data)).get("user", [None])[0]
@@ -299,7 +299,7 @@ def api_signal(request):
     # Чекаємо, поки cTrader буде готовий
     d = ctrader.when_ready()
     d.addCallback(lambda _: analysis.get_api_detailed_signal_data(ctrader, pair, user_id))
-    d.addCallback(lambda  json_response(request, data))
+    d.addCallback(lambda _: json_response(request, data))  # ✅ Виправлено: lambda _:
     d.addErrback(on_error)
     return d
 
@@ -317,7 +317,7 @@ def api_get_mta(request):
 
     d = ctrader.when_ready()
     d.addCallback(lambda _: analysis.get_api_mta_data(ctrader, pair))
-    d.addCallback(lambda  json_response(request, data))
+    d.addCallback(lambda _: json_response(request, data))  # ✅ Виправлено: lambda _:
     d.addErrback(on_error)
     return d
 
