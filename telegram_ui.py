@@ -9,6 +9,7 @@ from db import get_watchlist, toggle_watch
 from analysis import get_api_detailed_signal_data, get_api_mta_data
 from twisted.internet import reactor
 
+
 def _get_back_callback(asset, display, chunk_index):
     if asset == 'forex':
         return f'session_{next((s for s, p in FOREX_SESSIONS.items() if display in p), "Азіатська")}'
@@ -20,6 +21,7 @@ def _get_back_callback(asset, display, chunk_index):
         return 'menu_watchlist'
     return 'main_menu'
 
+
 def main_kb():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("⭐ Обране", callback_data='menu_watchlist')],
@@ -28,6 +30,7 @@ def main_kb():
         [InlineKeyboardButton("🏢 Акції США", callback_data='menu_stocks')]
     ])
 
+
 def forex_session_kb():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🗾 Азіатська", callback_data="session_Азіатська")],
@@ -35,6 +38,7 @@ def forex_session_kb():
         [InlineKeyboardButton("💵 Американська", callback_data="session_Американська")],
         [InlineKeyboardButton("⬅️ НАЗАД", callback_data="main_menu")]
     ])
+
 
 def crypto_chunks_kb(pairs, page=0):
     items_per_page = 100
@@ -57,6 +61,7 @@ def crypto_chunks_kb(pairs, page=0):
     buttons.append([InlineKeyboardButton("⬅️ НАЗАД", callback_data="main_menu")])
     return InlineKeyboardMarkup(buttons)
 
+
 def asset_list_kb(asset_type, pairs, chunk_index=0):
     keyboard = []
     if asset_type == 'crypto':
@@ -77,25 +82,30 @@ def asset_list_kb(asset_type, pairs, chunk_index=0):
     keyboard.append([InlineKeyboardButton("⬅️ НАЗАД", callback_data=back_map.get(asset_type, 'main_menu'))])
     return InlineKeyboardMarkup(keyboard)
 
+
 def start(update: Update, context: CallbackContext):
     keyboard = [["МЕНЮ"]]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
     update.message.reply_text("👋 Вітаю! Я бот для технічного аналізу ринків. Натисніть «МЕНЮ» нижче.", reply_markup=reply_markup)
 
+
 def menu_command(update: Update, context: CallbackContext):
     chat_id = update.message.chat_id
-    if 'last_menu_id' in context.user_data:
-        try: context.bot.delete_message(chat_id=chat_id, message_id=context.user_data['last_menu_id'])
-        except BadRequest: pass
+    if 'last_menu_id' in context.user_
+        try:
+            context.bot.delete_message(chat_id=chat_id, message_id=context.user_data['last_menu_id'])
+        except BadRequest:
+            pass
     sent_message = context.bot.send_message(chat_id=chat_id, text="🏠 Головне меню:", reply_markup=main_kb())
     context.user_data['last_menu_id'] = sent_message.message_id
+
 
 def button_handler(update: Update, context: CallbackContext):
     query = update.callback_query
     query.answer()
     data = query.data
     context.user_data['last_menu_id'] = query.message.message_id
-    
+
     if data == 'main_menu':
         query.edit_message_text("🏠 Головне меню:", reply_markup=main_kb())
     elif data == 'menu_forex':
@@ -104,7 +114,7 @@ def button_handler(update: Update, context: CallbackContext):
         session = data.split('_')[1]
         pairs = FOREX_SESSIONS.get(session, [])
         query.edit_message_text(f"📊 Пари сесії {session}:", reply_markup=asset_list_kb('forex', pairs))
-    
+
     elif data.startswith(('analyze_', 'refresh_')):
         is_refresh = data.startswith('refresh_')
         parts = data.split('_')
@@ -112,7 +122,7 @@ def button_handler(update: Update, context: CallbackContext):
         chunk_index = int(parts[4]) if len(parts) > 4 else 0
         ticker, display = ticker_safe.replace('~', '/'), display_safe.replace('~', '/')
         user_id = query.from_user.id
-        
+
         query.edit_message_text(f"⏳ {'Примусово оновлюю' if is_refresh else 'Аналізую'} {display}...")
 
         # ✅ Отримуємо ctrader з bot_data
@@ -141,7 +151,8 @@ def button_handler(update: Update, context: CallbackContext):
         parts = data.split('_')
         asset, ticker_safe, display_safe, chunk_index = parts[1], parts[2], parts[3], int(parts[4])
         analysis_data = context.user_data.get(f"analysis_{ticker_safe}")
-        if not analysis_data: return query.answer("Дані застаріли, оновіть сигнал.", show_alert=True)
+        if not analysis_
+            return query.answer("Дані застаріли, оновіть сигнал.", show_alert=True)
         reasons = "\n".join([f"• _{r}_" for r in analysis_data.get('reasons', [])]) or "_Немає виражених факторів._"
         support = f"{analysis_data.get('support'):.5f}" if analysis_data.get('support') else "N/A"
         resistance = f"{analysis_data.get('resistance'):.5f}" if analysis_data.get('resistance') else "N/A"
@@ -161,15 +172,19 @@ def button_handler(update: Update, context: CallbackContext):
         watch_text = "🌟 В обраному" if ticker in watchlist else "⭐ В обране"
         for row in current_kb:
             for button in row:
-                if button.callback_data.startswith('togglewatch_'): button.text = watch_text
+                if button.callback_data.startswith('togglewatch_'):
+                    button.text = watch_text
         query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(current_kb))
 
+
 def _send_analysis_result(context, query, analysis_data, ticker_safe, display, asset, chunk_index, user_id):
-    if "error" in analysis_data:
+    if "error" in analysis_
         msg = f"❌ Помилка для {display}: {analysis_data['error']}"
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Назад до списку", callback_data=_get_back_callback(asset, display, chunk_index))]])
-        try: query.edit_message_text(text=msg, reply_markup=kb)
-        except BadRequest: pass
+        try:
+            query.edit_message_text(text=msg, reply_markup=kb)
+        except BadRequest:
+            pass
         return
 
     context.user_data[f"analysis_{ticker_safe}"] = analysis_data
@@ -187,11 +202,14 @@ def _send_analysis_result(context, query, analysis_data, ticker_safe, display, a
         [InlineKeyboardButton(watch_text, callback_data=f'togglewatch_{kb_data_prefix}')],
         [InlineKeyboardButton("⬅️ Назад до списку", callback_data=back_button_cb)]
     ])
-    try: query.edit_message_text(text=msg, parse_mode='Markdown', reply_markup=kb)
-    except BadRequest: pass
+    try:
+        query.edit_message_text(text=msg, parse_mode='Markdown', reply_markup=kb)
+    except BadRequest:
+        pass
+
 
 def register_handlers(dispatcher, ctrader_service):
-    # ✅ Тепер передаємо ctrader_service як аргумент
+    # ✅ Тепер передаємо ctrader_service через параметр
     dispatcher.bot_data['ctrader_service'] = ctrader_service
     dispatcher.add_handler(CommandHandler("start", start))
     dispatcher.add_handler(MessageHandler(Filters.text("МЕНЮ"), menu_command))
