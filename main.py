@@ -37,7 +37,7 @@ CLIENT_SECRET = os.getenv("CT_CLIENT_SECRET")
 ACCESS_TOKEN = os.getenv("CTRADER_ACCESS_TOKEN")
 ACCOUNT_ID = int(os.getenv("DEMO_ACCOUNT_ID", 9541520))
 APP_PORT = int(os.getenv("PORT", 8080))
-APP_NAME = os.getenv("FLY_APP_NAME", "zigzag-bot-package") # Додано для URL вебхука
+APP_NAME = os.getenv("FLY_APP_NAME", "zigzag-bot-package")
 
 class CTraderProtocol(TcpProtocol, Protobuf):
     def __init__(self, service):
@@ -138,7 +138,6 @@ class CTraderService:
 app = Klein()
 ctrader = CTraderService()
 
-# --- ЛОГІКА TELEGRAM БОТА ---
 @app.route(f"/webhook", methods=['POST'])
 def webhook(request):
     try:
@@ -215,7 +214,7 @@ def api_signal(request):
     return d
 
 @app.route('/api/get_mta')
-def api_get_mта(request):
+def api_get_mta(request):
     pair = request.args.get(b"pair", [b""])[0].decode()
     if not SYMBOL_DATA_CACHE:
         return json_response(request, {"error": "Сервіс ще завантажує дані, спробуйте за хвилину."})
@@ -239,13 +238,12 @@ from twisted.web.server import Site
 if __name__ == "__main__":
     init_db()
 
-    # --- ЗАПУСК TELEGRAM БОТА ---
     WEBHOOK_URL = f"https://{APP_NAME}.fly.dev/webhook"
-    bot.set_webhook(url=WEBHOOK_URL, secret_token=WEBHOOK_SECRET).result()
+    # --- ВИПРАВЛЕННЯ: прибрано .result() ---
+    bot.set_webhook(url=WEBHOOK_URL, secret_token=WEBHOOK_SECRET)
     register_handlers(dp)
     logger.info(f"Telegram webhook встановлено на {WEBHOOK_URL}")
 
-    # --- ЗАПУСК ВЕБ-СЕРВЕРА ТА CTRADER СЕРВІСУ ---
     endpoint_str = f"tcp:port={APP_PORT}:interface=0.0.0.0"
     endpoint = endpoints.serverFromString(reactor, endpoint_str)
     endpoint.listen(Site(app.resource()))
