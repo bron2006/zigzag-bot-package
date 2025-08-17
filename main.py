@@ -1,10 +1,7 @@
-# main.py
 import os
 import json
 from urllib.parse import parse_qs, unquote
-from dotenv import load_dotenv
 import threading
-import logging
 
 from twisted.internet import reactor, ssl, endpoints
 from twisted.internet.protocol import ClientFactory
@@ -22,30 +19,27 @@ from ctrader_open_api.messages.OpenApiMessages_pb2 import (
     ProtoOAGetTrendbarsReq, ProtoOAGetTrendbarsRes
 )
 
-from config import logger, FOREX_SESSIONS, SYMBOL_DATA_CACHE, CACHE_LOCK
+from config import logger, FOREX_SESSIONS, SYMBOL_DATA_CACHE, CACHE_LOCK, get_telegram_token
 from db import init_db, get_watchlist, toggle_watch, get_signal_history
 import analysis
 
-# Telegram part
+# Telegram (v20)
 from telegram.ext import Application
 import telegram_ui
 
-load_dotenv()
 HOST = "demo.ctraderapi.com"
 PORT = 5035
-CLIENT_ID = os.getenv("CT_CLIENT_ID")
-CLIENT_SECRET = os.getenv("CT_CLIENT_SECRET")
-ACCESS_TOKEN = os.getenv("CTRADER_ACCESS_TOKEN")
-ACCOUNT_ID = int(os.getenv("DEMO_ACCOUNT_ID", 9541520))
-APP_PORT = int(os.getenv("PORT", 8080))
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+CLIENT_ID = os.environ.get("CT_CLIENT_ID")
+CLIENT_SECRET = os.environ.get("CT_CLIENT_SECRET")
+ACCESS_TOKEN = os.environ.get("CTRADER_ACCESS_TOKEN")
+ACCOUNT_ID = int(os.environ.get("DEMO_ACCOUNT_ID", "9541520"))
+APP_PORT = int(os.environ.get("PORT", "8080"))
 
 # ----------------- cTrader -----------------
 class CTraderProtocol(TcpProtocol, Protobuf):
     def __init__(self, service):
         super().__init__()
         self.service = service
-
     def connectionMade(self): self.service._on_connected(self)
     def connectionLost(self, reason): self.service._on_disconnected(reason)
     def messageReceived(self, message: ProtoMessage): self.service._message_received(message)
@@ -61,10 +55,9 @@ class CTraderService:
             def buildProtocol(self, addr): return CTraderProtocol(self.service)
             def clientConnectionFailed(self, connector, reason): self.service._on_connection_failed(reason)
 
-        if not reactor.running:
-            logger.info("Запуск реактора Twisted та ініціація SSL-підключення...")
-            ctxFactory = ssl.optionsForClientTLS(hostname=HOST)
-            reactor.connectSSL(HOST, PORT, CTraderFactory(self), ctxFactory)
+        logger.info("Запуск Twisted з SSL-підключенням до cTrader...")
+        ctxFactory = ssl.optionsForClientTLS(hostname=HOST)
+        reactor.connectSSL(HOST, PORT, CTraderFactory(self), ctxFactory)
 
     def _on_connected(self, protocol):
         self._protocol = protocol
@@ -74,18 +67,18 @@ class CTraderService:
 
     def _on_disconnected(self, reason):
         try:
-            err_text = reason.getErrorMessage()
+            msg = reason.getErrorMessage()
         except Exception:
-            err_text = str(reason)
-        logger.warning(f"З'єднання втрачено: {err_text}")
+            msg = str(reason)
+        logger.warning(f"З'єднання втрачено: {msg}")
         self._protocol = None; self._is_authorized = False
 
     def _on_connection_failed(self, reason):
         try:
-            err_text = reason.getErrorMessage()
+            msg = reason.getErrorMessage()
         except Exception:
-            err_text = str(reason)
-        logger.error(f"Не вдалося підключитися: {err_text}")
+            msg = str(reason)
+        logger.error(f"Не вдалося підключитися: {msg}")
         self._protocol = None; self._is_authorized = False
 
     def _message_received(self, message):
@@ -100,15 +93,8 @@ class CTraderService:
             self._populate_symbol_cache()
         elif isinstance(message, ProtoOAErrorRes):
             logger.error(f"Помилка cTrader: {message.errorCode}. Опис: {message.description}")
-            if not self._is_authorized and reactor.running:
-                logger.error("Авторизація провалилася, зупиняю реактор.")
-                reactor.stop()
         elif self._protocol:
-            # бібліотека внутрішньо обробляє відповіді (callback pattern)
-            try:
-                self._protocol.handle_response(message)
-            except Exception as e:
-                logger.exception(f"Error while handling response: {e}")
+            self._protocol.handle_response(message)
 
     def _populate_symbol_cache(self):
         def on_symbols_listed(response):
@@ -116,7 +102,6 @@ class CTraderService:
                 symbols_list = ProtoOASymbolsListRes()
                 symbols_list.ParseFromString(response.payload)
                 all_symbol_ids = [s.symbolId for s in symbols_list.symbol]
-
                 def on_symbols_details(details_response):
                     details = ProtoOASymbolByIdRes()
                     details.ParseFromString(details_response.payload)
@@ -125,14 +110,13 @@ class CTraderService:
                             if hasattr(symbol, 'symbolName') and symbol.symbolName:
                                 SYMBOL_DATA_CACHE[symbol.symbolName] = {'symbolId': symbol.symbolId, 'digits': symbol.digits}
                     logger.info(f"Кеш символів cTrader тепер містить {len(SYMBOL_DATA_CACHE)} елементів.")
-
                 chunk_size = 70
                 for i in range(0, len(all_symbol_ids), chunk_size):
                     chunk = all_symbol_ids[i:i + chunk_size]
                     d = self.send_request(ProtoOASymbolByIdReq(ctidTraderAccountId=ACCOUNT_ID, symbolId=chunk))
                     d.addCallback(on_symbols_details)
             except Exception as e:
-                logger.exception(f"Помилка при обробці списку символів: {e}")
+                logger.error(f"Помилка при обробці списку символів: {e}")
 
         logger.info("Починаю заповнення кешу символів cTrader...")
         d = self.send_request(ProtoOASymbolsListReq(ctidTraderAccountId=ACCOUNT_ID))
@@ -162,8 +146,7 @@ def _get_user_id_from_request(req):
     try:
         user_json_str = parse_qs(unquote(init_data)).get("user", [None])[0]
         if user_json_str: return json.loads(user_json_str).get("id")
-    except Exception as e:
-        logger.warning(f"Не вдалося розпарсити initData: {e}")
+    except Exception as e: logger.warning(f"Не вдалося розпарсити initData: {e}")
     return None
 
 def json_response(request, data):
@@ -180,7 +163,7 @@ def api_get_ranked_pairs(request):
     watchlist = get_watchlist(user_id) if user_id else []
     data = {
         "watchlist": watchlist,
-        "crypto": [],  # placeholder
+        "crypto": [],
         "forex": {session: [{'ticker': p, 'active': True} for p in pairs] for session, pairs in FOREX_SESSIONS.items()},
         "stocks": []
     }
@@ -239,23 +222,23 @@ def static_files(request):
 
 # ----------------- Telegram Bot -----------------
 def start_telegram_bot():
-    if not TELEGRAM_TOKEN:
-        logger.warning("TELEGRAM_BOT_TOKEN не встановлено — Telegram бот не запущено.")
+    token = get_telegram_token()
+    if not token:
+        logger.warning("TELEGRAM token не встановлено — Telegram бот не запущено.")
         return
-    application = Application.builder().token(TELEGRAM_TOKEN).build()
-    telegram_ui.set_ctrader_service(ctrader)
+    application = Application.builder().token(token).build()
     telegram_ui.register_handlers(application)
-    logger.info("Starting Telegram polling...")
+    logger.info("Запускаю Telegram бот (polling) у фоні...")
     application.run_polling()
 
 # ----------------- Запуск -----------------
 if __name__ == "__main__":
     init_db()
 
-    # Запуск Telegram у фоновому потоці (не блокує головний потік)
+    # Запуск Telegram у фоновому потоці (якщо є токен)
     threading.Thread(target=start_telegram_bot, daemon=True).start()
 
-    # Запуск cTrader (через reactor)
+    # Запуск cTrader (Twisted) коли реактор запущено
     reactor.callWhenRunning(ctrader.connect)
 
     # Запуск Klein веб
