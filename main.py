@@ -1,10 +1,11 @@
-# main.py
+# main.py (оновлений — з додатковим логуванням для API)
 import os
 import json
 import asyncio
-import threading
 from urllib.parse import parse_qs, unquote
 from dotenv import load_dotenv
+import threading
+
 from twisted.internet import reactor, ssl, endpoints
 from twisted.internet.protocol import ClientFactory
 from twisted.web.server import Site
@@ -21,15 +22,23 @@ from ctrader_open_api.messages.OpenApiMessages_pb2 import (
     ProtoOAGetTrendbarsReq, ProtoOAGetTrendbarsRes
 )
 
-from config import logger, FOREX_SESSIONS, SYMBOL_DATA_CACHE, CACHE_LOCK, APP_PORT, CLIENT_ID, CLIENT_SECRET, ACCESS_TOKEN, ACCOUNT_ID
+from config import logger, FOREX_SESSIONS, SYMBOL_DATA_CACHE, CACHE_LOCK
 from db import init_db, get_watchlist, toggle_watch, get_signal_history
 import analysis
-import telegram_ui
+
+# --- Telegram ---
+from telegram.ext import Application
+from telegram_ui import register_handlers
 
 load_dotenv()
-
-HOST = os.getenv("CT_HOST", "demo.ctraderapi.com")
-PORT = int(os.getenv("CT_PORT", 5035))
+HOST = "demo.ctraderapi.com"
+PORT = 5035
+CLIENT_ID = os.getenv("CT_CLIENT_ID")
+CLIENT_SECRET = os.getenv("CT_CLIENT_SECRET")
+ACCESS_TOKEN = os.getenv("CTRADER_ACCESS_TOKEN")
+ACCOUNT_ID = int(os.getenv("DEMO_ACCOUNT_ID", 9541520))
+APP_PORT = int(os.getenv("PORT", 8080))
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
 # ----------------- cTrader -----------------
 class CTraderProtocol(TcpProtocol, Protobuf):
@@ -51,9 +60,10 @@ class CTraderService:
             def buildProtocol(self, addr): return CTraderProtocol(self.service)
             def clientConnectionFailed(self, connector, reason): self.service._on_connection_failed(reason)
 
-        logger.info("Починаю cTrader SSL-підключення...")
-        ctxFactory = ssl.optionsForClientTLS(hostname=HOST)
-        reactor.connectSSL(HOST, PORT, CTraderFactory(self), ctxFactory)
+        if not reactor.running:
+            logger.info("Запуск реактора Twisted та ініціація SSL-підключення...")
+            ctxFactory = ssl.optionsForClientTLS(hostname=HOST)
+            reactor.connectSSL(HOST, PORT, CTraderFactory(self), ctxFactory)
 
     def _on_connected(self, protocol):
         self._protocol = protocol
@@ -142,7 +152,8 @@ def _get_user_id_from_request(req):
     try:
         user_json_str = parse_qs(unquote(init_data)).get("user", [None])[0]
         if user_json_str: return json.loads(user_json_str).get("id")
-    except Exception as e: logger.warning(f"Не вдалося розпарсити initData: {e}")
+    except Exception as e: 
+        logger.warning(f"Не вдалося розпарсити initData: {e}")
     return None
 
 def json_response(request, data):
@@ -157,6 +168,10 @@ def health_check(request):
 
 @app.route('/api/get_ranked_pairs')
 def api_get_ranked_pairs(request):
+    try:
+        logger.info(f"HTTP /api/get_ranked_pairs called args={dict(request.args)}")
+    except Exception:
+        logger.info("HTTP /api/get_ranked_pairs called (couldn't decode args)")
     user_id = _get_user_id_from_request(request)
     watchlist = get_watchlist(user_id) if user_id else []
     data = {
@@ -169,30 +184,53 @@ def api_get_ranked_pairs(request):
 
 @app.route('/api/toggle_watchlist')
 def toggle_watchlist_route(request):
+    try:
+        logger.info(f"HTTP /api/toggle_watchlist called args={dict(request.args)}")
+    except Exception:
+        logger.info("HTTP /api/toggle_watchlist called")
     user_id = _get_user_id_from_request(request)
     pair = request.args.get(b"pair", [b""])[0].decode()
-    if not user_id or not pair: return json_response(request, {"success": False})
+    if not user_id or not pair:
+        logger.warning("toggle_watchlist: missing user_id or pair")
+        return json_response(request, {"success": False})
     toggle_watch(user_id, pair)
+    logger.info(f"toggle_watchlist: user={user_id} pair={pair}")
     return json_response(request, {"success": True})
 
 @app.route('/api/signal_history')
 def api_signal_history(request):
+    try:
+        logger.info(f"HTTP /api/signal_history called args={dict(request.args)}")
+    except Exception:
+        logger.info("HTTP /api/signal_history called")
     user_id = _get_user_id_from_request(request)
     pair = request.args.get(b"pair", [b""])[0].decode()
-    if not user_id or not pair: return json_response(request, [])
+    if not user_id or not pair:
+        logger.warning("signal_history: missing user_id or pair")
+        return json_response(request, [])
     history = get_signal_history(user_id, pair)
+    logger.info(f"signal_history: user={user_id} pair={pair} entries={len(history)}")
     return json_response(request, history)
 
 @app.route('/api/signal')
 def api_signal(request):
+    try:
+        logger.info(f"HTTP /api/signal called args={dict(request.args)}")
+    except Exception:
+        logger.info("HTTP /api/signal called")
     pair = request.args.get(b"pair", [b""])[0].decode()
     user_id = _get_user_id_from_request(request)
     if not SYMBOL_DATA_CACHE:
+        logger.warning("api_signal: SYMBOL_DATA_CACHE empty")
         return json_response(request, {"error": "Сервіс ще завантажує дані, спробуйте за хвилину."})
 
     def on_error(failure):
-        logger.error(f"Error in api_signal for pair '{pair}': {failure.value}")
-        return json_response(request, {"error": str(failure.value)})
+        try:
+            val = failure.value
+        except Exception:
+            val = repr(failure)
+        logger.error(f"Error in api_signal for pair '{pair}': {val}")
+        return json_response(request, {"error": str(val)})
 
     d = reactor.defer.maybeDeferred(analysis.get_api_detailed_signal_data, ctrader, pair, user_id)
     d.addCallback(lambda data: json_response(request, data))
@@ -201,13 +239,22 @@ def api_signal(request):
 
 @app.route('/api/get_mta')
 def api_get_mta(request):
+    try:
+        logger.info(f"HTTP /api/get_mta called args={dict(request.args)}")
+    except Exception:
+        logger.info("HTTP /api/get_mta called")
     pair = request.args.get(b"pair", [b""])[0].decode()
     if not SYMBOL_DATA_CACHE:
+        logger.warning("api_get_mta: SYMBOL_DATA_CACHE empty")
         return json_response(request, {"error": "Сервіс ще завантажує дані, спробуйте за хвилину."})
 
     def on_error(failure):
-        logger.error(f"Error in api_get_mta for pair '{pair}': {failure.value}")
-        return json_response(request, {"error": str(failure.value)})
+        try:
+            val = failure.value
+        except Exception:
+            val = repr(failure)
+        logger.error(f"Error in api_get_mta for pair '{pair}': {val}")
+        return json_response(request, {"error": str(val)})
 
     d = reactor.defer.maybeDeferred(analysis.get_api_mta_data, ctrader, pair)
     d.addCallback(lambda data: json_response(request, data))
@@ -216,60 +263,57 @@ def api_get_mta(request):
 
 @app.route("/", branch=True)
 def static_files(request):
+    try:
+        logger.info(f"HTTP / (static) called path={request.path}")
+    except Exception:
+        logger.info("HTTP / (static) called")
     return File("./webapp")
 
-# ----------------- Telegram helpers -----------------
-def get_telegram_token():
-    # підтримуємо TELEGRAM_BOT_TOKEN або TOKEN (Fly secret)
-    return os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("TOKEN")
+# ----------------- Telegram Bot -----------------
+def start_telegram_bot():
+    """
+    Запускаємо Telegram у окремому потоці, створюючи власний asyncio event loop для цього потоку.
+    Це дозволяє application.run_polling() працювати без помилок set_wakeup_fd / event loop missing.
+    """
+    try:
+        # Створюємо свій loop всередині потоку
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
 
-# ----------------- Twisted runner (фон) -----------------
-def start_twisted_in_background(port):
-    # Ставимо завдання, які Reactor повинен виконати при запуску
-    reactor.callWhenRunning(ctrader.connect)
+        application = Application.builder().token(TELEGRAM_TOKEN).build()
+        # register_handlers очікує об'єкт з методом add_handler -> Application має add_handler
+        register_handlers(application)
 
-    def _listen():
-        endpoint_str = f"tcp:port={port}:interface=0.0.0.0"
-        endpoint = endpoints.serverFromString(reactor, endpoint_str)
-        endpoint.listen(Site(app.resource()))
-        logger.info(f"Klein web scheduled to listen on {port}")
+        logger.info("Starting Telegram polling inside background thread with its own event loop.")
+        # Ініціалізуємо та запускаємо polling як корутину
+        loop.run_until_complete(application.initialize())
+        # start_polling() в нових версіях — корутина; запускаємо її як таск
+        loop.create_task(application.start_polling())
+        loop.run_forever()
+    except Exception as e:
+        logger.exception("Помилка при запуску Telegram бота в потоці: %s", e)
 
-    reactor.callWhenRunning(_listen)
-
-    def _run():
-        logger.info("Starting Twisted reactor (background thread)...")
-        reactor.run(installSignalHandlers=False)
-        logger.info("Twisted reactor stopped.")
-
-    t = threading.Thread(target=_run, name="twisted-reactor", daemon=True)
-    t.start()
-    return t
-
-# ----------------- Main (PTB in main thread) -----------------
+# ----------------- Запуск -----------------
 if __name__ == "__main__":
     init_db()
 
-    # Запускаємо Twisted/Klein у фоні
-    start_twisted_in_background(APP_PORT)
+    # Запуск cTrader
+    logger.info("Starting Twisted reactor (background thread)...")
+    reactor.callWhenRunning(ctrader.connect)
 
-    # Тепер запускаємо Telegram у головному потоці (asyncio прив'язаний до main thread)
-    TELEGRAM_TOKEN = get_telegram_token()
-    if not TELEGRAM_TOKEN:
-        logger.warning("TELEGRAM token не встановлено — Telegram бот не запущено.")
+    # Запуск Klein веб (сервер) — експортуємо через Twisted endpoint
+    endpoint_str = f"tcp:port={APP_PORT}:interface=0.0.0.0"
+    endpoint = endpoints.serverFromString(reactor, endpoint_str)
+    endpoint.listen(Site(app.resource()))
+    logger.info(f"Klein web scheduled to listen on {APP_PORT}")
+
+    # Запуск Telegram у фоновому потоці (якщо токен не в конфі — пропускаємо)
+    if TELEGRAM_TOKEN:
+        t = threading.Thread(target=start_telegram_bot, daemon=True, name="TelegramThread")
+        t.start()
     else:
-        try:
-            from telegram import __version__ as ptb_ver
-            logger.info(f"python-telegram-bot version: {ptb_ver}")
-            from telegram.ext import Application
-        except Exception:
-            logger.exception("Не вдалося імпортувати PTB Application.")
-            raise
+        logger.warning("TELEGRAM_BOT_TOKEN не встановлено — Telegram бот не запущено.")
 
-        try:
-            application = Application.builder().token(TELEGRAM_TOKEN).build()
-            # register handlers (синхронна)
-            telegram_ui.register_handlers(application)
-            logger.info("Запускаю Telegram бот (polling) у головному потоці...")
-            application.run_polling()
-        except Exception:
-            logger.exception("Помилка при запуску Telegram бота.")
+    # Запускаємо реактор (це блокує потік main)
+    logger.info("Starting Twisted reactor...")
+    reactor.run()
