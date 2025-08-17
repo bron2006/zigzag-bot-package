@@ -128,8 +128,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text(f"Помилка MTA: {e}")
         return
 
-# --------- ЗМІНА: register_handlers робить синхронну реєстрацію (не coroutine) ----------
 def register_handlers(application):
+    # РЕЄСТРАЦІЯ СИНХРОННА — не coroutine
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.Text("МЕНЮ"), menu_command))
     application.add_handler(CallbackQueryHandler(button_handler))

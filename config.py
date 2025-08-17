@@ -7,30 +7,29 @@ import threading
 
 load_dotenv()
 
-# Telegram token name: перевіряємо кілька можливих змінних (TELEGRAM_BOT_TOKEN, TOKEN)
-def get_telegram_token():
-    return os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("TOKEN") or os.getenv("TELEGRAM_TOKEN")
-
-TOKEN = os.getenv("TOKEN")
+# Telegram token environment (compatibility)
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TOKEN = os.getenv("TOKEN")  # підтримка старої змінної
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
 
-CT_CLIENT_ID = os.getenv("CT_CLIENT_ID")
-CT_CLIENT_SECRET = os.getenv("CT_CLIENT_SECRET")
-CTRADER_ACCESS_TOKEN = os.getenv("CTRADER_ACCESS_TOKEN")
-CTRADER_REFRESH_TOKEN = os.getenv("CTRADER_REFRESH_TOKEN")
-MY_TELEGRAM_ID = os.getenv("MY_TELEGRAM_ID")
-DEMO_ACCOUNT_ID = int(os.getenv("DEMO_ACCOUNT_ID", "9541520"))
+# cTrader / зовнішні налаштування
+CLIENT_ID = os.getenv("CT_CLIENT_ID")
+CLIENT_SECRET = os.getenv("CT_CLIENT_SECRET")
+ACCESS_TOKEN = os.getenv("CTRADER_ACCESS_TOKEN")
+REFRESH_TOKEN = os.getenv("CTRADER_REFRESH_TOKEN")
+ACCOUNT_ID = int(os.getenv("DEMO_ACCOUNT_ID", 9541520))
+APP_PORT = int(os.getenv("PORT", 8080))
 
-DB_NAME = "zigzag.db"
-
+# Логи
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("zigzag")
 
+# Кеші
 MARKET_DATA_CACHE = TTLCache(maxsize=5000, ttl=300)
 SYMBOL_DATA_CACHE = {}
 CACHE_LOCK = threading.Lock()
 
-# Minimal placeholders so web + bot code can import them safely even if not configured
+# UI lists placeholders
 CRYPTO_PAIRS_FULL = []
 STOCKS_US_SYMBOLS = []
 
@@ -40,3 +39,5 @@ FOREX_SESSIONS = {
     "Американська": ["USD/CAD", "USD/MXN", "USD/BRL", "USD/ZAR"]
 }
 ANALYSIS_TIMEFRAMES = ['15min', '1h', '4h', '1day']
+
+DB_NAME = "zigzag.db"
