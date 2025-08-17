@@ -91,7 +91,7 @@ def start(update: Update, context: CallbackContext):
 
 def menu_command(update: Update, context: CallbackContext):
     chat_id = update.message.chat_id
-    if 'last_menu_id' in context.user_
+    if 'last_menu_id' in context.user_data:
         try:
             context.bot.delete_message(chat_id=chat_id, message_id=context.user_data['last_menu_id'])
         except BadRequest:
@@ -125,7 +125,6 @@ def button_handler(update: Update, context: CallbackContext):
 
         query.edit_message_text(f"⏳ {'Примусово оновлюю' if is_refresh else 'Аналізую'} {display}...")
 
-        # ✅ Отримуємо ctrader з bot_data
         ctrader_service = context.bot_data.get('ctrader_service')
         if not ctrader_service:
             query.edit_message_text("❌ Сервіс cTrader ще не готовий. Зачекайте хвилину.")
@@ -151,7 +150,7 @@ def button_handler(update: Update, context: CallbackContext):
         parts = data.split('_')
         asset, ticker_safe, display_safe, chunk_index = parts[1], parts[2], parts[3], int(parts[4])
         analysis_data = context.user_data.get(f"analysis_{ticker_safe}")
-        if not analysis_
+        if not analysis_data:
             return query.answer("Дані застаріли, оновіть сигнал.", show_alert=True)
         reasons = "\n".join([f"• _{r}_" for r in analysis_data.get('reasons', [])]) or "_Немає виражених факторів._"
         support = f"{analysis_data.get('support'):.5f}" if analysis_data.get('support') else "N/A"
@@ -178,7 +177,7 @@ def button_handler(update: Update, context: CallbackContext):
 
 
 def _send_analysis_result(context, query, analysis_data, ticker_safe, display, asset, chunk_index, user_id):
-    if "error" in analysis_
+    if "error" in analysis_data:
         msg = f"❌ Помилка для {display}: {analysis_data['error']}"
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Назад до списку", callback_data=_get_back_callback(asset, display, chunk_index))]])
         try:
@@ -209,7 +208,6 @@ def _send_analysis_result(context, query, analysis_data, ticker_safe, display, a
 
 
 def register_handlers(dispatcher, ctrader_service):
-    # ✅ Тепер передаємо ctrader_service через параметр
     dispatcher.bot_data['ctrader_service'] = ctrader_service
     dispatcher.add_handler(CommandHandler("start", start))
     dispatcher.add_handler(MessageHandler(Filters.text("МЕНЮ"), menu_command))

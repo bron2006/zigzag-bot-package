@@ -11,7 +11,7 @@ from telegram.ext import CallbackContext
 # --- TWISTED ІМПОРТИ ---
 from twisted.internet import reactor, ssl, defer
 from twisted.internet.protocol import ClientFactory
-from twisted.web.server import Site  # 🔴 КРИТИЧНО: без цього — помилка!
+from twisted.web.server import Site
 from twisted.web.static import File
 from klein import Klein
 
@@ -41,9 +41,10 @@ PORT = 5035
 CLIENT_ID = os.getenv("CT_CLIENT_ID")
 CLIENT_SECRET = os.getenv("CT_CLIENT_SECRET")
 ACCESS_TOKEN = os.getenv("CTRADER_ACCESS_TOKEN")
-ACCOUNT_ID = int(os.getenv("DEMO_ACCOUNT_ID", 9541520))
+ACCOUNT_ID = int(os.getenv("DEMO_ACCOUNT_ID", 44186144))  # Твій реальний ID
 APP_PORT = int(os.getenv("PORT", 8080))
 APP_NAME = os.getenv("FLY_APP_NAME", "zigzag-bot-package")
+
 
 # --- cTRADER ПРОТОКОЛ ---
 class CTraderProtocol(TcpProtocol, Protobuf):
@@ -65,10 +66,9 @@ class CTraderService:
     def __init__(self):
         self._protocol = None
         self._is_authorized = False
-        self._ready_deferred = None  # Для очікування готовності
+        self._ready_deferred = None
 
     def when_ready(self):
-        """Повертає Deferred, який спрацює, коли сервіс буде готовий."""
         if self._is_authorized and self._ready_deferred is None:
             d = defer.Deferred()
             d.callback(None)
@@ -106,7 +106,7 @@ class CTraderService:
         self._protocol = None
         self._is_authorized = False
         if self._ready_deferred:
-            self._ready_deferred = None  # Перепідключення створить новий
+            self._ready_deferred = None
 
     def _on_connection_failed(self, reason):
         logger.error(f"❌ Помилка підключення: {reason.getErrorMessage()}")
@@ -126,6 +126,10 @@ class CTraderService:
             self._is_authorized = True
             logger.info(f"✅ Акаунт {ACCOUNT_ID} авторизовано.")
             self._populate_symbol_cache()
+
+            # 🔁 Додаємо keep-alive кожні 30 сек
+            self._start_keep_alive()
+
             if self._ready_deferred:
                 self._ready_deferred.callback(None)
                 self._ready_deferred = None
@@ -138,6 +142,19 @@ class CTraderService:
 
         elif self._protocol:
             self._protocol.handle_response(message)
+
+    def _start_keep_alive(self):
+        from twisted.internet import reactor
+        def send_ping():
+            if self._protocol and self._is_authorized:
+                try:
+                    # Надсилаємо пусте повідомлення як ping
+                    self._protocol.send(ProtoMessage())
+                except Exception as e:
+                    logger.warning(f"⚠️ Ping не відправився: {e}")
+            if self._is_authorized:
+                reactor.callLater(30, send_ping)  # Кожні 30 сек
+        reactor.callLater(30, send_ping)
 
     def _populate_symbol_cache(self):
         def on_symbols_listed(response):
@@ -216,7 +233,7 @@ def webhook(request):
 
 def _get_user_id_from_request(req):
     init_data = req.args.get(b"initData", [b""])[0].decode()
-    if not init_data:  # ✅ Виправлено: повна назва змінної та ':'
+    if not init_data:
         return None
     try:
         user_json_str = parse_qs(unquote(init_data)).get("user", [None])[0]
@@ -296,10 +313,9 @@ def api_signal(request):
         logger.error(f"❌ Помилка в api_signal для '{pair}': {failure.value}")
         return json_response(request, {"error": str(failure.value)})
 
-    # Чекаємо, поки cTrader буде готовий
     d = ctrader.when_ready()
     d.addCallback(lambda _: analysis.get_api_detailed_signal_data(ctrader, pair, user_id))
-    d.addCallback(lambda _: json_response(request, data))  # ✅ Виправлено: lambda _:
+    d.addCallback(lambda _: json_response(request, data))
     d.addErrback(on_error)
     return d
 
@@ -317,7 +333,7 @@ def api_get_mta(request):
 
     d = ctrader.when_ready()
     d.addCallback(lambda _: analysis.get_api_mta_data(ctrader, pair))
-    d.addCallback(lambda _: json_response(request, data))  # ✅ Виправлено: lambda _:
+    d.addCallback(lambda _: json_response(request, data))
     d.addErrback(on_error)
     return d
 
@@ -330,7 +346,6 @@ def static_files(request):
 # --- ГОЛОВНИЙ ЗАПУСК ---
 if __name__ == "__main__":
     init_db()
-    register_handlers(dp, ctrader)
 
     # Встановлюємо вебхук
     WEBHOOK_URL = f"https://{APP_NAME}.fly.dev/webhook"
@@ -340,7 +355,10 @@ if __name__ == "__main__":
     else:
         logger.error("❌ Не вдалося встановити webhook!")
 
-    # Запускаємо HTTP-сервер через Twisted
+    # Реєструємо хендлери
+    register_handlers(dp, ctrader)
+
+    # Запускаємо HTTP-сервер
     logger.info(f"🚀 Запуск HTTP-сервера на порту {APP_PORT}...")
     reactor.listenTCP(APP_PORT, Site(app.resource()))
 
