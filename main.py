@@ -16,10 +16,10 @@ from ctrader_open_api.messages.OpenApiMessages_pb2 import (
     ProtoOAApplicationAuthReq, ProtoOAApplicationAuthRes,
     ProtoOAAccountAuthReq, ProtoOAAccountAuthRes, ProtoOAErrorRes,
     ProtoOASymbolsListReq, ProtoOASymbolsListRes,
-    ProtoOASymbolByIdReq, ProtoOASymbolByIdRes
+    ProtoOASymbolByIdReq, ProtoOASymbolByIdRes,
+    ProtoOATraderRes # <-- Додано імпорт для нового тригера
 )
 
-# --- ЗМІНЕНО: Імпорти адаптовано до стабільної архітектури ---
 from config import logger, SYMBOL_DATA_CACHE, CACHE_LOCK, WEBHOOK_SECRET, \
                    CT_CLIENT_ID, CT_CLIENT_SECRET, CTRADER_ACCESS_TOKEN, DEMO_ACCOUNT_ID, \
                    bot, dp
@@ -53,16 +53,24 @@ def disconnected(client: Client, reason):
 def on_error(failure):
     logger.error(f"❌ A cTrader deferred error occurred: {failure.getErrorMessage()}")
 
+# --- ЗМІНЕНО: Оновлена логіка обробки повідомлень ---
 def message_received(client: Client, message: ProtoMessage):
     global is_ctrader_authorized
     if message.payloadType == ProtoOAApplicationAuthRes().payloadType:
         logger.info("✅ Application authorized. Authorizing account...")
         request = ProtoOAAccountAuthReq(ctidTraderAccountId=DEMO_ACCOUNT_ID, accessToken=CTRADER_ACCESS_TOKEN)
         client.send(request)
+
     elif message.payloadType == ProtoOAAccountAuthRes().payloadType:
-        logger.info(f"✅ Account {DEMO_ACCOUNT_ID} authorized successfully.")
         is_ctrader_authorized = True
+        logger.info(f"✅ Account {DEMO_ACCOUNT_ID} authorized. Waiting for trader data stream...")
+        # БІЛЬШЕ НЕ ВИКЛИКАЄМО populate_symbol_cache ТУТ
+
+    elif message.payloadType == ProtoOATraderRes().payloadType:
+        # ЦЕ НОВИЙ ТРИГЕР! Сервер надіслав дані про трейдера, отже він готовий до запитів.
+        logger.info("✅ Received Trader data. Connection is fully ready. Populating symbol cache...")
         populate_symbol_cache()
+
     elif message.payloadType == ProtoOAErrorRes().payloadType:
         error_res = ProtoOAErrorRes.FromString(message.payload)
         logger.error(f"❌ cTrader Error: {error_res.errorCode} - {error_res.description}")
@@ -74,9 +82,13 @@ def populate_symbol_cache():
 
     def on_symbols_listed(response: ProtoMessage):
         symbols_list = ProtoOASymbolsListRes.FromString(response.payload)
+        
+        # --- ЗМІНЕНО: Додано діагностичне логування ---
+        logger.info(f"DIAGNOSTIC: Received ProtoOASymbolsListRes with {len(symbols_list.symbol)} symbols.")
+
         all_symbol_ids = [s.symbolId for s in symbols_list.symbol if s.symbolId]
         if not all_symbol_ids:
-            logger.warning("⚠️ Received an empty symbol list from the server.")
+            logger.warning("⚠️ Received an empty symbol list from the server. Cache population aborted.")
             return
 
         chunk_size = 70
@@ -100,7 +112,7 @@ def populate_symbol_cache():
 
     d.addCallbacks(on_symbols_listed, on_error)
 
-# --- Klein Web Server Routes ---
+# --- Klein Web Server Routes (без змін) ---
 @web_app.route("/webhook", methods=["POST"])
 def webhook(request):
     try:
@@ -127,7 +139,7 @@ def root(request):
     status = "authorized" if is_ctrader_authorized else "connecting..."
     return f"✅ ZigZag Bot. cTrader Status: {status}. Symbols in cache: {len(SYMBOL_DATA_CACHE)}"
 
-# --- Main Application Startup ---
+# --- Main Application Startup (без змін) ---
 if __name__ == "__main__":
     init_db()
     
