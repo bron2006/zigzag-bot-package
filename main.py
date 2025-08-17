@@ -4,7 +4,6 @@ import json
 from urllib.parse import parse_qs, unquote
 from dotenv import load_dotenv
 
-# --- TELEGRAM ІМПОРТИ ---
 from telegram import Update
 from telegram.ext import CallbackContext
 
@@ -23,7 +22,6 @@ from ctrader_open_api.messages.OpenApiMessages_pb2 import (
     ProtoOAGetTrendbarsReq, ProtoOAGetTrendbarsRes
 )
 
-# --- ІМПОРТИ ДЛЯ БОТА ---
 from config import logger, FOREX_SESSIONS, SYMBOL_DATA_CACHE, CACHE_LOCK, bot, dp, WEBHOOK_SECRET
 from db import init_db, get_watchlist, toggle_watch, get_signal_history
 import analysis
@@ -137,6 +135,8 @@ class CTraderService:
 
 app = Klein()
 ctrader = CTraderService()
+# --- ВИПРАВЛЕННЯ: Додаємо cTrader сервіс в контекст бота ---
+dp.bot_data['ctrader_service'] = ctrader
 
 @app.route(f"/webhook", methods=['POST'])
 def webhook(request):
@@ -167,7 +167,14 @@ def json_response(request, data):
     return json.dumps(data, ensure_ascii=False)
 
 @app.route('/health')
-def health_check(request): return "OK"
+def health_check(request):
+    request.setResponseCode(200)
+    return "OK"
+
+@app.route('/')
+def root(request):
+    request.setResponseCode(200)
+    return "Bot is running. Use /webhook for Telegram."
 
 @app.route('/api/get_ranked_pairs')
 def api_get_ranked_pairs(request):
@@ -239,7 +246,6 @@ if __name__ == "__main__":
     init_db()
 
     WEBHOOK_URL = f"https://{APP_NAME}.fly.dev/webhook"
-    # --- ВИПРАВЛЕННЯ: прибрано .result() ---
     bot.set_webhook(url=WEBHOOK_URL, secret_token=WEBHOOK_SECRET)
     register_handlers(dp)
     logger.info(f"Telegram webhook встановлено на {WEBHOOK_URL}")

@@ -17,7 +17,9 @@ def get_market_data(ctrader_service, pair, tf, limit=300):
 
     symbol_details = SYMBOL_DATA_CACHE.get(pair)
     if not symbol_details:
-        raise Exception(f"Деталі для символу {pair} не знайдено в кеші.")
+        # --- ВИПРАВЛЕННЯ: Додано більш інформативне повідомлення про помилку ---
+        available = list(SYMBOL_DATA_CACHE.keys())[:5]
+        raise Exception(f"Пара '{pair}' не знайдена в кеші. Доступні: {available}...")
 
     tf_map = {"15min": TrendbarPeriod.M15, "1h": TrendbarPeriod.H1, "4h": TrendbarPeriod.H4, "1day": TrendbarPeriod.D1}
     if tf not in tf_map:
@@ -86,6 +88,10 @@ def _generate_verdict(analysis):
     return "🟡 НЕЙТРАЛЬНА СИТУАЦІЯ", "neutral"
 
 def get_api_detailed_signal_data(ctrader_service, pair, user_id=None):
+    # --- ВИПРАВЛЕННЯ: Додано валідацію назви пари ---
+    if not isinstance(pair, str) or len(pair) < 3:
+        return {"error": f"Некоректна назва пари: '{pair}'. Очікується рядок."}
+
     def on_data_ready(results):
         df, daily_df = results
         if df.empty or len(df) < 25 or daily_df.empty:

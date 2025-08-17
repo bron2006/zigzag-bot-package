@@ -4,28 +4,29 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKe
 from telegram.ext import CallbackContext, CommandHandler, MessageHandler, Filters, CallbackQueryHandler
 from telegram.error import BadRequest
 
-# --- ВИПРАВЛЕНО ІМПОРТИ ---
 from config import CRYPTO_PAIRS_FULL, FOREX_SESSIONS, STOCKS_US_SYMBOLS
 from db import get_watchlist, toggle_watch
-# Використовуємо ті самі функції, що й для Web App
 from analysis import get_api_detailed_signal_data, get_api_mta_data
 
-# --- АДАПТЕРИ: Перетворюють дані з API на текст для бота ---
-def get_signal_strength_verdict(ticker, display, asset, user_id=None, force_refresh=False):
+# --- ВИПРАВЛЕННЯ: Функції тепер приймають 'context' ---
+def get_signal_strength_verdict(context, ticker, display, asset, user_id=None, force_refresh=False):
     """Адаптер, що викликає основну функцію аналізу і форматує результат."""
-    analysis_data = get_api_detailed_signal_data(ticker, user_id) # force_refresh поки не реалізовано
+    ctrader_service = context.bot_data['ctrader_service']
+    # --- ВИПРАВЛЕННЯ: Передаємо ctrader_service першим аргументом ---
+    analysis_data = get_api_detailed_signal_data(ctrader_service, ticker, user_id)
     if "error" in analysis_data:
         return f"❌ Помилка для {display}: {analysis_data['error']}", None
 
-    # Форматуємо текстове повідомлення на основі даних
     price = analysis_data.get('price', 0)
     verdict_text = analysis_data.get('verdict_text', 'Н/Д')
     msg = f"*{display}* | Ціна: `{price:.5f}`\n\n{verdict_text}"
     return msg, analysis_data
 
-def get_full_mta_verdict(ticker, display, asset, user_id=None):
+def get_full_mta_verdict(context, ticker, display, asset, user_id=None):
     """Адаптер, що викликає MTA і форматує результат."""
-    mta_data = get_api_mta_data(ticker)
+    ctrader_service = context.bot_data['ctrader_service']
+    # --- ВИПРАВЛЕННЯ: Передаємо ctrader_service першим аргументом ---
+    mta_data = get_api_mta_data(ctrader_service, ticker)
     if not mta_data or "error" in mta_data:
         return f"❌ Помилка MTA для {display}"
 
@@ -37,7 +38,6 @@ def get_full_mta_verdict(ticker, display, asset, user_id=None):
         emoji = "🔼" if signal == "BUY" else "🔽" if signal == "SELL" else " neutral"
         rows.append(f"`{tf:<5}`: {signal} {emoji}")
     return header + "\n".join(rows)
-
 
 def main_kb():
     return InlineKeyboardMarkup([
@@ -171,7 +171,8 @@ def button_handler(update: Update, context: CallbackContext):
         
         query.edit_message_text(f"⏳ {'Примусово оновлюю' if is_refresh else 'Аналізую'} {display}...")
         
-        msg, analysis_data = get_signal_strength_verdict(ticker, display, asset, user_id=user_id, force_refresh=is_refresh)
+        # --- ВИПРАВЛЕННЯ: Передаємо 'context' у функцію ---
+        msg, analysis_data = get_signal_strength_verdict(context, ticker, display, asset, user_id=user_id, force_refresh=is_refresh)
         
         if analysis_data:
             context.user_data[f"analysis_{ticker_safe}"] = analysis_data
@@ -238,11 +239,11 @@ def button_handler(update: Update, context: CallbackContext):
         ticker, display = ticker_safe.replace('~', '/'), display_safe.replace('~', '/')
         user_id = query.from_user.id
         query.edit_message_text(f"⏳ Збираю MTF для {display}...")
-        msg = get_full_mta_verdict(ticker, display, asset, user_id=user_id)
+        # --- ВИПРАВЛЕННЯ: Передаємо 'context' у функцію ---
+        msg = get_full_mta_verdict(context, ticker, display, asset, user_id=user_id)
         back_callback = f"analyze_{asset}_{ticker_safe}_{display_safe}_{chunk_index}"
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Назад до вердикту", callback_data=back_callback)]])
         query.edit_message_text(text=msg, parse_mode='Markdown', reply_markup=kb)
-
 
 def register_handlers(dispatcher):
     dispatcher.add_handler(CommandHandler("start", start))
