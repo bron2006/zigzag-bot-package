@@ -330,7 +330,7 @@ def static_files(request):
 # --- ГОЛОВНИЙ ЗАПУСК ---
 if __name__ == "__main__":
     init_db()
-    register_handlers(dp)
+    register_handlers(dp, ctrader)
 
     # Встановлюємо вебхук
     WEBHOOK_URL = f"https://{APP_NAME}.fly.dev/webhook"
