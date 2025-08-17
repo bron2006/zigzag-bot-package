@@ -73,11 +73,9 @@ def populate_symbol_cache():
 
     def on_symbols_listed(response: ProtoMessage):
         symbols_list = ProtoOASymbolsListRes.FromString(response.payload)
-        logger.info(f"DIAGNOSTIC: Received ProtoOASymbolsListRes with {len(symbols_list.symbol)} symbols.")
-
         all_symbol_ids = [s.symbolId for s in symbols_list.symbol if s.symbolId]
         if not all_symbol_ids:
-            logger.warning("⚠️ Received an empty symbol list from the server. Cache population aborted.")
+            logger.warning("⚠️ Received an empty symbol list from the server.")
             return
 
         chunk_size = 70
@@ -88,26 +86,30 @@ def populate_symbol_cache():
         d_list = defer.DeferredList(deferred_list, consumeErrors=True)
         d_list.addCallback(on_all_details_fetched)
 
-    # --- ЗМІНЕНО: Додано розширене логування для діагностики ---
+    # --- ЗМІНЕНО: Повністю переписана логіка для надійного оновлення кешу ---
     def on_all_details_fetched(results):
         logger.info(f"DIAGNOSTIC: Processing details for {len(results)} chunks.")
+        # Крок 1: Створюємо тимчасовий словник
+        temp_cache = {}
+        for index, (success, response_or_failure) in enumerate(results):
+            if success:
+                details = ProtoOASymbolByIdRes.FromString(response_or_failure.payload)
+                for symbol in details.symbol:
+                    if hasattr(symbol, 'symbolName') and symbol.symbolName:
+                        temp_cache[symbol.symbolName] = {'symbolId': symbol.symbolId, 'digits': symbol.digits}
+            else:
+                logger.error(f"DIAGNOSTIC: Chunk {index+1} failed! Reason: {response_or_failure.getErrorMessage()}")
+
+        # Крок 2: Атомарно оновлюємо глобальний кеш
         with CACHE_LOCK:
             SYMBOL_DATA_CACHE.clear()
-            for index, (success, response_or_failure) in enumerate(results):
-                if success:
-                    details = ProtoOASymbolByIdRes.FromString(response_or_failure.payload)
-                    logger.info(f"DIAGNOSTIC: Chunk {index+1} successful. Received {len(details.symbol)} symbol details.")
-                    for symbol in details.symbol:
-                        if hasattr(symbol, 'symbolName') and symbol.symbolName:
-                            SYMBOL_DATA_CACHE[symbol.symbolName] = {'symbolId': symbol.symbolId, 'digits': symbol.digits}
-                else:
-                    # ЦЕЙ ЛОГ ПОКАЖЕ НАМ ПРИХОВАНУ ПОМИЛКУ
-                    logger.error(f"DIAGNOSTIC: Chunk {index+1} failed! Reason: {response_or_failure.getErrorMessage()}")
+            SYMBOL_DATA_CACHE.update(temp_cache)
+        
         logger.info(f"✅ Symbol cache populated. Total symbols: {len(SYMBOL_DATA_CACHE)}")
 
     d.addCallbacks(on_symbols_listed, on_error)
 
-# --- Klein Web Server Routes (без змін) ---
+# --- Klein Web Server Routes ---
 @web_app.route("/webhook", methods=["POST"])
 def webhook(request):
     try:
@@ -131,6 +133,8 @@ def health_check(request):
 
 @web_app.route("/")
 def root(request):
+    # --- ЗМІНЕНО: Додано заголовок для правильного відображення UTF-8 символів ---
+    request.setHeader("Content-Type", "text/plain; charset=utf-8")
     status = "authorized" if is_ctrader_authorized else "connecting..."
     return f"✅ ZigZag Bot. cTrader Status: {status}. Symbols in cache: {len(SYMBOL_DATA_CACHE)}"
 
