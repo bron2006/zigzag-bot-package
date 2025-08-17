@@ -52,20 +52,16 @@ def disconnected(client: Client, reason):
 def on_error(failure):
     logger.error(f"❌ A cTrader deferred error occurred: {failure.getErrorMessage()}")
 
-# --- ЗМІНЕНО: Повернено логіку до правильного стану ---
 def message_received(client: Client, message: ProtoMessage):
     global is_ctrader_authorized
     if message.payloadType == ProtoOAApplicationAuthRes().payloadType:
         logger.info("✅ Application authorized. Authorizing account...")
         request = ProtoOAAccountAuthReq(ctidTraderAccountId=DEMO_ACCOUNT_ID, accessToken=CTRADER_ACCESS_TOKEN)
         client.send(request)
-
     elif message.payloadType == ProtoOAAccountAuthRes().payloadType:
         is_ctrader_authorized = True
         logger.info(f"✅ Account {DEMO_ACCOUNT_ID} authorized successfully. Populating symbol cache...")
-        # ПРАВИЛЬНИЙ ТРИГЕР: викликаємо завантаження символів ВІДРАЗУ після авторизації.
         populate_symbol_cache()
-
     elif message.payloadType == ProtoOAErrorRes().payloadType:
         error_res = ProtoOAErrorRes.FromString(message.payload)
         logger.error(f"❌ cTrader Error: {error_res.errorCode} - {error_res.description}")
@@ -77,8 +73,6 @@ def populate_symbol_cache():
 
     def on_symbols_listed(response: ProtoMessage):
         symbols_list = ProtoOASymbolsListRes.FromString(response.payload)
-        
-        # Діагностичне логування, щоб побачити відповідь сервера
         logger.info(f"DIAGNOSTIC: Received ProtoOASymbolsListRes with {len(symbols_list.symbol)} symbols.")
 
         all_symbol_ids = [s.symbolId for s in symbols_list.symbol if s.symbolId]
@@ -94,15 +88,21 @@ def populate_symbol_cache():
         d_list = defer.DeferredList(deferred_list, consumeErrors=True)
         d_list.addCallback(on_all_details_fetched)
 
+    # --- ЗМІНЕНО: Додано розширене логування для діагностики ---
     def on_all_details_fetched(results):
+        logger.info(f"DIAGNOSTIC: Processing details for {len(results)} chunks.")
         with CACHE_LOCK:
             SYMBOL_DATA_CACHE.clear()
-            for success, response in results:
+            for index, (success, response_or_failure) in enumerate(results):
                 if success:
-                    details = ProtoOASymbolByIdRes.FromString(response.payload)
+                    details = ProtoOASymbolByIdRes.FromString(response_or_failure.payload)
+                    logger.info(f"DIAGNOSTIC: Chunk {index+1} successful. Received {len(details.symbol)} symbol details.")
                     for symbol in details.symbol:
                         if hasattr(symbol, 'symbolName') and symbol.symbolName:
                             SYMBOL_DATA_CACHE[symbol.symbolName] = {'symbolId': symbol.symbolId, 'digits': symbol.digits}
+                else:
+                    # ЦЕЙ ЛОГ ПОКАЖЕ НАМ ПРИХОВАНУ ПОМИЛКУ
+                    logger.error(f"DIAGNOSTIC: Chunk {index+1} failed! Reason: {response_or_failure.getErrorMessage()}")
         logger.info(f"✅ Symbol cache populated. Total symbols: {len(SYMBOL_DATA_CACHE)}")
 
     d.addCallbacks(on_symbols_listed, on_error)
