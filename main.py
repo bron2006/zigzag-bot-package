@@ -41,7 +41,7 @@ PORT = 5035
 CLIENT_ID = os.getenv("CT_CLIENT_ID")
 CLIENT_SECRET = os.getenv("CT_CLIENT_SECRET")
 ACCESS_TOKEN = os.getenv("CTRADER_ACCESS_TOKEN")
-ACCOUNT_ID = int(os.getenv("DEMO_ACCOUNT_ID", 44186144))  # Твій реальний ID
+ACCOUNT_ID = int(os.getenv("DEMO_ACCOUNT_ID", 44186144))  # Твій акаунт
 APP_PORT = int(os.getenv("PORT", 8080))
 APP_NAME = os.getenv("FLY_APP_NAME", "zigzag-bot-package")
 
@@ -107,6 +107,8 @@ class CTraderService:
         self._is_authorized = False
         if self._ready_deferred:
             self._ready_deferred = None
+        # 🔁 Автоматичне перепідключення через 3 секунди
+        reactor.callLater(3, self.connect)
 
     def _on_connection_failed(self, reason):
         logger.error(f"❌ Помилка підключення: {reason.getErrorMessage()}")
@@ -126,10 +128,7 @@ class CTraderService:
             self._is_authorized = True
             logger.info(f"✅ Акаунт {ACCOUNT_ID} авторизовано.")
             self._populate_symbol_cache()
-
-            # 🔁 Додаємо keep-alive кожні 30 сек
-            self._start_keep_alive()
-
+            self._start_keep_alive()  # 🔴 Запускаємо keep-alive
             if self._ready_deferred:
                 self._ready_deferred.callback(None)
                 self._ready_deferred = None
@@ -148,13 +147,12 @@ class CTraderService:
         def send_ping():
             if self._protocol and self._is_authorized:
                 try:
-                    # Надсилаємо пусте повідомлення як ping
                     self._protocol.send(ProtoMessage())
                 except Exception as e:
                     logger.warning(f"⚠️ Ping не відправився: {e}")
             if self._is_authorized:
-                reactor.callLater(30, send_ping)  # Кожні 30 сек
-        reactor.callLater(30, send_ping)
+                reactor.callLater(25, send_ping)  # Кожні 25 сек
+        reactor.callLater(25, send_ping)
 
     def _populate_symbol_cache(self):
         def on_symbols_listed(response):
@@ -233,7 +231,7 @@ def webhook(request):
 
 def _get_user_id_from_request(req):
     init_data = req.args.get(b"initData", [b""])[0].decode()
-    if not init_data:
+    if not init_
         return None
     try:
         user_json_str = parse_qs(unquote(init_data)).get("user", [None])[0]

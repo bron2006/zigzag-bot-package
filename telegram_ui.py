@@ -91,7 +91,7 @@ def start(update: Update, context: CallbackContext):
 
 def menu_command(update: Update, context: CallbackContext):
     chat_id = update.message.chat_id
-    if 'last_menu_id' in context.user_data:
+    if 'last_menu_id' in context.user_
         try:
             context.bot.delete_message(chat_id=chat_id, message_id=context.user_data['last_menu_id'])
         except BadRequest:
@@ -150,7 +150,7 @@ def button_handler(update: Update, context: CallbackContext):
         parts = data.split('_')
         asset, ticker_safe, display_safe, chunk_index = parts[1], parts[2], parts[3], int(parts[4])
         analysis_data = context.user_data.get(f"analysis_{ticker_safe}")
-        if not analysis_data:
+        if not analysis_
             return query.answer("Дані застаріли, оновіть сигнал.", show_alert=True)
         reasons = "\n".join([f"• _{r}_" for r in analysis_data.get('reasons', [])]) or "_Немає виражених факторів._"
         support = f"{analysis_data.get('support'):.5f}" if analysis_data.get('support') else "N/A"
@@ -177,7 +177,7 @@ def button_handler(update: Update, context: CallbackContext):
 
 
 def _send_analysis_result(context, query, analysis_data, ticker_safe, display, asset, chunk_index, user_id):
-    if "error" in analysis_data:
+    if "error" in analysis_
         msg = f"❌ Помилка для {display}: {analysis_data['error']}"
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Назад до списку", callback_data=_get_back_callback(asset, display, chunk_index))]])
         try:
