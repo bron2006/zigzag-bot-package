@@ -7,9 +7,9 @@ app = "zigzag-bot-package"
 [http_service]
   internal_port = 8080
   force_https = true
-  auto_stop_machines = false # ВИПРАВЛЕНО: Забороняємо авто-зупинку
+  auto_stop_machines = false   # не даємо авто-зупинку
   auto_start_machines = true
-  min_machines_running = 1   # ВИПРАВЛЕНО: Гарантуємо, що 1 машина завжди працює
+  min_machines_running = 1     # завжди тримаємо 1 машину
   processes = ["app"]
 
   [[http_service.checks]]
@@ -17,12 +17,12 @@ app = "zigzag-bot-package"
     timeout = "10s"
     method = "GET"
     path = "/health"
-    grace_period = "180s" # ВИПРАВЛЕНО: Збільшено час на запуск до 3 хвилин
+    grace_period = "180s"      # даємо до 3 хв на старт
 
 [[vm]]
   cpu_kind = "shared"
   cpus = 1
-  memory_mb = 512
+  memory_mb = 512              # безкоштовний тариф (shared-cpu, 512 МБ)
 
 [experimental]
   auto_rollback = true
