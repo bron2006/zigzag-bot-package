@@ -2,7 +2,7 @@
 python-telegram-bot==21.0.1
 python-dotenv==1.0.1
 klein
-Twisted
+Twisted[asyncio]
 pandas==2.1.4
 pandas-ta
 protobuf==4.25.0

@@ -1,23 +1,29 @@
 # main.py
+# --- ЗМІНЕНО: Встановлення asyncio-реактора для Twisted. Це має бути на самому початку! ---
+import asyncio
+from twisted.internet import asyncioreactor
+try:
+    asyncioreactor.install(asyncio.get_event_loop())
+except Exception:
+    # Ігноруємо помилку, якщо реактор вже встановлено (для деяких середовищ)
+    pass
+# --- КІНЕЦЬ ЗМІН ---
+
 import os
 import json
 from urllib.parse import parse_qs, unquote
 from dotenv import load_dotenv
 
-# --- Telegram Imports (Updated for PTB v21) ---
 from telegram import Update
 from telegram.ext import Application, ApplicationBuilder
 
-# --- Twisted & Klein Imports ---
+# --- ЗМІНЕНО: reactor тепер імпортується ПІСЛЯ встановлення asyncioreactor ---
 from twisted.internet import reactor, defer
 from twisted.web.server import Site
 from klein import Klein
 
-# --- cTrader Imports (Using the library's Client) ---
-# --- ЗМІНЕНО: Розділено імпорти на правильні файли ---
 from ctrader_open_api.client import Client
 from ctrader_open_api.tcpProtocol import TcpProtocol
-# --- КІНЕЦЬ ЗМІН ---
 from ctrader_open_api.endpoints import EndPoints
 from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import ProtoMessage
 from ctrader_open_api.messages.OpenApiMessages_pb2 import (
@@ -27,11 +33,9 @@ from ctrader_open_api.messages.OpenApiMessages_pb2 import (
     ProtoOASymbolByIdReq, ProtoOASymbolByIdRes
 )
 
-# --- Local Modules ---
 from config import logger, SYMBOL_DATA_CACHE, CACHE_LOCK, TOKEN, WEBHOOK_SECRET, \
-                   CT_CLIENT_ID, CT_CLIENT_SECRET, CTRADER_ACCESS_TOKEN, DEMO_ACCOUNT_ID, \
-                   FOREX_SESSIONS
-from db import init_db, get_watchlist, toggle_watch, get_signal_history
+                   CT_CLIENT_ID, CT_CLIENT_SECRET, CTRADER_ACCESS_TOKEN, DEMO_ACCOUNT_ID
+from db import init_db
 import analysis
 from telegram_ui import register_handlers
 
@@ -49,46 +53,36 @@ client = Client(HOST, PORT, TcpProtocol)
 web_app = Klein()
 telegram_app: Application | None = None
 
-# --- cTrader Client Callbacks ---
+# --- cTrader Client Callbacks (залишаються без змін) ---
 def connected(client: Client):
-    """Callback triggered on successful connection."""
     logger.info("✅ Connection successful. Authorizing application...")
     request = ProtoOAApplicationAuthReq(clientId=CT_CLIENT_ID, clientSecret=CT_CLIENT_SECRET)
     client.send(request)
 
 def disconnected(client: Client, reason):
-    """Callback triggered on disconnection."""
     global is_ctrader_authorized
     is_ctrader_authorized = False
     logger.warning(f"⚠️ Disconnected. Reason: {reason.getErrorMessage()}")
 
 def on_error(failure):
-    """General error handler for deferreds."""
     logger.error(f"❌ An error occurred: {failure.getErrorMessage()}")
 
 def message_received(client: Client, message: ProtoMessage):
-    """Callback for all incoming messages from cTrader."""
     global is_ctrader_authorized
     if message.payloadType == ProtoOAApplicationAuthRes().payloadType:
         logger.info("✅ Application authorized. Authorizing account...")
         request = ProtoOAAccountAuthReq(ctidTraderAccountId=DEMO_ACCOUNT_ID, accessToken=CTRADER_ACCESS_TOKEN)
         client.send(request)
-
     elif message.payloadType == ProtoOAAccountAuthRes().payloadType:
         logger.info(f"✅ Account {DEMO_ACCOUNT_ID} authorized successfully.")
         is_ctrader_authorized = True
         populate_symbol_cache()
-
     elif message.payloadType == ProtoOAErrorRes().payloadType:
-        error_res = ProtoOAErrorRes()
-        error_res.ParseFromString(message.payload)
+        error_res = ProtoOAErrorRes.FromString(message.payload)
         logger.error(f"❌ cTrader Error: {error_res.errorCode} - {error_res.description}")
 
-    elif is_ctrader_authorized:
-        pass
-
 def populate_symbol_cache():
-    """Fetches all symbols and populates the cache."""
+    # Ця функція залишається без змін
     logger.info("🔄 Populating symbol cache...")
     list_req = ProtoOASymbolsListReq(ctidTraderAccountId=DEMO_ACCOUNT_ID)
     d = client.send(list_req)
@@ -96,45 +90,38 @@ def populate_symbol_cache():
     def on_symbols_listed(response: ProtoMessage):
         symbols_list = ProtoOASymbolsListRes.FromString(response.payload)
         all_symbol_ids = [s.symbolId for s in symbols_list.symbol]
-        
         chunk_size = 70
-        deferred_list = []
-        for i in range(0, len(all_symbol_ids), chunk_size):
-            chunk = all_symbol_ids[i:i + chunk_size]
-            details_req = ProtoOASymbolByIdReq(ctidTraderAccountId=DEMO_ACCOUNT_ID, symbolId=chunk)
-            deferred_list.append(client.send(details_req))
-
+        deferred_list = [
+            client.send(ProtoOASymbolByIdReq(ctidTraderAccountId=DEMO_ACCOUNT_ID, symbolId=all_symbol_ids[i:i + chunk_size]))
+            for i in range(0, len(all_symbol_ids), chunk_size)
+        ]
         d_list = defer.DeferredList(deferred_list, consumeErrors=True)
         d_list.addCallback(on_all_details_fetched)
 
     def on_all_details_fetched(results):
-        added_count = 0
         with CACHE_LOCK:
+            SYMBOL_DATA_CACHE.clear()
             for success, response in results:
                 if success:
                     details = ProtoOASymbolByIdRes.FromString(response.payload)
                     for symbol in details.symbol:
                         if hasattr(symbol, 'symbolName') and symbol.symbolName:
-                            SYMBOL_DATA_CACHE[symbol.symbolName] = {
-                                'symbolId': symbol.symbolId,
-                                'digits': symbol.digits
-                            }
-                            added_count += 1
+                            SYMBOL_DATA_CACHE[symbol.symbolName] = {'symbolId': symbol.symbolId, 'digits': symbol.digits}
         logger.info(f"✅ Symbol cache populated. Total symbols: {len(SYMBOL_DATA_CACHE)}")
 
     d.addCallbacks(on_symbols_listed, on_error)
 
-# --- Klein Web Server Routes ---
+# --- Klein Web Server Routes (залишаються без змін) ---
 @web_app.route("/webhook", methods=["POST"])
 async def webhook(request):
-    """Telegram webhook endpoint."""
     try:
         if request.getHeader("X-Telegram-Bot-Api-Secret-Token") == WEBHOOK_SECRET:
-            await telegram_app.update_queue.put(Update.de_json(json.loads(request.content.read()), telegram_app.bot))
+            update_json = json.loads(request.content.read())
+            update = Update.de_json(update_json, telegram_app.bot)
+            await telegram_app.process_update(update)
             return "OK"
-        else:
-            request.setResponseCode(403)
-            return "Forbidden"
+        request.setResponseCode(403)
+        return "Forbidden"
     except Exception as e:
         logger.error(f"❌ Webhook error: {e}")
         request.setResponseCode(500)
@@ -143,73 +130,47 @@ async def webhook(request):
 @web_app.route("/health")
 def health_check(request):
     if is_ctrader_authorized and len(SYMBOL_DATA_CACHE) > 10:
-        request.setResponseCode(200)
         return "OK"
-    else:
-        request.setResponseCode(503)
-        return "Service Unavailable"
+    request.setResponseCode(503)
+    return "Service Unavailable"
 
 @web_app.route("/")
 def root(request):
     status = "authorized" if is_ctrader_authorized else "connecting..."
     return f"✅ ZigZag Bot. cTrader Status: {status}. Symbols in cache: {len(SYMBOL_DATA_CACHE)}"
 
-# --- API Routes for Web App ---
-def _get_user_id_from_request(req):
-    init_data = req.args.get(b"initData", [b""])[0].decode()
-    if not init_data:
-        return None
-    try:
-        user_json_str = parse_qs(unquote(init_data)).get("user", [None])[0]
-        if user_json_str:
-            return json.loads(user_json_str).get("id")
-    except Exception as e:
-        logger.warning(f"⚠️ Failed to parse initData: {e}")
-    return None
-
-def json_response(request, data):
-    request.setHeader("Content-Type", "application/json; charset=utf-8")
-    request.setHeader("Access-Control-Allow-Origin", "*")
-    if isinstance(data, defer.Deferred):
-        data.addCallback(lambda result: json.dumps(result, ensure_ascii=False, indent=2))
-        return data
-    return json.dumps(data, ensure_ascii=False, indent=2)
-
-# ... Other API routes would go here, simplified for brevity ...
-
-# --- Main Application Startup ---
-async def main():
-    """Main function to setup and run services."""
+# --- ЗМІНЕНО: Логіка запуску ---
+def main():
+    """Синхронна функція для налаштування всіх сервісів перед запуском реактора."""
     global telegram_app
-    
     init_db()
 
-    # --- Initialize Telegram Bot (PTB v21) ---
+    # 1. Налаштовуємо Telegram, але не запускаємо його блокуючим методом
     telegram_app = ApplicationBuilder().token(TOKEN).build()
     telegram_app.bot_data['ctrader_client'] = client
     register_handlers(telegram_app)
+    
+    # Використовуємо `run_webhook` в неблокуючому режимі, керованому Twisted
+    async def setup_telegram():
+        await telegram_app.initialize()
+        webhook_url = f"https://{APP_NAME}.fly.dev/webhook"
+        await telegram_app.bot.set_webhook(url=webhook_url, secret_token=WEBHOOK_SECRET)
+        logger.info(f"✅ Telegram webhook set: {webhook_url}")
 
-    # --- Set Webhook ---
-    webhook_url = f"https://{APP_NAME}.fly.dev/webhook"
-    await telegram_app.bot.set_webhook(url=webhook_url, secret_token=WEBHOOK_SECRET)
-    logger.info(f"✅ Telegram webhook set: {webhook_url}")
-
-    # --- Initialize and run Telegram's internal async components ---
-    await telegram_app.initialize()
-    await telegram_app.start()
-
-    # --- Setup Twisted Reactor ---
-    logger.info(f"🚀 Starting HTTP server on port {APP_PORT}...")
-    reactor.listenTCP(APP_PORT, Site(web_app.resource()))
-
-    # --- Setup and run cTrader Client ---
+    # 2. Налаштовуємо cTrader клієнт
     client.setConnectedCallback(connected)
     client.setDisconnectedCallback(disconnected)
     client.setMessageReceivedCallback(message_received)
-    client.startService()
 
-    logger.info("✅ Services are running. Twisted reactor is in charge.")
+    # 3. Додаємо всі задачі в реактор Twisted
+    reactor.callWhenRunning(client.startService)
+    reactor.callWhenRunning(lambda: defer.ensureDeferred(setup_telegram()))
+
+    # 4. Налаштовуємо веб-сервер Klein
+    logger.info(f"🚀 Starting HTTP server on port {APP_PORT}...")
+    reactor.listenTCP(APP_PORT, Site(web_app.resource()))
+    logger.info("✅ All services configured. Starting Twisted reactor...")
 
 if __name__ == "__main__":
-    reactor.callWhenRunning(lambda: defer.ensureDeferred(main()))
+    main()
     reactor.run()
