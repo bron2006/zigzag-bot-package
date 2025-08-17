@@ -2,8 +2,9 @@
 import pandas as pd
 import pandas_ta as ta
 import numpy as np
+from concurrent.futures import ThreadPoolExecutor
 import time
-from twisted.internet import reactor
+from twisted.internet import threads
 
 from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOATrendbarPeriod as TrendbarPeriod
 from db import add_signal_to_history
@@ -16,15 +17,11 @@ def get_market_data(ctrader_service, pair, tf, limit=300):
 
     symbol_details = SYMBOL_DATA_CACHE.get(pair)
     if not symbol_details:
-        d = reactor.defer.Deferred()
-        d.errback(Exception(f"Деталі для символу {pair} не знайдено в кеші."))
-        return d
+        raise Exception(f"Деталі для символу {pair} не знайдено в кеші.")
 
     tf_map = {"15min": TrendbarPeriod.M15, "1h": TrendbarPeriod.H1, "4h": TrendbarPeriod.H4, "1day": TrendbarPeriod.D1}
     if tf not in tf_map:
-        d = reactor.defer.Deferred()
-        d.errback(Exception(f"Непідтримуваний таймфрейм: {tf}"))
-        return d
+        raise Exception(f"Непідтримуваний таймфрейм: {tf}")
 
     now = int(time.time() * 1000)
     seconds_per_bar = {'15min': 900, '1h': 3600, '4h': 14400, '1day': 86400}
@@ -39,7 +36,7 @@ def get_market_data(ctrader_service, pair, tf, limit=300):
 
     def process_response(response):
         trendbars_response = response
-        if not getattr(trendbars_response, 'trendbar', None):
+        if not trendbars_response.trendbar:
             return pd.DataFrame()
         
         divisor = 10**symbol_details['digits']
