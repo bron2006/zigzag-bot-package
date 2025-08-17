@@ -1,10 +1,9 @@
-# main.py (ОНОВЛЕНО)
+# main.py
 import os
 import json
 from urllib.parse import parse_qs, unquote
 import threading
 import asyncio
-import traceback
 
 from twisted.internet import reactor, ssl, endpoints
 from twisted.internet.protocol import ClientFactory
@@ -26,8 +25,8 @@ from config import logger, FOREX_SESSIONS, SYMBOL_DATA_CACHE, CACHE_LOCK, get_te
 from db import init_db, get_watchlist, toggle_watch, get_signal_history
 import analysis
 
-# Telegram (v20)
-from telegram.ext import Application
+# telegram UI uses HTTP calls (requests) to our own web endpoints to avoid twisted deferred blocking
+from telegram.ext import Application  # v20
 import telegram_ui
 
 HOST = "demo.ctraderapi.com"
@@ -62,7 +61,7 @@ class CTraderService:
         try:
             ctxFactory = ssl.optionsForClientTLS(hostname=HOST)
             reactor.connectSSL(HOST, PORT, CTraderFactory(self), ctxFactory)
-        except Exception as e:
+        except Exception:
             logger.exception("Не вдалося запустити SSL підключення до cTrader:")
 
     def _on_connected(self, protocol):
@@ -167,7 +166,6 @@ def json_response(request, data):
     request.setHeader('Access-Control-Allow-Origin', '*')
     return json.dumps(data, ensure_ascii=False)
 
-# ЛОГУЄМО кожен вхідний запит у кінці ендпоінта для діагностики
 @app.route('/health')
 def health_check(request):
     logger.info("HTTP /health called")
@@ -270,7 +268,7 @@ def start_telegram_bot():
         logger.warning("TELEGRAM token не встановлено — Telegram бот не запущено.")
         return
 
-    # ВАЖЛИВО: створюємо та встановлюємо asyncio loop у цьому потоці
+    # створюємо asyncio loop у цьому потоці
     try:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
