@@ -4,6 +4,10 @@ import json
 from urllib.parse import parse_qs, unquote
 from dotenv import load_dotenv
 
+# --- TELEGRAM ІМПОРТИ ---
+from telegram import Update
+from telegram.ext import CallbackContext
+
 from twisted.internet import reactor, ssl
 from twisted.internet.protocol import ClientFactory
 from twisted.web.static import File
@@ -19,9 +23,11 @@ from ctrader_open_api.messages.OpenApiMessages_pb2 import (
     ProtoOAGetTrendbarsReq, ProtoOAGetTrendbarsRes
 )
 
-from config import logger, FOREX_SESSIONS, SYMBOL_DATA_CACHE, CACHE_LOCK
+# --- ІМПОРТИ ДЛЯ БОТА ---
+from config import logger, FOREX_SESSIONS, SYMBOL_DATA_CACHE, CACHE_LOCK, bot, dp, WEBHOOK_SECRET
 from db import init_db, get_watchlist, toggle_watch, get_signal_history
 import analysis
+from telegram_ui import register_handlers
 
 load_dotenv()
 HOST = "demo.ctraderapi.com"
@@ -31,6 +37,7 @@ CLIENT_SECRET = os.getenv("CT_CLIENT_SECRET")
 ACCESS_TOKEN = os.getenv("CTRADER_ACCESS_TOKEN")
 ACCOUNT_ID = int(os.getenv("DEMO_ACCOUNT_ID", 9541520))
 APP_PORT = int(os.getenv("PORT", 8080))
+APP_NAME = os.getenv("FLY_APP_NAME", "zigzag-bot-package") # Додано для URL вебхука
 
 class CTraderProtocol(TcpProtocol, Protobuf):
     def __init__(self, service):
@@ -71,7 +78,6 @@ class CTraderService:
         self._protocol = None; self._is_authorized = False
 
     def _message_received(self, message):
-        # --- ДІАГНОСТИКА: Логуємо тип КОЖНОГО вхідного повідомлення від cTrader ---
         logger.info(f"Received cTrader message: {type(message).__name__}")
 
         if isinstance(message, ProtoOAApplicationAuthRes):
@@ -83,7 +89,6 @@ class CTraderService:
             logger.info(f"Авторизація акаунту {ACCOUNT_ID} успішна.")
             self._populate_symbol_cache()
         elif isinstance(message, ProtoOAErrorRes):
-            # --- ДІАГНОСТИКА: Логуємо деталі помилки ---
             logger.error(f"Помилка cTrader: {message.errorCode}. Опис: {message.description}")
         elif self._protocol:
             self._protocol.handle_response(message)
@@ -132,6 +137,21 @@ class CTraderService:
 
 app = Klein()
 ctrader = CTraderService()
+
+# --- ЛОГІКА TELEGRAM БОТА ---
+@app.route(f"/webhook", methods=['POST'])
+def webhook(request):
+    try:
+        if request.getHeader('X-Telegram-Bot-Api-Secret-Token') == WEBHOOK_SECRET:
+            update = Update.de_json(json.loads(request.content.read()), bot)
+            dp.process_update(update)
+            return "OK"
+        else:
+            logger.warning("Invalid webhook secret token received.")
+            return "Forbidden", 403
+    except Exception as e:
+        logger.error(f"Error processing webhook: {e}")
+        return "Error", 500
 
 def _get_user_id_from_request(req):
     init_data = req.args.get(b"initData", [b""])[0].decode()
@@ -195,7 +215,7 @@ def api_signal(request):
     return d
 
 @app.route('/api/get_mta')
-def api_get_mta(request):
+def api_get_mта(request):
     pair = request.args.get(b"pair", [b""])[0].decode()
     if not SYMBOL_DATA_CACHE:
         return json_response(request, {"error": "Сервіс ще завантажує дані, спробуйте за хвилину."})
@@ -218,10 +238,19 @@ from twisted.web.server import Site
 
 if __name__ == "__main__":
     init_db()
+
+    # --- ЗАПУСК TELEGRAM БОТА ---
+    WEBHOOK_URL = f"https://{APP_NAME}.fly.dev/webhook"
+    bot.set_webhook(url=WEBHOOK_URL, secret_token=WEBHOOK_SECRET).result()
+    register_handlers(dp)
+    logger.info(f"Telegram webhook встановлено на {WEBHOOK_URL}")
+
+    # --- ЗАПУСК ВЕБ-СЕРВЕРА ТА CTRADER СЕРВІСУ ---
     endpoint_str = f"tcp:port={APP_PORT}:interface=0.0.0.0"
     endpoint = endpoints.serverFromString(reactor, endpoint_str)
     endpoint.listen(Site(app.resource()))
     
     reactor.callWhenRunning(ctrader.connect)
     
+    logger.info("Сервер запущено...")
     reactor.run()
