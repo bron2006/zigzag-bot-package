@@ -216,7 +216,7 @@ def webhook(request):
 
 def _get_user_id_from_request(req):
     init_data = req.args.get(b"initData", [b""])[0].decode()
-    if not init_
+    if not init_data:
         return None
     try:
         user_json_str = parse_qs(unquote(init_data)).get("user", [None])[0]
