@@ -7,7 +7,8 @@ from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import CallbackContext
 
-from twisted.internet import reactor, ssl
+# --- ВИПРАВЛЕННЯ: Додано 'defer' для механізму очікування ---
+from twisted.internet import reactor, ssl, defer
 from twisted.internet.protocol import ClientFactory
 from twisted.web.static import File
 from klein import Klein
@@ -48,7 +49,13 @@ class CTraderProtocol(TcpProtocol, Protobuf):
 class CTraderService:
     def __init__(self):
         self._protocol = None
-        self._is_authorized = False
+        self._is_ready = False
+        # --- ВИПРАВЛЕННЯ: Створюємо "обіцянку" готовності сервісу ---
+        self._ready_deferred = defer.Deferred()
+
+    def when_ready(self):
+        """Повертає Deferred, який буде виконано, коли сервіс буде готовий."""
+        return self._ready_deferred
 
     def connect(self):
         class CTraderFactory(ClientFactory):
@@ -56,10 +63,10 @@ class CTraderService:
             def buildProtocol(self, addr): return CTraderProtocol(self.service)
             def clientConnectionFailed(self, connector, reason): self.service._on_connection_failed(reason)
         
-        if not reactor.running:
-            logger.info("Запуск реактора Twisted та ініціація SSL-підключення...")
-            ctxFactory = ssl.optionsForClientTLS(hostname=HOST)
-            reactor.connectSSL(HOST, PORT, CTraderFactory(self), ctxFactory)
+        # --- ВИПРАВЛЕННЯ: Прибрано помилкову умову 'if not reactor.running' ---
+        logger.info("Ініціація SSL-підключення до cTrader...")
+        ctxFactory = ssl.optionsForClientTLS(hostname=HOST)
+        reactor.connectSSL(HOST, PORT, CTraderFactory(self), ctxFactory)
             
     def _on_connected(self, protocol):
         self._protocol = protocol
@@ -69,11 +76,14 @@ class CTraderService:
 
     def _on_disconnected(self, reason):
         logger.warning(f"З'єднання втрачено: {reason.getErrorMessage()}")
-        self._protocol = None; self._is_authorized = False
+        self._protocol = None; self._is_ready = False
     
     def _on_connection_failed(self, reason):
         logger.error(f"Не вдалося підключитися: {reason.getErrorMessage()}")
-        self._protocol = None; self._is_authorized = False
+        self._protocol = None; self._is_ready = False
+        # --- ВИПРАВЛЕННЯ: Повідомляємо про помилку, якщо сервіс очікував на готовність ---
+        if not self._ready_deferred.called:
+            self._ready_deferred.errback(reason)
 
     def _message_received(self, message):
         logger.info(f"Received cTrader message: {type(message).__name__}")
@@ -83,13 +93,13 @@ class CTraderService:
             request = ProtoOAAccountAuthReq(ctidTraderAccountId=ACCOUNT_ID, accessToken=ACCESS_TOKEN)
             self._protocol.send(request)
         elif isinstance(message, ProtoOAAccountAuthRes):
-            self._is_authorized = True
+            self._is_ready = True
             logger.info(f"Авторизація акаунту {ACCOUNT_ID} успішна.")
             self._populate_symbol_cache()
         elif isinstance(message, ProtoOAErrorRes):
             logger.error(f"Помилка cTrader: {message.errorCode}. Опис: {message.description}")
-        elif self._protocol:
-            self._protocol.handle_response(message)
+            if not self._ready_deferred.called:
+                self._ready_deferred.errback(Exception(f"{message.errorCode}: {message.description}"))
 
     def _populate_symbol_cache(self):
         def on_symbols_listed(response):
@@ -104,9 +114,11 @@ class CTraderService:
                     with CACHE_LOCK:
                         for symbol in details.symbol:
                             if hasattr(symbol, 'symbolName') and symbol.symbolName:
-                                logger.info(f"Adding to cache: {symbol.symbolName}")
                                 SYMBOL_DATA_CACHE[symbol.symbolName] = {'symbolId': symbol.symbolId, 'digits': symbol.digits}
                     logger.info(f"Кеш символів cTrader тепер містить {len(SYMBOL_DATA_CACHE)} елементів.")
+                    # --- ВИПРАВЛЕННЯ: Повідомляємо, що сервіс готовий до роботи ---
+                    if not self._ready_deferred.called:
+                        self._ready_deferred.callback(self)
 
                 chunk_size = 70
                 for i in range(0, len(all_symbol_ids), chunk_size):
@@ -120,22 +132,8 @@ class CTraderService:
         d = self.send_request(ProtoOASymbolsListReq(ctidTraderAccountId=ACCOUNT_ID))
         d.addCallback(on_symbols_listed)
 
-    def send_request(self, request, timeout=30):
-        if not self._protocol:
-            d = reactor.defer.Deferred()
-            d.errback(Exception("Сервіс не підключений."))
-            return d
-        return self._protocol.send(request, timeout=timeout)
-    
-    def get_trendbars(self, symbol_id, period, from_timestamp, to_timestamp):
-        req = ProtoOAGetTrendbarsReq(ctidTraderAccountId=ACCOUNT_ID, symbolId=symbol_id, period=period, fromTimestamp=from_timestamp, toTimestamp=to_timestamp)
-        d = self.send_request(req)
-        d.addCallback(lambda response: ProtoOAGetTrendbarsRes.FromString(response.payload))
-        return d
-
 app = Klein()
 ctrader = CTraderService()
-# --- ВИПРАВЛЕННЯ: Додаємо cTrader сервіс в контекст бота ---
 dp.bot_data['ctrader_service'] = ctrader
 
 @app.route(f"/webhook", methods=['POST'])
@@ -152,15 +150,6 @@ def webhook(request):
         logger.error(f"Error processing webhook: {e}")
         return "Error", 500
 
-def _get_user_id_from_request(req):
-    init_data = req.args.get(b"initData", [b""])[0].decode()
-    if not init_data: return None
-    try:
-        user_json_str = parse_qs(unquote(init_data)).get("user", [None])[0]
-        if user_json_str: return json.loads(user_json_str).get("id")
-    except Exception as e: logger.warning(f"Не вдалося розпарсити initData: {e}")
-    return None
-
 def json_response(request, data):
     request.setHeader('Content-Type', 'application/json; charset=utf-8')
     request.setHeader('Access-Control-Allow-Origin', '*')
@@ -176,6 +165,7 @@ def root(request):
     request.setResponseCode(200)
     return "Bot is running. Use /webhook for Telegram."
 
+# --- ВИПРАВЛЕННЯ: Всі ендпоінти тепер чекають на готовність cTrader ---
 @app.route('/api/get_ranked_pairs')
 def api_get_ranked_pairs(request):
     user_id = _get_user_id_from_request(request)
@@ -208,14 +198,13 @@ def api_signal_history(request):
 def api_signal(request):
     pair = request.args.get(b"pair", [b""])[0].decode()
     user_id = _get_user_id_from_request(request)
-    if not SYMBOL_DATA_CACHE:
-        return json_response(request, {"error": "Сервіс ще завантажує дані, спробуйте за хвилину."})
-    
+
     def on_error(failure):
         logger.error(f"Error in api_signal for pair '{pair}': {failure.value}")
         return json_response(request, {"error": str(failure.value)})
 
-    d = reactor.defer.maybeDeferred(analysis.get_api_detailed_signal_data, ctrader, pair, user_id)
+    d = ctrader.when_ready()
+    d.addCallback(lambda _: analysis.get_api_detailed_signal_data(ctrader, pair, user_id))
     d.addCallback(lambda data: json_response(request, data))
     d.addErrback(on_error)
     return d
@@ -223,14 +212,13 @@ def api_signal(request):
 @app.route('/api/get_mta')
 def api_get_mta(request):
     pair = request.args.get(b"pair", [b""])[0].decode()
-    if not SYMBOL_DATA_CACHE:
-        return json_response(request, {"error": "Сервіс ще завантажує дані, спробуйте за хвилину."})
-
+    
     def on_error(failure):
         logger.error(f"Error in api_get_mta for pair '{pair}': {failure.value}")
         return json_response(request, {"error": str(failure.value)})
 
-    d = reactor.defer.maybeDeferred(analysis.get_api_mta_data, ctrader, pair)
+    d = ctrader.when_ready()
+    d.addCallback(lambda _: analysis.get_api_mta_data(ctrader, pair))
     d.addCallback(lambda data: json_response(request, data))
     d.addErrback(on_error)
     return d
