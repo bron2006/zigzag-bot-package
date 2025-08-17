@@ -1,4 +1,3 @@
-# db.py
 import sqlite3
 import time
 from config import DB_NAME
@@ -23,15 +22,6 @@ def init_db():
             bull_percentage INTEGER
         );""")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_signal_history_user_pair ON signal_history (user_id, pair);")
-
-        # --- АРХІТЕКТУРНЕ ВИПРАВЛЕННЯ: Ця таблиця більше не потрібна ---
-        # conn.execute("""
-        # CREATE TABLE IF NOT EXISTS ctrader_tokens (
-        #     telegram_user_id INTEGER PRIMARY KEY,
-        #     access_token TEXT NOT NULL,
-        #     refresh_token TEXT NOT NULL,
-        #     expires_at INTEGER NOT NULL
-        # );""")
 
 def get_watchlist(uid):
     with sqlite3.connect(DB_NAME) as conn:
@@ -63,7 +53,6 @@ def add_signal_to_history(signal_data):
             signal_data['bull_percentage']
         ))
 
-        # Обрізаємо історію, залишаючи останні 20 записів для пари
         conn.execute("""
             DELETE FROM signal_history
             WHERE id IN (
@@ -85,28 +74,4 @@ def get_signal_history(user_id, pair, limit=10):
             ORDER BY timestamp DESC
             LIMIT ?
         """, (user_id, pair, limit))
-        
         return [dict(row) for row in cursor.fetchall()]
-
-# --- АРХІТЕКТУРНЕ ВИПРАВЛЕННЯ: Ці функції більше не потрібні ---
-# def save_ctrader_token(user_id, access_token, refresh_token, expires_in):
-#     """Зберігає або оновлює токени для користувача."""
-#     expires_at = int(time.time()) + expires_in
-#     with sqlite3.connect(DB_NAME) as conn:
-#         conn.execute("""
-#             INSERT INTO ctrader_tokens (telegram_user_id, access_token, refresh_token, expires_at)
-#             VALUES (?, ?, ?, ?)
-#             ON CONFLICT(telegram_user_id) DO UPDATE SET
-#                 access_token=excluded.access_token,
-#                 refresh_token=excluded.refresh_token,
-#                 expires_at=excluded.expires_at
-#         """, (user_id, access_token, refresh_token, expires_at))
-
-# def get_ctrader_token(user_id):
-#     """Отримує токени для користувача."""
-#     with sqlite3.connect(DB_NAME) as conn:
-#         conn.row_factory = sqlite3.Row
-#         cursor = conn.cursor()
-#         cursor.execute("SELECT * FROM ctrader_tokens WHERE telegram_user_id = ?", (user_id,))
-#         row = cursor.fetchone()
-#         return dict(row) if row else None

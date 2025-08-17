@@ -1,4 +1,3 @@
-# config.py
 import os
 import logging
 from cachetools import TTLCache
@@ -31,8 +30,7 @@ dp = Dispatcher(bot, None, use_context=True, workers=0)
 
 app = Flask(__name__)
 
-# --- ДОДАНО ВІДСУТНІ ЗМІННІ ДЛЯ СУМІСНОСТІ ---
-CRYPTO_PAIRS_FULL = [] 
+CRYPTO_PAIRS_FULL = []
 STOCKS_US_SYMBOLS = []
 
 FOREX_SESSIONS = {
