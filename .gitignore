@@ -2,9 +2,7 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
-ctrader_open_api/__pycache__/
 venv/
-venv.bak/
 .venv/
 .env
 .idea/

@@ -1,3 +1,4 @@
+# db.py
 import sqlite3
 import time
 from config import DB_NAME
@@ -24,6 +25,7 @@ def init_db():
         conn.execute("CREATE INDEX IF NOT EXISTS idx_signal_history_user_pair ON signal_history (user_id, pair);")
 
 def get_watchlist(uid):
+    if uid is None: return []
     with sqlite3.connect(DB_NAME) as conn:
         rows = conn.execute("SELECT pair FROM watch WHERE user_id=?", (uid,)).fetchall()
         return [r[0] for r in rows]
@@ -74,4 +76,5 @@ def get_signal_history(user_id, pair, limit=10):
             ORDER BY timestamp DESC
             LIMIT ?
         """, (user_id, pair, limit))
+        
         return [dict(row) for row in cursor.fetchall()]
