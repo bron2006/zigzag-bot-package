@@ -16,8 +16,7 @@ from ctrader_open_api.messages.OpenApiMessages_pb2 import (
     ProtoOAApplicationAuthReq, ProtoOAApplicationAuthRes,
     ProtoOAAccountAuthReq, ProtoOAAccountAuthRes, ProtoOAErrorRes,
     ProtoOASymbolsListReq, ProtoOASymbolsListRes,
-    ProtoOASymbolByIdReq, ProtoOASymbolByIdRes,
-    ProtoOATraderRes # <-- Додано імпорт для нового тригера
+    ProtoOASymbolByIdReq, ProtoOASymbolByIdRes
 )
 
 from config import logger, SYMBOL_DATA_CACHE, CACHE_LOCK, WEBHOOK_SECRET, \
@@ -53,7 +52,7 @@ def disconnected(client: Client, reason):
 def on_error(failure):
     logger.error(f"❌ A cTrader deferred error occurred: {failure.getErrorMessage()}")
 
-# --- ЗМІНЕНО: Оновлена логіка обробки повідомлень ---
+# --- ЗМІНЕНО: Повернено логіку до правильного стану ---
 def message_received(client: Client, message: ProtoMessage):
     global is_ctrader_authorized
     if message.payloadType == ProtoOAApplicationAuthRes().payloadType:
@@ -63,12 +62,8 @@ def message_received(client: Client, message: ProtoMessage):
 
     elif message.payloadType == ProtoOAAccountAuthRes().payloadType:
         is_ctrader_authorized = True
-        logger.info(f"✅ Account {DEMO_ACCOUNT_ID} authorized. Waiting for trader data stream...")
-        # БІЛЬШЕ НЕ ВИКЛИКАЄМО populate_symbol_cache ТУТ
-
-    elif message.payloadType == ProtoOATraderRes().payloadType:
-        # ЦЕ НОВИЙ ТРИГЕР! Сервер надіслав дані про трейдера, отже він готовий до запитів.
-        logger.info("✅ Received Trader data. Connection is fully ready. Populating symbol cache...")
+        logger.info(f"✅ Account {DEMO_ACCOUNT_ID} authorized successfully. Populating symbol cache...")
+        # ПРАВИЛЬНИЙ ТРИГЕР: викликаємо завантаження символів ВІДРАЗУ після авторизації.
         populate_symbol_cache()
 
     elif message.payloadType == ProtoOAErrorRes().payloadType:
@@ -83,7 +78,7 @@ def populate_symbol_cache():
     def on_symbols_listed(response: ProtoMessage):
         symbols_list = ProtoOASymbolsListRes.FromString(response.payload)
         
-        # --- ЗМІНЕНО: Додано діагностичне логування ---
+        # Діагностичне логування, щоб побачити відповідь сервера
         logger.info(f"DIAGNOSTIC: Received ProtoOASymbolsListRes with {len(symbols_list.symbol)} symbols.")
 
         all_symbol_ids = [s.symbolId for s in symbols_list.symbol if s.symbolId]
