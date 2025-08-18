@@ -1,29 +1,19 @@
+# fly.toml
+
 app = "zigzag-bot-package"
+primary_region = "fra"
 
 [build]
   dockerfile = "Dockerfile"
 
-# --- ЗМІНЕНО: Додано секцію для змінних оточення ---
 [env]
-  # Цей рядок змушує protobuf використовувати надійну Python-реалізацію
-  # для уникнення проблем з C++ розширеннями в Docker.
   PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION = "python"
-# --- КІНЕЦЬ ЗМІН ---
-
-[http_service]
-  internal_port = 8080
-  force_https = true
-  auto_stop_machines = false
-  auto_start_machines = true
-  min_machines_running = 1
-  processes = ["app"]
-
-  [[http_service.checks]]
-    interval = "30s"
-    timeout = "10s"
-    grace_period = "180s"
-    http_path = "/health"
-    method = "GET"
+  
+# Оскільки наш додаток - це бот (фоновий процес), а не веб-сервер,
+# ми не використовуємо секцію [[http_service]].
+# Замість неї ми прямо вказуємо команду для запуску.
+[processes]
+  app = "python main.py"
 
 [[vm]]
   cpu_kind = "shared"
