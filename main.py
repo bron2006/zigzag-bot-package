@@ -7,7 +7,7 @@ from urllib.parse import parse_qs, unquote
 from klein import Klein
 from twisted.internet import reactor, defer
 from twisted.web.static import File
-from telegram import Update, KeyboardButton, WebAppInfo
+from telegram import Update
 from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, MessageHandler, Filters
 
 import state
@@ -96,24 +96,19 @@ def get_ranked_pairs(request):
         init_data = request.args.get(b'initData', [b''])[0].decode()
         user = parse_tg_init_data(init_data)
         user_id = user.get('id') if user else 'Anonymous'
-        
         logger.info(f"API: /api/get_ranked_pairs - Запит від користувача: {user_id}")
-
         watchlist = []
         if user and user.get('id'):
             watchlist = get_watchlist(user['id'])
-
         def format_pair(ticker):
             norm_ticker = ticker.replace("/", "").strip()
             return {"ticker": ticker, "active": norm_ticker in state.symbol_cache}
-
         response_data = {
             "watchlist": watchlist,
             "forex": {session: [format_pair(p) for p in pairs] for session, pairs in FOREX_SESSIONS.items()},
             "crypto": [format_pair(p) for p in CRYPTO_PAIRS_FULL],
             "stocks": [format_pair(p) for p in STOCKS_US_SYMBOLS]
         }
-        
         logger.info(f"API: /api/get_ranked_pairs - Успішно сформовано дані.")
         request.setHeader('Content-Type', 'application/json')
         request.setHeader('Access-Control-Allow-Origin', '*')
@@ -131,14 +126,11 @@ def toggle_watchlist_api(request):
     init_data = request.args.get(b'initData', [b''])[0].decode()
     pair = request.args.get(b'pair', [b''])[0].decode()
     user = parse_tg_init_data(init_data)
-
     request.setHeader('Content-Type', 'application/json')
     request.setHeader('Access-Control-Allow-Origin', '*')
-    
     if not user or not user.get('id') or not pair:
         request.setResponseCode(400)
         return json.dumps({"success": False, "error": "Invalid parameters"}).encode('utf-8')
-
     try:
         toggle_watch(user['id'], pair)
         return json.dumps({"success": True}).encode('utf-8')
@@ -153,10 +145,8 @@ def get_signal_api(request):
     init_data = request.args.get(b'initData', [b''])[0].decode()
     user = parse_tg_init_data(init_data)
     user_id = user.get('id') if user else None
-
     request.setHeader('Content-Type', 'application/json')
     request.setHeader('Access-Control-Allow-Origin', '*')
-
     if not pair:
         request.setResponseCode(400)
         return json.dumps({"error": "Pair parameter is required"}).encode('utf-8')
@@ -166,14 +156,12 @@ def get_signal_api(request):
     def on_success(result):
         request.write(json.dumps(result).encode('utf-8'))
         request.finish()
-
     def on_error(failure):
         logger.error(f"API /api/signal: Помилка: {failure.getErrorMessage()}")
         request.setResponseCode(500)
         error_response = {"error": f"Внутрішня помилка сервера при аналізі {pair}."}
         request.write(json.dumps(error_response).encode('utf-8'))
         request.finish()
-        
     d.addCallbacks(on_success, on_error)
     return defer.SUCCESS
 
@@ -182,17 +170,13 @@ def get_mta_api(request):
     pair = request.args.get(b'pair', [b''])[0].decode()
     request.setHeader('Content-Type', 'application/json')
     request.setHeader('Access-Control-Allow-Origin', '*')
-
     if not pair:
         request.setResponseCode(400)
         return json.dumps({"error": "Pair parameter is required"}).encode('utf-8')
-
     d = get_mta_signal(state.client, pair)
-    
     def on_result(result):
         request.write(json.dumps(result).encode('utf-8'))
         request.finish()
-        
     d.addBoth(on_result)
     return defer.SUCCESS
 
@@ -201,14 +185,11 @@ def get_signal_history_api(request):
     init_data = request.args.get(b'initData', [b''])[0].decode()
     pair = request.args.get(b'pair', [b''])[0].decode()
     user = parse_tg_init_data(init_data)
-
     request.setHeader('Content-Type', 'application/json')
     request.setHeader('Access-Control-Allow-Origin', '*')
-
     if not user or not user.get('id') or not pair:
         request.setResponseCode(400)
         return json.dumps([]).encode('utf-8')
-
     history = get_signal_history(user['id'], pair)
     return json.dumps(history).encode('utf-8')
 
@@ -218,23 +199,17 @@ def get_signal_history_api(request):
 def webhook_handler(request):
     try:
         body = request.content.read()
-        
         if request.getHeader("X-Telegram-Bot-Api-Secret-Token") != get_webhook_secret():
-            logger.warning("Відхилено запит до вебхука з неправильним секретним токеном.")
             request.setResponseCode(403)
             return b"Forbidden"
-
         update_data = json.loads(body.decode())
         updates_queue.put_nowait(update_data)
-        
         request.setResponseCode(200)
         return b"OK"
     except queue.Full:
-        logger.warning("Черга оновлень переповнена.")
         request.setResponseCode(503)
         return b"Busy"
     except Exception:
-        logger.exception("Некоректний запит до вебхука.")
         request.setResponseCode(400)
         return b"Bad Request"
 
