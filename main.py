@@ -33,12 +33,12 @@ PORT = EndPoints.PROTOBUF_PORT
 APP_PORT = int(os.getenv("PORT", 8080))
 APP_NAME = os.getenv("FLY_APP_NAME", "zigzag-bot-package")
 
-# --- Globals for services ---
+# --- Globals ---
 is_ctrader_authorized = False
 client = Client(HOST, PORT, TcpProtocol)
 web_app = Klein()
 
-# --- cTrader Client Callbacks ---
+# --- Callbacks ---
 def connected(client: Client):
     logger.info("✅ cTrader Client Connected. Authorizing application...")
     request = ProtoOAApplicationAuthReq(clientId=CT_CLIENT_ID, clientSecret=CT_CLIENT_SECRET)
@@ -60,7 +60,7 @@ def message_received(client: Client, message: ProtoMessage):
         client.send(request)
     elif message.payloadType == ProtoOAAccountAuthRes().payloadType:
         is_ctrader_authorized = True
-        logger.info(f"✅ Account {DEMO_ACCOUNT_ID} authorized successfully. Populating symbol cache...")
+        logger.info(f"✅ Account {DEMO_ACCOUNT_ID} authorized. Populating symbol cache...")
         populate_symbol_cache()
     elif message.payloadType == ProtoOAErrorRes().payloadType:
         error_res = ProtoOAErrorRes.FromString(message.payload)
@@ -81,19 +81,18 @@ def populate_symbol_cache():
             details_req = ProtoOASymbolByIdReq(ctidTraderAccountId=DEMO_ACCOUNT_ID, symbolId=chunk)
             return client.send(details_req)
 
-        # --- ЗМІНЕНО: Додано діагностику сирих даних ---
+        # --- ЗМІНЕНО: Додано фінальну діагностику ---
         def on_chunk_details(response: ProtoMessage):
-            # ЛОГУЄМО СИРІ БАЙТИ
-            logger.info(f"DIAGNOSTIC: Received payload for chunk. Size: {len(response.payload)} bytes.")
-            if len(response.payload) < 20: # Маленький пейлоад - ймовірно, порожній
-                 logger.info(f"DIAGNOSTIC: Payload (raw): {response.payload}")
-
             details = ProtoOASymbolByIdRes.FromString(response.payload)
+            
+            # ВИВОДИМО ПОВНИЙ ВМІСТ ПЕРШОГО СИМВОЛУ ДЛЯ АНАЛІЗУ
+            if details.symbol:
+                logger.info(f"DIAGNOSTIC: Inspecting first symbol object: {repr(details.symbol[0])}")
+
             for symbol in details.symbol:
                 if hasattr(symbol, 'symbolName') and symbol.symbolName:
                     temp_cache[symbol.symbolName] = {'symbolId': symbol.symbolId, 'digits': symbol.digits}
-            logger.info(f"DIAGNOSTIC: Parsed {len(details.symbol)} symbols. Temp cache size: {len(temp_cache)}")
-
+            
         for i in range(0, len(all_symbol_ids), chunk_size):
             chunk = all_symbol_ids[i:i + chunk_size]
             d.addCallback(process_chunk, chunk)
@@ -112,14 +111,13 @@ def populate_symbol_cache():
     d = client.send(list_req)
     d.addCallbacks(on_symbols_listed, on_error)
 
-# --- Klein Web Server Routes ---
+# --- Web Server ---
 @web_app.route("/")
 def root(request):
     request.setHeader("Content-Type", "text/plain; charset=utf-8")
     status = "authorized" if is_ctrader_authorized else "connecting..."
     return f"✅ ZigZag Bot. cTrader Status: {status}. Symbols in cache: {len(SYMBOL_DATA_CACHE)}"
 
-# ... (решта файлу без змін) ...
 @web_app.route("/webhook", methods=["POST"])
 def webhook(request):
     try:
@@ -141,7 +139,7 @@ def health_check(request):
     request.setResponseCode(503)
     return "Service Unavailable"
 
-# --- Main Application Startup ---
+# --- Main Startup ---
 if __name__ == "__main__":
     init_db()
     

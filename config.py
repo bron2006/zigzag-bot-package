@@ -41,7 +41,7 @@ STOCKS_US_SYMBOLS = []
 
 # --- Constants ---
 FOREX_SESSIONS = {
-    "Азіатська": ["USD/JPY", "AUD/USD", "NZD/USD", "EUR/JPY", "CHF/JPY"],
+    "Азіатська": ["USD/JPY", "AUD/USD", "NZ/USD", "EUR/JPY", "CHF/JPY"],
     "Європейська": ["EUR/USD", "GBP/USD", "USD/CHF", "EUR/GBP", "EUR/CHF", "GBP/CHF"],
     "Американська": ["USD/CAD", "USD/MXN", "USD/BRL", "USD/ZAR"]
 }
