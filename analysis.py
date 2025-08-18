@@ -3,41 +3,39 @@ import pandas as pd
 import pandas_ta as ta
 import numpy as np
 import time
-from twisted.internet import defer, reactor
+from twisted.internet import reactor, defer
 
-# --- ЗМІНЕНО: Імпорти адаптовано під нову архітектуру ---
+# --- ЗМІНЕНО: Імпорти адаптовано до правильного клієнта ---
 from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import ProtoMessage
 from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOAGetTrendbarsReq, ProtoOAGetTrendbarsRes
 from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOATrendbarPeriod as TrendbarPeriod
 
 from db import add_signal_to_history
-from config import logger, MARKET_DATA_CACHE, SYMBOL_DATA_CACHE, ANALYSIS_TIMEFRAMES
+from config import logger, MARKET_DATA_CACHE, SYMBOL_DATA_CACHE, ANALYSIS_TIMEFRAMES, DEMO_ACCOUNT_ID
 
-# --- ЗМІНЕНО: Функція тепер приймає `client` замість `ctrader_service` ---
+# --- ЗМІНЕНО: Функція тепер приймає `client` і працює з `client.send` ---
 def get_market_data(client, pair, tf, limit=300):
     key = f"{pair}_{tf}_{limit}"
     if key in MARKET_DATA_CACHE:
-        # Wrap cached result in a Deferred for consistent return type
         d = defer.Deferred()
         d.callback(MARKET_DATA_CACHE[key])
         return d
 
     symbol_details = SYMBOL_DATA_CACHE.get(pair)
     if not symbol_details:
-        available = list(SYMBOL_DATA_CACHE.keys())[:5]
-        return defer.fail(Exception(f"Pair '{pair}' not in cache. Available: {available}..."))
+        return defer.fail(Exception(f"Пара '{pair}' не знайдена в кеші."))
 
     tf_map = {"15min": TrendbarPeriod.M15, "1h": TrendbarPeriod.H1, "4h": TrendbarPeriod.H4, "1day": TrendbarPeriod.D1}
     if tf not in tf_map:
-        return defer.fail(Exception(f"Unsupported timeframe: {tf}"))
+        return defer.fail(Exception(f"Непідтримуваний таймфрейм: {tf}"))
 
     now = int(time.time() * 1000)
     seconds_per_bar = {'15min': 900, '1h': 3600, '4h': 14400, '1day': 86400}
     from_ts = now - (limit * seconds_per_bar[tf] * 1000)
-    
-    # --- ЗМІНЕНО: Запит створюється і надсилається напряму через client.send() ---
+
+    # Створюємо і надсилаємо правильний запит
     request = ProtoOAGetTrendbarsReq(
-        ctidTraderAccountId=client.account_id, # Assuming client will have account_id
+        ctidTraderAccountId=DEMO_ACCOUNT_ID,
         symbolId=symbol_details['symbolId'],
         period=tf_map[tf],
         fromTimestamp=from_ts,
@@ -63,10 +61,11 @@ def get_market_data(client, pair, tf, limit=300):
         df = df.sort_values(by='ts').reset_index(drop=True).tail(limit)
         MARKET_DATA_CACHE[key] = df
         return df
-
+    
+    # Додаємо обробку відповіді
     return d.addCallback(process_response)
 
-# --- Функції _calculate_core_signal та _generate_verdict залишаються без змін ---
+# Функції _calculate_core_signal та _generate_verdict залишаються без змін
 def _calculate_core_signal(df, daily_df):
     df.ta.rsi(close=df['close'], length=14, append=True, col_names=('RSI',))
     df.ta.kama(close=df['close'], length=14, append=True, col_names=('KAMA',))
@@ -97,35 +96,30 @@ def _generate_verdict(analysis):
     if score < 45: return "↘️ Помірний сигнал: ПРОДАВАТИ", "moderate_sell"
     return "🟡 НЕЙТРАЛЬНА СИТУАЦІЯ", "neutral"
 
-# --- ЗМІНЕНО: Функція тепер приймає `client` і повертає Deferred ---
+# --- ЗМІНЕНО: Функція тепер приймає `client` ---
 def get_api_detailed_signal_data(client, pair, user_id=None):
     if not isinstance(pair, str) or len(pair) < 3:
-        return defer.fail(Exception(f"Incorrect pair name: '{pair}'."))
+        return defer.fail(Exception(f"Некоректна назва пари: '{pair}'."))
 
-    # Set the account_id on the client object if it's not already there
-    if not hasattr(client, 'account_id'):
-        client.account_id = client.factory.client.account_id if hasattr(client.factory, 'client') else None # A bit of a hack
-        if not client.account_id:
-            from config import DEMO_ACCOUNT_ID
-            client.account_id = DEMO_ACCOUNT_ID
-            
     def on_data_ready(results):
-        # Results from DeferredList are tuples of (success, result)
-        if not results[0][0] or not results[1][0]:
-            return {"error": "Failed to fetch market data for one of the timeframes."}
+        # Перевірка, чи обидва Deferred завершились успішно
+        if not all(res[0] for res in results):
+            return {"error": "Не вдалося завантажити ринкові дані."}
         
         df, daily_df = results[0][1], results[1][1]
 
         if df.empty or len(df) < 25 or daily_df.empty:
-            return {"error": "Not enough historical data for analysis."}
+            return {"error": "Недостатньо історичних даних для аналізу."}
 
         analysis_result = _calculate_core_signal(df, daily_df)
         verdict_text, verdict_level = _generate_verdict(analysis_result)
 
         if user_id:
             add_signal_to_history({
-                'user_id': user_id, 'pair': pair, 
-                'price': analysis_result['price'], 'bull_percentage': analysis_result['score']
+                'user_id': user_id, 
+                'pair': pair, 
+                'price': analysis_result['price'], 
+                'bull_percentage': analysis_result['score']
             })
         
         history_df = df.tail(50)
@@ -144,17 +138,10 @@ def get_api_detailed_signal_data(client, pair, user_id=None):
 
     d1 = get_market_data(client, pair, '15min', 100)
     d2 = get_market_data(client, pair, '1day', 100)
-    
     d_list = defer.DeferredList([d1, d2], consumeErrors=True)
     return d_list.addCallback(on_data_ready)
 
-
 def get_api_mta_data(client, pair):
-    # This function is also adapted to use the new client and Deferred logic
-    if not hasattr(client, 'account_id'): # Ensure account_id is set
-        from config import DEMO_ACCOUNT_ID
-        client.account_id = DEMO_ACCOUNT_ID
-
     def get_single_tf_signal(tf):
         d = get_market_data(client, pair, tf, 200)
         def on_df_ready(df):
