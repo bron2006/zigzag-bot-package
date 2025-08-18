@@ -1,30 +1,32 @@
 # fly.toml
-
 app = "zigzag-bot-package"
-primary_region = "fra"
 
 [build]
   dockerfile = "Dockerfile"
 
 [env]
   PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION = "python"
-      
-# Ця секція налаштовує мережу.
-# Вона вказує Fly.io приймати безпечний трафік (HTTPS) на стандартному порту 443
-# і перенаправляти його на внутрішній порт 8080, де працює наш додаток.
-# Саме це потрібно для роботи вебхуків Telegram.
+
 [[services]]
   internal_port = 8080
   protocol = "tcp"
-  
+  processes = ["app"]
+
   [[services.ports]]
-    handlers = ["tls", "http"]
     port = 443
+    handlers = ["tls", "http"]
+
+  [[services.ports]]
+    port = 80
+    handlers = ["http"]
+
+  [[services.http_checks]]
+    path = "/health"
+    interval = "30s"
+    timeout = "10s"
+    grace_period = "30s"
 
 [[vm]]
   cpu_kind = "shared"
   cpus = 1
   memory_mb = 512
-
-[experimental]
-  auto_rollback = true
