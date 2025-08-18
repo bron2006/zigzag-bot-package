@@ -1,8 +1,10 @@
 import logging
 import os
+import json
 from klein import Klein
 from twisted.internet import reactor
-from telegram.ext import Updater, CommandHandler, CallbackQueryHandler
+from telegram import Update
+from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, Dispatcher
 
 import state
 from telegram_ui import start, button_handler
@@ -15,18 +17,26 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# --- Створення екземпляру веб-додатку Klein ---
+# --- Ініціалізація Klein App та Telegram ---
 app = Klein()
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
-# --- Логіка ініціалізації ---
+if not TOKEN:
+    logger.critical("TELEGRAM_BOT_TOKEN не встановлено! Додаток не може запуститись.")
+    # У реальному додатку тут краще викликати sys.exit(1)
+else:
+    # Ініціалізуємо бота та диспетчер, зберігаємо їх у спільному стані
+    state.bot = Updater(TOKEN).bot
+    state.dispatcher = Dispatcher(state.bot, None, workers=0, use_context=True)
 
+
+# --- Логіка ініціалізації cTrader ---
 def register_bot_handlers():
-    if not state.updater:
-        logger.error("Updater не ініціалізовано.")
+    if not state.dispatcher:
+        logger.error("Диспетчер не ініціалізовано.")
         return
-    dispatcher = state.updater.dispatcher
-    dispatcher.add_handler(CommandHandler("start", start))
-    dispatcher.add_handler(CallbackQueryHandler(button_handler))
+    state.dispatcher.add_handler(CommandHandler("start", start))
+    state.dispatcher.add_handler(CallbackQueryHandler(button_handler))
     logger.info("✅ Обробники Telegram зареєстровані.")
 
 def on_symbols_loaded(symbols):
@@ -52,32 +62,36 @@ def init_ctrader_client():
     state.client.connect()
     logger.info("Запущено підключення до cTrader API...")
 
-def init_telegram_bot():
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
-    if not token:
-        logger.critical("TELEGRAM_BOT_TOKEN не встановлено.")
-        return
-    state.updater = Updater(token)
-    state.updater.start_polling()
-    logger.info("Бот запущений в режимі polling.")
+# --- Веб-ручки (Web Routes) ---
 
-# --- Реєстрація подій Twisted ---
-
-@app.handle_errors(Exception)
-def handle_errors(request, failure):
-    logger.error(f"Помилка обробки запиту: {failure.getErrorMessage()}")
-    request.setResponseCode(500)
-    return b"Internal Server Error"
+@app.route(f"/{TOKEN}", methods=['POST'])
+def webhook_handler(request):
+    """Приймає оновлення від Telegram."""
+    try:
+        update_data = json.loads(request.content.read().decode())
+        update = Update.de_json(update_data, state.bot)
+        state.dispatcher.process_update(update)
+    except Exception as e:
+        logger.error(f"Помилка обробки оновлення: {e}")
+    return ""  # Повертаємо 200 OK, щоб Telegram знав, що ми отримали повідомлення
 
 @app.route("/")
 def home(request):
-    """Проста сторінка-заглушка для веб-інтерфейсу."""
-    request.setHeader('Content-Type', 'text/html; charset=utf-8')
-    return b"<h1>Telegram Bot and Web Service is running</h1>"
+    """Сторінка-заглушка."""
+    return b"Telegram Bot and Web Service is running"
 
-# --- Запуск сервісів при старті Twisted Reactor ---
 
-# reactor.callWhenRunning реєструє функції, які мають виконатись,
-# коли цикл подій Twisted буде запущено (тобто командою app.run()).
-reactor.callWhenRunning(init_telegram_bot)
+def setup_webhook():
+    """Встановлює вебхук при запуску додатку."""
+    app_name = os.getenv("FLY_APP_NAME")
+    if app_name and state.bot:
+        webhook_url = f"https://{app_name}.fly.dev/{TOKEN}"
+        state.bot.set_webhook(webhook_url)
+        logger.info(f"Вебхук встановлено за адресою: {webhook_url}")
+    else:
+        logger.warning("FLY_APP_NAME не встановлено. Вебхук не може бути встановлений автоматично.")
+
+
+# --- Запуск сервісів ---
+reactor.callWhenRunning(setup_webhook)
 reactor.callWhenRunning(init_ctrader_client)
