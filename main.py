@@ -6,11 +6,12 @@ import threading
 from urllib.parse import parse_qs, unquote
 from klein import Klein
 from twisted.internet import reactor, defer
-from telegram import Update, KeyboardButton, WebAppInfo # Додано
-from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, MessageHandler, Filters # Додано
+from twisted.web.static import File
+from telegram import Update, KeyboardButton, WebAppInfo
+from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, MessageHandler, Filters
 
 import state
-from telegram_ui import start, button_handler, menu # Додано menu
+from telegram_ui import start, menu, button_handler
 from spotware_connect import SpotwareClient
 from config import (
     get_telegram_token, get_ct_client_id, get_ct_client_secret, 
@@ -20,7 +21,6 @@ from db import get_watchlist, toggle_watch, get_signal_history, init_db
 from analysis import get_api_detailed_signal_data
 from mta_analysis import get_mta_signal
 
-
 # --- Налаштування логування ---
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -28,12 +28,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-
 # --- Ініціалізація ---
 app = Klein()
 TOKEN = get_telegram_token()
 updates_queue = queue.Queue(maxsize=1000)
-
 
 # --- Воркер для обробки оновлень з черги ---
 def dispatcher_worker():
@@ -47,23 +45,18 @@ def dispatcher_worker():
         except Exception as e:
             logger.exception(f"Помилка в воркері диспетчера: {e}")
 
-
 # --- Ініціалізація Telegram ---
 def init_telegram_bot():
     state.updater = Updater(TOKEN, use_context=True)
     dispatcher = state.updater.dispatcher
-    
-    # Додаємо всі обробники згідно з новою логікою
     dispatcher.add_handler(CommandHandler("start", start))
     dispatcher.add_handler(MessageHandler(Filters.text("МЕНЮ"), menu))
     dispatcher.add_handler(CallbackQueryHandler(button_handler))
-
     logger.info("✅ Обробники Telegram зареєстровані.")
     
     for _ in range(4):
         threading.Thread(target=dispatcher_worker, daemon=True).start()
     logger.info("✅ Воркери для обробки черги Telegram запущені.")
-
 
 # --- Ініціалізація cTrader ---
 def on_symbols_loaded(symbols):
@@ -100,21 +93,62 @@ def parse_tg_init_data(init_data_str: str) -> dict | None:
 @app.route('/api/get_ranked_pairs', methods=['GET'])
 def get_ranked_pairs(request):
     try:
-        # ... (код залишається без змін)
+        init_data = request.args.get(b'initData', [b''])[0].decode()
+        user = parse_tg_init_data(init_data)
+        user_id = user.get('id') if user else 'Anonymous'
+        
+        logger.info(f"API: /api/get_ranked_pairs - Запит від користувача: {user_id}")
+
+        watchlist = []
+        if user and user.get('id'):
+            watchlist = get_watchlist(user['id'])
+
+        def format_pair(ticker):
+            norm_ticker = ticker.replace("/", "").strip()
+            return {"ticker": ticker, "active": norm_ticker in state.symbol_cache}
+
+        response_data = {
+            "watchlist": watchlist,
+            "forex": {session: [format_pair(p) for p in pairs] for session, pairs in FOREX_SESSIONS.items()},
+            "crypto": [format_pair(p) for p in CRYPTO_PAIRS_FULL],
+            "stocks": [format_pair(p) for p in STOCKS_US_SYMBOLS]
+        }
+        
+        logger.info(f"API: /api/get_ranked_pairs - Успішно сформовано дані.")
+        request.setHeader('Content-Type', 'application/json')
+        request.setHeader('Access-Control-Allow-Origin', '*')
         return json.dumps(response_data).encode('utf-8')
     except Exception:
-        # ... (код залишається без змін)
+        logger.exception("!!! КРИТИЧНА ПОМИЛКА в ендпойнті /api/get_ranked_pairs")
+        request.setResponseCode(500)
+        request.setHeader('Content-Type', 'application/json')
+        request.setHeader('Access-Control-Allow-Origin', '*')
+        error_response = {"error": "Internal Server Error", "message": "Failed to process pair lists."}
         return json.dumps(error_response).encode('utf-8')
-
 
 @app.route('/api/toggle_watchlist', methods=['GET'])
 def toggle_watchlist_api(request):
-    # ... (код залишається без змін)
+    init_data = request.args.get(b'initData', [b''])[0].decode()
+    pair = request.args.get(b'pair', [b''])[0].decode()
+    user = parse_tg_init_data(init_data)
 
+    request.setHeader('Content-Type', 'application/json')
+    request.setHeader('Access-Control-Allow-Origin', '*')
+    
+    if not user or not user.get('id') or not pair:
+        request.setResponseCode(400)
+        return json.dumps({"success": False, "error": "Invalid parameters"}).encode('utf-8')
+
+    try:
+        toggle_watch(user['id'], pair)
+        return json.dumps({"success": True}).encode('utf-8')
+    except Exception as e:
+        logger.error(f"Помилка toggle_watchlist: {e}")
+        request.setResponseCode(500)
+        return json.dumps({"success": False, "error": "Database error"}).encode('utf-8')
 
 @app.route('/api/signal', methods=['GET'])
 def get_signal_api(request):
-    """Основний ендпоінт для отримання детального сигналу."""
     pair = request.args.get(b'pair', [b''])[0].decode()
     init_data = request.args.get(b'initData', [b''])[0].decode()
     user = parse_tg_init_data(init_data)
@@ -129,60 +163,102 @@ def get_signal_api(request):
 
     d = get_api_detailed_signal_data(state.client, pair, user_id)
     
-    # --- ПОЧАТОК ВИПРАВЛЕННЯ ---
     def on_success(result):
-        """Обробник успішного результату."""
         request.write(json.dumps(result).encode('utf-8'))
         request.finish()
 
     def on_error(failure):
-        """Обробник помилки."""
-        logger.error(f"API /api/signal: Помилка при отриманні сигналу для '{pair}': {failure.getErrorMessage()}")
+        logger.error(f"API /api/signal: Помилка: {failure.getErrorMessage()}")
         request.setResponseCode(500)
         error_response = {"error": f"Внутрішня помилка сервера при аналізі {pair}."}
         request.write(json.dumps(error_response).encode('utf-8'))
         request.finish()
         
     d.addCallbacks(on_success, on_error)
-    # --- КІНЕЦЬ ВИПРАВЛЕННЯ ---
-    
     return defer.SUCCESS
-
 
 @app.route('/api/get_mta', methods=['GET'])
 def get_mta_api(request):
-    # ... (код залишається без змін)
+    pair = request.args.get(b'pair', [b''])[0].decode()
+    request.setHeader('Content-Type', 'application/json')
+    request.setHeader('Access-Control-Allow-Origin', '*')
 
+    if not pair:
+        request.setResponseCode(400)
+        return json.dumps({"error": "Pair parameter is required"}).encode('utf-8')
+
+    d = get_mta_signal(state.client, pair)
+    
+    def on_result(result):
+        request.write(json.dumps(result).encode('utf-8'))
+        request.finish()
+        
+    d.addBoth(on_result)
+    return defer.SUCCESS
 
 @app.route('/api/signal_history', methods=['GET'])
 def get_signal_history_api(request):
-    # ... (код залишається без змін)
+    init_data = request.args.get(b'initData', [b''])[0].decode()
+    pair = request.args.get(b'pair', [b''])[0].decode()
+    user = parse_tg_init_data(init_data)
 
+    request.setHeader('Content-Type', 'application/json')
+    request.setHeader('Access-Control-Allow-Origin', '*')
+
+    if not user or not user.get('id') or not pair:
+        request.setResponseCode(400)
+        return json.dumps([]).encode('utf-8')
+
+    history = get_signal_history(user['id'], pair)
+    return json.dumps(history).encode('utf-8')
 
 # --- Веб-ручки (Web Routes) ---
 
 @app.route(f"/{TOKEN}", methods=['POST'])
 def webhook_handler(request):
-    # ... (код залишається без змін)
+    try:
+        body = request.content.read()
+        
+        if request.getHeader("X-Telegram-Bot-Api-Secret-Token") != get_webhook_secret():
+            logger.warning("Відхилено запит до вебхука з неправильним секретним токеном.")
+            request.setResponseCode(403)
+            return b"Forbidden"
+
+        update_data = json.loads(body.decode())
+        updates_queue.put_nowait(update_data)
+        
+        request.setResponseCode(200)
+        return b"OK"
+    except queue.Full:
+        logger.warning("Черга оновлень переповнена.")
+        request.setResponseCode(503)
+        return b"Busy"
+    except Exception:
+        logger.exception("Некоректний запит до вебхука.")
+        request.setResponseCode(400)
+        return b"Bad Request"
 
 @app.route("/health")
 def health_check(request):
-    # ... (код залишається без змін)
+    request.setResponseCode(200)
+    return b"OK"
 
 @app.route("/")
 def home(request):
-    # ... (код залишається без змін)
+    return b"Telegram Bot and Web Service is running"
 
-# Додаємо обслуговування статичних файлів для WebApp
-from twisted.web.static import File
 @app.route('/webapp/', branch=True)
 def webapp_static(request):
-    # Використовуємо відносний шлях до папки webapp
     return File("./webapp")
 
-
 def setup_webhook():
-    # ... (код залишається без змін)
+    app_name = get_fly_app_name()
+    if app_name and state.updater:
+        webhook_url = f"https://{app_name}.fly.dev/{TOKEN}"
+        state.updater.bot.set_webhook(url=webhook_url, secret_token=get_webhook_secret())
+        logger.info(f"Вебхук встановлено за адресою: {webhook_url}")
+    else:
+        logger.warning("Не вдалося встановити вебхук.")
 
 # --- Запуск сервісів ---
 init_db()
