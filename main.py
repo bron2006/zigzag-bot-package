@@ -23,11 +23,11 @@ TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
 if not TOKEN:
     logger.critical("TELEGRAM_BOT_TOKEN не встановлено! Додаток не може запуститись.")
-    # У реальному додатку тут краще викликати sys.exit(1)
 else:
     # Ініціалізуємо бота та диспетчер, зберігаємо їх у спільному стані
     state.bot = Updater(TOKEN).bot
-    state.dispatcher = Dispatcher(state.bot, None, workers=0, use_context=True)
+    # ВИПРАВЛЕНО: Встановлюємо 4 воркери для обробки оновлень
+    state.dispatcher = Dispatcher(state.bot, None, workers=4, use_context=True)
 
 
 # --- Логіка ініціалізації cTrader ---
