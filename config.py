@@ -33,6 +33,9 @@ def get_demo_account_id() -> int:
 def get_fly_app_name() -> str | None:
     return os.getenv("FLY_APP_NAME")
 
+# --- Database ---
+DB_NAME = "bot_data.db"
+
 # --- Списки активів (додано відсутні для повноти) ---
 CRYPTO_PAIRS_FULL = ["BTC/USD", "ETH/USD", "LTC/USD", "XRP/USD"] 
 STOCKS_US_SYMBOLS = ["AAPL", "GOOGL", "MSFT", "AMZN"]
