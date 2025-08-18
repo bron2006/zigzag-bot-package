@@ -7,6 +7,10 @@ import threading
 from urllib.parse import parse_qs, unquote
 from klein import Klein
 from twisted.internet import reactor, defer
+# --- ЗМІНА: Нові імпорти для віддачі файлів ---
+from twisted.web.static import File
+from twisted.web.server import NOT_DONE_YET
+# --- КІНЕЦЬ ЗМІНИ ---
 from telegram import Update
 from telegram.ext import Updater, CommandHandler, CallbackQueryHandler
 
@@ -24,8 +28,8 @@ from mta_analysis import get_mta_signal
 
 # --- Налаштування логування ---
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", # Додали %(name)s для ідентифікації модуля
-    level=logging.DEBUG # --- ДІАГНОСТИКА: Вмикаємо максимальний рівень логування ---
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.DEBUG
 )
 logger = logging.getLogger(__name__)
 
@@ -80,7 +84,6 @@ def init_ctrader_client():
     api_key = get_ct_client_id()
     api_secret = get_ct_client_secret()
     state.client = SpotwareClient(api_key, api_secret)
-    # --- ДІАГНОСТИКА: Логуємо ID клієнта в main.py ---
     logger.info(f"main.py init_ctrader_client: Присвоєно state.client екземпляр з ID -> {id(state.client)}")
     state.client.on("symbolsLoaded")(on_symbols_loaded)
     state.client.on("error")(lambda err: logger.error(f"Помилка cTrader: {err}"))
@@ -102,7 +105,6 @@ def parse_tg_init_data(init_data_str: str) -> dict | None:
 
 @app.route('/api/get_ranked_pairs', methods=['GET'])
 def get_ranked_pairs(request):
-    """Віддає списки активів та список обраного для користувача."""
     try:
         init_data = request.args.get(b'initData', [b''])[0].decode()
         user = parse_tg_init_data(init_data)
@@ -125,7 +127,7 @@ def get_ranked_pairs(request):
             "stocks": [format_pair(p) for p in STOCKS_US_SYMBOLS]
         }
         
-        logger.info(f"API: /api/get_ranked_pairs - Успішно сформовано дані. Розмір кешу символів: {len(state.symbol_cache)}")
+        logger.info(f"API: /api/get_ranked_pairs - Успішно сформовано дані.")
         request.setHeader('Content-Type', 'application/json')
         request.setHeader('Access-Control-Allow-Origin', '*')
         return json.dumps(response_data).encode('utf-8')
@@ -141,7 +143,7 @@ def get_ranked_pairs(request):
 
 @app.route('/api/toggle_watchlist', methods=['GET'])
 def toggle_watchlist_api(request):
-    """Додає або видаляє пару зі списку обраного."""
+    # ... (код без змін)
     init_data = request.args.get(b'initData', [b''])[0].decode()
     pair = request.args.get(b'pair', [b''])[0].decode()
     user = parse_tg_init_data(init_data)
@@ -164,32 +166,45 @@ def toggle_watchlist_api(request):
 
 @app.route('/api/signal', methods=['GET'])
 def get_signal_api(request):
-    """Основний ендпоінт для отримання детального сигналу."""
-    init_data = request.args.get(b'initData', [b''])[0].decode()
-    pair = request.args.get(b'pair', [b''])[0].decode()
-    user = parse_tg_init_data(init_data)
-    user_id = user.get('id') if user else None
-
-    request.setHeader('Content-Type', 'application/json')
-    request.setHeader('Access-Control-Allow-Origin', '*')
-
-    if not pair:
-        request.setResponseCode(400)
-        return json.dumps({"error": "Pair parameter is required"}).encode('utf-8')
-
-    d = get_api_detailed_signal_data(state.client, pair, user_id)
-
-    def on_result(result):
+    # --- ЗМІНА: Повністю переписана обробка помилок ---
+    def on_success(result):
+        request.setHeader('Content-Type', 'application/json')
+        request.setHeader('Access-Control-Allow-Origin', '*')
         request.write(json.dumps(result).encode('utf-8'))
         request.finish()
 
-    d.addBoth(on_result)
-    return defer.SUCCESS
+    def on_error(failure):
+        logger.exception("!!! КРИТИЧНА ПОМИЛКА в ендпойнті /api/signal", exc_info=failure)
+        request.setResponseCode(500)
+        request.setHeader('Content-Type', 'application/json')
+        request.setHeader('Access-Control-Allow-Origin', '*')
+        error_response = {"error": "Internal Server Error", "message": "Failed to get signal."}
+        request.write(json.dumps(error_response).encode('utf-8'))
+        request.finish()
+
+    try:
+        pair = request.args.get(b'pair', [b''])[0].decode()
+        if not pair:
+            request.setResponseCode(400)
+            return json.dumps({"error": "Pair parameter is required"}).encode('utf-8')
+
+        init_data = request.args.get(b'initData', [b''])[0].decode()
+        user = parse_tg_init_data(init_data)
+        user_id = user.get('id') if user else None
+
+        d = get_api_detailed_signal_data(state.client, pair, user_id)
+        d.addCallbacks(on_success, on_error)
+        
+        return NOT_DONE_YET
+    except Exception as e:
+        on_error(e)
+        return NOT_DONE_YET
+    # --- КІНЕЦЬ ЗМІНИ ---
 
 
 @app.route('/api/get_mta', methods=['GET'])
 def get_mta_api(request):
-    """Ендпоінт для отримання MTA."""
+    # ... (код без змін)
     pair = request.args.get(b'pair', [b''])[0].decode()
     request.setHeader('Content-Type', 'application/json')
     request.setHeader('Access-Control-Allow-Origin', '*')
@@ -205,12 +220,12 @@ def get_mta_api(request):
         request.finish()
         
     d.addBoth(on_result)
-    return defer.SUCCESS
+    return NOT_DONE_YET
 
 
 @app.route('/api/signal_history', methods=['GET'])
 def get_signal_history_api(request):
-    """Отримує історію сигналів для пари."""
+    # ... (код без змін)
     init_data = request.args.get(b'initData', [b''])[0].decode()
     pair = request.args.get(b'pair', [b''])[0].decode()
     user = parse_tg_init_data(init_data)
@@ -230,6 +245,7 @@ def get_signal_history_api(request):
 
 @app.route(f"/{TOKEN}", methods=['POST'])
 def webhook_handler(request):
+    # ... (код без змін)
     try:
         body = request.content.read()
         
@@ -257,9 +273,13 @@ def health_check(request):
     request.setResponseCode(200)
     return b"OK"
 
-@app.route("/")
-def home(request):
-    return b"Telegram Bot and Web Service is running"
+# --- ЗМІНА: Налаштовуємо віддачу статичних файлів WebApp ---
+@app.route("/", branch=True)
+def static_files(request):
+    # branch=True означає, що цей роут обробляє / і всі під-шляхи
+    # Це дозволяє обслуговувати index.html, script.js, style.css і т.д.
+    return File("webapp/")
+# --- КІНЕЦЬ ЗМІНИ ---
 
 def setup_webhook():
     app_name = get_fly_app_name()
