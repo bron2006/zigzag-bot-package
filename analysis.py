@@ -12,16 +12,21 @@ from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOATrendbarPe
 from db import add_signal_to_history
 from config import logger, MARKET_DATA_CACHE, SYMBOL_DATA_CACHE, ANALYSIS_TIMEFRAMES, DEMO_ACCOUNT_ID
 
+def _normalize_pair(pair: str) -> str:
+    # Приводимо "EUR/USD" -> "EURUSD", "eurusd" -> "EURUSD"
+    return pair.replace("/", "").replace("\\", "").upper().strip()
+
 def get_market_data(client, pair, tf, limit=300):
-    key = f"{pair}_{tf}_{limit}"
+    norm_pair = _normalize_pair(pair)
+    key = f"{norm_pair}_{tf}_{limit}"
     if key in MARKET_DATA_CACHE:
         d = defer.Deferred()
         d.callback(MARKET_DATA_CACHE[key])
         return d
 
-    symbol_details = SYMBOL_DATA_CACHE.get(pair)
+    symbol_details = SYMBOL_DATA_CACHE.get(norm_pair)
     if not symbol_details:
-        return defer.fail(Exception(f"Пара '{pair}' не знайдена в кеші."))
+        return defer.fail(Exception(f"Пара '{pair}' не знайдена в кеші (шукав як '{norm_pair}')."))
 
     tf_map = {"15min": TrendbarPeriod.M15, "1h": TrendbarPeriod.H1, "4h": TrendbarPeriod.H4, "1day": TrendbarPeriod.D1}
     if tf not in tf_map:
@@ -46,15 +51,18 @@ def get_market_data(client, pair, tf, limit=300):
             return pd.DataFrame()
         
         divisor = 10**symbol_details['digits']
-        bars = [{'ts': pd.to_datetime(bar.utcTimestampInMinutes * 60, unit='s', utc=True),
-                 'open': (bar.low + bar.deltaOpen) / divisor,
-                 'high': (bar.low + bar.deltaHigh) / divisor,
-                 'low': bar.low / divisor,
-                 'close': (bar.low + bar.deltaClose) / divisor,
-                 'volume': bar.volume} for bar in trendbars_response.trendbar]
+        bars = [{
+            'ts': pd.to_datetime(bar.utcTimestampInMinutes * 60, unit='s', utc=True),
+            'open': (bar.low + bar.deltaOpen) / divisor,
+            'high': (bar.low + bar.deltaHigh) / divisor,
+            'low': bar.low / divisor,
+            'close': (bar.low + bar.deltaClose) / divisor,
+            'volume': bar.volume
+        } for bar in trendbars_response.trendbar]
         
         df = pd.DataFrame(bars)
-        if df.empty: return df
+        if df.empty:
+            return df
         df = df.sort_values(by='ts').reset_index(drop=True).tail(limit)
         MARKET_DATA_CACHE[key] = df
         return df
@@ -95,6 +103,9 @@ def get_api_detailed_signal_data(client, pair, user_id=None):
     if not isinstance(pair, str) or len(pair) < 3:
         return defer.fail(Exception(f"Некоректна назва пари: '{pair}'."))
 
+    display_pair = pair  # те, що показуємо користувачу
+    norm_pair = _normalize_pair(pair)
+
     def on_data_ready(results):
         if not all(res[0] for res in results):
             return {"error": "Не вдалося завантажити ринкові дані."}
@@ -110,7 +121,7 @@ def get_api_detailed_signal_data(client, pair, user_id=None):
         if user_id:
             add_signal_to_history({
                 'user_id': user_id, 
-                'pair': pair, 
+                'pair': norm_pair, 
                 'price': analysis_result['price'], 
                 'bull_percentage': analysis_result['score']
             })
@@ -123,13 +134,13 @@ def get_api_detailed_signal_data(client, pair, user_id=None):
         }
         
         return { 
-            "pair": pair, "price": analysis_result['price'], "verdict_text": verdict_text, 
+            "pair": display_pair, "price": analysis_result['price'], "verdict_text": verdict_text, 
             "verdict_level": verdict_level, "reasons": analysis_result['reasons'], 
             "support": analysis_result['support'], "resistance": analysis_result['resistance'], 
             "history": history 
         }
 
-    d1 = get_market_data(client, pair, '15min', 100)
-    d2 = get_market_data(client, pair, '1day', 100)
+    d1 = get_market_data(client, norm_pair, '15min', 100)
+    d2 = get_market_data(client, norm_pair, '1day', 100)
     d_list = defer.DeferredList([d1, d2], consumeErrors=True)
     return d_list.addCallback(on_data_ready)
