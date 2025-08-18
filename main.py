@@ -66,47 +66,40 @@ def message_received(client: Client, message: ProtoMessage):
         error_res = ProtoOAErrorRes.FromString(message.payload)
         logger.error(f"❌ cTrader Error: {error_res.errorCode} - {error_res.description}")
 
-# --- ЗМІНЕНО: Повністю переписано на послідовні запити, як в офіційному прикладі ---
 def populate_symbol_cache():
     logger.info("🔄 Populating symbol cache...")
     
     def on_symbols_listed(response: ProtoMessage):
         symbols_list = ProtoOASymbolsListRes.FromString(response.payload)
         all_symbol_ids = [s.symbolId for s in symbols_list.symbol if s.symbolId]
-        logger.info(f"DIAGNOSTIC: Received {len(all_symbol_ids)} symbol IDs. Fetching details sequentially...")
-
-        if not all_symbol_ids:
-            logger.warning("⚠️ Symbol list is empty. Aborting cache population.")
-            return
-
-        # Створюємо тимчасовий кеш для збору результатів
-        temp_cache = {}
         
-        # Створюємо ланцюжок послідовних запитів
+        temp_cache = {}
         d = defer.succeed(None)
         chunk_size = 70
         
         def process_chunk(result, chunk):
-            # Коли попередній запит завершився, відправляємо наступний
             details_req = ProtoOASymbolByIdReq(ctidTraderAccountId=DEMO_ACCOUNT_ID, symbolId=chunk)
             return client.send(details_req)
 
+        # --- ЗМІНЕНО: Додано діагностику сирих даних ---
         def on_chunk_details(response: ProtoMessage):
-            # Обробляємо результат поточного запиту
+            # ЛОГУЄМО СИРІ БАЙТИ
+            logger.info(f"DIAGNOSTIC: Received payload for chunk. Size: {len(response.payload)} bytes.")
+            if len(response.payload) < 20: # Маленький пейлоад - ймовірно, порожній
+                 logger.info(f"DIAGNOSTIC: Payload (raw): {response.payload}")
+
             details = ProtoOASymbolByIdRes.FromString(response.payload)
             for symbol in details.symbol:
                 if hasattr(symbol, 'symbolName') and symbol.symbolName:
                     temp_cache[symbol.symbolName] = {'symbolId': symbol.symbolId, 'digits': symbol.digits}
-            logger.info(f"DIAGNOSTIC: Processed chunk, current temp cache size: {len(temp_cache)}")
+            logger.info(f"DIAGNOSTIC: Parsed {len(details.symbol)} symbols. Temp cache size: {len(temp_cache)}")
 
-        # Формуємо ланцюжок
         for i in range(0, len(all_symbol_ids), chunk_size):
             chunk = all_symbol_ids[i:i + chunk_size]
             d.addCallback(process_chunk, chunk)
             d.addCallback(on_chunk_details)
 
         def on_all_done(result):
-            # Коли всі запити в ланцюжку виконано
             with CACHE_LOCK:
                 SYMBOL_DATA_CACHE.clear()
                 SYMBOL_DATA_CACHE.update(temp_cache)
@@ -115,7 +108,6 @@ def populate_symbol_cache():
         d.addCallback(on_all_done)
         d.addErrback(on_error)
 
-    # Запускаємо початковий запит на список символів
     list_req = ProtoOASymbolsListReq(ctidTraderAccountId=DEMO_ACCOUNT_ID)
     d = client.send(list_req)
     d.addCallbacks(on_symbols_listed, on_error)
