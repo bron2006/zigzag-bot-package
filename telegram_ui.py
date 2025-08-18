@@ -2,7 +2,6 @@ import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import CallbackContext
 
-# Імпортуємо залежності з файлу спільного стану
 from state import client, symbol_cache
 
 logger = logging.getLogger(__name__)
@@ -18,24 +17,19 @@ def get_main_keyboard() -> InlineKeyboardMarkup:
 
 
 def start(update: Update, context: CallbackContext) -> None:
-    """
-    Обробляє команду /start.
-    Перевіряє стан підключення перед тим, як надіслати клавіатуру.
-    """
-    # Перевіряємо, чи клієнт підключений
+    """Обробляє команду /start."""
     if client and client.isConnected:
         update.message.reply_text(
             "✅ З'єднання встановлено. Виберіть валютну пару:",
             reply_markup=get_main_keyboard()
         )
     else:
-        # Якщо з'єднання ще встановлюється, пропонуємо зачекати і оновити
         keyboard = [
             [InlineKeyboardButton("🔄 Оновити статус", callback_data="refresh_status")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         update.message.reply_text(
-            "⏳ Встановлюю з'єднання з сервером cTrader... Будь ласка, зачекайте кілька секунд і натисніть 'Оновити'.",
+            "⏳ Встановлюю з'єднання з сервером cTrader... Натисніть 'Оновити' за кілька секунд.",
             reply_markup=reply_markup
         )
 
@@ -43,11 +37,14 @@ def start(update: Update, context: CallbackContext) -> None:
 def button_handler(update: Update, context: CallbackContext) -> None:
     """Обробляє натискання на всі inline-кнопки."""
     query = update.callback_query
-    query.answer()
+    button_data = query.data if query else None
     
-    button_data = query.data
-
-    # Нова логіка для кнопки оновлення
+    # Додаємо логування, як порадив експерт
+    logger.info(f"🔔 Отримано CallbackQuery: '{button_data}' від користувача {query.from_user.id}")
+    
+    if query:
+        query.answer()
+    
     if button_data == "refresh_status":
         if client and client.isConnected:
             query.edit_message_text(
@@ -55,11 +52,9 @@ def button_handler(update: Update, context: CallbackContext) -> None:
                 reply_markup=get_main_keyboard()
             )
         else:
-            # Якщо все ще не підключено, просто повідомляємо користувача
             query.answer(text="⏳ З'єднання ще встановлюється... Спробуйте за мить.", show_alert=True)
         return
 
-    # Стара логіка для кнопок символів
     if not client or not client.isConnected:
         query.answer(text="❌ З'єднання з cTrader API ще не встановлено. Спробуйте оновити статус.", show_alert=True)
         return
@@ -71,4 +66,3 @@ def button_handler(update: Update, context: CallbackContext) -> None:
         return
 
     query.edit_message_text(text=f"✅ Обрано {symbol}. Дані завантажуються...")
-    # Тут буде ваша майбутня логіка для показу аналітики по символу

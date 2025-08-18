@@ -15,6 +15,9 @@ def _get_required_env(var_name: str) -> str:
 def get_telegram_token() -> str:
     return _get_required_env("TELEGRAM_BOT_TOKEN")
 
+def get_webhook_secret() -> str:
+    return _get_required_env("WEBHOOK_SECRET")
+
 # --- cTrader ---
 def get_ct_client_id() -> str:
     return _get_required_env("CT_CLIENT_ID")

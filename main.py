@@ -12,7 +12,8 @@ from spotware_connect import SpotwareClient
 # Оновлюємо імпорти з конфігурації
 from config import (
     get_telegram_token, get_ct_client_id, 
-    get_ct_client_secret, get_fly_app_name
+    get_ct_client_secret, get_fly_app_name,
+    get_webhook_secret
 )
 
 # --- Налаштування логування ---
@@ -24,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 # --- Ініціалізація Klein App ---
 app = Klein()
-TOKEN = get_telegram_token() # Використовуємо функцію
+TOKEN = get_telegram_token()
 
 
 def init_telegram_bot():
@@ -41,6 +42,10 @@ def register_bot_handlers():
     dispatcher.add_handler(CommandHandler("start", start))
     dispatcher.add_handler(CallbackQueryHandler(button_handler))
     logger.info("✅ Обробники Telegram зареєстровані.")
+    
+    # ВАЖЛИВО: Запускаємо воркери диспетчера, як порадив експерт
+    dispatcher.start()
+    logger.info("✅ Воркери диспетчера Telegram запущені.")
 
 def on_symbols_loaded(symbols):
     temp_cache = {}
@@ -53,7 +58,6 @@ def on_symbols_loaded(symbols):
     register_bot_handlers()
 
 def init_ctrader_client():
-    # Використовуємо функції для отримання конфігурації
     api_key = get_ct_client_id()
     api_secret = get_ct_client_secret()
 
@@ -67,15 +71,26 @@ def init_ctrader_client():
 
 @app.route(f"/{TOKEN}", methods=['POST'])
 def webhook_handler(request):
-    """Приймає оновлення від Telegram."""
-    if state.updater:
-        try:
-            update_data = json.loads(request.content.read().decode())
-            update = Update.de_json(update_data, state.updater.bot)
-            state.updater.dispatcher.process_update(update)
-        except Exception as e:
-            logger.error(f"Помилка обробки оновлення: {e}")
-    return ""
+    """Приймає оновлення від Telegram, не блокуючи Twisted."""
+    try:
+        # Перевірка секретного токену для безпеки
+        if request.getHeader("X-Telegram-Bot-Api-Secret-Token") != get_webhook_secret():
+            logger.warning("Відхилено запит до вебхука з неправильним секретним токеном.")
+            request.setResponseCode(403)
+            return b"Forbidden"
+
+        update_data = json.loads(request.content.read().decode())
+        update = Update.de_json(update_data, state.updater.bot)
+        
+        # Віддаємо обробку в потік, щоб не блокувати реактор
+        reactor.callInThread(state.updater.dispatcher.process_update, update)
+        
+        request.setResponseCode(200)
+        return b"OK"
+    except Exception as e:
+        logger.exception(f"Помилка обробки вебхука: {e}")
+        request.setResponseCode(500)
+        return b"Error"
 
 @app.route("/")
 def home(request):
@@ -87,7 +102,11 @@ def setup_webhook():
     app_name = get_fly_app_name()
     if app_name and state.updater:
         webhook_url = f"https://{app_name}.fly.dev/{TOKEN}"
-        state.updater.bot.set_webhook(webhook_url)
+        # Встановлюємо вебхук разом із секретним токеном
+        state.updater.bot.set_webhook(
+            url=webhook_url, 
+            secret_token=get_webhook_secret()
+        )
         logger.info(f"Вебхук встановлено за адресою: {webhook_url}")
     else:
         logger.warning("Не вдалося встановити вебхук (FLY_APP_NAME або updater не знайдено).")
