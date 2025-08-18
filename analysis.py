@@ -1,4 +1,3 @@
-# analysis.py
 import pandas as pd
 import pandas_ta as ta
 import numpy as np
@@ -10,10 +9,10 @@ from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOAGetTrendbarsReq
 from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOATrendbarPeriod as TrendbarPeriod
 
 from db import add_signal_to_history
-from config import logger, MARKET_DATA_CACHE, SYMBOL_DATA_CACHE, ANALYSIS_TIMEFRAMES, DEMO_ACCOUNT_ID
+# Оновлюємо імпорт з конфігурації
+from config import get_demo_account_id, logger, MARKET_DATA_CACHE, SYMBOL_DATA_CACHE
 
 def _normalize_pair(pair: str) -> str:
-    # Приводимо "EUR/USD" -> "EURUSD", "eurusd" -> "EURUSD"
     return pair.replace("/", "").replace("\\", "").upper().strip()
 
 def get_market_data(client, pair, tf, limit=300):
@@ -37,7 +36,7 @@ def get_market_data(client, pair, tf, limit=300):
     from_ts = now - (limit * seconds_per_bar[tf] * 1000)
 
     request = ProtoOAGetTrendbarsReq(
-        ctidTraderAccountId=DEMO_ACCOUNT_ID,
+        ctidTraderAccountId=get_demo_account_id(), # Використовуємо функцію
         symbolId=symbol_details['symbolId'],
         period=tf_map[tf],
         fromTimestamp=from_ts,
@@ -103,7 +102,7 @@ def get_api_detailed_signal_data(client, pair, user_id=None):
     if not isinstance(pair, str) or len(pair) < 3:
         return defer.fail(Exception(f"Некоректна назва пари: '{pair}'."))
 
-    display_pair = pair  # те, що показуємо користувачу
+    display_pair = pair
     norm_pair = _normalize_pair(pair)
 
     def on_data_ready(results):

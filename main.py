@@ -9,6 +9,11 @@ from telegram.ext import Updater, CommandHandler, CallbackQueryHandler
 import state
 from telegram_ui import start, button_handler
 from spotware_connect import SpotwareClient
+# Оновлюємо імпорти з конфігурації
+from config import (
+    get_telegram_token, get_ct_client_id, 
+    get_ct_client_secret, get_fly_app_name
+)
 
 # --- Налаштування логування ---
 logging.basicConfig(
@@ -19,15 +24,11 @@ logger = logging.getLogger(__name__)
 
 # --- Ініціалізація Klein App ---
 app = Klein()
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TOKEN = get_telegram_token() # Використовуємо функцію
 
 
 def init_telegram_bot():
     """Ініціалізує Updater і зберігає його в спільному стані."""
-    if not TOKEN:
-        logger.critical("TELEGRAM_BOT_TOKEN не встановлено! Бот не може запуститись.")
-        return
-    # Створюємо екземпляр Updater. Він автоматично створює bot та dispatcher з воркерами.
     state.updater = Updater(TOKEN, use_context=True)
     logger.info("Telegram Updater успішно ініціалізовано.")
 
@@ -36,7 +37,6 @@ def register_bot_handlers():
     if not state.updater:
         logger.error("Updater не ініціалізовано.")
         return
-    # Використовуємо dispatcher, який належить updater'у
     dispatcher = state.updater.dispatcher
     dispatcher.add_handler(CommandHandler("start", start))
     dispatcher.add_handler(CallbackQueryHandler(button_handler))
@@ -53,11 +53,9 @@ def on_symbols_loaded(symbols):
     register_bot_handlers()
 
 def init_ctrader_client():
-    api_key = os.getenv("CT_CLIENT_ID")
-    api_secret = os.getenv("CT_CLIENT_SECRET")
-    if not all([api_key, api_secret]):
-        logger.critical("CT_CLIENT_ID або CT_CLIENT_SECRET не встановлено.")
-        return
+    # Використовуємо функції для отримання конфігурації
+    api_key = get_ct_client_id()
+    api_secret = get_ct_client_secret()
 
     state.client = SpotwareClient(api_key, api_secret)
     state.client.on("symbolsLoaded")(on_symbols_loaded)
@@ -86,7 +84,7 @@ def home(request):
 
 def setup_webhook():
     """Встановлює вебхук при запуску додатку."""
-    app_name = os.getenv("FLY_APP_NAME")
+    app_name = get_fly_app_name()
     if app_name and state.updater:
         webhook_url = f"https://{app_name}.fly.dev/{TOKEN}"
         state.updater.bot.set_webhook(webhook_url)
@@ -96,6 +94,6 @@ def setup_webhook():
 
 
 # --- Запуск сервісів ---
-init_telegram_bot() # Ініціалізуємо бота до запуску reactor
+init_telegram_bot()
 reactor.callWhenRunning(setup_webhook)
 reactor.callWhenRunning(init_ctrader_client)

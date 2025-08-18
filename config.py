@@ -1,48 +1,34 @@
-# config.py
 import os
-import logging
-import threading
-from cachetools import TTLCache
 from dotenv import load_dotenv
-from telegram import Bot
-from telegram.ext import Dispatcher
 
+# Завантажує змінні з .env файлу для локальної розробки
 load_dotenv()
 
-# --- Telegram Tokens ---
-TOKEN = os.getenv("TOKEN")
-WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
-MY_TELEGRAM_ID = os.getenv("MY_TELEGRAM_ID")
+def _get_required_env(var_name: str) -> str:
+    """Отримує змінну оточення, яка є обов'язковою."""
+    value = os.getenv(var_name)
+    if value is None:
+        raise ValueError(f"Помилка: обов'язкова змінна оточення '{var_name}' не встановлена.")
+    return value
 
-# --- cTrader Credentials ---
-CT_CLIENT_ID = os.getenv("CT_CLIENT_ID")
-CT_CLIENT_SECRET = os.getenv("CT_CLIENT_SECRET")
-CTRADER_ACCESS_TOKEN = os.getenv("CTRADER_ACCESS_TOKEN")
-DEMO_ACCOUNT_ID = int(os.getenv("DEMO_ACCOUNT_ID", "0"))
-if DEMO_ACCOUNT_ID == 0:
-    raise ValueError("FATAL: DEMO_ACCOUNT_ID is not set in environment variables.")
+# --- Telegram ---
+def get_telegram_token() -> str:
+    return _get_required_env("TELEGRAM_BOT_TOKEN")
 
-# --- Logging ---
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+# --- cTrader ---
+def get_ct_client_id() -> str:
+    return _get_required_env("CT_CLIENT_ID")
 
-# --- Caching ---
-MARKET_DATA_CACHE = TTLCache(maxsize=5000, ttl=300)
-SYMBOL_DATA_CACHE = {}
-CACHE_LOCK = threading.Lock()
+def get_ct_client_secret() -> str:
+    return _get_required_env("CT_CLIENT_SECRET")
 
-# --- Telegram Bot Objects ---
-bot = Bot(token=TOKEN)
-# --- ЗМІНЕНО: Додано 4 воркери для обробки асинхронних завдань ---
-dp = Dispatcher(bot, None, use_context=True, workers=4)
+def get_ctrader_access_token() -> str:
+    return _get_required_env("CTRADER_ACCESS_TOKEN")
 
-# --- Constants ---
-CRYPTO_PAIRS_FULL = [] 
-STOCKS_US_SYMBOLS = []
-FOREX_SESSIONS = {
-    "Азіатська": ["USD/JPY", "AUD/USD", "NZD/USD", "EUR/JPY", "CHF/JPY"],
-    "Європейська": ["EUR/USD", "GBP/USD", "USD/CHF", "EUR/GBP", "EUR/CHF", "GBP/CHF"],
-    "Американська": ["USD/CAD", "USD/MXN", "USD/BRL", "USD/ZAR"]
-}
-ANALYSIS_TIMEFRAMES = ['15min', '1h', '4h', '1day']
-DB_NAME = "zigzag.db"
+def get_demo_account_id() -> int:
+    return int(_get_required_env("DEMO_ACCOUNT_ID"))
+
+# --- Fly.io ---
+def get_fly_app_name() -> str | None:
+    """Отримує ім'я додатку Fly.io (не є критичним, може бути None)."""
+    return os.getenv("FLY_APP_NAME")
