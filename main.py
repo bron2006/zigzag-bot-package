@@ -17,7 +17,6 @@ from config import (
     get_telegram_token, get_ct_client_id, get_ct_client_secret, 
     get_fly_app_name, get_webhook_secret, FOREX_SESSIONS, CRYPTO_PAIRS_FULL, STOCKS_US_SYMBOLS
 )
-# --- ЗМІНА: Додаємо init_db до імпортів ---
 from db import get_watchlist, toggle_watch, get_signal_history, init_db
 from analysis import get_api_detailed_signal_data
 from mta_analysis import get_mta_signal
@@ -25,8 +24,8 @@ from mta_analysis import get_mta_signal
 
 # --- Налаштування логування ---
 logging.basicConfig(
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    level=logging.INFO
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", # Додали %(name)s для ідентифікації модуля
+    level=logging.DEBUG # --- ДІАГНОСТИКА: Вмикаємо максимальний рівень логування ---
 )
 logger = logging.getLogger(__name__)
 
@@ -81,6 +80,8 @@ def init_ctrader_client():
     api_key = get_ct_client_id()
     api_secret = get_ct_client_secret()
     state.client = SpotwareClient(api_key, api_secret)
+    # --- ДІАГНОСТИКА: Логуємо ID клієнта в main.py ---
+    logger.info(f"main.py init_ctrader_client: Присвоєно state.client екземпляр з ID -> {id(state.client)}")
     state.client.on("symbolsLoaded")(on_symbols_loaded)
     state.client.on("error")(lambda err: logger.error(f"Помилка cTrader: {err}"))
     state.client.connect()
@@ -270,10 +271,8 @@ def setup_webhook():
         logger.warning("Не вдалося встановити вебхук.")
 
 # --- Запуск сервісів ---
-# --- ЗМІНА: Викликаємо ініціалізацію БД ---
 init_db()
 logger.info("✅ Базу даних ініціалізовано.")
-# --- КІНЕЦЬ ЗМІНИ ---
 init_telegram_bot()
 reactor.callWhenRunning(setup_webhook)
 reactor.callWhenRunning(init_ctrader_client)

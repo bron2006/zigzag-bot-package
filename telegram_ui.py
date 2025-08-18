@@ -4,7 +4,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import CallbackContext
 from twisted.internet import reactor
 
-from state import client, symbol_cache
+import state # --- ДІАГНОСТИКА: Імпортуємо весь модуль state ---
 from config import FOREX_SESSIONS
 from analysis import get_api_detailed_signal_data
 
@@ -29,7 +29,7 @@ def get_main_keyboard() -> InlineKeyboardMarkup:
 def start(update: Update, context: CallbackContext) -> None:
     """Обробляє команду /start."""
     try:
-        if client and client.isConnected:
+        if state.client and state.client.isConnected:
             update.message.reply_text(
                 "✅ З'єднання встановлено. Виберіть валютну пару:",
                 reply_markup=get_main_keyboard()
@@ -87,6 +87,10 @@ def button_handler(update: Update, context: CallbackContext) -> None:
     query = update.callback_query
     button_data = query.data if query else None
     
+    # --- ДІАГНОСТИКА: Логуємо ID клієнта, який бачить обробник ---
+    client_id_in_handler = id(state.client) if state.client else "None"
+    logger.info(f"telegram_ui.py button_handler: Обробник бачить state.client з ID -> {client_id_in_handler}")
+    
     logger.info(f"🔔 Отримано CallbackQuery: '{button_data}' від користувача {query.from_user.id}")
     
     if query:
@@ -95,10 +99,9 @@ def button_handler(update: Update, context: CallbackContext) -> None:
     if button_data == "ignore":
         return
 
-    # --- ПОЧАТОК ДІАГНОСТИЧНОГО БЛОКУ 1 ---
     if button_data == "refresh_status":
         try:
-            if client and client.isConnected:
+            if state.client and state.client.isConnected:
                 logger.info("Клієнт підключено. Спроба показати головне меню...")
                 query.edit_message_text(
                     text="✅ З'єднання встановлено. Виберіть валютну пару:",
@@ -106,7 +109,8 @@ def button_handler(update: Update, context: CallbackContext) -> None:
                 )
                 logger.info("Головне меню успішно надіслано.")
             else:
-                logger.warning("Клієнт НЕ підключено. Відповідь користувачу...")
+                is_connected_status = state.client.isConnected if state.client else "Client is None"
+                logger.warning(f"Клієнт НЕ підключено. Поточний статус isConnected: {is_connected_status}. Відповідь користувачу...")
                 query.answer(text="⏳ З'єднання ще встановлюється... Спробуйте за мить.", show_alert=True)
         except Exception:
             logger.exception("!!! КРИТИЧНА ПОМИЛКА при спробі оновити клавіатуру 'refresh_status'")
@@ -118,15 +122,14 @@ def button_handler(update: Update, context: CallbackContext) -> None:
             except Exception:
                 logger.exception("!!! Не вдалося навіть відправити повідомлення про помилку")
         return
-    # --- КІНЕЦЬ ДІАГНОСТИЧНОГО БЛОКУ 1 ---
 
-    if not client or not client.isConnected:
+    if not state.client or not state.client.isConnected:
         query.answer(text="❌ З'єднання з cTrader API ще не встановлено. Спробуйте оновити статус.", show_alert=True)
         return
 
     symbol = button_data
-    if symbol not in symbol_cache:
-        logger.warning(f"Символ '{symbol}' не знайдено в кеші. Розмір кешу: {len(symbol_cache)}.")
+    if symbol not in state.symbol_cache:
+        logger.warning(f"Символ '{symbol}' не знайдено в кеші. Розмір кешу: {len(state.symbol_cache)}.")
         query.edit_message_text(text=f"⚠️ Символ {symbol} не знайдено. Можливо, він не торгується у вашого брокера.")
         return
 
@@ -148,7 +151,7 @@ def button_handler(update: Update, context: CallbackContext) -> None:
         )
 
     def do_analysis():
-        d = get_api_detailed_signal_data(client, symbol, user_id)
+        d = get_api_detailed_signal_data(state.client, symbol, user_id)
         d.addCallbacks(on_success, on_error)
 
     reactor.callFromThread(do_analysis)

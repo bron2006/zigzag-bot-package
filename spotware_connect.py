@@ -10,7 +10,6 @@ from ctrader_open_api.messages.OpenApiMessages_pb2 import (
     ProtoOAErrorRes
 )
 from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOAPayloadType
-# Оновлюємо імпорти з конфігурації
 from config import get_ctrader_access_token, get_demo_account_id
 
 logger = logging.getLogger(__name__)
@@ -35,6 +34,8 @@ class EventEmitter:
 class SpotwareClient(EventEmitter):
     def __init__(self, client_id, client_secret):
         super().__init__()
+        # --- ДІАГНОСТИКА: Логуємо ID об'єкта при створенні ---
+        logger.info(f"SpotwareClient __init__: Створено екземпляр з ID -> {id(self)}")
         self.host = "demo.ctraderapi.com"
         self.port = 5035
         self._client_id = client_id
@@ -50,6 +51,12 @@ class SpotwareClient(EventEmitter):
     def isConnected(self):
         return self._is_connected
 
+    # --- ДІАГНОСТИКА: Метод для безпечної зміни стану з логуванням ---
+    def _set_connection_state(self, new_state: bool):
+        if self._is_connected != new_state:
+            logger.info(f"SpotwareClient State Change: isConnected -> {new_state} (ID: {id(self)})")
+            self._is_connected = new_state
+
     def connect(self):
         self._client.startService()
 
@@ -59,7 +66,9 @@ class SpotwareClient(EventEmitter):
         self._send_message(request)
 
     def _on_disconnected(self, client, reason):
-        self._is_connected = False
+        # --- ДІАГНОСТИКА: Явний лог при дисконекті ---
+        logger.warning(f"!!! SpotwareClient _on_disconnected: Спрацював колбек роз'єднання! (ID: {id(self)})")
+        self._set_connection_state(False)
         error_msg = reason.getErrorMessage()
         logger.warning(f"Відключено від cTrader API. Причина: {error_msg}")
         self.emit("error", f"Відключено: {error_msg}")
@@ -75,7 +84,7 @@ class SpotwareClient(EventEmitter):
             response = ProtoOAAccountAuthRes()
             response.ParseFromString(message.payload)
             logger.info(f"Торговий рахунок {response.ctidTraderAccountId} успішно авторизовано.")
-            self._is_connected = True
+            self._set_connection_state(True)
             self._request_symbols()
         elif payload_type == ProtoOAPayloadType.PROTO_OA_SYMBOLS_LIST_RES:
             response = ProtoOASymbolsListRes()
@@ -91,7 +100,6 @@ class SpotwareClient(EventEmitter):
             self.emit("error", error_message)
 
     def _authorize_account(self):
-        # Використовуємо функції для отримання конфігурації
         request = ProtoOAAccountAuthReq(
             ctidTraderAccountId=get_demo_account_id(), 
             accessToken=get_ctrader_access_token()
@@ -100,7 +108,6 @@ class SpotwareClient(EventEmitter):
 
     def _request_symbols(self):
         logger.info("Надсилаю запит на отримання списку символів...")
-        # Використовуємо функцію для отримання ID акаунту
         request = ProtoOASymbolsListReq(ctidTraderAccountId=get_demo_account_id())
         self._send_message(request)
 
