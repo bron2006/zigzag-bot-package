@@ -1,5 +1,5 @@
 # requirements.txt
-python-telegram-bot==20.9
+python-telegram-bot==20.8
 python-dotenv==1.0.1
 klein
 Twisted
