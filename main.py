@@ -66,50 +66,68 @@ def message_received(client: Client, message: ProtoMessage):
         error_res = ProtoOAErrorRes.FromString(message.payload)
         logger.error(f"❌ cTrader Error: {error_res.errorCode} - {error_res.description}")
 
+# --- ЗМІНЕНО: Повністю переписано на послідовні запити, як в офіційному прикладі ---
 def populate_symbol_cache():
     logger.info("🔄 Populating symbol cache...")
-    list_req = ProtoOASymbolsListReq(ctidTraderAccountId=DEMO_ACCOUNT_ID)
-    d = client.send(list_req)
-
+    
     def on_symbols_listed(response: ProtoMessage):
         symbols_list = ProtoOASymbolsListRes.FromString(response.payload)
         all_symbol_ids = [s.symbolId for s in symbols_list.symbol if s.symbolId]
+        logger.info(f"DIAGNOSTIC: Received {len(all_symbol_ids)} symbol IDs. Fetching details sequentially...")
+
         if not all_symbol_ids:
-            logger.warning("⚠️ Received an empty symbol list from the server.")
+            logger.warning("⚠️ Symbol list is empty. Aborting cache population.")
             return
 
-        chunk_size = 70
-        deferred_list = [
-            client.send(ProtoOASymbolByIdReq(ctidTraderAccountId=DEMO_ACCOUNT_ID, symbolId=all_symbol_ids[i:i + chunk_size]))
-            for i in range(0, len(all_symbol_ids), chunk_size)
-        ]
-        d_list = defer.DeferredList(deferred_list, consumeErrors=True)
-        d_list.addCallback(on_all_details_fetched)
-
-    # --- ЗМІНЕНО: Повністю переписана логіка для надійного оновлення кешу ---
-    def on_all_details_fetched(results):
-        logger.info(f"DIAGNOSTIC: Processing details for {len(results)} chunks.")
-        # Крок 1: Створюємо тимчасовий словник
+        # Створюємо тимчасовий кеш для збору результатів
         temp_cache = {}
-        for index, (success, response_or_failure) in enumerate(results):
-            if success:
-                details = ProtoOASymbolByIdRes.FromString(response_or_failure.payload)
-                for symbol in details.symbol:
-                    if hasattr(symbol, 'symbolName') and symbol.symbolName:
-                        temp_cache[symbol.symbolName] = {'symbolId': symbol.symbolId, 'digits': symbol.digits}
-            else:
-                logger.error(f"DIAGNOSTIC: Chunk {index+1} failed! Reason: {response_or_failure.getErrorMessage()}")
-
-        # Крок 2: Атомарно оновлюємо глобальний кеш
-        with CACHE_LOCK:
-            SYMBOL_DATA_CACHE.clear()
-            SYMBOL_DATA_CACHE.update(temp_cache)
         
-        logger.info(f"✅ Symbol cache populated. Total symbols: {len(SYMBOL_DATA_CACHE)}")
+        # Створюємо ланцюжок послідовних запитів
+        d = defer.succeed(None)
+        chunk_size = 70
+        
+        def process_chunk(result, chunk):
+            # Коли попередній запит завершився, відправляємо наступний
+            details_req = ProtoOASymbolByIdReq(ctidTraderAccountId=DEMO_ACCOUNT_ID, symbolId=chunk)
+            return client.send(details_req)
 
+        def on_chunk_details(response: ProtoMessage):
+            # Обробляємо результат поточного запиту
+            details = ProtoOASymbolByIdRes.FromString(response.payload)
+            for symbol in details.symbol:
+                if hasattr(symbol, 'symbolName') and symbol.symbolName:
+                    temp_cache[symbol.symbolName] = {'symbolId': symbol.symbolId, 'digits': symbol.digits}
+            logger.info(f"DIAGNOSTIC: Processed chunk, current temp cache size: {len(temp_cache)}")
+
+        # Формуємо ланцюжок
+        for i in range(0, len(all_symbol_ids), chunk_size):
+            chunk = all_symbol_ids[i:i + chunk_size]
+            d.addCallback(process_chunk, chunk)
+            d.addCallback(on_chunk_details)
+
+        def on_all_done(result):
+            # Коли всі запити в ланцюжку виконано
+            with CACHE_LOCK:
+                SYMBOL_DATA_CACHE.clear()
+                SYMBOL_DATA_CACHE.update(temp_cache)
+            logger.info(f"✅ Symbol cache populated. Total symbols: {len(SYMBOL_DATA_CACHE)}")
+
+        d.addCallback(on_all_done)
+        d.addErrback(on_error)
+
+    # Запускаємо початковий запит на список символів
+    list_req = ProtoOASymbolsListReq(ctidTraderAccountId=DEMO_ACCOUNT_ID)
+    d = client.send(list_req)
     d.addCallbacks(on_symbols_listed, on_error)
 
 # --- Klein Web Server Routes ---
+@web_app.route("/")
+def root(request):
+    request.setHeader("Content-Type", "text/plain; charset=utf-8")
+    status = "authorized" if is_ctrader_authorized else "connecting..."
+    return f"✅ ZigZag Bot. cTrader Status: {status}. Symbols in cache: {len(SYMBOL_DATA_CACHE)}"
+
+# ... (решта файлу без змін) ...
 @web_app.route("/webhook", methods=["POST"])
 def webhook(request):
     try:
@@ -131,14 +149,7 @@ def health_check(request):
     request.setResponseCode(503)
     return "Service Unavailable"
 
-@web_app.route("/")
-def root(request):
-    # --- ЗМІНЕНО: Додано заголовок для правильного відображення UTF-8 символів ---
-    request.setHeader("Content-Type", "text/plain; charset=utf-8")
-    status = "authorized" if is_ctrader_authorized else "connecting..."
-    return f"✅ ZigZag Bot. cTrader Status: {status}. Symbols in cache: {len(SYMBOL_DATA_CACHE)}"
-
-# --- Main Application Startup (без змін) ---
+# --- Main Application Startup ---
 if __name__ == "__main__":
     init_db()
     
