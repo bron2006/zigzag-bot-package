@@ -66,10 +66,11 @@ def message_received(client: Client, message: ProtoMessage):
         error_res = ProtoOAErrorRes.FromString(message.payload)
         logger.error(f"❌ cTrader Error: {error_res.errorCode} - {error_res.description}")
 
-# --- ЗМІНЕНО: Фінальна версія з правильним двокроковим завантаженням ---
+# --- ЗМІНЕНО: Повернено правильну і надійну двокрокову логіку ---
 def populate_symbol_cache():
     logger.info("🔄 Populating symbol cache...")
     
+    # Крок 1: Отримуємо "полегшені" символи і витягуємо їх ID
     def on_symbols_listed(response: ProtoMessage):
         symbols_list = ProtoOASymbolsListRes.FromString(response.payload)
         all_symbol_ids = [s.symbolId for s in symbols_list.symbol]
@@ -78,7 +79,7 @@ def populate_symbol_cache():
         if not all_symbol_ids:
             return
 
-        # Розбиваємо на частини і створюємо список запитів
+        # Крок 2: Робимо запит на "повні" символи, використовуючи отримані ID
         chunk_size = 70
         deferred_list = [
             client.send(ProtoOASymbolByIdReq(ctidTraderAccountId=DEMO_ACCOUNT_ID, symbolId=all_symbol_ids[i:i + chunk_size]))
@@ -88,14 +89,14 @@ def populate_symbol_cache():
         d_list = defer.DeferredList(deferred_list, consumeErrors=True)
         d_list.addCallback(on_all_details_fetched)
 
+    # Крок 3: Обробляємо відповідь з "повними" символами
     def on_all_details_fetched(results):
         temp_cache = {}
         for success, response_or_failure in results:
             if success:
-                # Тепер ми працюємо з ProtoOASymbolByIdRes, де є повні дані
                 details = ProtoOASymbolByIdRes.FromString(response_or_failure.payload)
                 for symbol in details.symbol:
-                    # І тут вже є і symbolName, і digits
+                    # Тепер ми гарантовано маємо і symbolName, і digits
                     if hasattr(symbol, 'symbolName') and symbol.symbolName:
                         temp_cache[symbol.symbolName] = {'symbolId': symbol.symbolId, 'digits': symbol.digits}
         
@@ -138,6 +139,7 @@ def health_check(request):
 if __name__ == "__main__":
     init_db()
     
+    # Повертаємо функціонал Telegram
     webhook_url = f"https://{APP_NAME}.fly.dev/webhook"
     if bot.set_webhook(url=webhook_url, secret_token=WEBHOOK_SECRET):
         logger.info(f"✅ Telegram webhook set: {webhook_url}")
