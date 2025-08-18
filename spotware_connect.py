@@ -11,7 +11,6 @@ from ctrader_open_api.messages.OpenApiMessages_pb2 import (
 )
 from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOAPayloadType
 
-# Імпортуємо необхідні налаштування з конфігураційного файлу
 try:
     from config import CTRADER_ACCESS_TOKEN, DEMO_ACCOUNT_ID
 except ImportError:
@@ -25,11 +24,17 @@ class EventEmitter:
     def __init__(self):
         self._events = {}
 
-    def on(self, event, func):
-        if event not in self._events:
-            self._events[event] = []
-        self._events[event].append(func)
-        return func
+    def on(self, event):
+        """
+        Декоратор для реєстрації обробника події.
+        ВИПРАВЛЕНО: Ця реалізація коректно працює з синтаксисом @.
+        """
+        def decorator(func):
+            if event not in self._events:
+                self._events[event] = []
+            self._events[event].append(func)
+            return func
+        return decorator
 
     def emit(self, event, *args, **kwargs):
         if event in self._events:
