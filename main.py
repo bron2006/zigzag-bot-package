@@ -17,7 +17,8 @@ from config import (
     get_telegram_token, get_ct_client_id, get_ct_client_secret, 
     get_fly_app_name, get_webhook_secret, FOREX_SESSIONS, CRYPTO_PAIRS_FULL, STOCKS_US_SYMBOLS
 )
-from db import get_watchlist, toggle_watch, get_signal_history
+# --- ЗМІНА: Додаємо init_db до імпортів ---
+from db import get_watchlist, toggle_watch, get_signal_history, init_db
 from analysis import get_api_detailed_signal_data
 from mta_analysis import get_mta_signal
 
@@ -68,11 +69,10 @@ def on_symbols_loaded(symbols):
     for s in symbols:
         if "symbolName" in s:
             normalized_name = s["symbolName"].replace("/", "").strip()
-            # Зберігаємо весь об'єкт, він може містити корисні дані
             temp_cache[normalized_name] = {
                 "symbolId": s.get("symbolId"),
                 "symbolName": s.get("symbolName"),
-                "pipPosition": s.get("pipPosition", 5) # Зберігаємо pipPosition, якщо воно є
+                "pipPosition": s.get("pipPosition", 5) 
             }
     state.symbol_cache.update(temp_cache)
     logger.info("✅ Кеш символів заповнено (%s символів)", len(state.symbol_cache))
@@ -102,7 +102,6 @@ def parse_tg_init_data(init_data_str: str) -> dict | None:
 @app.route('/api/get_ranked_pairs', methods=['GET'])
 def get_ranked_pairs(request):
     """Віддає списки активів та список обраного для користувача."""
-    # --- ПОЧАТОК ДІАГНОСТИЧНОГО БЛОКУ 2 ---
     try:
         init_data = request.args.get(b'initData', [b''])[0].decode()
         user = parse_tg_init_data(init_data)
@@ -137,7 +136,6 @@ def get_ranked_pairs(request):
         request.setHeader('Access-Control-Allow-Origin', '*')
         error_response = {"error": "Internal Server Error", "message": "Failed to process pair lists."}
         return json.dumps(error_response).encode('utf-8')
-    # --- КІНЕЦЬ ДІАГНОСТИЧНОГО БЛОКУ 2 ---
 
 
 @app.route('/api/toggle_watchlist', methods=['GET'])
@@ -272,6 +270,10 @@ def setup_webhook():
         logger.warning("Не вдалося встановити вебхук.")
 
 # --- Запуск сервісів ---
+# --- ЗМІНА: Викликаємо ініціалізацію БД ---
+init_db()
+logger.info("✅ Базу даних ініціалізовано.")
+# --- КІНЕЦЬ ЗМІНИ ---
 init_telegram_bot()
 reactor.callWhenRunning(setup_webhook)
 reactor.callWhenRunning(init_ctrader_client)
