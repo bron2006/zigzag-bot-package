@@ -6,7 +6,6 @@ import threading
 from klein import Klein
 from twisted.internet import reactor
 from telegram import Update
-# ВАЖЛИВО: Повертаємо імпорти для CommandHandler та CallbackQueryHandler
 from telegram.ext import Updater, CommandHandler, CallbackQueryHandler
 
 import state
@@ -45,16 +44,14 @@ def dispatcher_worker():
 
 # --- Ініціалізація Telegram ---
 def init_telegram_bot():
-    """Ініціалізує Updater та запускає фонові воркери."""
+    """Ініціалізує Updater, реєструє обробники та запускає фонові воркери."""
     state.updater = Updater(TOKEN, use_context=True)
     
-    # Реєструємо обробники
     dispatcher = state.updater.dispatcher
     dispatcher.add_handler(CommandHandler("start", start))
     dispatcher.add_handler(CallbackQueryHandler(button_handler))
     logger.info("✅ Обробники Telegram зареєстровані.")
     
-    # Запускаємо наші власні воркери для обробки черги
     for _ in range(4):
         threading.Thread(target=dispatcher_worker, daemon=True).start()
     logger.info("✅ Воркери для обробки черги Telegram запущені.")
@@ -128,7 +125,6 @@ def setup_webhook():
 
 # --- Запуск сервісів ---
 init_telegram_bot()
-# ВАЖЛИВО: Реєструємо обробники до того, як cTrader їх може викликати
-register_bot_handlers() 
+# ВИДАЛЕНО ПОМИЛКОВИЙ ВИКЛИК
 reactor.callWhenRunning(setup_webhook)
 reactor.callWhenRunning(init_ctrader_client)
