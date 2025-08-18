@@ -8,17 +8,17 @@ primary_region = "fra"
 
 [env]
   PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION = "python"
-  
-# Оскільки наш додаток - це бот (фоновий процес), а не веб-сервер,
-# ми не використовуємо секцію [[http_service]].
-# Замість неї ми прямо вказуємо команду для запуску.
-[processes]
-  app = "python main.py"
 
-[[vm]]
-  cpu_kind = "shared"
-  cpus = 1
-  memory_mb = 512
+# ПОВЕРТАЄМОСЯ ДО СТАНДАРТНОЇ КОНФІГУРАЦІЇ ДЛЯ ВЕБ-СЕРВІСУ
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = true
+  auto_start_machines = true
+  min_machines_running = 0 # Встановіть 1, якщо бот має працювати постійно
+  processes = ["app"]
 
-[experimental]
-  auto_rollback = true
+# Видаляємо [processes], оскільки flyctl автоматично
+# запустить команду з Dockerfile (CMD ["python", "main.py"])
+# або ми можемо вказати її тут. Краще оновити Dockerfile.
+# Ми оновимо Dockerfile, щоб він запускав run.py
