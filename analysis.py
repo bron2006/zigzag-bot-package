@@ -5,7 +5,6 @@ import numpy as np
 import time
 from twisted.internet import reactor, defer
 
-# --- ЗМІНЕНО: Імпорти адаптовано до правильного клієнта ---
 from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import ProtoMessage
 from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOAGetTrendbarsReq, ProtoOAGetTrendbarsRes
 from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOATrendbarPeriod as TrendbarPeriod
@@ -13,7 +12,6 @@ from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOATrendbarPe
 from db import add_signal_to_history
 from config import logger, MARKET_DATA_CACHE, SYMBOL_DATA_CACHE, ANALYSIS_TIMEFRAMES, DEMO_ACCOUNT_ID
 
-# --- ЗМІНЕНО: Функція тепер приймає `client` і працює з `client.send` ---
 def get_market_data(client, pair, tf, limit=300):
     key = f"{pair}_{tf}_{limit}"
     if key in MARKET_DATA_CACHE:
@@ -33,7 +31,6 @@ def get_market_data(client, pair, tf, limit=300):
     seconds_per_bar = {'15min': 900, '1h': 3600, '4h': 14400, '1day': 86400}
     from_ts = now - (limit * seconds_per_bar[tf] * 1000)
 
-    # Створюємо і надсилаємо правильний запит
     request = ProtoOAGetTrendbarsReq(
         ctidTraderAccountId=DEMO_ACCOUNT_ID,
         symbolId=symbol_details['symbolId'],
@@ -62,10 +59,8 @@ def get_market_data(client, pair, tf, limit=300):
         MARKET_DATA_CACHE[key] = df
         return df
     
-    # Додаємо обробку відповіді
     return d.addCallback(process_response)
 
-# Функції _calculate_core_signal та _generate_verdict залишаються без змін
 def _calculate_core_signal(df, daily_df):
     df.ta.rsi(close=df['close'], length=14, append=True, col_names=('RSI',))
     df.ta.kama(close=df['close'], length=14, append=True, col_names=('KAMA',))
@@ -96,13 +91,11 @@ def _generate_verdict(analysis):
     if score < 45: return "↘️ Помірний сигнал: ПРОДАВАТИ", "moderate_sell"
     return "🟡 НЕЙТРАЛЬНА СИТУАЦІЯ", "neutral"
 
-# --- ЗМІНЕНО: Функція тепер приймає `client` ---
 def get_api_detailed_signal_data(client, pair, user_id=None):
     if not isinstance(pair, str) or len(pair) < 3:
         return defer.fail(Exception(f"Некоректна назва пари: '{pair}'."))
 
     def on_data_ready(results):
-        # Перевірка, чи обидва Deferred завершились успішно
         if not all(res[0] for res in results):
             return {"error": "Не вдалося завантажити ринкові дані."}
         
@@ -140,24 +133,3 @@ def get_api_detailed_signal_data(client, pair, user_id=None):
     d2 = get_market_data(client, pair, '1day', 100)
     d_list = defer.DeferredList([d1, d2], consumeErrors=True)
     return d_list.addCallback(on_data_ready)
-
-def get_api_mta_data(client, pair):
-    def get_single_tf_signal(tf):
-        d = get_market_data(client, pair, tf, 200)
-        def on_df_ready(df):
-            if df.empty or len(df) < 55: return None
-            df.ta.ema(close=df['close'], length=21, append=True, col_names=('EMA_fast',))
-            df.ta.ema(close=df['close'], length=55, append=True, col_names=('EMA_slow',))
-            signal = "BUY" if df.iloc[-1]['EMA_fast'] > df.iloc[-1]['EMA_slow'] else "SELL"
-            return {"tf": tf, "signal": signal}
-        return d.addCallback(on_df_ready)
-
-    deferreds = [get_single_tf_signal(tf) for tf in ANALYSIS_TIMEFRAMES]
-    d_list = defer.DeferredList(deferreds, consumeErrors=True)
-
-    def on_all_ready(results):
-        valid_results = [res[1] for res in results if res[0] and res[1] is not None]
-        valid_results.sort(key=lambda x: ANALYSIS_TIMEFRAMES.index(x['tf']))
-        return valid_results
-        
-    return d_list.addCallback(on_all_ready)
