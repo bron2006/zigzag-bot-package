@@ -6,7 +6,8 @@ import threading
 from klein import Klein
 from twisted.internet import reactor
 from telegram import Update
-from telegram.ext import Updater
+# ВАЖЛИВО: Повертаємо імпорти для CommandHandler та CallbackQueryHandler
+from telegram.ext import Updater, CommandHandler, CallbackQueryHandler
 
 import state
 from telegram_ui import start, button_handler
@@ -27,7 +28,6 @@ logger = logging.getLogger(__name__)
 # --- Ініціалізація ---
 app = Klein()
 TOKEN = get_telegram_token()
-# Створюємо потоко-безпечну чергу для оновлень від Telegram
 updates_queue = queue.Queue(maxsize=1000)
 
 # --- Воркер для обробки оновлень з черги ---
@@ -55,7 +55,7 @@ def init_telegram_bot():
     logger.info("✅ Обробники Telegram зареєстровані.")
     
     # Запускаємо наші власні воркери для обробки черги
-    for _ in range(4): # Запускаємо 4 фонових потоки
+    for _ in range(4):
         threading.Thread(target=dispatcher_worker, daemon=True).start()
     logger.info("✅ Воркери для обробки черги Telegram запущені.")
 
@@ -84,7 +84,6 @@ def init_ctrader_client():
 def webhook_handler(request):
     """Швидка ручка, що лише кладе оновлення в чергу і миттєво відповідає."""
     try:
-        # ОБОВ'ЯЗКОВО зчитуємо тіло запиту повністю
         body = request.content.read()
         
         if request.getHeader("X-Telegram-Bot-Api-Secret-Token") != get_webhook_secret():
@@ -93,17 +92,17 @@ def webhook_handler(request):
             return b"Forbidden"
 
         update_data = json.loads(body.decode())
-        updates_queue.put_nowait(update_data) # Неблокуюче додавання в чергу
+        updates_queue.put_nowait(update_data)
         
         request.setResponseCode(200)
         return b"OK"
     except queue.Full:
         logger.warning("Черга оновлень переповнена.")
-        request.setResponseCode(503) # Service Unavailable
+        request.setResponseCode(503)
         return b"Busy"
     except Exception:
         logger.exception("Некоректний запит до вебхука.")
-        request.setResponseCode(400) # Bad Request
+        request.setResponseCode(400)
         return b"Bad Request"
 
 @app.route("/health")
@@ -129,5 +128,7 @@ def setup_webhook():
 
 # --- Запуск сервісів ---
 init_telegram_bot()
+# ВАЖЛИВО: Реєструємо обробники до того, як cTrader їх може викликати
+register_bot_handlers() 
 reactor.callWhenRunning(setup_webhook)
 reactor.callWhenRunning(init_ctrader_client)
