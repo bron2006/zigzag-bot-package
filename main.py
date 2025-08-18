@@ -15,9 +15,9 @@ from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import ProtoMessage
 from ctrader_open_api.messages.OpenApiMessages_pb2 import (
     ProtoOAApplicationAuthReq, ProtoOAApplicationAuthRes,
     ProtoOAAccountAuthReq, ProtoOAAccountAuthRes, ProtoOAErrorRes,
-    ProtoOASymbolsListReq, ProtoOASymbolsListRes
+    ProtoOASymbolsListReq, ProtoOASymbolsListRes,
+    ProtoOASymbolByIdReq, ProtoOASymbolByIdRes
 )
-# --- ЗМІНЕНО: ProtoOASymbolByIdReq більше не потрібен ---
 
 from config import logger, SYMBOL_DATA_CACHE, CACHE_LOCK, WEBHOOK_SECRET, \
                    CT_CLIENT_ID, CT_CLIENT_SECRET, CTRADER_ACCESS_TOKEN, DEMO_ACCOUNT_ID, \
@@ -50,7 +50,7 @@ def disconnected(client: Client, reason):
     logger.warning(f"⚠️ cTrader Client Disconnected. Reason: {reason.getErrorMessage()}")
 
 def on_error(failure):
-    logger.error(f"❌ A cTrader deferred error occurred: {failure.getErrorMessage()}")
+    logger.error(f"❌ A cTrader deferred error occurred: {failure}")
 
 def message_received(client: Client, message: ProtoMessage):
     global is_ctrader_authorized
@@ -66,28 +66,20 @@ def message_received(client: Client, message: ProtoMessage):
         error_res = ProtoOAErrorRes.FromString(message.payload)
         logger.error(f"❌ cTrader Error: {error_res.errorCode} - {error_res.description}")
 
-# --- ЗМІНЕНО: Фінальна, спрощена і правильна версія функції ---
 def populate_symbol_cache():
     logger.info("🔄 Populating symbol cache...")
     
     def on_symbols_listed(response: ProtoMessage):
         symbols_list = ProtoOASymbolsListRes.FromString(response.payload)
         
-        # Створюємо тимчасовий словник для нових даних
-        temp_cache = {}
-        for symbol in symbols_list.symbol:
-            # Беремо дані з правильного об'єкта, де є і назва, і ID, і digits
-            if hasattr(symbol, 'symbolName') and symbol.symbolName:
-                temp_cache[symbol.symbolName] = {'symbolId': symbol.symbolId, 'digits': symbol.digits}
-        
-        # Атомарно оновлюємо глобальний кеш
         with CACHE_LOCK:
             SYMBOL_DATA_CACHE.clear()
-            SYMBOL_DATA_CACHE.update(temp_cache)
+            for symbol in symbols_list.symbol:
+                if hasattr(symbol, 'symbolName') and symbol.symbolName:
+                    SYMBOL_DATA_CACHE[symbol.symbolName] = {'symbolId': symbol.symbolId, 'digits': symbol.digits}
         
         logger.info(f"✅ Symbol cache populated. Total symbols: {len(SYMBOL_DATA_CACHE)}")
 
-    # Робимо лише ОДИН запит, цього достатньо
     list_req = ProtoOASymbolsListReq(ctidTraderAccountId=DEMO_ACCOUNT_ID)
     d = client.send(list_req)
     d.addCallbacks(on_symbols_listed, on_error)
@@ -99,38 +91,20 @@ def root(request):
     status = "authorized" if is_ctrader_authorized else "connecting..."
     return f"✅ ZigZag Bot. cTrader Status: {status}. Symbols in cache: {len(SYMBOL_DATA_CACHE)}"
 
-@web_app.route("/webhook", methods=["POST"])
-def webhook(request):
-    try:
-        if request.getHeader("X-Telegram-Bot-Api-Secret-Token") == WEBHOOK_SECRET:
-            update = Update.de_json(json.loads(request.content.read()), bot)
-            dp.process_update(update)
-            return "OK"
-        request.setResponseCode(403)
-        return "Forbidden"
-    except Exception as e:
-        logger.error(f"❌ Webhook error: {e}")
-        request.setResponseCode(500)
-        return "Error"
-
-@web_app.route("/health")
-def health_check(request):
-    if is_ctrader_authorized and len(SYMBOL_DATA_CACHE) > 100: # Збільшено поріг для надійності
-        return "OK"
-    request.setResponseCode(503)
-    return "Service Unavailable"
-
 # --- Main Startup ---
 if __name__ == "__main__":
     init_db()
     
-    webhook_url = f"https://{APP_NAME}.fly.dev/webhook"
-    if bot.set_webhook(url=webhook_url, secret_token=WEBHOOK_SECRET):
-        logger.info(f"✅ Telegram webhook set: {webhook_url}")
-    else:
-        logger.error(f"❌ Failed to set Telegram webhook!")
+    # --- ЗМІНЕНО: Тимчасово вимикаємо Telegram для діагностики ---
+    logger.warning("DIAGNOSTIC MODE: Telegram bot functionality is temporarily disabled.")
+    # webhook_url = f"https://{APP_NAME}.fly.dev/webhook"
+    # if bot.set_webhook(url=webhook_url, secret_token=WEBHOOK_SECRET):
+    #     logger.info(f"✅ Telegram webhook set: {webhook_url}")
+    # else:
+    #     logger.error(f"❌ Failed to set Telegram webhook!")
         
-    register_handlers(dp, client)
+    # register_handlers(dp, client)
+    # -----------------------------------------------------------
     
     client.setConnectedCallback(connected)
     client.setDisconnectedCallback(disconnected)
