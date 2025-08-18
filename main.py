@@ -15,9 +15,9 @@ from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import ProtoMessage
 from ctrader_open_api.messages.OpenApiMessages_pb2 import (
     ProtoOAApplicationAuthReq, ProtoOAApplicationAuthRes,
     ProtoOAAccountAuthReq, ProtoOAAccountAuthRes, ProtoOAErrorRes,
-    ProtoOASymbolsListReq, ProtoOASymbolsListRes,
-    ProtoOASymbolByIdReq, ProtoOASymbolByIdRes
+    ProtoOASymbolsListReq, ProtoOASymbolsListRes
 )
+# --- ЗМІНЕНО: ProtoOASymbolByIdReq більше не потрібен ---
 
 from config import logger, SYMBOL_DATA_CACHE, CACHE_LOCK, WEBHOOK_SECRET, \
                    CT_CLIENT_ID, CT_CLIENT_SECRET, CTRADER_ACCESS_TOKEN, DEMO_ACCOUNT_ID, \
@@ -66,47 +66,28 @@ def message_received(client: Client, message: ProtoMessage):
         error_res = ProtoOAErrorRes.FromString(message.payload)
         logger.error(f"❌ cTrader Error: {error_res.errorCode} - {error_res.description}")
 
+# --- ЗМІНЕНО: Фінальна, спрощена і правильна версія функції ---
 def populate_symbol_cache():
     logger.info("🔄 Populating symbol cache...")
     
     def on_symbols_listed(response: ProtoMessage):
         symbols_list = ProtoOASymbolsListRes.FromString(response.payload)
-        all_symbol_ids = [s.symbolId for s in symbols_list.symbol if s.symbolId]
         
+        # Створюємо тимчасовий словник для нових даних
         temp_cache = {}
-        d = defer.succeed(None)
-        chunk_size = 70
+        for symbol in symbols_list.symbol:
+            # Беремо дані з правильного об'єкта, де є і назва, і ID, і digits
+            if hasattr(symbol, 'symbolName') and symbol.symbolName:
+                temp_cache[symbol.symbolName] = {'symbolId': symbol.symbolId, 'digits': symbol.digits}
         
-        def process_chunk(result, chunk):
-            details_req = ProtoOASymbolByIdReq(ctidTraderAccountId=DEMO_ACCOUNT_ID, symbolId=chunk)
-            return client.send(details_req)
+        # Атомарно оновлюємо глобальний кеш
+        with CACHE_LOCK:
+            SYMBOL_DATA_CACHE.clear()
+            SYMBOL_DATA_CACHE.update(temp_cache)
+        
+        logger.info(f"✅ Symbol cache populated. Total symbols: {len(SYMBOL_DATA_CACHE)}")
 
-        # --- ЗМІНЕНО: Додано фінальну діагностику ---
-        def on_chunk_details(response: ProtoMessage):
-            details = ProtoOASymbolByIdRes.FromString(response.payload)
-            
-            # ВИВОДИМО ПОВНИЙ ВМІСТ ПЕРШОГО СИМВОЛУ ДЛЯ АНАЛІЗУ
-            if details.symbol:
-                logger.info(f"DIAGNOSTIC: Inspecting first symbol object: {repr(details.symbol[0])}")
-
-            for symbol in details.symbol:
-                if hasattr(symbol, 'symbolName') and symbol.symbolName:
-                    temp_cache[symbol.symbolName] = {'symbolId': symbol.symbolId, 'digits': symbol.digits}
-            
-        for i in range(0, len(all_symbol_ids), chunk_size):
-            chunk = all_symbol_ids[i:i + chunk_size]
-            d.addCallback(process_chunk, chunk)
-            d.addCallback(on_chunk_details)
-
-        def on_all_done(result):
-            with CACHE_LOCK:
-                SYMBOL_DATA_CACHE.clear()
-                SYMBOL_DATA_CACHE.update(temp_cache)
-            logger.info(f"✅ Symbol cache populated. Total symbols: {len(SYMBOL_DATA_CACHE)}")
-
-        d.addCallback(on_all_done)
-        d.addErrback(on_error)
-
+    # Робимо лише ОДИН запит, цього достатньо
     list_req = ProtoOASymbolsListReq(ctidTraderAccountId=DEMO_ACCOUNT_ID)
     d = client.send(list_req)
     d.addCallbacks(on_symbols_listed, on_error)
@@ -134,7 +115,7 @@ def webhook(request):
 
 @web_app.route("/health")
 def health_check(request):
-    if is_ctrader_authorized and len(SYMBOL_DATA_CACHE) > 10:
+    if is_ctrader_authorized and len(SYMBOL_DATA_CACHE) > 100: # Збільшено поріг для надійності
         return "OK"
     request.setResponseCode(503)
     return "Service Unavailable"
