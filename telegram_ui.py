@@ -28,27 +28,31 @@ def get_main_keyboard() -> InlineKeyboardMarkup:
 
 def start(update: Update, context: CallbackContext) -> None:
     """Обробляє команду /start."""
-    if client and client.isConnected:
-        update.message.reply_text(
-            "✅ З'єднання встановлено. Виберіть валютну пару:",
-            reply_markup=get_main_keyboard()
-        )
-    else:
-        keyboard = [
-            [InlineKeyboardButton("🔄 Оновити статус", callback_data="refresh_status")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        update.message.reply_text(
-            "⏳ Встановлюю з'єднання з сервером cTrader... Натисніть 'Оновити' за кілька секунд.",
-            reply_markup=reply_markup
-        )
+    try:
+        if client and client.isConnected:
+            update.message.reply_text(
+                "✅ З'єднання встановлено. Виберіть валютну пару:",
+                reply_markup=get_main_keyboard()
+            )
+        else:
+            keyboard = [
+                [InlineKeyboardButton("🔄 Оновити статус", callback_data="refresh_status")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            update.message.reply_text(
+                "⏳ Встановлюю з'єднання з сервером cTrader... Натисніть 'Оновити' за кілька секунд.",
+                reply_markup=reply_markup
+            )
+    except Exception:
+        logger.exception("!!! КРИТИЧНА ПОМИЛКА під час виконання команди /start")
+        update.message.reply_text("❌ Виникла помилка під час запуску. Будь ласка, спробуйте пізніше.")
+
 
 def _format_signal_message(result: dict) -> str:
     """Форматує результат аналізу у повідомлення для користувача."""
     if result.get("error"):
         return f"❌ Помилка аналізу: {result['error']}"
 
-    # Використовуємо .get() з fallback-значеннями для безпеки
     pair = result.get('pair', 'N/A')
     price = result.get('price', 0)
     verdict = result.get('verdict_text', 'Не вдалося визначити.')
@@ -91,15 +95,30 @@ def button_handler(update: Update, context: CallbackContext) -> None:
     if button_data == "ignore":
         return
 
+    # --- ПОЧАТОК ДІАГНОСТИЧНОГО БЛОКУ 1 ---
     if button_data == "refresh_status":
-        if client and client.isConnected:
-            query.edit_message_text(
-                text="✅ З'єднання встановлено. Виберіть валютну пару:",
-                reply_markup=get_main_keyboard()
-            )
-        else:
-            query.answer(text="⏳ З'єднання ще встановлюється... Спробуйте за мить.", show_alert=True)
+        try:
+            if client and client.isConnected:
+                logger.info("Клієнт підключено. Спроба показати головне меню...")
+                query.edit_message_text(
+                    text="✅ З'єднання встановлено. Виберіть валютну пару:",
+                    reply_markup=get_main_keyboard()
+                )
+                logger.info("Головне меню успішно надіслано.")
+            else:
+                logger.warning("Клієнт НЕ підключено. Відповідь користувачу...")
+                query.answer(text="⏳ З'єднання ще встановлюється... Спробуйте за мить.", show_alert=True)
+        except Exception:
+            logger.exception("!!! КРИТИЧНА ПОМИЛКА при спробі оновити клавіатуру 'refresh_status'")
+            try:
+                context.bot.send_message(
+                    chat_id=query.message.chat_id,
+                    text="❌ Виникла критична помилка. Не вдалося відобразити меню. Помилку зареєстровано."
+                )
+            except Exception:
+                logger.exception("!!! Не вдалося навіть відправити повідомлення про помилку")
         return
+    # --- КІНЕЦЬ ДІАГНОСТИЧНОГО БЛОКУ 1 ---
 
     if not client or not client.isConnected:
         query.answer(text="❌ З'єднання з cTrader API ще не встановлено. Спробуйте оновити статус.", show_alert=True)
@@ -116,16 +135,12 @@ def button_handler(update: Update, context: CallbackContext) -> None:
     user_id = query.from_user.id
     chat_id = query.message.chat_id
 
-    # --- ПОЧАТОК НОВОЇ ЛОГІКИ ---
-
     def on_success(result):
-        """Колбек, який виконується при успішному отриманні сигналу."""
         logger.info(f"✅ Сигнал для {symbol} успішно отримано. Результат: {result}")
         message_text = _format_signal_message(result)
         context.bot.send_message(chat_id=chat_id, text=message_text, parse_mode='Markdown')
 
     def on_error(failure):
-        """Колбек для обробки помилок."""
         logger.error(f"❌ Помилка при отриманні сигналу для {symbol}: {failure.getErrorMessage()}")
         context.bot.send_message(
             chat_id=chat_id,
@@ -133,12 +148,7 @@ def button_handler(update: Update, context: CallbackContext) -> None:
         )
 
     def do_analysis():
-        """Функція, що запускає асинхронний аналіз."""
-        # Викликаємо функцію з analysis.py, яка повертає Deferred
         d = get_api_detailed_signal_data(client, symbol, user_id)
-        # Додаємо колбеки для обробки результату
         d.addCallbacks(on_success, on_error)
 
-    # Безпечно викликаємо функцію `do_analysis` з потоку TG-бота в головному потоці Twisted
     reactor.callFromThread(do_analysis)
-    # --- КІНЕЦЬ НОВОЇ ЛОГІКИ ---

@@ -17,7 +17,6 @@ from config import (
     get_telegram_token, get_ct_client_id, get_ct_client_secret, 
     get_fly_app_name, get_webhook_secret, FOREX_SESSIONS, CRYPTO_PAIRS_FULL, STOCKS_US_SYMBOLS
 )
-# Нові імпорти для API
 from db import get_watchlist, toggle_watch, get_signal_history
 from analysis import get_api_detailed_signal_data
 from mta_analysis import get_mta_signal
@@ -69,7 +68,12 @@ def on_symbols_loaded(symbols):
     for s in symbols:
         if "symbolName" in s:
             normalized_name = s["symbolName"].replace("/", "").strip()
-            temp_cache[normalized_name] = s
+            # Зберігаємо весь об'єкт, він може містити корисні дані
+            temp_cache[normalized_name] = {
+                "symbolId": s.get("symbolId"),
+                "symbolName": s.get("symbolName"),
+                "pipPosition": s.get("pipPosition", 5) # Зберігаємо pipPosition, якщо воно є
+            }
     state.symbol_cache.update(temp_cache)
     logger.info("✅ Кеш символів заповнено (%s символів)", len(state.symbol_cache))
 
@@ -84,7 +88,6 @@ def init_ctrader_client():
 
 # --- Допоміжна функція для WebApp ---
 def parse_tg_init_data(init_data_str: str) -> dict | None:
-    """Парсить рядок initData і повертає дані користувача."""
     try:
         params = parse_qs(unquote(init_data_str))
         user_data_str = params.get('user', [None])[0]
@@ -99,28 +102,42 @@ def parse_tg_init_data(init_data_str: str) -> dict | None:
 @app.route('/api/get_ranked_pairs', methods=['GET'])
 def get_ranked_pairs(request):
     """Віддає списки активів та список обраного для користувача."""
-    init_data = request.args.get(b'initData', [b''])[0].decode()
-    user = parse_tg_init_data(init_data)
-    
-    watchlist = []
-    if user and user.get('id'):
-        watchlist = get_watchlist(user['id'])
+    # --- ПОЧАТОК ДІАГНОСТИЧНОГО БЛОКУ 2 ---
+    try:
+        init_data = request.args.get(b'initData', [b''])[0].decode()
+        user = parse_tg_init_data(init_data)
+        user_id = user.get('id') if user else 'Anonymous'
+        
+        logger.info(f"API: /api/get_ranked_pairs - Запит від користувача: {user_id}")
 
-    # Формуємо структуру даних, як очікує frontend
-    def format_pair(ticker):
-        norm_ticker = ticker.replace("/", "").strip()
-        return {"ticker": ticker, "active": norm_ticker in state.symbol_cache}
+        watchlist = []
+        if user and user.get('id'):
+            watchlist = get_watchlist(user['id'])
 
-    response_data = {
-        "watchlist": watchlist,
-        "forex": {session: [format_pair(p) for p in pairs] for session, pairs in FOREX_SESSIONS.items()},
-        "crypto": [format_pair(p) for p in CRYPTO_PAIRS_FULL],
-        "stocks": [format_pair(p) for p in STOCKS_US_SYMBOLS]
-    }
-    
-    request.setHeader('Content-Type', 'application/json')
-    request.setHeader('Access-Control-Allow-Origin', '*') # Для локального тестування
-    return json.dumps(response_data).encode('utf-8')
+        def format_pair(ticker):
+            norm_ticker = ticker.replace("/", "").strip()
+            return {"ticker": ticker, "active": norm_ticker in state.symbol_cache}
+
+        response_data = {
+            "watchlist": watchlist,
+            "forex": {session: [format_pair(p) for p in pairs] for session, pairs in FOREX_SESSIONS.items()},
+            "crypto": [format_pair(p) for p in CRYPTO_PAIRS_FULL],
+            "stocks": [format_pair(p) for p in STOCKS_US_SYMBOLS]
+        }
+        
+        logger.info(f"API: /api/get_ranked_pairs - Успішно сформовано дані. Розмір кешу символів: {len(state.symbol_cache)}")
+        request.setHeader('Content-Type', 'application/json')
+        request.setHeader('Access-Control-Allow-Origin', '*')
+        return json.dumps(response_data).encode('utf-8')
+
+    except Exception:
+        logger.exception("!!! КРИТИЧНА ПОМИЛКА в ендпойнті /api/get_ranked_pairs")
+        request.setResponseCode(500)
+        request.setHeader('Content-Type', 'application/json')
+        request.setHeader('Access-Control-Allow-Origin', '*')
+        error_response = {"error": "Internal Server Error", "message": "Failed to process pair lists."}
+        return json.dumps(error_response).encode('utf-8')
+    # --- КІНЕЦЬ ДІАГНОСТИЧНОГО БЛОКУ 2 ---
 
 
 @app.route('/api/toggle_watchlist', methods=['GET'])
@@ -214,7 +231,6 @@ def get_signal_history_api(request):
 
 @app.route(f"/{TOKEN}", methods=['POST'])
 def webhook_handler(request):
-    """Швидка ручка, що лише кладе оновлення в чергу і миттєво відповідає."""
     try:
         body = request.content.read()
         
