@@ -34,7 +34,6 @@ class EventEmitter:
 class SpotwareClient(EventEmitter):
     def __init__(self, client_id, client_secret):
         super().__init__()
-        # --- ДІАГНОСТИКА: Логуємо ID об'єкта при створенні ---
         logger.info(f"SpotwareClient __init__: Створено екземпляр з ID -> {id(self)}")
         self.host = "demo.ctraderapi.com"
         self.port = 5035
@@ -51,7 +50,6 @@ class SpotwareClient(EventEmitter):
     def isConnected(self):
         return self._is_connected
 
-    # --- ДІАГНОСТИКА: Метод для безпечної зміни стану з логуванням ---
     def _set_connection_state(self, new_state: bool):
         if self._is_connected != new_state:
             logger.info(f"SpotwareClient State Change: isConnected -> {new_state} (ID: {id(self)})")
@@ -60,13 +58,21 @@ class SpotwareClient(EventEmitter):
     def connect(self):
         self._client.startService()
 
+    # --- ФІНАЛЬНЕ ВИПРАВЛЕННЯ ---
+    def send(self, message, client_msg_id=None):
+        """
+        Публічний метод для надсилання повідомлень, який делегує запит
+        внутрішньому приватному методу.
+        """
+        return self._send_message(message, client_msg_id)
+    # --- КІНЕЦЬ ВИПРАВЛЕННЯ ---
+
     def _on_connected(self, client):
         logger.info("Встановлено з'єднання з cTrader API. Авторизація додатку...")
         request = ProtoOAApplicationAuthReq(clientId=self._client_id, clientSecret=self._client_secret)
         self._send_message(request)
 
     def _on_disconnected(self, client, reason):
-        # --- ДІАГНОСТИКА: Явний лог при дисконекті ---
         logger.warning(f"!!! SpotwareClient _on_disconnected: Спрацював колбек роз'єднання! (ID: {id(self)})")
         self._set_connection_state(False)
         error_msg = reason.getErrorMessage()
@@ -90,7 +96,14 @@ class SpotwareClient(EventEmitter):
             response = ProtoOASymbolsListRes()
             response.ParseFromString(message.payload)
             logger.info("Отримано список символів.")
-            symbols_data = [{"symbolId": s.symbolId, "symbolName": s.symbolName} for s in response.symbol]
+            # Передаємо повні дані про символи, а не тільки ID та ім'я
+            symbols_data = [
+                {
+                    "symbolId": s.symbolId, 
+                    "symbolName": s.symbolName,
+                    # Додаємо pipPosition та інші корисні дані, якщо вони є в LightSymbol
+                } for s in response.symbol
+            ]
             self.emit("symbolsLoaded", symbols_data)
         elif payload_type == ProtoOAPayloadType.PROTO_OA_ERROR_RES:
             response = ProtoOAErrorRes()
@@ -114,6 +127,7 @@ class SpotwareClient(EventEmitter):
     def _send_message(self, message, client_msg_id=None):
         deferred = self._client.send(message, clientMsgId=client_msg_id)
         deferred.addErrback(self._on_send_error)
+        return deferred # Повертаємо Deferred, щоб його можна було обробляти далі
 
     def _on_send_error(self, failure):
         error_message = f"Не вдалося надіслати повідомлення: {failure.getErrorMessage()}"
