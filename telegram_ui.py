@@ -26,6 +26,7 @@ def forex_session_kb():
 def asset_list_kb(pairs):
     keyboard = []
     for pair_name in pairs:
+        # Важливо: callback_data тепер має префікс, щоб уникнути плутанини
         callback_data = f'analyze_{pair_name}'
         keyboard.append([InlineKeyboardButton(pair_name, callback_data=callback_data)])
     keyboard.append([InlineKeyboardButton("⬅️ НАЗАД", callback_data='menu_forex')])
@@ -39,7 +40,7 @@ def start(update: Update, context: CallbackContext):
 def menu_command(update: Update, context: CallbackContext):
     update.message.reply_text("🏠 Головне меню:", reply_markup=main_kb())
 
-# --- ЗМІНЕНО: Повністю переписана логіка обробника кнопок ---
+# --- ЗМІНЕНО: Повністю переписано з урахуванням рекомендацій експерта ---
 def button_handler(update: Update, context: CallbackContext):
     query = update.callback_query
     query.answer()
@@ -55,27 +56,29 @@ def button_handler(update: Update, context: CallbackContext):
         session = data.split('_')[1]
         pairs = FOREX_SESSIONS.get(session, [])
         query.edit_message_text(f"📊 Пари сесії {session}:", reply_markup=asset_list_kb(pairs))
+
     elif data.startswith('analyze_'):
-        ticker = data.split('_')[1]
+        # 1. Правильний парсинг назви пари
+        ticker = data[len("analyze_"):]
         user_id = query.from_user.id
 
-        # Правильна перевірка статусу клієнта
-        if not client or not client.isConnected:
+        # 2. Правильна перевірка статусу клієнта (використовуємо метод isConnected())
+        if not client or not client.isConnected():
             query.edit_message_text("❌ Сервіс cTrader ще не готовий. Зачекайте хвилину.")
             return
             
         query.edit_message_text(f"⏳ Аналізую {ticker}...")
 
         def on_analysis_done(analysis_data):
-            # Використовуємо callFromThread для безпечної взаємодії з Telegram з потоку Twisted
             reactor.callFromThread(_send_analysis_result, context, query, analysis_data, ticker)
 
+        # 3. Надійна обробка помилок
         def on_analysis_error(failure):
-            logger.error(f"Analysis failed for {ticker}: {failure.getErrorMessage()}")
-            error_data = {"error": str(failure.value)}
+            logger.error(f"Analysis failed for {ticker}: {failure}")
+            error_data = {"error": str(failure.value) if failure else "Невідома помилка аналізу"}
             reactor.callFromThread(_send_analysis_result, context, query, error_data, ticker)
 
-        # Напряму викликаємо функцію аналізу
+        # Виклик залишається тим самим, але тепер він обробляється коректно
         d = get_api_detailed_signal_data(client, ticker, user_id=user_id)
         d.addCallbacks(on_analysis_done, on_analysis_error)
 
@@ -92,13 +95,13 @@ def _send_analysis_result(context, query, analysis_data, ticker):
     verdict_text = analysis_data.get('verdict_text', 'Н/Д')
     msg = f"*{ticker}* | Ціна: `{price:.5f}`\n\n{verdict_text}"
     
+    # Можна додати більше кнопок, якщо потрібно
     kb = InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ НАЗАД", callback_data='menu_forex')]])
     try:
         query.edit_message_text(text=msg, parse_mode='Markdown', reply_markup=kb)
     except BadRequest: pass
 
 def register_handlers(dispatcher, client):
-    # Передаємо клієнт в контекст, щоб він був доступний в обробниках
     dispatcher.bot_data['ctrader_client'] = client
     dispatcher.add_handler(CommandHandler("start", start))
     dispatcher.add_handler(MessageHandler(Filters.text("МЕНЮ"), menu_command))
