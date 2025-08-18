@@ -1,11 +1,9 @@
 import os
 from dotenv import load_dotenv
 
-# Завантажує змінні з .env файлу для локальної розробки
 load_dotenv()
 
 def _get_required_env(var_name: str) -> str:
-    """Отримує змінну оточення, яка є обов'язковою."""
     value = os.getenv(var_name)
     if value is None:
         raise ValueError(f"Помилка: обов'язкова змінна оточення '{var_name}' не встановлена.")
@@ -33,5 +31,13 @@ def get_demo_account_id() -> int:
 
 # --- Fly.io ---
 def get_fly_app_name() -> str | None:
-    """Отримує ім'я додатку Fly.io (не є критичним, може бути None)."""
     return os.getenv("FLY_APP_NAME")
+
+# --- Списки активів (додано відсутні для повноти) ---
+CRYPTO_PAIRS_FULL = ["BTC/USD", "ETH/USD", "LTC/USD", "XRP/USD"] 
+STOCKS_US_SYMBOLS = ["AAPL", "GOOGL", "MSFT", "AMZN"]
+FOREX_SESSIONS = {
+    "Азіатська": ["USD/JPY", "AUD/USD", "NZD/USD", "EUR/JPY", "CHF/JPY"],
+    "Європейська": ["EUR/USD", "GBP/USD", "USD/CHF", "EUR/GBP", "EUR/CHF", "GBP/CHF"],
+    "Американська": ["USD/CAD", "USD/MXN", "USD/BRL", "USD/ZAR"]
+}
