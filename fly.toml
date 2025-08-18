@@ -8,17 +8,23 @@ primary_region = "fra"
 
 [env]
   PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION = "python"
-
-# ПОВЕРТАЄМОСЯ ДО СТАНДАРТНОЇ КОНФІГУРАЦІЇ ДЛЯ ВЕБ-СЕРВІСУ
-[http_service]
+      
+# Ця секція налаштовує мережу.
+# Вона вказує Fly.io приймати безпечний трафік (HTTPS) на стандартному порту 443
+# і перенаправляти його на внутрішній порт 8080, де працює наш додаток.
+# Саме це потрібно для роботи вебхуків Telegram.
+[[services]]
   internal_port = 8080
-  force_https = true
-  auto_stop_machines = true
-  auto_start_machines = true
-  min_machines_running = 0 # Встановіть 1, якщо бот має працювати постійно
-  processes = ["app"]
+  protocol = "tcp"
+  
+  [[services.ports]]
+    handlers = ["tls", "http"]
+    port = 443
 
-# Видаляємо [processes], оскільки flyctl автоматично
-# запустить команду з Dockerfile (CMD ["python", "main.py"])
-# або ми можемо вказати її тут. Краще оновити Dockerfile.
-# Ми оновимо Dockerfile, щоб він запускав run.py
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 512
+
+[experimental]
+  auto_rollback = true
