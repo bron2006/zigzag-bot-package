@@ -1,10 +1,12 @@
+# main.py
 import logging
 import os
 import json
 import queue
 import threading
+from urllib.parse import parse_qs, unquote
 from klein import Klein
-from twisted.internet import reactor
+from twisted.internet import reactor, defer
 from telegram import Update
 from telegram.ext import Updater, CommandHandler, CallbackQueryHandler
 
@@ -12,10 +14,14 @@ import state
 from telegram_ui import start, button_handler
 from spotware_connect import SpotwareClient
 from config import (
-    get_telegram_token, get_ct_client_id, 
-    get_ct_client_secret, get_fly_app_name,
-    get_webhook_secret
+    get_telegram_token, get_ct_client_id, get_ct_client_secret, 
+    get_fly_app_name, get_webhook_secret, FOREX_SESSIONS, CRYPTO_PAIRS_FULL, STOCKS_US_SYMBOLS
 )
+# Нові імпорти для API
+from db import get_watchlist, toggle_watch, get_signal_history
+from analysis import get_api_detailed_signal_data
+from mta_analysis import get_mta_signal
+
 
 # --- Налаштування логування ---
 logging.basicConfig(
@@ -24,14 +30,15 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
 # --- Ініціалізація ---
 app = Klein()
 TOKEN = get_telegram_token()
 updates_queue = queue.Queue(maxsize=1000)
 
+
 # --- Воркер для обробки оновлень з черги ---
 def dispatcher_worker():
-    """Ця функція працює у фоновому потоці, бере оновлення з черги і обробляє їх."""
     while True:
         try:
             update_data = updates_queue.get()
@@ -42,11 +49,10 @@ def dispatcher_worker():
         except Exception as e:
             logger.exception(f"Помилка в воркері диспетчера: {e}")
 
+
 # --- Ініціалізація Telegram ---
 def init_telegram_bot():
-    """Ініціалізує Updater, реєструє обробники та запускає фонові воркери."""
     state.updater = Updater(TOKEN, use_context=True)
-    
     dispatcher = state.updater.dispatcher
     dispatcher.add_handler(CommandHandler("start", start))
     dispatcher.add_handler(CallbackQueryHandler(button_handler))
@@ -55,6 +61,7 @@ def init_telegram_bot():
     for _ in range(4):
         threading.Thread(target=dispatcher_worker, daemon=True).start()
     logger.info("✅ Воркери для обробки черги Telegram запущені.")
+
 
 # --- Ініціалізація cTrader ---
 def on_symbols_loaded(symbols):
@@ -74,6 +81,134 @@ def init_ctrader_client():
     state.client.on("error")(lambda err: logger.error(f"Помилка cTrader: {err}"))
     state.client.connect()
     logger.info("Запущено підключення до cTrader API...")
+
+# --- Допоміжна функція для WebApp ---
+def parse_tg_init_data(init_data_str: str) -> dict | None:
+    """Парсить рядок initData і повертає дані користувача."""
+    try:
+        params = parse_qs(unquote(init_data_str))
+        user_data_str = params.get('user', [None])[0]
+        if user_data_str:
+            return json.loads(user_data_str)
+    except Exception as e:
+        logger.error(f"Помилка парсингу initData: {e}")
+    return None
+
+# --- API ендпоінти для WebApp ---
+
+@app.route('/api/get_ranked_pairs', methods=['GET'])
+def get_ranked_pairs(request):
+    """Віддає списки активів та список обраного для користувача."""
+    init_data = request.args.get(b'initData', [b''])[0].decode()
+    user = parse_tg_init_data(init_data)
+    
+    watchlist = []
+    if user and user.get('id'):
+        watchlist = get_watchlist(user['id'])
+
+    # Формуємо структуру даних, як очікує frontend
+    def format_pair(ticker):
+        norm_ticker = ticker.replace("/", "").strip()
+        return {"ticker": ticker, "active": norm_ticker in state.symbol_cache}
+
+    response_data = {
+        "watchlist": watchlist,
+        "forex": {session: [format_pair(p) for p in pairs] for session, pairs in FOREX_SESSIONS.items()},
+        "crypto": [format_pair(p) for p in CRYPTO_PAIRS_FULL],
+        "stocks": [format_pair(p) for p in STOCKS_US_SYMBOLS]
+    }
+    
+    request.setHeader('Content-Type', 'application/json')
+    request.setHeader('Access-Control-Allow-Origin', '*') # Для локального тестування
+    return json.dumps(response_data).encode('utf-8')
+
+
+@app.route('/api/toggle_watchlist', methods=['GET'])
+def toggle_watchlist_api(request):
+    """Додає або видаляє пару зі списку обраного."""
+    init_data = request.args.get(b'initData', [b''])[0].decode()
+    pair = request.args.get(b'pair', [b''])[0].decode()
+    user = parse_tg_init_data(init_data)
+
+    request.setHeader('Content-Type', 'application/json')
+    request.setHeader('Access-Control-Allow-Origin', '*')
+    
+    if not user or not user.get('id') or not pair:
+        request.setResponseCode(400)
+        return json.dumps({"success": False, "error": "Invalid parameters"}).encode('utf-8')
+
+    try:
+        toggle_watch(user['id'], pair)
+        return json.dumps({"success": True}).encode('utf-8')
+    except Exception as e:
+        logger.error(f"Помилка toggle_watchlist: {e}")
+        request.setResponseCode(500)
+        return json.dumps({"success": False, "error": "Database error"}).encode('utf-8')
+
+
+@app.route('/api/signal', methods=['GET'])
+def get_signal_api(request):
+    """Основний ендпоінт для отримання детального сигналу."""
+    init_data = request.args.get(b'initData', [b''])[0].decode()
+    pair = request.args.get(b'pair', [b''])[0].decode()
+    user = parse_tg_init_data(init_data)
+    user_id = user.get('id') if user else None
+
+    request.setHeader('Content-Type', 'application/json')
+    request.setHeader('Access-Control-Allow-Origin', '*')
+
+    if not pair:
+        request.setResponseCode(400)
+        return json.dumps({"error": "Pair parameter is required"}).encode('utf-8')
+
+    d = get_api_detailed_signal_data(state.client, pair, user_id)
+
+    def on_result(result):
+        request.write(json.dumps(result).encode('utf-8'))
+        request.finish()
+
+    d.addBoth(on_result)
+    return defer.SUCCESS
+
+
+@app.route('/api/get_mta', methods=['GET'])
+def get_mta_api(request):
+    """Ендпоінт для отримання MTA."""
+    pair = request.args.get(b'pair', [b''])[0].decode()
+    request.setHeader('Content-Type', 'application/json')
+    request.setHeader('Access-Control-Allow-Origin', '*')
+
+    if not pair:
+        request.setResponseCode(400)
+        return json.dumps({"error": "Pair parameter is required"}).encode('utf-8')
+
+    d = get_mta_signal(state.client, pair)
+    
+    def on_result(result):
+        request.write(json.dumps(result).encode('utf-8'))
+        request.finish()
+        
+    d.addBoth(on_result)
+    return defer.SUCCESS
+
+
+@app.route('/api/signal_history', methods=['GET'])
+def get_signal_history_api(request):
+    """Отримує історію сигналів для пари."""
+    init_data = request.args.get(b'initData', [b''])[0].decode()
+    pair = request.args.get(b'pair', [b''])[0].decode()
+    user = parse_tg_init_data(init_data)
+
+    request.setHeader('Content-Type', 'application/json')
+    request.setHeader('Access-Control-Allow-Origin', '*')
+
+    if not user or not user.get('id') or not pair:
+        request.setResponseCode(400)
+        return json.dumps([]).encode('utf-8')
+
+    history = get_signal_history(user['id'], pair)
+    return json.dumps(history).encode('utf-8')
+
 
 # --- Веб-ручки (Web Routes) ---
 
@@ -104,17 +239,14 @@ def webhook_handler(request):
 
 @app.route("/health")
 def health_check(request):
-    """Ручка для перевірки стану сервісу Fly.io."""
     request.setResponseCode(200)
     return b"OK"
 
 @app.route("/")
 def home(request):
-    """Сторінка-заглушка."""
     return b"Telegram Bot and Web Service is running"
 
 def setup_webhook():
-    """Встановлює вебхук при запуску додатку."""
     app_name = get_fly_app_name()
     if app_name and state.updater:
         webhook_url = f"https://{app_name}.fly.dev/{TOKEN}"
@@ -125,6 +257,5 @@ def setup_webhook():
 
 # --- Запуск сервісів ---
 init_telegram_bot()
-# ВИДАЛЕНО ПОМИЛКОВИЙ ВИКЛИК
 reactor.callWhenRunning(setup_webhook)
 reactor.callWhenRunning(init_ctrader_client)

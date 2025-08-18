@@ -1,10 +1,12 @@
+# telegram_ui.py
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import CallbackContext
+from twisted.internet import reactor
 
 from state import client, symbol_cache
-# Імпортуємо наші списки валютних пар
 from config import FOREX_SESSIONS
+from analysis import get_api_detailed_signal_data
 
 logger = logging.getLogger(__name__)
 
@@ -12,17 +14,12 @@ def get_main_keyboard() -> InlineKeyboardMarkup:
     """Створює динамічну клавіатуру на основі торгових сесій."""
     keyboard = []
     
-    # Проходимо по кожній сесії та її парам
     for session_name, pairs in FOREX_SESSIONS.items():
-        # Створюємо кнопки для кожної пари в сесії
         pair_buttons = [
-            # Текст кнопки: "EUR/USD", дані для колбеку: "EURUSD"
             InlineKeyboardButton(pair, callback_data=pair.replace("/", ""))
             for pair in pairs
         ]
-        # Додаємо заголовок сесії
         keyboard.append([InlineKeyboardButton(f"--- {session_name} сесія ---", callback_data="ignore")])
-        # Розбиваємо кнопки по 3 в ряд для кращого вигляду
         for i in range(0, len(pair_buttons), 3):
             keyboard.append(pair_buttons[i:i+3])
             
@@ -46,6 +43,40 @@ def start(update: Update, context: CallbackContext) -> None:
             reply_markup=reply_markup
         )
 
+def _format_signal_message(result: dict) -> str:
+    """Форматує результат аналізу у повідомлення для користувача."""
+    if result.get("error"):
+        return f"❌ Помилка аналізу: {result['error']}"
+
+    # Використовуємо .get() з fallback-значеннями для безпеки
+    pair = result.get('pair', 'N/A')
+    price = result.get('price', 0)
+    verdict = result.get('verdict_text', 'Не вдалося визначити.')
+    support = result.get('support')
+    resistance = result.get('resistance')
+    reasons = result.get('reasons', [])
+
+    price_str = f"{price:.5f}" if price else "N/A"
+
+    message = f"📈 **Аналіз для {pair}**\n\n"
+    message += f"**Сигнал:** {verdict}\n"
+    message += f"**Поточна ціна:** `{price_str}`\n\n"
+
+    if support or resistance:
+        message += "🔑 **Ключові рівні:**\n"
+        if support:
+            message += f"   - Підтримка: `{support:.5f}`\n"
+        if resistance:
+            message += f"   - Опір: `{resistance:.5f}`\n"
+        message += "\n"
+
+    if reasons:
+        message += "📑 **Фактори аналізу:**\n"
+        for reason in reasons:
+            message += f"   - {reason}\n"
+            
+    return message
+
 
 def button_handler(update: Update, context: CallbackContext) -> None:
     """Обробляє натискання на всі inline-кнопки."""
@@ -57,7 +88,6 @@ def button_handler(update: Update, context: CallbackContext) -> None:
     if query:
         query.answer()
     
-    # Ігноруємо натискання на заголовки сесій
     if button_data == "ignore":
         return
 
@@ -81,8 +111,34 @@ def button_handler(update: Update, context: CallbackContext) -> None:
         query.edit_message_text(text=f"⚠️ Символ {symbol} не знайдено. Можливо, він не торгується у вашого брокера.")
         return
 
-    # Якщо все добре, показуємо, що починаємо роботу
-    query.edit_message_text(text=f"✅ Обрано {symbol}. Отримую дані для аналізу...")
+    query.edit_message_text(text=f"⏳ Обрано {symbol}. Отримую дані для аналізу...")
     
-    # В майбутньому тут буде виклик функції з analysis.py для отримання сигналу
-    # наприклад: context.bot.send_message(chat_id=query.message.chat_id, text="Результат аналізу...")
+    user_id = query.from_user.id
+    chat_id = query.message.chat_id
+
+    # --- ПОЧАТОК НОВОЇ ЛОГІКИ ---
+
+    def on_success(result):
+        """Колбек, який виконується при успішному отриманні сигналу."""
+        logger.info(f"✅ Сигнал для {symbol} успішно отримано. Результат: {result}")
+        message_text = _format_signal_message(result)
+        context.bot.send_message(chat_id=chat_id, text=message_text, parse_mode='Markdown')
+
+    def on_error(failure):
+        """Колбек для обробки помилок."""
+        logger.error(f"❌ Помилка при отриманні сигналу для {symbol}: {failure.getErrorMessage()}")
+        context.bot.send_message(
+            chat_id=chat_id,
+            text=f"❌ Виникла помилка під час аналізу {symbol}. Будь ласка, спробуйте пізніше."
+        )
+
+    def do_analysis():
+        """Функція, що запускає асинхронний аналіз."""
+        # Викликаємо функцію з analysis.py, яка повертає Deferred
+        d = get_api_detailed_signal_data(client, symbol, user_id)
+        # Додаємо колбеки для обробки результату
+        d.addCallbacks(on_success, on_error)
+
+    # Безпечно викликаємо функцію `do_analysis` з потоку TG-бота в головному потоці Twisted
+    reactor.callFromThread(do_analysis)
+    # --- КІНЕЦЬ НОВОЇ ЛОГІКИ ---
