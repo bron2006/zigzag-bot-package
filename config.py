@@ -33,15 +33,14 @@ CACHE_LOCK = threading.Lock()
 
 # --- Telegram Bot Objects ---
 bot = Bot(token=TOKEN)
-dp = Dispatcher(bot, None, use_context=True, workers=0)
-
-# --- ЗМІНЕНО: Повернуто відсутні змінні для сумісності з telegram_ui.py ---
-CRYPTO_PAIRS_FULL = [] 
-STOCKS_US_SYMBOLS = []
+# --- ЗМІНЕНО: Додано 4 воркери для обробки асинхронних завдань ---
+dp = Dispatcher(bot, None, use_context=True, workers=4)
 
 # --- Constants ---
+CRYPTO_PAIRS_FULL = [] 
+STOCKS_US_SYMBOLS = []
 FOREX_SESSIONS = {
-    "Азіатська": ["USD/JPY", "AUD/USD", "NZ/USD", "EUR/JPY", "CHF/JPY"],
+    "Азіатська": ["USD/JPY", "AUD/USD", "NZD/USD", "EUR/JPY", "CHF/JPY"],
     "Європейська": ["EUR/USD", "GBP/USD", "USD/CHF", "EUR/GBP", "EUR/CHF", "GBP/CHF"],
     "Американська": ["USD/CAD", "USD/MXN", "USD/BRL", "USD/ZAR"]
 }
