@@ -8,7 +8,7 @@ from ctrader_open_api.messages.OpenApiMessages_pb2 import (
     ProtoOAApplicationAuthReq, ProtoOAApplicationAuthRes,
     ProtoOAAccountAuthReq, ProtoOAAccountAuthRes,
     ProtoOASymbolsListReq, ProtoOASymbolsListRes,
-    ProtoOASymbolByIdRes, # ДОДАНО
+    ProtoOASymbolByIdRes,
     ProtoOAErrorRes
 )
 from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOAPayloadType
@@ -85,13 +85,11 @@ class SpotwareClient(EventEmitter):
             response = ProtoOASymbolsListRes()
             response.ParseFromString(message.payload)
             self.emit("fullSymbolsLoaded", response.symbol)
-        # --- ПОЧАТОК ЗМІН: Обробка відповіді з детальною інформацією про символ ---
         elif payload_type == ProtoOAPayloadType.PROTO_OA_SYMBOL_BY_ID_RES:
             response = ProtoOASymbolByIdRes()
             response.ParseFromString(message.payload)
-            # Ця подія буде використовуватися в analysis.py для оновлення кешу
-            self.emit("symbolDataLoaded", response.symbol[0]) 
-        # --- КІНЕЦЬ ЗМІН ---
+            if response.symbol:
+                self.emit("symbolDataLoaded", response.symbol[0])
         elif payload_type == ProtoOAPayloadType.PROTO_OA_ERROR_RES:
             response = ProtoOAErrorRes()
             response.ParseFromString(message.payload)
