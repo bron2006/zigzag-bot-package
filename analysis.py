@@ -4,6 +4,7 @@ import numpy as np
 import time
 import logging
 from twisted.internet import defer
+import json # Додано для логування
 
 from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import ProtoMessage
 from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOAGetTrendbarsReq, ProtoOAGetTrendbarsRes
@@ -31,19 +32,12 @@ def get_market_data(client, pair, tf, limit=300):
     if not symbol_details:
         return defer.fail(Exception(f"Пара '{pair}' не знайдена в кеші."))
 
-    # --- ЗМІНА №1: Додано підтримку '1m' (M1) ---
-    tf_map = {
-        "1m": TrendbarPeriod.M1, 
-        "15min": TrendbarPeriod.M15, 
-        "1h": TrendbarPeriod.H1, 
-        "4h": TrendbarPeriod.H4, 
-        "1day": TrendbarPeriod.D1
-    }
+    tf_map = {"15min": TrendbarPeriod.M15, "1h": TrendbarPeriod.H1, "4h": TrendbarPeriod.H4, "1day": TrendbarPeriod.D1}
     if tf not in tf_map:
         return defer.fail(Exception(f"Непідтримуваний таймфрейм: {tf}"))
 
     now = int(time.time() * 1000)
-    seconds_per_bar = {'1m': 60, '15min': 900, '1h': 3600, '4h': 14400, '1day': 86400}
+    seconds_per_bar = {'15min': 900, '1h': 3600, '4h': 14400, '1day': 86400}
     from_ts = now - (limit * seconds_per_bar[tf] * 1000)
 
     request = ProtoOAGetTrendbarsReq(
@@ -118,6 +112,22 @@ def _generate_verdict(analysis):
     return "🟡 НЕЙТРАЛЬНА СИТУАЦІЯ", "neutral"
 
 def get_api_detailed_signal_data(client, pair, user_id=None):
+    # --- ПОЧАТОК ДІАГНОСТИЧНОГО БЛОКУ ---
+    try:
+        from_bot = hasattr(client, 'send') # Простий спосіб визначити, чи це наш клієнт
+        caller = "BOT" if from_bot else "WEB"
+        log_data = {
+            "caller": caller,
+            "pair_received": pair,
+            "user_id_received": user_id,
+            "type_of_pair": str(type(pair)),
+            "client_id": id(client)
+        }
+        logger.info(f"DIAGNOSTICS: get_api_detailed_signal_data called with: {json.dumps(log_data)}")
+    except Exception as e:
+        logger.exception(f"DIAGNOSTICS: Error during logging: {e}")
+    # --- КІНЕЦЬ ДІАГНОСТИЧНОГО БЛОКУ ---
+
     if not isinstance(pair, str) or len(pair) < 3:
         return defer.fail(Exception(f"Некоректна назва пари: '{pair}'."))
 
@@ -130,8 +140,8 @@ def get_api_detailed_signal_data(client, pair, user_id=None):
 
         if not (success1 and success2):
             errors = []
-            if not success1: errors.append(f"M1 data failed")
-            if not success2: errors.append(f"D1 data failed")
+            if not success1: errors.append(f"15min data failed")
+            if not success2: errors.append(f"1day data failed")
             return {"error": f"Не вдалося завантажити ринкові дані ({', '.join(errors)})."}
         
         if df.empty or len(df) < 25 or daily_df.empty:
@@ -166,8 +176,7 @@ def get_api_detailed_signal_data(client, pair, user_id=None):
         logger.error(f"Загальна помилка в DeferredList для {pair}: {failure.getErrorMessage()}")
         return {"error": "Внутрішня помилка обробки."}
 
-    # --- ЗМІНА №2: Змінюємо '15min' на '1m' ---
-    d1 = get_market_data(client, norm_pair, '1m', 100)
+    d1 = get_market_data(client, norm_pair, '15min', 100)
     d2 = get_market_data(client, norm_pair, '1day', 100)
     d_list = defer.DeferredList([d1, d2], consumeErrors=True)
     d_list.addCallbacks(on_data_ready, on_error)
