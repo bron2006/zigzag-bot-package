@@ -2,7 +2,7 @@ import pandas as pd
 import pandas_ta as ta
 import numpy as np
 import time
-import logging # <-- Додано імпорт
+import logging
 from twisted.internet import defer
 
 from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import ProtoMessage
@@ -10,15 +10,10 @@ from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOAGetTrendbarsReq
 from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOATrendbarPeriod as TrendbarPeriod
 
 from db import add_signal_to_history
-# --- ВИПРАВЛЕНО ---
-# Ініціалізуємо логер та кеші тут, а не в конфігурації
 from config import get_demo_account_id
 
 logger = logging.getLogger(__name__)
 MARKET_DATA_CACHE = {}
-SYMBOL_DATA_CACHE = {}
-# --- КІНЕЦЬ ВИПРАВЛЕННЯ ---
-
 
 def _normalize_pair(pair: str) -> str:
     return pair.replace("/", "").replace("\\", "").upper().strip()
@@ -31,19 +26,24 @@ def get_market_data(client, pair, tf, limit=300):
         d.callback(MARKET_DATA_CACHE[key])
         return d
 
-    # УВАГА: SYMBOL_DATA_CACHE наразі не заповнюється. 
-    # Це може бути наступною проблемою, але поки що замінимо його на state.symbol_cache
     from state import symbol_cache
     symbol_details = symbol_cache.get(norm_pair)
     if not symbol_details:
-        return defer.fail(Exception(f"Пара '{pair}' не знайдена в кеші (шукав як '{norm_pair}')."))
+        return defer.fail(Exception(f"Пара '{pair}' не знайдена в кеші."))
 
-    tf_map = {"15min": TrendbarPeriod.M15, "1h": TrendbarPeriod.H1, "4h": TrendbarPeriod.H4, "1day": TrendbarPeriod.D1}
+    # --- ЗМІНА №1: Додано підтримку '1m' (M1) ---
+    tf_map = {
+        "1m": TrendbarPeriod.M1, 
+        "15min": TrendbarPeriod.M15, 
+        "1h": TrendbarPeriod.H1, 
+        "4h": TrendbarPeriod.H4, 
+        "1day": TrendbarPeriod.D1
+    }
     if tf not in tf_map:
         return defer.fail(Exception(f"Непідтримуваний таймфрейм: {tf}"))
 
     now = int(time.time() * 1000)
-    seconds_per_bar = {'15min': 900, '1h': 3600, '4h': 14400, '1day': 86400}
+    seconds_per_bar = {'1m': 60, '15min': 900, '1h': 3600, '4h': 14400, '1day': 86400}
     from_ts = now - (limit * seconds_per_bar[tf] * 1000)
 
     request = ProtoOAGetTrendbarsReq(
@@ -54,14 +54,11 @@ def get_market_data(client, pair, tf, limit=300):
         toTimestamp=now
     )
     
-    # Використовуємо метод send(), який повертає Deferred
     deferred = client.send(request)
 
     def process_response(response_proto: ProtoMessage):
-        # Перевіряємо, чи це не помилка
         from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOAPayloadType
         if response_proto.payloadType == ProtoOAPayloadType.PROTO_OA_ERROR_RES:
-            # Якщо це помилка, ми прокидаємо її далі по ланцюжку
             raise Exception(f"Помилка API при запиті trendbars для {pair}")
 
         trendbars_response = ProtoOAGetTrendbarsRes()
@@ -70,8 +67,7 @@ def get_market_data(client, pair, tf, limit=300):
         if not trendbars_response.trendbar:
             return pd.DataFrame()
         
-        # Використовуємо 'pipPosition' для правильного розрахунку ціни
-        divisor = 10**symbol_details.get('pipPosition', 5) # Default to 5 if not found
+        divisor = 10**symbol_details.get('digits', 5)
         bars = [{
             'ts': pd.to_datetime(bar.utcTimestampInMinutes * 60, unit='s', utc=True),
             'open': (bar.low + bar.deltaOpen) / divisor,
@@ -129,17 +125,14 @@ def get_api_detailed_signal_data(client, pair, user_id=None):
     norm_pair = _normalize_pair(pair)
 
     def on_data_ready(results):
-        # results - це список кортежів [(success, result), (success, result)]
         success1, df = results[0]
         success2, daily_df = results[1]
 
         if not (success1 and success2):
-            # Збираємо помилки, якщо вони були
             errors = []
-            if not success1: errors.append(f"15min data failed: {df.getErrorMessage()}")
-            if not success2: errors.append(f"1day data failed: {daily_df.getErrorMessage()}")
-            logger.error(f"Не вдалося завантажити ринкові дані для {pair}: {'; '.join(errors)}")
-            return {"error": "Не вдалося завантажити ринкові дані."}
+            if not success1: errors.append(f"M1 data failed")
+            if not success2: errors.append(f"D1 data failed")
+            return {"error": f"Не вдалося завантажити ринкові дані ({', '.join(errors)})."}
         
         if df.empty or len(df) < 25 or daily_df.empty:
             return {"error": "Недостатньо історичних даних для аналізу."}
@@ -170,10 +163,11 @@ def get_api_detailed_signal_data(client, pair, user_id=None):
         }
     
     def on_error(failure):
-        logger.error(f"Загальна помилка в ланцюжку Deferred для {pair}: {failure.getErrorMessage()}")
-        return {"error": "Внутрішня помилка під час обробки даних."}
+        logger.error(f"Загальна помилка в DeferredList для {pair}: {failure.getErrorMessage()}")
+        return {"error": "Внутрішня помилка обробки."}
 
-    d1 = get_market_data(client, norm_pair, '15min', 100)
+    # --- ЗМІНА №2: Змінюємо '15min' на '1m' ---
+    d1 = get_market_data(client, norm_pair, '1m', 100)
     d2 = get_market_data(client, norm_pair, '1day', 100)
     d_list = defer.DeferredList([d1, d2], consumeErrors=True)
     d_list.addCallbacks(on_data_ready, on_error)
