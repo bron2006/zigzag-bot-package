@@ -15,11 +15,15 @@ from telegram_ui import start, menu, button_handler, reset_ui
 from spotware_connect import SpotwareClient
 from config import (
     get_telegram_token, get_ct_client_id, get_ct_client_secret, 
-    get_fly_app_name, get_webhook_secret, FOREX_SESSIONS, CRYPTO_PAIRS_FULL, STOCKS_US_SYMBOLS
+    get_fly_app_name, get_webhook_secret, FOREX_SESSIONS, CRYPTO_PAIRS_FULL, STOCKS_US_SYMBOLS,
+    get_demo_account_id # <-- ВИПРАВЛЕННЯ: Додано імпорт
 )
 from db import get_watchlist, toggle_watch, get_signal_history, init_db
 from analysis import get_api_detailed_signal_data
 from mta_analysis import get_mta_signal
+# <-- ВИПРАВЛЕННЯ: Додано імпорт
+from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOASymbolByIdReq, ProtoOASymbolByIdRes
+
 
 # --- Налаштування логування ---
 logging.basicConfig(
@@ -62,8 +66,6 @@ def init_telegram_bot():
 # --- Ініціалізація cTrader ---
 def on_symbols_loaded(light_symbols):
     """Обробляє список спрощених символів і запитує повні дані для кожного."""
-    from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOASymbolByIdReq, ProtoOASymbolByIdRes
-
     logger.info(f"Отримано {len(light_symbols)} спрощених символів. Запитую повні дані...")
     
     deferreds = []
