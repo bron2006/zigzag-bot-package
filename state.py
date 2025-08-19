@@ -1,3 +1,4 @@
+# state.py
 from typing import Optional, Dict, Any
 from telegram.ext import Updater
 # from spotware_connect import SpotwareClient
@@ -6,3 +7,6 @@ from telegram.ext import Updater
 client: Optional['SpotwareClient'] = None
 symbol_cache: Dict[str, Dict[str, Any]] = {}
 updater: Optional[Updater] = None
+
+# Прапорець, що сигналізує про завершення завантаження даних від cTrader
+SYMBOLS_LOADED: bool = False

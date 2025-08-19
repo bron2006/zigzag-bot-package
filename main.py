@@ -1,3 +1,4 @@
+# main.py
 import logging
 import os
 import json
@@ -65,7 +66,6 @@ def on_symbols_loaded(full_symbols):
     temp_cache = {}
     for symbol_data in full_symbols:
         try:
-            # Згідно з документацією, використовуємо поле symbolName з об'єкта ProtoOASymbol
             normalized_name = symbol_data.symbolName.replace("/", "").strip()
             temp_cache[normalized_name] = {
                 "symbolId": symbol_data.symbolId,
@@ -76,7 +76,9 @@ def on_symbols_loaded(full_symbols):
             continue
             
     state.symbol_cache.update(temp_cache)
-    logger.info(f"✅ Кеш символів заповнено. Завантажено дані для {len(state.symbol_cache)} символів.")
+    # Встановлюємо прапорець, що дані готові
+    state.SYMBOLS_LOADED = True
+    logger.info(f"✅ Кеш символів заповнено. Завантажено дані для {len(state.symbol_cache)} символів. Сервіс готовий.")
 
 def init_ctrader_client():
     api_key = get_ct_client_id()
@@ -101,28 +103,36 @@ def parse_tg_init_data(init_data_str: str) -> dict | None:
 # --- API ендпоінти для WebApp ---
 @app.route('/api/get_ranked_pairs', methods=['GET'])
 def get_ranked_pairs(request):
+    request.setHeader('Content-Type', 'application/json')
+    request.setHeader('Access-Control-Allow-Origin', '*')
+
+    # Перевіряємо, чи готовий кеш символів
+    if not state.SYMBOLS_LOADED:
+        return json.dumps({"status": "initializing"}).encode('utf-8')
+
     try:
         init_data = request.args.get(b'initData', [b''])[0].decode()
         user = parse_tg_init_data(init_data)
         watchlist = []
         if user and user.get('id'):
             watchlist = get_watchlist(user['id'])
+
         def format_pair(ticker):
             norm_ticker = ticker.replace("/", "").strip()
             return {"ticker": ticker, "active": norm_ticker in state.symbol_cache}
+
         response_data = {
             "watchlist": watchlist,
             "forex": {session: [format_pair(p) for p in pairs] for session, pairs in FOREX_SESSIONS.items()},
             "crypto": [format_pair(p) for p in CRYPTO_PAIRS_FULL],
             "stocks": [format_pair(p) for p in STOCKS_US_SYMBOLS]
         }
-        request.setHeader('Content-Type', 'application/json')
-        request.setHeader('Access-Control-Allow-Origin', '*')
-        return json.dumps(response_data).encode('utf-8')
+        
+        return json.dumps({"status": "ready", "data": response_data}).encode('utf-8')
     except Exception:
         logger.exception("!!! ПОМИЛКА в /api/get_ranked_pairs")
         request.setResponseCode(500)
-        return json.dumps({"error": "Internal Server Error"}).encode('utf-8')
+        return json.dumps({"status": "error", "error": "Internal Server Error"}).encode('utf-8')
 
 @app.route('/api/toggle_watchlist', methods=['GET'])
 def toggle_watchlist_api(request):
