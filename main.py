@@ -16,14 +16,12 @@ from spotware_connect import SpotwareClient
 from config import (
     get_telegram_token, get_ct_client_id, get_ct_client_secret, 
     get_fly_app_name, get_webhook_secret, FOREX_SESSIONS, CRYPTO_PAIRS_FULL, STOCKS_US_SYMBOLS,
-    get_demo_account_id # <-- ВИПРАВЛЕННЯ: Додано імпорт
+    get_demo_account_id
 )
 from db import get_watchlist, toggle_watch, get_signal_history, init_db
 from analysis import get_api_detailed_signal_data
 from mta_analysis import get_mta_signal
-# <-- ВИПРАВЛЕННЯ: Додано імпорт
-from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOASymbolByIdReq, ProtoOASymbolByIdRes
-
+from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOASymbolsListReq # <-- Важливий імпорт
 
 # --- Налаштування логування ---
 logging.basicConfig(
@@ -64,45 +62,31 @@ def init_telegram_bot():
     logger.info("✅ Воркери для обробки черги Telegram запущені.")
 
 # --- Ініціалізація cTrader ---
-def on_symbols_loaded(light_symbols):
-    """Обробляє список спрощених символів і запитує повні дані для кожного."""
-    logger.info(f"Отримано {len(light_symbols)} спрощених символів. Запитую повні дані...")
-    
-    deferreds = []
-    for s in light_symbols:
-        request = ProtoOASymbolByIdReq(ctidTraderAccountId=get_demo_account_id(), symbolId=[s['symbolId']])
-        deferreds.append(state.client.send(request))
+def on_symbols_loaded(full_symbols):
+    """Обробляє ПОВНИЙ список символів, отриманий від API."""
+    temp_cache = {}
+    for symbol_data in full_symbols:
+        try:
+            # Використовуємо правильне поле symbolName з ProtoOASymbol
+            normalized_name = symbol_data.symbolName.replace("/", "").strip()
+            temp_cache[normalized_name] = {
+                "symbolId": symbol_data.symbolId,
+                "digits": symbol_data.digits
+            }
+        except AttributeError:
+            logger.warning(f"Пропущено символ без імені: {symbol_data}")
+            continue
+            
+    state.symbol_cache.update(temp_cache)
+    logger.info(f"✅ Кеш символів заповнено. Завантажено дані для {len(state.symbol_cache)} символів.")
 
-    d_list = defer.DeferredList(deferreds, consumeErrors=True)
-
-    def on_full_symbols_data(results):
-        temp_cache = {}
-        successful_fetches = 0
-        for success, response_proto in results:
-            if success:
-                try:
-                    full_symbol_res = ProtoOASymbolByIdRes()
-                    full_symbol_res.ParseFromString(response_proto.payload)
-                    for symbol_data in full_symbol_res.symbol:
-                        normalized_name = symbol_data.symbolName.replace("/", "").strip()
-                        temp_cache[normalized_name] = {
-                            "symbolId": symbol_data.symbolId,
-                            "digits": symbol_data.digits
-                        }
-                        successful_fetches += 1
-                except Exception:
-                    logger.exception("Помилка парсингу ProtoOASymbolByIdRes")
-        
-        state.symbol_cache.update(temp_cache)
-        logger.info(f"✅ Кеш символів заповнено. Завантажено повні дані для {successful_fetches}/{len(light_symbols)} символів.")
-
-    d_list.addCallback(on_full_symbols_data)
 
 def init_ctrader_client():
     api_key = get_ct_client_id()
     api_secret = get_ct_client_secret()
     state.client = SpotwareClient(api_key, api_secret)
-    state.client.on("symbolsLoaded")(on_symbols_loaded)
+    # Змінюємо подію, на яку реагуємо
+    state.client.on("fullSymbolsLoaded")(on_symbols_loaded) 
     state.client.on("error")(lambda err: logger.error(f"Помилка cTrader: {err}"))
     state.client.connect()
     logger.info("Запущено підключення до cTrader API...")
