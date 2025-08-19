@@ -1,6 +1,6 @@
 // webapp/script.js
 
-const API_BASE_URL = "https://zigzag-bot-package.fly.dev"; // ВИПРАВЛЕНО: Повернено абсолютну URL-адресу
+const API_BASE_URL = "https://zigzag-bot-package.fly.dev";
 
 const loader = document.getElementById("loader");
 const listsContainer = document.getElementById("listsContainer");
@@ -9,12 +9,11 @@ const historyContainer = document.getElementById("historyContainer");
 const chartContainer = document.getElementById("chart");
 
 let tg;
-// Mock Telegram WebApp object for browser-based testing
 if (!window.Telegram || !window.Telegram.WebApp || !window.Telegram.WebApp.initData) {
     console.warn("Telegram WebApp object not found. Running in browser mode with mock data.");
     tg = { 
         themeParams: { bg_color: '#1a1a1a', text_color: '#ffffff' }, 
-        initData: '', // Mock initData can be placed here for testing
+        initData: '',
         ready: function() {},
         expand: function() {}
     };
@@ -40,10 +39,10 @@ function fetchInitialData() {
                 console.log("Backend is initializing, retrying in 2 seconds...");
                 signalOutput.innerHTML = "⏳ Ініціалізація з'єднання з торговим сервером...";
                 signalOutput.style.textAlign = 'center';
-                setTimeout(fetchInitialData, 2000); // Poll again
+                setTimeout(fetchInitialData, 2000);
             } else if (response.status === "ready") {
                 console.log("Received static pairs:", response.data);
-                signalOutput.innerHTML = ""; // Clear initializing message
+                signalOutput.innerHTML = "";
                 currentWatchlist = response.data.watchlist || [];
                 populateLists(response.data);
                 showLoader(false);
@@ -122,7 +121,7 @@ function populateLists(staticData) {
     
     const watchlistData = staticData.watchlist
         .map(ticker => allPairs.find(p => p.ticker === ticker))
-        .filter(Boolean); // Filter out any tickers not found in allPairs
+        .filter(Boolean);
 
     html += createSection('⭐ Обране', watchlistData);
 
@@ -146,73 +145,74 @@ function fetchSignal(pair) {
 
     const cacheBuster = `&_=${new Date().getTime()}`;
     const signalApiUrl = `${API_BASE_URL}/api/signal?pair=${pair}&initData=${encodeURIComponent(initData)}${cacheBuster}`;
-    const mtaApiUrl = `${API_BASE_URL}/api/get_mta?pair=${pair}${cacheBuster}`;
 
-    Promise.all([
-        fetch(signalApiUrl).then(res => res.json()),
-        fetch(mtaApiUrl).then(res => res.json())
-    ])
-    .then(([signalData, mtaData]) => {
-        signalOutput.style.textAlign = 'left';
-        if (signalData.error) {
-            throw new Error(signalData.error);
-        }
-        
-        const priceStr = (signalData.price || 0).toFixed(5);
-        const supportStr = signalData.support ? signalData.support.toFixed(5) : null;
-        const resistanceStr = signalData.resistance ? signalData.resistance.toFixed(5) : null;
+    // --- ПОЧАТОК ЗМІН: Робимо тільки один запит ---
+    fetch(signalApiUrl)
+        .then(res => res.json())
+        .then(signalData => {
+            signalOutput.style.textAlign = 'left';
+            if (signalData.error) {
+                throw new Error(signalData.error);
+            }
+            
+            const priceStr = (signalData.price || 0).toFixed(5);
+            const supportStr = signalData.support ? signalData.support.toFixed(5) : null;
+            const resistanceStr = signalData.resistance ? signalData.resistance.toFixed(5) : null;
+            const mtaData = signalData.mta; // МТА дані тепер є частиною відповіді
 
-        let html = `
-            <div class="verdict-box ${signalData.verdict_level || 'neutral'}">
-                ${signalData.verdict_text || 'Н/Д'}
-            </div>
-            <div class="pair-title">${signalData.pair} | Ціна: ${priceStr}</div>
-        `;
-        
-        if (supportStr || resistanceStr) {
-            html += `<div class="sr-levels">`;
-            if (supportStr) html += `Підтримка: <strong>${supportStr}</strong>`;
-            if (supportStr && resistanceStr) html += ` | `;
-            if (resistanceStr) html += `Опір: <strong>${resistanceStr}</strong>`;
-            html += `</div>`;
-        }
+            let html = `
+                <div class="verdict-box ${signalData.verdict_level || 'neutral'}">
+                    ${signalData.verdict_text || 'Н/Д'}
+                </div>
+                <div class="pair-title">${signalData.pair} | Ціна: ${priceStr}</div>
+            `;
+            
+            if (supportStr || resistanceStr) {
+                html += `<div class="sr-levels">`;
+                if (supportStr) html += `Підтримка: <strong>${supportStr}</strong>`;
+                if (supportStr && resistanceStr) html += ` | `;
+                if (resistanceStr) html += `Опір: <strong>${resistanceStr}</strong>`;
+                html += `</div>`;
+            }
 
-        if (signalData.reasons && signalData.reasons.length) {
-            html += `<h4>Ключові фактори:</h4><ul class="reason-list">${signalData.reasons.map(r => `<li>${r}</li>`).join('')}</ul>`;
-        }
-        
-        if (Array.isArray(mtaData) && mtaData.length > 0) {
-            html += '<h4>Мульти-таймфрейм аналіз (MTA):</h4><table class="mta-table"><tr>';
-            mtaData.forEach(item => { html += `<th>${item.tf}</th>`; });
-            html += '</tr><tr>';
-            mtaData.forEach(item => {
-                const signalClass = item.signal.toLowerCase();
-                html += `<td class="${signalClass}">${item.signal}</td>`;
-            });
-            html += '</tr></table>';
-        }
+            if (signalData.reasons && signalData.reasons.length) {
+                html += `<h4>Ключові фактори:</h4><ul class="reason-list">${signalData.reasons.map(r => `<li>${r}</li>`).join('')}</ul>`;
+            }
+            
+            if (Array.isArray(mtaData) && mtaData.length > 0) {
+                html += '<h4>Мульти-таймфрейм аналіз (MTA):</h4><table class="mta-table"><tr>';
+                mtaData.forEach(item => { html += `<th>${item.tf}</th>`; });
+                html += '</tr><tr>';
+                mtaData.forEach(item => {
+                    const signalClass = item.signal.toLowerCase();
+                    html += `<td class="${signalClass}">${item.signal}</td>`;
+                });
+                html += '</tr></table>';
+            }
 
-        signalOutput.innerHTML = html;
+            signalOutput.innerHTML = html;
 
-        if (signalData.history && signalData.history.dates && signalData.history.dates.length > 0) {
-            drawChart(pair, signalData.history);
-        } else {
-            chartContainer.innerHTML = `<div class="no-chart">Графік недоступний</div>`;
-        }
-        
-        if (initData) {
-            fetchHistory(pair);
-        }
-    })
-    .catch(err => {
-        console.error(`Error fetching signal for ${pair}:`, err);
-        signalOutput.innerHTML = `❌ Помилка: ${err.message || "Перевірте з'єднання."}`;
-        signalOutput.style.textAlign = 'center';
-    })
-    .finally(() => {
-        showLoader(false);
-    });
+            if (signalData.history && signalData.history.dates && signalData.history.dates.length > 0) {
+                drawChart(pair, signalData.history);
+            } else {
+                chartContainer.innerHTML = `<div class="no-chart">Графік недоступний</div>`;
+            }
+            
+            if (initData) {
+                fetchHistory(pair);
+            }
+        })
+        .catch(err => {
+            console.error(`Error fetching signal for ${pair}:`, err);
+            signalOutput.innerHTML = `❌ Помилка: ${err.message || "Перевірте з'єднання."}`;
+            signalOutput.style.textAlign = 'center';
+        })
+        .finally(() => {
+            showLoader(false);
+        });
+    // --- КІНЕЦЬ ЗМІН ---
 }
+
 
 function fetchHistory(pair) {
     const historyApiUrl = `${API_BASE_URL}/api/signal_history?pair=${pair}&initData=${encodeURIComponent(initData)}`;

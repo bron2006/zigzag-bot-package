@@ -1,8 +1,10 @@
+# analysis.py
 import pandas as pd
 import pandas_ta as ta
 import numpy as np
 import time
 import logging
+import random # Додано імпорт
 from twisted.internet import defer
 
 from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import ProtoMessage
@@ -17,6 +19,14 @@ MARKET_DATA_CACHE = {}
 
 def _normalize_pair(pair: str) -> str:
     return pair.replace("/", "").replace("\\", "").upper().strip()
+
+# --- ПОЧАТОК ЗМІН: Логіка МТА перенесена сюди ---
+def _get_mta_signal_data():
+    """Імітує отримання сигналу мульти-таймфрейм аналізу (MTA)."""
+    timeframes = ["15min", "1h", "4h", "1day"]
+    signals = ["BUY", "SELL", "NEUTRAL"]
+    return [{"tf": tf, "signal": random.choice(signals)} for tf in timeframes]
+# --- КІНЕЦЬ ЗМІН ---
 
 def get_market_data(client, pair, tf, limit=300):
     norm_pair = _normalize_pair(pair)
@@ -60,7 +70,8 @@ def get_market_data(client, pair, tf, limit=300):
         if not trendbars_response.trendbar:
             return pd.DataFrame()
         
-        # --- ВИПРАВЛЕННЯ: Використовуємо 'digits', яке є завжди, або безпечний fallback ---
+        # Використовуємо 'digits', яке тепер має бути в кеші, або безпечний fallback.
+        # Для ProtoOALightSymbol 'digits' немає, тому fallback важливий.
         divisor = 10**symbol_details.get('digits', 5)
         bars = [{
             'ts': pd.to_datetime(bar.utcTimestampInMinutes * 60, unit='s', utc=True),
@@ -149,11 +160,16 @@ def get_api_detailed_signal_data(client, pair, user_id=None):
             "low": history_df['low'].tolist(), "close": history_df['close'].tolist() 
         }
         
+        # --- ПОЧАТОК ЗМІН: Додаємо MTA дані до відповіді ---
+        mta_data = _get_mta_signal_data()
+        # --- КІНЕЦЬ ЗМІН ---
+
         return { 
             "pair": display_pair, "price": analysis_result['price'], "verdict_text": verdict_text, 
             "verdict_level": verdict_level, "reasons": analysis_result['reasons'], 
             "support": analysis_result['support'], "resistance": analysis_result['resistance'], 
-            "history": history 
+            "history": history,
+            "mta": mta_data # Додано поле mta
         }
     
     def on_error(failure):

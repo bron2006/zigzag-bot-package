@@ -6,7 +6,7 @@ import queue
 import threading
 from urllib.parse import parse_qs, unquote
 from klein import Klein
-from twisted.web.server import NOT_DONE_YET # ВИПРАВЛЕНО: Правильний імпорт
+from twisted.web.server import NOT_DONE_YET
 from twisted.internet import reactor, defer
 from twisted.web.static import File
 from telegram import Update
@@ -21,7 +21,7 @@ from config import (
 )
 from db import get_watchlist, toggle_watch, get_signal_history, init_db
 from analysis import get_api_detailed_signal_data
-from mta_analysis import get_mta_signal
+# from mta_analysis import get_mta_signal # ВИДАЛЕНО
 
 # --- Налаштування логування ---
 logging.basicConfig(
@@ -74,7 +74,6 @@ def on_symbols_loaded(full_symbols):
             continue
 
         normalized_name = symbol_name.replace("/", "").strip()
-        
         temp_cache[normalized_name] = { "symbolId": symbol_id }
             
     state.symbol_cache.update(temp_cache)
@@ -172,35 +171,18 @@ def get_signal_api(request):
     def on_error(failure):
         logger.error(f"API /api/signal: Помилка: {failure.getErrorMessage()}")
         request.setResponseCode(500)
-        error_response = {"error": f"Внутрішня помилка сервера."}
+        error_response = {"error": f"Внутрішня помилка сервера: {failure.getErrorMessage()}"}
         request.write(json.dumps(error_response).encode('utf-8'))
         request.finish()
     d.addCallbacks(on_success, on_error)
     
     return NOT_DONE_YET
 
-@app.route('/api/get_mta', methods=['GET'])
-def get_mta_api(request):
-    pair = request.args.get(b'pair', [b''])[0].decode()
-    request.setHeader('Content-Type', 'application/json')
-    request.setHeader('Access-Control-Allow-Origin', '*')
-    if not pair:
-        request.setResponseCode(400)
-        return json.dumps({"error": "Pair parameter is required"}).encode('utf-8')
-
-    d = get_mta_signal(state.client, pair)
-    def on_success(result):
-        request.write(json.dumps(result).encode('utf-8'))
-        request.finish()
-    def on_error(failure):
-        logger.error(f"API /api/get_mta: Помилка: {failure.getErrorMessage()}")
-        request.setResponseCode(500)
-        error_response = {"error": f"Внутрішня помилка сервера."}
-        request.write(json.dumps(error_response).encode('utf-8'))
-        request.finish()
-    d.addCallbacks(on_success, on_error)
-
-    return NOT_DONE_YET
+# --- ПОЧАТОК ЗМІН: Ендпоінт для MTA видалено ---
+# @app.route('/api/get_mta', methods=['GET'])
+# def get_mta_api(request):
+#     ...
+# --- КІНЕЦЬ ЗМІН ---
 
 @app.route('/api/signal_history', methods=['GET'])
 def get_signal_history_api(request):
