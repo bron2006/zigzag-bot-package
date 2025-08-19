@@ -5,7 +5,7 @@ import json
 import queue
 import threading
 from urllib.parse import parse_qs, unquote
-from klein import Klein
+from klein import Klein, NOT_DONE_YET
 from twisted.internet import reactor, defer
 from twisted.web.static import File
 from telegram import Update
@@ -65,7 +65,6 @@ def on_symbols_loaded(full_symbols):
     """Обробляє ПОВНИЙ список символів та коректно заповнює кеш."""
     temp_cache = {}
     
-    # --- ПОЧАТОК ФІНАЛЬНОГО ВИПРАВЛЕННЯ ---
     for symbol_data in full_symbols:
         symbol_name = getattr(symbol_data, 'symbolName', None)
         symbol_id = getattr(symbol_data, 'symbolId', None)
@@ -75,10 +74,7 @@ def on_symbols_loaded(full_symbols):
 
         normalized_name = symbol_name.replace("/", "").strip()
         
-        # Об'єкт ProtoOALightSymbol не містить 'digits', тому ми його не зберігаємо.
-        # analysis.py буде використовувати значення за замовчуванням (5), що коректно для більшості пар Forex.
         temp_cache[normalized_name] = { "symbolId": symbol_id }
-    # --- КІНЕЦЬ ФІНАЛЬНОГО ВИПРАВЛЕННЯ ---
             
     state.symbol_cache.update(temp_cache)
     state.SYMBOLS_LOADED = True
@@ -167,6 +163,7 @@ def get_signal_api(request):
     if not pair:
         request.setResponseCode(400)
         return json.dumps({"error": "Pair parameter is required"}).encode('utf-8')
+    
     d = get_api_detailed_signal_data(state.client, pair, user_id)
     def on_success(result):
         request.write(json.dumps(result).encode('utf-8'))
@@ -178,7 +175,8 @@ def get_signal_api(request):
         request.write(json.dumps(error_response).encode('utf-8'))
         request.finish()
     d.addCallbacks(on_success, on_error)
-    return defer.SUCCESS
+    
+    return NOT_DONE_YET
 
 @app.route('/api/get_mta', methods=['GET'])
 def get_mta_api(request):
@@ -188,6 +186,7 @@ def get_mta_api(request):
     if not pair:
         request.setResponseCode(400)
         return json.dumps({"error": "Pair parameter is required"}).encode('utf-8')
+
     d = get_mta_signal(state.client, pair)
     def on_success(result):
         request.write(json.dumps(result).encode('utf-8'))
@@ -199,7 +198,8 @@ def get_mta_api(request):
         request.write(json.dumps(error_response).encode('utf-8'))
         request.finish()
     d.addCallbacks(on_success, on_error)
-    return defer.SUCCESS
+
+    return NOT_DONE_YET
 
 @app.route('/api/signal_history', methods=['GET'])
 def get_signal_history_api(request):
