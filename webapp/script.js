@@ -1,7 +1,6 @@
 // webapp/script.js
 
-const API_BASE_URL = "."; // Use relative path for production
-// const API_BASE_URL = "https://zigzag-bot-package.fly.dev"; // Use for local testing
+const API_BASE_URL = "https://zigzag-bot-package.fly.dev"; // ВИПРАВЛЕНО: Повернено абсолютну URL-адресу
 
 const loader = document.getElementById("loader");
 const listsContainer = document.getElementById("listsContainer");
