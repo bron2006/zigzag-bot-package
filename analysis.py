@@ -5,11 +5,13 @@ import numpy as np
 import time
 import logging
 import random
-from twisted.internet import defer, reactor
-from twisted.internet.error import TimeoutError
+from twisted.internet import defer
 
 from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import ProtoMessage
-from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOAGetTrendbarsReq, ProtoOAGetTrendbarsRes
+from ctrader_open_api.messages.OpenApiMessages_pb2 import (
+    ProtoOAGetTrendbarsReq, ProtoOAGetTrendbarsRes,
+    ProtoOASymbolByIdReq # ДОДАНО
+)
 from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOATrendbarPeriod as TrendbarPeriod
 
 from db import add_signal_to_history
@@ -27,18 +29,49 @@ def _get_mta_signal_data():
     signals = ["BUY", "SELL", "NEUTRAL"]
     return [{"tf": tf, "signal": random.choice(signals)} for tf in timeframes]
 
-def get_market_data(client, pair, tf, limit=300):
-    norm_pair = _normalize_pair(pair)
-    
-    logger.info(f"[ANALYSIS] Запит даних для {pair} (нормалізовано: {norm_pair}), таймфрейм: {tf}")
-
+# --- ПОЧАТОК ФІНАЛЬНОГО ВИПРАВЛЕННЯ: Нова функція для отримання детальних даних ---
+def get_full_symbol_details(client, symbol_id: int):
+    """Робить запит на отримання повної інформації про символ за його ID."""
     from state import symbol_cache
-    symbol_details = symbol_cache.get(norm_pair)
-    if not symbol_details:
-        logger.error(f"[ANALYSIS] ПОМИЛКА: Символ '{norm_pair}' НЕ ЗНАЙДЕНО в кеші.")
-        return defer.fail(Exception(f"Пара '{pair}' не знайдена в кеші."))
     
-    logger.info(f"[ANALYSIS] Символ '{norm_pair}' знайдено в кеші. Деталі: {symbol_details}")
+    # Спочатку перевіряємо, чи є вже детальна інформація в кеші
+    for details in symbol_cache.values():
+        if details['symbolId'] == symbol_id and 'pipPosition' in details:
+            logger.info(f"[ANALYSIS] Детальна інформація для symbolId {symbol_id} вже є в кеші.")
+            return defer.succeed(details)
+            
+    d = defer.Deferred()
+    request = ProtoOASymbolByIdReq(ctidTraderAccountId=get_demo_account_id(), symbolId=[symbol_id])
+    
+    # Тимчасово підписуємося на подію, щоб отримати відповідь
+    def on_symbol_data(symbol_data):
+        # Оновлюємо наш головний кеш
+        norm_name = getattr(symbol_data, 'symbolName', '').replace("/", "").strip()
+        if norm_name:
+            symbol_cache[norm_name]['pipPosition'] = getattr(symbol_data, 'pipPosition', 5)
+            symbol_cache[norm_name]['digits'] = getattr(symbol_data, 'digits', 5)
+        
+        # Видаляємо обробник, щоб уникнути дублювання
+        client._events.get("symbolDataLoaded", []).remove(on_symbol_data)
+        if not d.called:
+            d.callback(symbol_cache[norm_name])
+
+    client.on("symbolDataLoaded")(on_symbol_data)
+    client.send(request)
+    return d
+# --- КІНЕЦЬ ФІНАЛЬНОГО ВИПРАВЛЕННЯ ---
+
+
+def get_market_data(client, pair, tf, limit=300, full_symbol_details=None):
+    norm_pair = _normalize_pair(pair)
+    key = f"{norm_pair}_{tf}_{limit}"
+    if key in MARKET_DATA_CACHE:
+        d = defer.Deferred()
+        d.callback(MARKET_DATA_CACHE[key])
+        return d
+        
+    if not full_symbol_details:
+        return defer.fail(Exception(f"Для {pair} відсутня детальна інформація про символ."))
 
     tf_map = {"15min": TrendbarPeriod.M15, "1h": TrendbarPeriod.H1, "4h": TrendbarPeriod.H4, "1day": TrendbarPeriod.D1}
     if tf not in tf_map:
@@ -50,60 +83,27 @@ def get_market_data(client, pair, tf, limit=300):
 
     request = ProtoOAGetTrendbarsReq(
         ctidTraderAccountId=get_demo_account_id(),
-        symbolId=symbol_details['symbolId'],
+        symbolId=full_symbol_details['symbolId'],
         period=tf_map[tf],
         fromTimestamp=from_ts,
         toTimestamp=now
     )
     
-    # --- ПОЧАТОК ФІНАЛЬНОГО ВИПРАВЛЕННЯ: Власний механізм таймауту ---
-    
-    # Створюємо наш власний Deferred, який будемо контролювати
-    outer_deferred = defer.Deferred()
-    
-    # Запускаємо таймер на 10 секунд. Якщо він спрацює, наш Deferred завершиться помилкою.
-    timeout_handler = reactor.callLater(
-        10, 
-        lambda: not outer_deferred.called and outer_deferred.errback(
-            TimeoutError(f"Таймаут 10с для запиту Trendbars для {pair} ({tf})")
-        )
-    )
-
-    def on_success(result):
-        # Якщо ми отримали успішну відповідь, скасовуємо наш таймер і передаємо результат далі
-        if timeout_handler.active():
-            timeout_handler.cancel()
-        if not outer_deferred.called:
-            outer_deferred.callback(result)
-
-    def on_error(failure):
-        # Якщо сталася інша помилка, скасовуємо таймер і передаємо помилку далі
-        if timeout_handler.active():
-            timeout_handler.cancel()
-        if not outer_deferred.called:
-            outer_deferred.errback(failure)
-            
-    logger.info(f"[ANALYSIS] Надсилаю запит ProtoOAGetTrendbarsReq з таймаутом 10с: {request}")
-    # Відправляємо запит і прив'язуємо наші обробники
-    original_deferred = client.send(request)
-    original_deferred.addCallbacks(on_success, on_error)
+    deferred = client.send(request)
 
     def process_response(response_proto: ProtoMessage):
-        logger.info(f"[ANALYSIS] Отримано відповідь від cTrader для {pair} ({tf}). Тип: {response_proto.payloadType}")
         from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOAPayloadType
         if response_proto.payloadType == ProtoOAPayloadType.PROTO_OA_ERROR_RES:
-            logger.error(f"[ANALYSIS] cTrader повернув помилку для {pair}: {response_proto}")
             raise Exception(f"Помилка API при запиті trendbars для {pair}")
 
         trendbars_response = ProtoOAGetTrendbarsRes()
         trendbars_response.ParseFromString(response_proto.payload)
-        
-        logger.info(f"[ANALYSIS] Успішно розпарсено ProtoOAGetTrendbarsRes. Кількість свічок: {len(trendbars_response.trendbar)}")
 
         if not trendbars_response.trendbar:
             return pd.DataFrame()
         
-        divisor = 10**symbol_details.get('digits', 5)
+        # ВИПРАВЛЕНО: Використовуємо 'digits' з детальної інформації
+        divisor = 10**full_symbol_details.get('digits', 5)
         bars = [{
             'ts': pd.to_datetime(bar.utcTimestampInMinutes * 60, unit='s', utc=True),
             'open': (bar.low + bar.deltaOpen) / divisor,
@@ -117,13 +117,11 @@ def get_market_data(client, pair, tf, limit=300):
         if df.empty:
             return df
         df = df.sort_values(by='ts').reset_index(drop=True).tail(limit)
-        MARKET_DATA_CACHE[f"{norm_pair}_{tf}_{limit}"] = df
+        MARKET_DATA_CACHE[key] = df
         return df
-    
-    # Повертаємо наш контрольований Deferred
-    return outer_deferred.addCallback(process_response)
-    # --- КІНЕЦЬ ФІНАЛЬНОГО ВИПРАВЛЕННЯ ---
 
+    deferred.addCallback(process_response)
+    return deferred
 
 def _calculate_core_signal(df, daily_df):
     df.ta.rsi(close=df['close'], length=14, append=True, col_names=('RSI',))
@@ -156,11 +154,20 @@ def _generate_verdict(analysis):
     return "🟡 НЕЙТРАЛЬНА СИТУАЦІЯ", "neutral"
 
 def get_api_detailed_signal_data(client, pair, user_id=None):
-    if not isinstance(pair, str) or len(pair) < 3:
-        return defer.fail(Exception(f"Некоректна назва пари: '{pair}'."))
-
-    display_pair = pair
+    from state import symbol_cache
     norm_pair = _normalize_pair(pair)
+    
+    base_symbol_info = symbol_cache.get(norm_pair)
+    if not base_symbol_info:
+        return defer.fail(Exception(f"Пара '{pair}' не знайдена в базовому кеші."))
+
+    # --- ПОЧАТОК ФІНАЛЬНОГО ВИПРАВЛЕННЯ: Нова логіка з отриманням деталей ---
+    def on_details_loaded(full_symbol_details):
+        d1 = get_market_data(client, norm_pair, '15min', 100, full_symbol_details)
+        d2 = get_market_data(client, norm_pair, '1day', 100, full_symbol_details)
+        d_list = defer.DeferredList([d1, d2], consumeErrors=True)
+        d_list.addCallback(on_data_ready)
+        return d_list
 
     def on_data_ready(results):
         success1, df = results[0]
@@ -168,9 +175,9 @@ def get_api_detailed_signal_data(client, pair, user_id=None):
 
         if not (success1 and success2):
             errors = []
-            if not success1: errors.append(f"15min data failed ({results[0][1].getErrorMessage()})")
-            if not success2: errors.append(f"1day data failed ({results[1][1].getErrorMessage()})")
-            return {"error": f"Не вдалося завантажити ринкові дані: {', '.join(errors)}."}
+            if not success1: errors.append(f"15min data failed")
+            if not success2: errors.append(f"1day data failed")
+            return {"error": f"Не вдалося завантажити ринкові дані ({', '.join(errors)})."}
         
         if df.empty or len(df) < 25 or daily_df.empty:
             return {"error": "Недостатньо історичних даних для аналізу."}
@@ -196,19 +203,15 @@ def get_api_detailed_signal_data(client, pair, user_id=None):
         mta_data = _get_mta_signal_data()
         
         return { 
-            "pair": display_pair, "price": analysis_result['price'], "verdict_text": verdict_text, 
+            "pair": pair, "price": analysis_result['price'], "verdict_text": verdict_text, 
             "verdict_level": verdict_level, "reasons": analysis_result['reasons'], 
             "support": analysis_result['support'], "resistance": analysis_result['resistance'], 
             "history": history,
             "mta": mta_data
         }
-    
-    def on_error(failure):
-        logger.error(f"Загальна помилка в DeferredList для {pair}: {failure.getErrorMessage()}")
-        return {"error": "Внутрішня помилка обробки."}
 
-    d1 = get_market_data(client, norm_pair, '15min', 100)
-    d2 = get_market_data(client, norm_pair, '1day', 100)
-    d_list = defer.DeferredList([d1, d2], consumeErrors=True)
-    d_list.addCallbacks(on_data_ready, on_error)
-    return d_list
+    # Запускаємо ланцюжок: спочатку деталі, потім дані
+    details_deferred = get_full_symbol_details(client, base_symbol_info['symbolId'])
+    details_deferred.addCallback(on_details_loaded)
+    return details_deferred
+    # --- КІНЕЦЬ ФІНАЛЬНОГО ВИПРАВЛЕННЯ ---

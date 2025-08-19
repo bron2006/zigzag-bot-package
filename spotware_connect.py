@@ -1,3 +1,4 @@
+# spotware_connect.py
 import logging
 from twisted.internet import reactor
 from ctrader_open_api.client import Client as SpotwareClientBase
@@ -7,6 +8,7 @@ from ctrader_open_api.messages.OpenApiMessages_pb2 import (
     ProtoOAApplicationAuthReq, ProtoOAApplicationAuthRes,
     ProtoOAAccountAuthReq, ProtoOAAccountAuthRes,
     ProtoOASymbolsListReq, ProtoOASymbolsListRes,
+    ProtoOASymbolByIdRes, # ДОДАНО
     ProtoOAErrorRes
 )
 from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOAPayloadType
@@ -40,7 +42,6 @@ class SpotwareClient(EventEmitter):
         self._client_secret = client_secret
         self._is_connected = False
         
-        # Збільшуємо таймаут до 15 секунд для надійності
         self._client = SpotwareClientBase(self.host, self.port, TcpProtocol)
         self._client.setConnectedCallback(self._on_connected)
         self._client.setMessageReceivedCallback(self._on_message_received)
@@ -54,7 +55,6 @@ class SpotwareClient(EventEmitter):
         self._client.startService()
 
     def send(self, message, client_msg_id=None):
-        # Збільшуємо таймаут для важливих запитів
         return self._client.send(message, clientMsgId=client_msg_id, responseTimeoutInSeconds=15)
 
     def _on_connected(self, client):
@@ -84,8 +84,14 @@ class SpotwareClient(EventEmitter):
         elif payload_type == ProtoOAPayloadType.PROTO_OA_SYMBOLS_LIST_RES:
             response = ProtoOASymbolsListRes()
             response.ParseFromString(message.payload)
-            # Генеруємо подію з повними даними
             self.emit("fullSymbolsLoaded", response.symbol)
+        # --- ПОЧАТОК ЗМІН: Обробка відповіді з детальною інформацією про символ ---
+        elif payload_type == ProtoOAPayloadType.PROTO_OA_SYMBOL_BY_ID_RES:
+            response = ProtoOASymbolByIdRes()
+            response.ParseFromString(message.payload)
+            # Ця подія буде використовуватися в analysis.py для оновлення кешу
+            self.emit("symbolDataLoaded", response.symbol[0]) 
+        # --- КІНЕЦЬ ЗМІН ---
         elif payload_type == ProtoOAPayloadType.PROTO_OA_ERROR_RES:
             response = ProtoOAErrorRes()
             response.ParseFromString(message.payload)
