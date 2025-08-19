@@ -8,10 +8,10 @@ from klein import Klein
 from twisted.internet import reactor, defer
 from twisted.web.static import File
 from telegram import Update
-from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, MessageHandler, Filters
+from telegram.ext import Updater, CommandHandler, CallbackQueryHandler
 
 import state
-from telegram_ui import start, menu, button_handler, reset_ui
+from telegram_ui import start, button_handler
 from spotware_connect import SpotwareClient
 from config import (
     get_telegram_token, get_ct_client_id, get_ct_client_secret, 
@@ -50,8 +50,6 @@ def init_telegram_bot():
     state.updater = Updater(TOKEN, use_context=True)
     dispatcher = state.updater.dispatcher
     dispatcher.add_handler(CommandHandler("start", start))
-    dispatcher.add_handler(MessageHandler(Filters.text("МЕНЮ"), menu))
-    dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, reset_ui))
     dispatcher.add_handler(CallbackQueryHandler(button_handler))
     logger.info("✅ Обробники Telegram зареєстровані.")
     
@@ -65,7 +63,11 @@ def on_symbols_loaded(symbols):
     for s in symbols:
         if "symbolName" in s:
             normalized_name = s["symbolName"].replace("/", "").strip()
-            temp_cache[normalized_name] = { "symbolId": s.get("symbolId") }
+            # Зберігаємо більше даних про символ для майбутнього використання
+            temp_cache[normalized_name] = {
+                "symbolId": s.get("symbolId"),
+                "digits": s.get("digits", 5) 
+            }
     state.symbol_cache.update(temp_cache)
     logger.info("✅ Кеш символів заповнено (%s символів)", len(state.symbol_cache))
 
@@ -89,7 +91,7 @@ def parse_tg_init_data(init_data_str: str) -> dict | None:
         logger.error(f"Помилка парсингу initData: {e}")
     return None
 
-# --- API ендпоінти для WebApp ---
+# API ендпоінти
 @app.route('/api/get_ranked_pairs', methods=['GET'])
 def get_ranked_pairs(request):
     try:
@@ -111,12 +113,9 @@ def get_ranked_pairs(request):
         request.setHeader('Access-Control-Allow-Origin', '*')
         return json.dumps(response_data).encode('utf-8')
     except Exception:
-        logger.exception("!!! КРИТИЧНА ПОМИЛКА в ендпойнті /api/get_ranked_pairs")
+        logger.exception("!!! ПОМИЛКА в /api/get_ranked_pairs")
         request.setResponseCode(500)
-        request.setHeader('Content-Type', 'application/json')
-        request.setHeader('Access-Control-Allow-Origin', '*')
-        error_response = {"error": "Internal Server Error"}
-        return json.dumps(error_response).encode('utf-8')
+        return json.dumps({"error": "Internal Server Error"}).encode('utf-8')
 
 @app.route('/api/toggle_watchlist', methods=['GET'])
 def toggle_watchlist_api(request):
@@ -154,7 +153,7 @@ def get_signal_api(request):
     def on_error(failure):
         logger.error(f"API /api/signal: Помилка: {failure.getErrorMessage()}")
         request.setResponseCode(500)
-        error_response = {"error": f"Внутрішня помилка сервера при аналізі {pair}."}
+        error_response = {"error": f"Внутрішня помилка сервера."}
         request.write(json.dumps(error_response).encode('utf-8'))
         request.finish()
     d.addCallbacks(on_success, on_error)
@@ -169,18 +168,16 @@ def get_mta_api(request):
         request.setResponseCode(400)
         return json.dumps({"error": "Pair parameter is required"}).encode('utf-8')
     d = get_mta_signal(state.client, pair)
-    # --- ФІНАЛЬНЕ ВИПРАВЛЕННЯ ТУТ ---
     def on_success(result):
         request.write(json.dumps(result).encode('utf-8'))
         request.finish()
     def on_error(failure):
         logger.error(f"API /api/get_mta: Помилка: {failure.getErrorMessage()}")
         request.setResponseCode(500)
-        error_response = {"error": f"Внутрішня помилка сервера при аналізі MTA."}
+        error_response = {"error": f"Внутрішня помилка сервера."}
         request.write(json.dumps(error_response).encode('utf-8'))
         request.finish()
     d.addCallbacks(on_success, on_error)
-    # --- КІНЕЦЬ ВИПРАВЛЕННЯ ---
     return defer.SUCCESS
 
 @app.route('/api/signal_history', methods=['GET'])
@@ -196,7 +193,7 @@ def get_signal_history_api(request):
     history = get_signal_history(user['id'], pair)
     return json.dumps(history).encode('utf-8')
 
-# --- Веб-ручки ---
+# Веб-ручки
 @app.route(f"/{TOKEN}", methods=['POST'])
 def webhook_handler(request):
     try:
@@ -229,7 +226,7 @@ def home(request):
         request.finish()
         return b""
     else:
-        return b"WebApp URL is not configured."
+        return b"Telegram Bot and Web Service is running"
 
 @app.route('/webapp/', branch=True)
 def webapp_static(request):
@@ -244,7 +241,7 @@ def setup_webhook():
     else:
         logger.warning("Не вдалося встановити вебхук.")
 
-# --- Запуск сервісів ---
+# Запуск сервісів
 init_db()
 logger.info("✅ Базу даних ініціалізовано.")
 init_telegram_bot()

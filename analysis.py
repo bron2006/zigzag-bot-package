@@ -60,8 +60,6 @@ def get_market_data(client, pair, tf, limit=300):
         if not trendbars_response.trendbar:
             return pd.DataFrame()
         
-        # Виправлення: Використовуємо 'digits' з кешу символів, якщо воно є, або безпечний fallback.
-        # Це виправляє помилку, коли 'pipPosition' був відсутній.
         divisor = 10**symbol_details.get('digits', 5)
         bars = [{
             'ts': pd.to_datetime(bar.utcTimestampInMinutes * 60, unit='s', utc=True),
