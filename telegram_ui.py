@@ -7,6 +7,10 @@ from telegram.error import BadRequest
 import state
 from config import FOREX_SESSIONS
 
+# Якщо треба, токен і chat_id вже збережені в пам'яті проекту.
+TOKEN = "bot8036106554:AAElZ3Xwh8615qB_uuKzOKqVpJoxz6kAR1o"
+CHAT_ID = 1064175237
+
 logger = logging.getLogger(__name__)
 
 # --- КЛАВІАТУРИ ---
@@ -40,7 +44,7 @@ def get_pairs_kb(session: str) -> InlineKeyboardMarkup:
 def start(update: Update, context: CallbackContext) -> None:
     """Обробляє команду /start і створює головну клавіатуру."""
     keyboard = [["МЕНЮ"]]
-    # --- ФІНАЛЬНЕ ВИПРАВЛЕННЯ: Повертаємо one_time_keyboard=False ---
+    # --- ВІДНОВЛЕНО: one_time_keyboard=False щоб клавіатура була постійною ---
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
     update.message.reply_text(
         "👋 Вітаю! Натисніть «МЕНЮ» для вибору активів.",
@@ -103,7 +107,7 @@ def button_handler(update: Update, context: CallbackContext) -> None:
     elif data == "menu_forex":
         query.edit_message_text("💹 Виберіть торгову сесію:", reply_markup=get_forex_sessions_kb())
     elif data.startswith("session_"):
-        session_name = data.split("_")[1]
+        session_name = data.split("_", 1)[1]
         query.edit_message_text(f"Виберіть пару для сесії '{session_name}':", reply_markup=get_pairs_kb(session_name))
     else:
         symbol = data
@@ -118,15 +122,26 @@ def button_handler(update: Update, context: CallbackContext) -> None:
         chat_id = query.message.chat_id
 
         def on_success(result):
-            message_text = _format_signal_message(result)
-            query.edit_message_text(text=message_text, parse_mode='Markdown', reply_markup=get_forex_sessions_kb())
+            try:
+                message_text = _format_signal_message(result)
+                query.edit_message_text(text=message_text, parse_mode='Markdown', reply_markup=get_forex_sessions_kb())
+            except Exception as e:
+                logger.exception(f"Помилка при форматуванні/відправці результату для {symbol}: {e}")
+                query.edit_message_text(text=f"❌ Помилка при обробці результату для {symbol}.", reply_markup=get_forex_sessions_kb())
+
         def on_error(failure):
-            logger.error(f"❌ Помилка при отриманні сигналу для {symbol}: {failure.getErrorMessage()}")
+            try:
+                err_msg = failure.getErrorMessage() if hasattr(failure, 'getErrorMessage') else str(failure)
+            except Exception:
+                err_msg = str(failure)
+            logger.error(f"❌ Помилка при отриманні сигналу для {symbol}: {err_msg}")
             query.edit_message_text(
                 text=f"❌ Виникла помилка під час аналізу {symbol}.",
                 reply_markup=get_forex_sessions_kb()
             )
+
         def do_analysis():
             d = get_api_detailed_signal_data(state.client, symbol, user_id)
             d.addCallbacks(on_success, on_error)
+
         reactor.callFromThread(do_analysis)
