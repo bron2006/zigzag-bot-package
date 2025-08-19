@@ -1,12 +1,11 @@
 import logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, WebAppInfo
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import CallbackContext
 from twisted.internet import reactor
 from telegram.error import BadRequest
 
 import state
-from config import FOREX_SESSIONS, get_fly_app_name
-from analysis import get_api_detailed_signal_data
+from config import FOREX_SESSIONS
 
 logger = logging.getLogger(__name__)
 
@@ -39,33 +38,31 @@ def get_pairs_kb(session: str) -> InlineKeyboardMarkup:
 
 # --- ОБРОБНИКИ ---
 def start(update: Update, context: CallbackContext) -> None:
-    app_name = get_fly_app_name()
-    if not app_name:
-        logger.error("FLY_APP_NAME не встановлено! WebApp недоступний.")
-        update.message.reply_text("Помилка конфігурації сервера. WebApp недоступний.")
-        return
-
-    webapp_info = WebAppInfo(url=f"https://{app_name}.fly.dev/webapp/index.html")
-    
-    keyboard = [
-        [
-            KeyboardButton("МЕНЮ"), 
-            KeyboardButton("WebApp", web_app=webapp_info)
-        ]
-    ]
+    """Обробляє команду /start і створює головну клавіатуру."""
+    keyboard = [["МЕНЮ"]]
+    # --- ВИПРАВЛЕННЯ: Додаємо one_time_keyboard=False, щоб клавіатура була постійною ---
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
     update.message.reply_text(
-        "👋 Вітаю! Натисніть «МЕНЮ» для вибору активів або «WebApp» для відкриття терміналу.", 
+        "👋 Вітаю! Натисніть «МЕНЮ» для вибору активів.", 
         reply_markup=reply_markup
     )
 
+def reset_ui(update: Update, context: CallbackContext) -> None:
+    """При будь-якому текстовому повідомленні, крім 'МЕНЮ', повертає головну клавіатуру."""
+    if update.message.text != "МЕНЮ":
+        start(update, context)
+
 def menu(update: Update, context: CallbackContext) -> None:
+    """Обробляє натискання на кнопку 'МЕНЮ'."""
+    try:
+        context.bot.delete_message(chat_id=update.message.chat_id, message_id=update.message.message_id)
+    except BadRequest:
+        pass
     if 'last_menu_id' in context.user_data:
         try:
             context.bot.delete_message(chat_id=update.message.chat_id, message_id=context.user_data['last_menu_id'])
         except BadRequest:
             pass
-            
     sent_message = update.message.reply_text("🏠 Головне меню:", reply_markup=get_main_menu_kb())
     context.user_data['last_menu_id'] = sent_message.message_id
 
@@ -117,7 +114,6 @@ def button_handler(update: Update, context: CallbackContext) -> None:
             query.answer(text=f"⚠️ Символ {symbol} не знайдено.", show_alert=True)
             return
         query.edit_message_text(text=f"⏳ Обрано {symbol}. Отримую дані для аналізу...")
-        
         user_id = query.from_user.id
         chat_id = query.message.chat_id
 
