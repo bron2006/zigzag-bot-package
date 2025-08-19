@@ -8,10 +8,10 @@ from klein import Klein
 from twisted.internet import reactor, defer
 from twisted.web.static import File
 from telegram import Update
-from telegram.ext import Updater, CommandHandler, CallbackQueryHandler
+from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, MessageHandler, Filters
 
 import state
-from telegram_ui import start, button_handler
+from telegram_ui import start, menu, button_handler, reset_ui
 from spotware_connect import SpotwareClient
 from config import (
     get_telegram_token, get_ct_client_id, get_ct_client_secret, 
@@ -50,6 +50,8 @@ def init_telegram_bot():
     state.updater = Updater(TOKEN, use_context=True)
     dispatcher = state.updater.dispatcher
     dispatcher.add_handler(CommandHandler("start", start))
+    dispatcher.add_handler(MessageHandler(Filters.text("МЕНЮ"), menu))
+    dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, reset_ui))
     dispatcher.add_handler(CallbackQueryHandler(button_handler))
     logger.info("✅ Обробники Telegram зареєстровані.")
     
@@ -63,7 +65,6 @@ def on_symbols_loaded(symbols):
     for s in symbols:
         if "symbolName" in s:
             normalized_name = s["symbolName"].replace("/", "").strip()
-            # Зберігаємо більше даних про символ для майбутнього використання
             temp_cache[normalized_name] = {
                 "symbolId": s.get("symbolId"),
                 "digits": s.get("digits", 5) 
