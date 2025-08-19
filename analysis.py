@@ -4,7 +4,6 @@ import numpy as np
 import time
 import logging
 from twisted.internet import defer
-import json # Додано для логування
 
 from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import ProtoMessage
 from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOAGetTrendbarsReq, ProtoOAGetTrendbarsRes
@@ -61,6 +60,7 @@ def get_market_data(client, pair, tf, limit=300):
         if not trendbars_response.trendbar:
             return pd.DataFrame()
         
+        # --- ВИПРАВЛЕННЯ: Використовуємо 'digits', яке є завжди, або безпечний fallback ---
         divisor = 10**symbol_details.get('digits', 5)
         bars = [{
             'ts': pd.to_datetime(bar.utcTimestampInMinutes * 60, unit='s', utc=True),
@@ -112,22 +112,6 @@ def _generate_verdict(analysis):
     return "🟡 НЕЙТРАЛЬНА СИТУАЦІЯ", "neutral"
 
 def get_api_detailed_signal_data(client, pair, user_id=None):
-    # --- ПОЧАТОК ДІАГНОСТИЧНОГО БЛОКУ ---
-    try:
-        from_bot = hasattr(client, 'send') # Простий спосіб визначити, чи це наш клієнт
-        caller = "BOT" if from_bot else "WEB"
-        log_data = {
-            "caller": caller,
-            "pair_received": pair,
-            "user_id_received": user_id,
-            "type_of_pair": str(type(pair)),
-            "client_id": id(client)
-        }
-        logger.info(f"DIAGNOSTICS: get_api_detailed_signal_data called with: {json.dumps(log_data)}")
-    except Exception as e:
-        logger.exception(f"DIAGNOSTICS: Error during logging: {e}")
-    # --- КІНЕЦЬ ДІАГНОСТИЧНОГО БЛОКУ ---
-
     if not isinstance(pair, str) or len(pair) < 3:
         return defer.fail(Exception(f"Некоректна назва пари: '{pair}'."))
 

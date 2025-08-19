@@ -39,8 +39,8 @@ def get_pairs_kb(session: str) -> InlineKeyboardMarkup:
 # --- ОБРОБНИКИ ---
 def start(update: Update, context: CallbackContext) -> None:
     """Обробляє команду /start і створює головну клавіатуру."""
-    # --- ФІНАЛЬНЕ ВИПРАВЛЕННЯ: Прибираємо WebApp і робимо меню постійним ---
     keyboard = [["МЕНЮ"]]
+    # --- ВИПРАВЛЕННЯ: Додаємо one_time_keyboard=False, щоб клавіатура була постійною ---
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
     update.message.reply_text(
         "👋 Вітаю! Натисніть «МЕНЮ» для вибору активів.", 
