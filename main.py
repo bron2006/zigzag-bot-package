@@ -62,23 +62,40 @@ def init_telegram_bot():
 
 # --- Ініціалізація cTrader ---
 def on_symbols_loaded(full_symbols):
-    """Обробляє ПОВНИЙ список символів, отриманий від API."""
+    """Обробляє ПОВНИЙ список символів, отриманий від API, та логує їх імена."""
     temp_cache = {}
+    available_symbols_names = []
+
     for symbol_data in full_symbols:
+        # --- ВИПРАВЛЕННЯ: Безпечний доступ до опціонального поля symbolName ---
+        symbol_name = getattr(symbol_data, 'symbolName', None)
+        
+        if not symbol_name:
+            logger.warning(f"Пропущено символ без імені або з порожнім іменем: {symbol_data}")
+            continue
+        
+        available_symbols_names.append(symbol_name)
+        
         try:
-            normalized_name = symbol_data.symbolName.replace("/", "").strip()
+            normalized_name = symbol_name.replace("/", "").strip()
             temp_cache[normalized_name] = {
                 "symbolId": symbol_data.symbolId,
                 "digits": symbol_data.digits
             }
-        except AttributeError:
-            logger.warning(f"Пропущено символ без імені: {symbol_data}")
+        except Exception as e:
+            logger.error(f"Помилка обробки символу {symbol_name}: {e}")
             continue
-            
+    
+    # --- ДІАГНОСТИКА: Виводимо в лог повний список отриманих символів ---
+    logger.info("="*50)
+    logger.info(f"СПИСОК СИМВОЛІВ, ОТРИМАНИХ ВІД CTRADER ({len(available_symbols_names)} шт.):")
+    logger.info(", ".join(sorted(available_symbols_names)))
+    logger.info("="*50)
+
     state.symbol_cache.update(temp_cache)
-    # Встановлюємо прапорець, що дані готові
     state.SYMBOLS_LOADED = True
     logger.info(f"✅ Кеш символів заповнено. Завантажено дані для {len(state.symbol_cache)} символів. Сервіс готовий.")
+
 
 def init_ctrader_client():
     api_key = get_ct_client_id()
@@ -106,7 +123,6 @@ def get_ranked_pairs(request):
     request.setHeader('Content-Type', 'application/json')
     request.setHeader('Access-Control-Allow-Origin', '*')
 
-    # Перевіряємо, чи готовий кеш символів
     if not state.SYMBOLS_LOADED:
         return json.dumps({"status": "initializing"}).encode('utf-8')
 
