@@ -1,249 +1,304 @@
-# -*- coding: utf-8 -*-
+import logging
 import os
 import json
-import logging
-from typing import Any, Dict, Optional
-
+import queue
+import threading
+from urllib.parse import parse_qs, unquote
 from klein import Klein
-from twisted.internet import reactor
-from twisted.internet.defer import maybeDeferred
+from twisted.internet import reactor, defer
 from twisted.web.static import File
+from telegram import Update
+from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, MessageHandler, Filters
 
 import state
-import config
-import analysis
-import telegram_ui
-import spotware_connect
-import db
+from telegram_ui import start, menu, button_handler, reset_ui, register_handlers
+from spotware_connect import SpotwareClient
+from config import (
+    get_telegram_token, get_ct_client_id, get_ct_client_secret,
+    get_fly_app_name, get_webhook_secret, FOREX_SESSIONS, CRYPTO_PAIRS_FULL, STOCKS_US_SYMBOLS
+)
+from db import get_watchlist, toggle_watch, get_signal_history, init_db
+from analysis import get_api_detailed_signal_data
+from mta_analysis import get_mta_signal
 
-logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"),
-                    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-log = logging.getLogger("main")
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
 app = Klein()
+TOKEN = None
+try:
+    TOKEN = get_telegram_token()
+except Exception:
+    logger.warning("TELEGRAM token not available at import time.")
+updates_queue = queue.Queue(maxsize=1000)
 
-# --- Утиліти ---
-def normalize_pair_input(pair: str) -> Dict[str, str]:
-    """Приймає 'eurusd' або 'EUR/USD' або 'eur/usd' і повертає:
-       {'norm': 'EURUSD', 'display': 'EUR/USD'}"""
-    if not pair:
-        return {"norm": "", "display": ""}
-    p = pair.replace("\\", "").replace(" ", "").upper()
-    if "/" in p:
-        parts = p.split("/")
-        if len(parts) >= 2:
-            norm = (parts[0] + parts[1])[:6]
-            display = f"{parts[0]}/{parts[1]}"
-            return {"norm": norm, "display": display}
-    # fallback: assume contiguous like EURUSD
-    p = p.replace("/", "")
-    if len(p) >= 6:
-        display = f"{p[:3]}/{p[3:6]}"
+def dispatcher_worker():
+    while True:
+        try:
+            update_data = updates_queue.get()
+            if state.updater:
+                update = Update.de_json(update_data, state.updater.bot)
+                state.updater.dispatcher.process_update(update)
+            updates_queue.task_done()
+        except Exception as e:
+            logger.exception(f"Помилка в воркері диспетчера: {e}")
+
+def init_telegram_bot():
+    global TOKEN
+    if TOKEN is None:
+        try:
+            TOKEN = get_telegram_token()
+        except Exception as e:
+            logger.error("TELEGRAM token not set: %s", e)
+            state.updater = None
+            state.dispatcher = None
+            return
+
+    state.updater = Updater(TOKEN, use_context=True)
+    state.dispatcher = state.updater.dispatcher
+
+    # Register handlers from telegram_ui
+    register_handlers(state.dispatcher)
+
+    # start dispatcher worker threads for webhook->dispatcher queue
+    for _ in range(4):
+        threading.Thread(target=dispatcher_worker, daemon=True).start()
+    logger.info("✅ Воркери для обробки черги Telegram запущені.")
+
+def on_symbols_loaded(symbols):
+    temp_cache = {}
+    for s in symbols:
+        if "symbolName" in s:
+            normalized_name = s["symbolName"].replace("/", "").strip().upper()
+            temp_cache[normalized_name] = {
+                "symbolId": s.get("symbolId"),
+                "digits": s.get("digits", 5)
+            }
+    state.symbol_cache.update(temp_cache)
+    logger.info("✅ Кеш символів заповнено (%s символів)", len(state.symbol_cache))
+
+def init_ctrader_client():
+    api_key = get_ct_client_id()
+    api_secret = get_ct_client_secret()
+    state.client = SpotwareClient(api_key, api_secret)
+    state.client.on("symbolsLoaded")(on_symbols_loaded)
+    state.client.on("error")(lambda err: logger.error(f"Помилка cTrader: {err}"))
+    state.client.connect()
+    logger.info("Запущено підключення до cTrader API...")
+
+def parse_tg_init_data(init_data_str: str) -> dict | None:
+    try:
+        params = parse_qs(unquote(init_data_str))
+        user_data_str = params.get('user', [None])[0]
+        if user_data_str:
+            return json.loads(user_data_str)
+    except Exception as e:
+        logger.error(f"Помилка парсингу initData: {e}")
+    return None
+
+def _format_pair_for_web(ticker: str) -> dict:
+    # ticker may be "EURUSD" in symbol_cache or "EUR/USD" in config
+    t = ticker or ""
+    t = t.replace("\\", "").strip()
+    if "/" in t:
+        display = t.upper()
+        norm = t.replace("/", "").upper()
     else:
-        display = p
-    return {"norm": p, "display": display}
+        up = t.upper()
+        if len(up) >= 6:
+            display = f"{up[:3]}/{up[3:6]}"
+        else:
+            display = up
+        norm = up
+    active = norm in state.symbol_cache
+    return {"ticker": display, "active": active}
 
-def json_response(request, payload: Dict[str, Any], status: int = 200):
-    request.setHeader(b"Content-Type", b"application/json; charset=utf-8")
-    request.setResponseCode(status)
-    return json.dumps(payload, ensure_ascii=False).encode("utf-8")
+@app.route('/api/get_ranked_pairs', methods=['GET'])
+def get_ranked_pairs(request):
+    try:
+        init_data = request.args.get(b'initData', [b''])[0].decode()
+        user = parse_tg_init_data(init_data)
+        watchlist = []
+        if user and user.get('id'):
+            watchlist = get_watchlist(user['id'])
+        def format_pair(ticker):
+            norm_ticker = ticker.replace("/", "").strip().upper()
+            display_ticker = f"{norm_ticker[:3]}/{norm_ticker[3:6]}" if len(norm_ticker) >= 6 else ticker
+            return {"ticker": display_ticker, "active": norm_ticker in state.symbol_cache}
+        response_data = {
+            "watchlist": watchlist,
+            "forex": {session: [format_pair(p) for p in pairs] for session, pairs in FOREX_SESSIONS.items()},
+            "crypto": [format_pair(p) for p in CRYPTO_PAIRS_FULL],
+            "stocks": [format_pair(p) for p in STOCKS_US_SYMBOLS]
+        }
+        request.setHeader('Content-Type', 'application/json')
+        request.setHeader('Access-Control-Allow-Origin', '*')
+        return json.dumps(response_data).encode('utf-8')
+    except Exception:
+        logger.exception("!!! ПОМИЛКА в /api/get_ranked_pairs")
+        request.setResponseCode(500)
+        return json.dumps({"error": "Internal Server Error"}).encode('utf-8')
 
-def _get_arg(request, name: str) -> Optional[str]:
-    raw = request.args.get(name.encode("utf-8"))
-    if not raw:
-        return None
-    return raw[0].decode("utf-8")
+@app.route('/api/toggle_watchlist', methods=['GET'])
+def toggle_watchlist_api(request):
+    init_data = request.args.get(b'initData', [b''])[0].decode()
+    pair = request.args.get(b'pair', [b''])[0].decode()
+    user = parse_tg_init_data(init_data)
+    request.setHeader('Content-Type', 'application/json')
+    request.setHeader('Access-Control-Allow-Origin', '*')
+    if not user or not user.get('id') or not pair:
+        request.setResponseCode(400)
+        return json.dumps({"success": False, "error": "Invalid parameters"}).encode('utf-8')
+    try:
+        toggle_watch(user['id'], pair)
+        return json.dumps({"success": True}).encode('utf-8')
+    except Exception as e:
+        logger.error(f"Помилка toggle_watchlist: {e}")
+        request.setResponseCode(500)
+        return json.dumps({"success": False, "error": "Database error"}).encode('utf-8')
 
-def _get_json_body(request) -> Dict[str, Any]:
+@app.route('/api/signal', methods=['GET'])
+def get_signal_api(request):
+    pair = request.args.get(b'pair', [b''])[0].decode()
+    init_data = request.args.get(b'initData', [b''])[0].decode()
+    user = parse_tg_init_data(init_data)
+    user_id = user.get('id') if user else None
+    request.setHeader('Content-Type', 'application/json')
+    request.setHeader('Access-Control-Allow-Origin', '*')
+    if not pair:
+        request.setResponseCode(400)
+        return json.dumps({"error": "Pair parameter is required"}).encode('utf-8')
+
+    d = get_api_detailed_signal_data(state.client, pair, user_id)
+
+    def on_success(result):
+        try:
+            request.write(json.dumps(result, ensure_ascii=False).encode('utf-8'))
+        finally:
+            try:
+                request.finish()
+            except Exception:
+                pass
+
+    def on_error(failure):
+        try:
+            msg = failure.getErrorMessage()
+        except Exception:
+            msg = str(failure)
+        logger.error(f"API /api/signal: Помилка: {msg}")
+        request.setResponseCode(500)
+        error_response = {"error": f"Внутрішня помилка сервера."}
+        try:
+            request.write(json.dumps(error_response).encode('utf-8'))
+        finally:
+            try:
+                request.finish()
+            except Exception:
+                pass
+
+    d.addCallbacks(on_success, on_error)
+    return defer.SUCCESS
+
+@app.route('/api/get_mta', methods=['GET'])
+def get_mta_api(request):
+    pair = request.args.get(b'pair', [b''])[0].decode()
+    request.setHeader('Content-Type', 'application/json')
+    request.setHeader('Access-Control-Allow-Origin', '*')
+    if not pair:
+        request.setResponseCode(400)
+        return json.dumps({"error": "Pair parameter is required"}).encode('utf-8')
+    d = get_mta_signal(state.client, pair)
+    def on_success(result):
+        try:
+            request.write(json.dumps(result, ensure_ascii=False).encode('utf-8'))
+        finally:
+            try:
+                request.finish()
+            except Exception:
+                pass
+    def on_error(failure):
+        try:
+            msg = failure.getErrorMessage()
+        except Exception:
+            msg = str(failure)
+        logger.error(f"API /api/get_mta: Помилка: {msg}")
+        request.setResponseCode(500)
+        error_response = {"error": f"Внутрішня помилка сервера."}
+        try:
+            request.write(json.dumps(error_response).encode('utf-8'))
+        finally:
+            try:
+                request.finish()
+            except Exception:
+                pass
+    d.addCallbacks(on_success, on_error)
+    return defer.SUCCESS
+
+@app.route('/api/signal_history', methods=['GET'])
+def get_signal_history_api(request):
+    init_data = request.args.get(b'initData', [b''])[0].decode()
+    pair = request.args.get(b'pair', [b''])[0].decode()
+    user = parse_tg_init_data(init_data)
+    request.setHeader('Content-Type', 'application/json')
+    request.setHeader('Access-Control-Allow-Origin', '*')
+    if not user or not user.get('id') or not pair:
+        request.setResponseCode(400)
+        return json.dumps([]).encode('utf-8')
+    history = get_signal_history(user['id'], pair)
+    return json.dumps(history).encode('utf-8')
+
+@app.route(f"/{TOKEN}", methods=['POST'])
+def webhook_handler(request):
     try:
         body = request.content.read()
-        if not body:
-            return {}
-        return json.loads(body.decode("utf-8"))
+        if request.getHeader("X-Telegram-Bot-Api-Secret-Token") != get_webhook_secret():
+            request.setResponseCode(403)
+            return b"Forbidden"
+        update_data = json.loads(body.decode())
+        updates_queue.put_nowait(update_data)
+        request.setResponseCode(200)
+        return b"OK"
+    except queue.Full:
+        request.setResponseCode(503)
+        return b"Busy"
     except Exception:
-        return {}
+        request.setResponseCode(400)
+        return b"Bad Request"
 
-# --- Health ---
 @app.route("/health")
-def health(request):
-    data = {
-        "ok": True,
-        "telegram_initialized": bool(getattr(state, "updater", None)),
-        "ctrader_connected": bool(getattr(state, "client", None) and getattr(state.client, "isConnected", False)),
-        "symbols_cached": len(getattr(state, "symbol_cache", {}))
-    }
-    return json_response(request, data, 200)
+def health_check(request):
+    request.setResponseCode(200)
+    return b"OK"
 
-# --- Ranked pairs (webapp expects "EUR/USD") ---
-@app.route("/api/get_ranked_pairs", methods=["GET"])
-def api_get_ranked_pairs(request):
-    try:
-        pairs = []
-        cache = getattr(state, "symbol_cache", None)
-        if cache and isinstance(cache, dict) and cache:
-            for key in cache.keys():
-                k = str(key).upper().replace(" ", "")
-                if "/" in k:
-                    pairs.append(k)
-                else:
-                    if len(k) >= 6:
-                        pairs.append(f"{k[:3]}/{k[3:6]}")
-                    else:
-                        pairs.append(k)
-        if not pairs:
-            # fallback to config sessions (format them to EUR/USD)
-            sessions = getattr(config, "FOREX_SESSIONS", {})
-            for sess_pairs in sessions.values():
-                for p in sess_pairs:
-                    pnorm = normalize_pair_input(p)["display"]
-                    pairs.append(pnorm)
-        pairs = sorted(dict.fromkeys(pairs))  # unique, ordered by first appearance
-        return json_response(request, {"ok": True, "pairs": pairs}, 200)
-    except Exception as e:
-        log.exception("get_ranked_pairs failed")
-        return json_response(request, {"ok": False, "error": str(e)}, 500)
+@app.route("/")
+def home(request):
+    app_name = get_fly_app_name()
+    if app_name:
+        webapp_url = f"https://{app_name}.fly.dev/webapp/index.html"
+        request.redirect(webapp_url.encode('utf-8'))
+        request.finish()
+        return b""
+    else:
+        return b"Telegram Bot and Web Service is running"
 
-# --- Signal endpoint (accepts eurusd or eur/usd) ---
-@app.route("/api/signal", methods=["GET", "POST"])
-def api_signal(request):
-    try:
-        pair = _get_arg(request, "pair")
-        if not pair:
-            body = _get_json_body(request)
-            pair = body.get("pair") or body.get("symbol")
-        if not pair:
-            return json_response(request, {"ok": False, "error": "pair parameter is required"}, 400)
-
-        normalized = normalize_pair_input(pair)
-        norm_pair = normalized["norm"]
-
-        # user id parsing from initData if provided
-        init_data = _get_arg(request, "initData")
-        user_id = None
-        if init_data:
-            try:
-                from urllib.parse import parse_qs, unquote
-                params = parse_qs(unquote(init_data))
-                user_raw = params.get('user', [None])[0]
-                if user_raw:
-                    user = json.loads(user_raw)
-                    user_id = user.get('id')
-            except Exception:
-                user_id = None
-
-        d = maybeDeferred(analysis.get_api_detailed_signal_data, getattr(state, "client", None), norm_pair, user_id)
-
-        def cb_ok(res):
-            if isinstance(res, dict) and res.get("error"):
-                return json_response(request, {"ok": False, "error": res["error"]}, 200)
-            res_out = {"ok": True, "pair": normalized["display"], "data": res}
-            return json_response(request, res_out, 200)
-
-        def cb_err(f):
-            try:
-                msg = f.getErrorMessage()
-            except Exception:
-                msg = str(f)
-            log.error("api/signal error for %s: %s", norm_pair, msg)
-            return json_response(request, {"ok": False, "error": msg}, 200)
-
-        d.addCallback(cb_ok)
-        d.addErrback(cb_err)
-        return d
-    except Exception as e:
-        log.exception("api_signal unexpected")
-        return json_response(request, {"ok": False, "error": str(e)}, 500)
-
-# --- MTA endpoint ---
-@app.route("/api/get_mta", methods=["GET", "POST"])
-def api_get_mta(request):
-    try:
-        pair = _get_arg(request, "pair")
-        if not pair:
-            body = _get_json_body(request)
-            pair = body.get("pair") or body.get("symbol")
-        if not pair:
-            return json_response(request, {"ok": False, "error": "pair parameter is required"}, 400)
-
-        norm_pair = normalize_pair_input(pair)["norm"]
-        d = maybeDeferred(analysis.get_mta_signal, getattr(state, "client", None), norm_pair)
-
-        def cb_ok(res):
-            return json_response(request, {"ok": True, "pair": pair, "mta": res}, 200)
-
-        def cb_err(f):
-            try:
-                msg = f.getErrorMessage()
-            except Exception:
-                msg = str(f)
-            log.error("api/get_mta error for %s: %s", norm_pair, msg)
-            return json_response(request, {"ok": False, "error": msg}, 200)
-
-        d.addCallback(cb_ok)
-        d.addErrback(cb_err)
-        return d
-    except Exception as e:
-        log.exception("api_get_mta unexpected")
-        return json_response(request, {"ok": False, "error": str(e)}, 500)
-
-# --- Static webapp route ---
-@app.route("/webapp/", branch=True)
+@app.route('/webapp/', branch=True)
 def webapp_static(request):
     return File("./webapp")
 
-# --- Telegram webhook route ---
-@app.route("/<token>", methods=["POST"])
-def telegram_webhook(request, token: str):
-    if not getattr(state, "updater", None) or token != getattr(state, "BOT_TOKEN", None):
-        request.setResponseCode(404)
-        return b"Not found"
-    try:
-        body = request.content.read()
-        if not body:
-            request.setResponseCode(400); return b"Empty"
-        from telegram import Update as TgUpdate
-        upd = TgUpdate.de_json(json.loads(body.decode("utf-8")), state.updater.bot)
-        state.dispatcher.process_update(upd)
-        request.setResponseCode(200); return b"OK"
-    except Exception as e:
-        log.exception("telegram_webhook failed")
-        request.setResponseCode(500)
-        return str(e).encode("utf-8")
+def setup_webhook():
+    app_name = get_fly_app_name()
+    if app_name and state.updater:
+        webhook_url = f"https://{app_name}.fly.dev/{TOKEN}"
+        state.updater.bot.set_webhook(url=webhook_url, secret_token=get_webhook_secret())
+        logger.info(f"Вебхук встановлено за адресою: {webhook_url}")
+    else:
+        logger.warning("Не вдалося встановити вебхук.")
 
-# --- Init helpers ---
-def init_services():
-    try:
-        db.init_db()
-    except Exception:
-        log.exception("DB init failed")
-    # init telegram
-    try:
-        token = config.get_telegram_token()
-        state.BOT_TOKEN = token
-        from telegram.ext import Updater
-        state.updater = Updater(token, use_context=True)
-        state.dispatcher = state.updater.dispatcher
-        telegram_ui.register_handlers(state.dispatcher)
-        # do not force webhook here, rely on environment if set
-        log.info("Telegram initialized")
-    except Exception as e:
-        log.error("Telegram init error: %s", e)
-        state.updater = None
-        state.dispatcher = None
-
-    # init cTrader client (spotware_connect should set state.client and symbol_cache)
-    try:
-        spotware_connect.init_ctrader_client()
-    except Exception:
-        # try alternative start
-        try:
-            spotware_connect.start()
-        except Exception:
-            log.exception("ctrader init failed")
-
-# --- run ---
-if __name__ == "__main__":
-    init_services()
-    port = int(os.getenv("PORT", "8080"))
-    app.run("0.0.0.0", port)
-    reactor.run()
+init_db()
+logger.info("✅ Базу даних ініціалізовано.")
+init_telegram_bot()
+reactor.callWhenRunning(setup_webhook)
+reactor.callWhenRunning(init_ctrader_client)
