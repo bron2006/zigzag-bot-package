@@ -40,10 +40,10 @@ def get_pairs_kb(session: str) -> InlineKeyboardMarkup:
 def start(update: Update, context: CallbackContext) -> None:
     """Обробляє команду /start і створює головну клавіатуру."""
     keyboard = [["МЕНЮ"]]
-    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    # Виправлення: Повертаємо one_time_keyboard=False, щоб клавіатура була постійною.
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
     update.message.reply_text(
-        "👋 Вітаю! Натисніть «МЕНЮ» для вибору активів.\n\n"
-        "Якщо ця клавіатура зникне, просто надішліть будь-яке повідомлення, щоб її повернути.", 
+        "👋 Вітаю! Натисніть «МЕНЮ» для вибору активів.", 
         reply_markup=reply_markup
     )
 
@@ -63,23 +63,8 @@ def menu(update: Update, context: CallbackContext) -> None:
             context.bot.delete_message(chat_id=update.message.chat_id, message_id=context.user_data['last_menu_id'])
         except BadRequest:
             pass
-    # --- ФІНАЛЬНЕ ВИПРАВЛЕННЯ ТУТ ---
-    # При виклику меню, ми відправляємо і inline-меню, і підтверджуємо ReplyKeyboard
-    keyboard = [["МЕНЮ"]]
-    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-    sent_message = update.message.reply_text(
-        "🏠 Головне меню:", 
-        reply_markup=get_main_menu_kb()
-    )
-    # Надсилаємо ще одне повідомлення, щоб клавіатура точно оновилась, якщо була прихована
-    context.bot.send_message(
-        chat_id=update.message.chat_id, 
-        text="_ _ _", # Технічне повідомлення
-        reply_markup=reply_markup
-    ).delete()
-    # --- КІНЕЦЬ ВИПРАВЛЕННЯ ---
+    sent_message = update.message.reply_text("🏠 Головне меню:", reply_markup=get_main_menu_kb())
     context.user_data['last_menu_id'] = sent_message.message_id
-
 
 def _format_signal_message(result: dict) -> str:
     if result.get("error"):
