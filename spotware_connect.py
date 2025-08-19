@@ -40,6 +40,7 @@ class SpotwareClient(EventEmitter):
         self._client_secret = client_secret
         self._is_connected = False
         
+        # Збільшуємо таймаут до 15 секунд для надійності
         self._client = SpotwareClientBase(self.host, self.port, TcpProtocol)
         self._client.setConnectedCallback(self._on_connected)
         self._client.setMessageReceivedCallback(self._on_message_received)
@@ -53,12 +54,13 @@ class SpotwareClient(EventEmitter):
         self._client.startService()
 
     def send(self, message, client_msg_id=None):
-        return self._send_message(message, client_msg_id)
+        # Збільшуємо таймаут для важливих запитів
+        return self._client.send(message, clientMsgId=client_msg_id, responseTimeoutInSeconds=15)
 
     def _on_connected(self, client):
         logger.info("Встановлено з'єднання з cTrader API. Авторизація додатку...")
         request = ProtoOAApplicationAuthReq(clientId=self._client_id, clientSecret=self._client_secret)
-        self._send_message(request)
+        self.send(request)
 
     def _on_disconnected(self, client, reason):
         self._is_connected = False
@@ -82,7 +84,7 @@ class SpotwareClient(EventEmitter):
         elif payload_type == ProtoOAPayloadType.PROTO_OA_SYMBOLS_LIST_RES:
             response = ProtoOASymbolsListRes()
             response.ParseFromString(message.payload)
-            # --- ВИПРАВЛЕННЯ: Генеруємо подію з повними даними ---
+            # Генеруємо подію з повними даними
             self.emit("fullSymbolsLoaded", response.symbol)
         elif payload_type == ProtoOAPayloadType.PROTO_OA_ERROR_RES:
             response = ProtoOAErrorRes()
@@ -96,19 +98,9 @@ class SpotwareClient(EventEmitter):
             ctidTraderAccountId=get_demo_account_id(), 
             accessToken=get_ctrader_access_token()
         )
-        self._send_message(request)
+        self.send(request)
 
     def _request_symbols(self):
         logger.info("Надсилаю запит на отримання ПОВНОГО списку символів...")
         request = ProtoOASymbolsListReq(ctidTraderAccountId=get_demo_account_id())
-        self._send_message(request)
-
-    def _send_message(self, message, client_msg_id=None):
-        deferred = self._client.send(message, clientMsgId=client_msg_id)
-        deferred.addErrback(self._on_send_error)
-        return deferred
-
-    def _on_send_error(self, failure):
-        error_message = f"Не вдалося надіслати повідомлення: {failure.getErrorMessage()}"
-        logger.error(error_message)
-        self.emit("error", error_message)
+        self.send(request)

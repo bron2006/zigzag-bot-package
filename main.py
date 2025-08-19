@@ -15,13 +15,11 @@ from telegram_ui import start, menu, button_handler, reset_ui
 from spotware_connect import SpotwareClient
 from config import (
     get_telegram_token, get_ct_client_id, get_ct_client_secret, 
-    get_fly_app_name, get_webhook_secret, FOREX_SESSIONS, CRYPTO_PAIRS_FULL, STOCKS_US_SYMBOLS,
-    get_demo_account_id
+    get_fly_app_name, get_webhook_secret, FOREX_SESSIONS, CRYPTO_PAIRS_FULL, STOCKS_US_SYMBOLS
 )
 from db import get_watchlist, toggle_watch, get_signal_history, init_db
 from analysis import get_api_detailed_signal_data
 from mta_analysis import get_mta_signal
-from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOASymbolsListReq # <-- Важливий імпорт
 
 # --- Налаштування логування ---
 logging.basicConfig(
@@ -67,7 +65,7 @@ def on_symbols_loaded(full_symbols):
     temp_cache = {}
     for symbol_data in full_symbols:
         try:
-            # Використовуємо правильне поле symbolName з ProtoOASymbol
+            # Згідно з документацією, використовуємо поле symbolName з об'єкта ProtoOASymbol
             normalized_name = symbol_data.symbolName.replace("/", "").strip()
             temp_cache[normalized_name] = {
                 "symbolId": symbol_data.symbolId,
@@ -80,13 +78,11 @@ def on_symbols_loaded(full_symbols):
     state.symbol_cache.update(temp_cache)
     logger.info(f"✅ Кеш символів заповнено. Завантажено дані для {len(state.symbol_cache)} символів.")
 
-
 def init_ctrader_client():
     api_key = get_ct_client_id()
     api_secret = get_ct_client_secret()
     state.client = SpotwareClient(api_key, api_secret)
-    # Змінюємо подію, на яку реагуємо
-    state.client.on("fullSymbolsLoaded")(on_symbols_loaded) 
+    state.client.on("fullSymbolsLoaded")(on_symbols_loaded)
     state.client.on("error")(lambda err: logger.error(f"Помилка cTrader: {err}"))
     state.client.connect()
     logger.info("Запущено підключення до cTrader API...")
