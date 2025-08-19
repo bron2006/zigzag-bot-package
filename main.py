@@ -11,7 +11,7 @@ from telegram import Update
 from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, MessageHandler, Filters
 
 import state
-from telegram_ui import start, menu, button_handler, reset_ui
+from telegram_ui import start, menu, button_handler
 from spotware_connect import SpotwareClient
 from config import (
     get_telegram_token, get_ct_client_id, get_ct_client_secret, 
@@ -21,19 +21,16 @@ from db import get_watchlist, toggle_watch, get_signal_history, init_db
 from analysis import get_api_detailed_signal_data
 from mta_analysis import get_mta_signal
 
-# Налаштування логування
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# Ініціалізація
 app = Klein()
 TOKEN = get_telegram_token()
 updates_queue = queue.Queue(maxsize=1000)
 
-# Воркер
 def dispatcher_worker():
     while True:
         try:
@@ -45,13 +42,11 @@ def dispatcher_worker():
         except Exception as e:
             logger.exception(f"Помилка в воркері диспетчера: {e}")
 
-# Ініціалізація Telegram
 def init_telegram_bot():
     state.updater = Updater(TOKEN, use_context=True)
     dispatcher = state.updater.dispatcher
     dispatcher.add_handler(CommandHandler("start", start))
     dispatcher.add_handler(MessageHandler(Filters.text("МЕНЮ"), menu))
-    dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, reset_ui))
     dispatcher.add_handler(CallbackQueryHandler(button_handler))
     logger.info("✅ Обробники Telegram зареєстровані.")
     
@@ -59,11 +54,10 @@ def init_telegram_bot():
         threading.Thread(target=dispatcher_worker, daemon=True).start()
     logger.info("✅ Воркери для обробки черги Telegram запущені.")
 
-# Ініціалізація cTrader
 def on_symbols_loaded(symbols):
     temp_cache = {}
     for s in symbols:
-        if "symbolName" in s:
+        if "symbolName" in s and s.get("symbolId"):
             normalized_name = s["symbolName"].replace("/", "").strip()
             temp_cache[normalized_name] = {
                 "symbolId": s.get("symbolId"),
@@ -81,17 +75,28 @@ def init_ctrader_client():
     state.client.connect()
     logger.info("Запущено підключення до cTrader API...")
 
-# Допоміжна функція
 def parse_tg_init_data(init_data_str: str) -> dict | None:
     try:
         params = parse_qs(unquote(init_data_str))
         user_data_str = params.get('user', [None])[0]
         if user_data_str:
             return json.loads(user_data_str)
-    except Exception:
-        return None
+    except Exception as e:
+        logger.error(f"Помилка парсингу initData: {e}")
+    return None
 
-# API ендпоінти
+def _deferred_to_request(d, request):
+    def on_success(result):
+        request.setHeader('Content-Type', 'application/json')
+        return json.dumps(result).encode('utf-8')
+    def on_error(failure):
+        logger.error(f"Помилка обробки API запиту {request.path.decode()}: {failure.getTraceback()}")
+        request.setResponseCode(500)
+        request.setHeader('Content-Type', 'application/json')
+        return json.dumps({"error": "Internal Server Error"}).encode('utf-8')
+    d.addCallbacks(on_success, on_error)
+    return d
+
 @app.route('/api/get_ranked_pairs', methods=['GET'])
 def get_ranked_pairs(request):
     try:
@@ -113,9 +118,9 @@ def get_ranked_pairs(request):
         request.setHeader('Access-Control-Allow-Origin', '*')
         return json.dumps(response_data).encode('utf-8')
     except Exception:
-        logger.exception("API /api/get_ranked_pairs: ПОМИЛКА")
+        logger.exception("!!! ПОМИЛКА в /api/get_ranked_pairs")
         request.setResponseCode(500)
-        return json.dumps({"status": "error", "message": "Internal Server Error"}).encode('utf-8')
+        return json.dumps({"error": "Internal Server Error"}).encode('utf-8')
 
 @app.route('/api/toggle_watchlist', methods=['GET'])
 def toggle_watchlist_api(request):
@@ -137,66 +142,28 @@ def toggle_watchlist_api(request):
 
 @app.route('/api/signal', methods=['GET'])
 def get_signal_api(request):
-    request.setHeader('Content-Type', 'application/json')
+    pair = request.args.get(b'pair', [b''])[0].decode()
+    init_data = request.args.get(b'initData', [b''])[0].decode()
+    user = parse_tg_init_data(init_data)
+    user_id = user.get('id') if user else None
     request.setHeader('Access-Control-Allow-Origin', '*')
-    try:
-        pair = request.args.get(b'pair', [b''])[0].decode()
-        if not pair:
-            return json.dumps({"status": "error", "message": "Pair is required"}).encode('utf-8')
-
-        init_data = request.args.get(b'initData', [b''])[0].decode()
-        user = parse_tg_init_data(init_data)
-        user_id = user.get('id') if user else None
-        
-        d = get_api_detailed_signal_data(state.client, pair, user_id)
-        
-        def on_success(result):
-            if result.get("error"):
-                response = {"status": "error", "message": result["error"]}
-            else:
-                response = {"status": "success", "signal": result}
-            request.write(json.dumps(response).encode('utf-8'))
-            request.finish()
-
-        def on_error(failure):
-            logger.error(f"API /api/signal: Помилка: {failure.getErrorMessage()}")
-            response = {"status": "error", "message": "Внутрішня помилка сервера."}
-            request.write(json.dumps(response).encode('utf-8'))
-            request.finish()
-            
-        d.addCallbacks(on_success, on_error)
-        return defer.SUCCESS
-    except Exception as e:
-        logger.exception("API /api/signal: КРИТИЧНА ПОМИЛКА")
-        return json.dumps({"status": "error", "message": str(e)}).encode('utf-8')
+    if not pair:
+        request.setResponseCode(400)
+        request.setHeader('Content-Type', 'application/json')
+        return json.dumps({"error": "Pair parameter is required"}).encode('utf-8')
+    d = get_api_detailed_signal_data(state.client, pair, user_id)
+    return _deferred_to_request(d, request)
 
 @app.route('/api/get_mta', methods=['GET'])
 def get_mta_api(request):
-    request.setHeader('Content-Type', 'application/json')
+    pair = request.args.get(b'pair', [b''])[0].decode()
     request.setHeader('Access-Control-Allow-Origin', '*')
-    try:
-        pair = request.args.get(b'pair', [b''])[0].decode()
-        if not pair:
-            return json.dumps({"status": "error", "message": "Pair is required"}).encode('utf-8')
-
-        d = get_mta_signal(state.client, pair)
-        
-        def on_success(result):
-            response = {"status": "success", "mta": result}
-            request.write(json.dumps(response).encode('utf-8'))
-            request.finish()
-
-        def on_error(failure):
-            logger.error(f"API /api/get_mta: Помилка: {failure.getErrorMessage()}")
-            response = {"status": "error", "message": "Внутрішня помилка сервера."}
-            request.write(json.dumps(response).encode('utf-8'))
-            request.finish()
-
-        d.addCallbacks(on_success, on_error)
-        return defer.SUCCESS
-    except Exception as e:
-        logger.exception("API /api/get_mta: КРИТИЧНА ПОМИЛКА")
-        return json.dumps({"status": "error", "message": str(e)}).encode('utf-8')
+    if not pair:
+        request.setResponseCode(400)
+        request.setHeader('Content-Type', 'application/json')
+        return json.dumps({"error": "Pair parameter is required"}).encode('utf-8')
+    d = get_mta_signal(state.client, pair)
+    return _deferred_to_request(d, request)
 
 @app.route('/api/signal_history', methods=['GET'])
 def get_signal_history_api(request):
@@ -211,7 +178,6 @@ def get_signal_history_api(request):
     history = get_signal_history(user['id'], pair)
     return json.dumps(history).encode('utf-8')
 
-# Веб-ручки
 @app.route(f"/{TOKEN}", methods=['POST'])
 def webhook_handler(request):
     try:
@@ -241,10 +207,9 @@ def home(request):
     if app_name:
         webapp_url = f"https://{app_name}.fly.dev/webapp/index.html"
         request.redirect(webapp_url.encode('utf-8'))
-        request.finish()
         return b""
     else:
-        return b"Telegram Bot and Web Service is running"
+        return b"WebApp URL is not configured."
 
 @app.route('/webapp/', branch=True)
 def webapp_static(request):
@@ -259,7 +224,6 @@ def setup_webhook():
     else:
         logger.warning("Не вдалося встановити вебхук.")
 
-# Запуск
 init_db()
 logger.info("✅ Базу даних ініціалізовано.")
 init_telegram_bot()
