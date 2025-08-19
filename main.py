@@ -33,7 +33,7 @@ app = Klein()
 TOKEN = get_telegram_token()
 updates_queue = queue.Queue(maxsize=1000)
 
-# Воркер для обробки оновлень
+# Воркер
 def dispatcher_worker():
     while True:
         try:
@@ -81,16 +81,15 @@ def init_ctrader_client():
     state.client.connect()
     logger.info("Запущено підключення до cTrader API...")
 
-# Допоміжна функція для WebApp
+# Допоміжна функція
 def parse_tg_init_data(init_data_str: str) -> dict | None:
     try:
         params = parse_qs(unquote(init_data_str))
         user_data_str = params.get('user', [None])[0]
         if user_data_str:
             return json.loads(user_data_str)
-    except Exception as e:
-        logger.error(f"Помилка парсингу initData: {e}")
-    return None
+    except Exception:
+        return None
 
 # API ендпоінти
 @app.route('/api/get_ranked_pairs', methods=['GET'])
@@ -114,12 +113,13 @@ def get_ranked_pairs(request):
         request.setHeader('Access-Control-Allow-Origin', '*')
         return json.dumps(response_data).encode('utf-8')
     except Exception:
-        logger.exception("!!! ПОМИЛКА в /api/get_ranked_pairs")
+        logger.exception("API /api/get_ranked_pairs: ПОМИЛКА")
         request.setResponseCode(500)
-        return json.dumps({"error": "Internal Server Error"}).encode('utf-8')
+        return json.dumps({"status": "error", "message": "Internal Server Error"}).encode('utf-8')
 
 @app.route('/api/toggle_watchlist', methods=['GET'])
 def toggle_watchlist_api(request):
+    # ... (код не змінюється, він стабільний)
     init_data = request.args.get(b'initData', [b''])[0].decode()
     pair = request.args.get(b'pair', [b''])[0].decode()
     user = parse_tg_init_data(init_data)
@@ -138,51 +138,71 @@ def toggle_watchlist_api(request):
 
 @app.route('/api/signal', methods=['GET'])
 def get_signal_api(request):
-    pair = request.args.get(b'pair', [b''])[0].decode()
-    init_data = request.args.get(b'initData', [b''])[0].decode()
-    user = parse_tg_init_data(init_data)
-    user_id = user.get('id') if user else None
     request.setHeader('Content-Type', 'application/json')
     request.setHeader('Access-Control-Allow-Origin', '*')
-    if not pair:
-        request.setResponseCode(400)
-        return json.dumps({"error": "Pair parameter is required"}).encode('utf-8')
-    d = get_api_detailed_signal_data(state.client, pair, user_id)
-    def on_success(result):
-        request.write(json.dumps(result).encode('utf-8'))
-        request.finish()
-    def on_error(failure):
-        logger.error(f"API /api/signal: Помилка: {failure.getErrorMessage()}")
-        request.setResponseCode(500)
-        error_response = {"error": f"Внутрішня помилка сервера."}
-        request.write(json.dumps(error_response).encode('utf-8'))
-        request.finish()
-    d.addCallbacks(on_success, on_error)
-    return defer.SUCCESS
+    try:
+        pair = request.args.get(b'pair', [b''])[0].decode()
+        if not pair:
+            return json.dumps({"status": "error", "message": "Pair is required"}).encode('utf-8')
+
+        init_data = request.args.get(b'initData', [b''])[0].decode()
+        user = parse_tg_init_data(init_data)
+        user_id = user.get('id') if user else None
+        
+        d = get_api_detailed_signal_data(state.client, pair, user_id)
+        
+        def on_success(result):
+            # Перевіряємо, чи сам аналіз не повернув помилку
+            if result.get("error"):
+                response = {"status": "error", "message": result["error"]}
+            else:
+                response = {"status": "success", "signal": result}
+            request.write(json.dumps(response).encode('utf-8'))
+            request.finish()
+
+        def on_error(failure):
+            logger.error(f"API /api/signal: Помилка: {failure.getErrorMessage()}")
+            response = {"status": "error", "message": "Внутрішня помилка сервера."}
+            request.write(json.dumps(response).encode('utf-8'))
+            request.finish()
+            
+        d.addCallbacks(on_success, on_error)
+        return defer.SUCCESS
+    except Exception as e:
+        logger.exception("API /api/signal: КРИТИЧНА ПОМИЛКА")
+        return json.dumps({"status": "error", "message": str(e)}).encode('utf-8')
 
 @app.route('/api/get_mta', methods=['GET'])
 def get_mta_api(request):
-    pair = request.args.get(b'pair', [b''])[0].decode()
     request.setHeader('Content-Type', 'application/json')
     request.setHeader('Access-Control-Allow-Origin', '*')
-    if not pair:
-        request.setResponseCode(400)
-        return json.dumps({"error": "Pair parameter is required"}).encode('utf-8')
-    d = get_mta_signal(state.client, pair)
-    def on_success(result):
-        request.write(json.dumps(result).encode('utf-8'))
-        request.finish()
-    def on_error(failure):
-        logger.error(f"API /api/get_mta: Помилка: {failure.getErrorMessage()}")
-        request.setResponseCode(500)
-        error_response = {"error": f"Внутрішня помилка сервера."}
-        request.write(json.dumps(error_response).encode('utf-8'))
-        request.finish()
-    d.addCallbacks(on_success, on_error)
-    return defer.SUCCESS
+    try:
+        pair = request.args.get(b'pair', [b''])[0].decode()
+        if not pair:
+            return json.dumps({"status": "error", "message": "Pair is required"}).encode('utf-8')
+
+        d = get_mta_signal(state.client, pair)
+        
+        def on_success(result):
+            response = {"status": "success", "mta": result}
+            request.write(json.dumps(response).encode('utf-8'))
+            request.finish()
+
+        def on_error(failure):
+            logger.error(f"API /api/get_mta: Помилка: {failure.getErrorMessage()}")
+            response = {"status": "error", "message": "Внутрішня помилка сервера."}
+            request.write(json.dumps(response).encode('utf-8'))
+            request.finish()
+
+        d.addCallbacks(on_success, on_error)
+        return defer.SUCCESS
+    except Exception as e:
+        logger.exception("API /api/get_mta: КРИТИЧНА ПОМИЛКА")
+        return json.dumps({"status": "error", "message": str(e)}).encode('utf-8')
 
 @app.route('/api/signal_history', methods=['GET'])
 def get_signal_history_api(request):
+    # ... (код не змінюється, він стабільний)
     init_data = request.args.get(b'initData', [b''])[0].decode()
     pair = request.args.get(b'pair', [b''])[0].decode()
     user = parse_tg_init_data(init_data)
@@ -197,6 +217,7 @@ def get_signal_history_api(request):
 # Веб-ручки
 @app.route(f"/{TOKEN}", methods=['POST'])
 def webhook_handler(request):
+    # ... (код не змінюється, він стабільний)
     try:
         body = request.content.read()
         if request.getHeader("X-Telegram-Bot-Api-Secret-Token") != get_webhook_secret():
@@ -215,11 +236,13 @@ def webhook_handler(request):
 
 @app.route("/health")
 def health_check(request):
+    # ... (код не змінюється, він стабільний)
     request.setResponseCode(200)
     return b"OK"
 
 @app.route("/")
 def home(request):
+    # ... (код не змінюється, він стабільний)
     app_name = get_fly_app_name()
     if app_name:
         webapp_url = f"https://{app_name}.fly.dev/webapp/index.html"
@@ -231,9 +254,11 @@ def home(request):
 
 @app.route('/webapp/', branch=True)
 def webapp_static(request):
+    # ... (код не змінюється, він стабільний)
     return File("./webapp")
 
 def setup_webhook():
+    # ... (код не змінюється, він стабільний)
     app_name = get_fly_app_name()
     if app_name and state.updater:
         webhook_url = f"https://{app_name}.fly.dev/{TOKEN}"
@@ -242,7 +267,7 @@ def setup_webhook():
     else:
         logger.warning("Не вдалося встановити вебхук.")
 
-# Запуск сервісів
+# Запуск
 init_db()
 logger.info("✅ Базу даних ініціалізовано.")
 init_telegram_bot()

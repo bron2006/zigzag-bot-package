@@ -40,10 +40,10 @@ def get_pairs_kb(session: str) -> InlineKeyboardMarkup:
 def start(update: Update, context: CallbackContext) -> None:
     """Обробляє команду /start і створює головну клавіатуру."""
     keyboard = [["МЕНЮ"]]
-    # --- ВИПРАВЛЕННЯ: Додаємо one_time_keyboard=False, щоб клавіатура була постійною ---
+    # --- ФІНАЛЬНЕ ВИПРАВЛЕННЯ: Повертаємо one_time_keyboard=False ---
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
     update.message.reply_text(
-        "👋 Вітаю! Натисніть «МЕНЮ» для вибору активів.", 
+        "👋 Вітаю! Натисніть «МЕНЮ» для вибору активів.",
         reply_markup=reply_markup
     )
 
