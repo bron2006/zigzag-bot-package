@@ -1,15 +1,12 @@
 import logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from telegram.ext import CallbackContext
 from twisted.internet import reactor
 from telegram.error import BadRequest
 
 import state
 from config import FOREX_SESSIONS
-
-# Якщо треба, токен і chat_id вже збережені в пам'яті проекту.
-TOKEN = "bot8036106554:AAElZ3Xwh8615qB_uuKzOKqVpJoxz6kAR1o"
-CHAT_ID = 1064175237
+from analysis import get_api_detailed_signal_data
 
 logger = logging.getLogger(__name__)
 
@@ -119,7 +116,6 @@ def button_handler(update: Update, context: CallbackContext) -> None:
             return
         query.edit_message_text(text=f"⏳ Обрано {symbol}. Отримую дані для аналізу...")
         user_id = query.from_user.id
-        chat_id = query.message.chat_id
 
         def on_success(result):
             try:

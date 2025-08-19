@@ -9,13 +9,13 @@ from twisted.internet import reactor, defer
 from twisted.web.static import File
 from telegram import Update
 from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, MessageHandler, Filters
+from telegram.error import InvalidToken
 
 import state
 from telegram_ui import start, menu, button_handler, reset_ui
 from spotware_connect import SpotwareClient
 from config import (
-    # Замість читати токен з .env, вставлено прямо за вимогою проекту/користувача.
-    get_ct_client_id, get_ct_client_secret,
+    get_telegram_token, get_ct_client_id, get_ct_client_secret,
     get_fly_app_name, get_webhook_secret, FOREX_SESSIONS, CRYPTO_PAIRS_FULL, STOCKS_US_SYMBOLS
 )
 from db import get_watchlist, toggle_watch, get_signal_history, init_db
@@ -29,13 +29,19 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Вставлений токен і chat_id згідно з побажанням.
-TOKEN = "bot8036106554:AAElZ3Xwh8615qB_uuKzOKqVpJoxz6kAR1o"
+# Жорстко закодований токен та chat_id (як просили).
+HARDCODED_TELEGRAM_TOKEN = "bot8036106554:AAElZ3Xwh8615qB_uuKzOKqVpJoxz6kAR1o"
 CHAT_ID = 1064175237
 
-# Ініціалізація
+# Отримаємо токен з оточення, або впадемо на жорстко закодований.
+try:
+    TOKEN = get_telegram_token()
+except Exception:
+    TOKEN = HARDCODED_TELEGRAM_TOKEN
+    logger.warning("TELEGRAM_BOT_TOKEN з .env не знайдено. Використовую жорстко закодований токен. Якщо він недійсний оновіть змінні оточення.")
+
+# Ініціалізація Klein app і черги
 app = Klein()
-# TOKEN використовується нижче для ініціалізації Telegram-updater та вебхука.
 updates_queue = queue.Queue(maxsize=1000)
 
 # Воркер для обробки оновлень
@@ -52,7 +58,17 @@ def dispatcher_worker():
 
 # Ініціалізація Telegram
 def init_telegram_bot():
-    state.updater = Updater(TOKEN, use_context=True)
+    try:
+        state.updater = Updater(TOKEN, use_context=True)
+    except InvalidToken:
+        logger.error("Невалідний Telegram token. Telegram бот не буде запущено. Перевірте TELEGRAM_BOT_TOKEN.")
+        state.updater = None
+        return
+    except Exception as e:
+        logger.exception(f"Не вдалось ініціалізувати Telegram Updater: {e}")
+        state.updater = None
+        return
+
     dispatcher = state.updater.dispatcher
     dispatcher.add_handler(CommandHandler("start", start))
     dispatcher.add_handler(MessageHandler(Filters.text("МЕНЮ"), menu))
@@ -158,7 +174,6 @@ def get_signal_api(request):
 
     def on_success(result):
         try:
-            # Якщо модуль повернув помилку у формі словника з ключем "error"
             if isinstance(result, dict) and result.get("error"):
                 resp = {"status": "error", "message": result.get("error")}
                 request.setResponseCode(400)
@@ -292,10 +307,13 @@ def setup_webhook():
     app_name = get_fly_app_name()
     if app_name and state.updater:
         webhook_url = f"https://{app_name}.fly.dev/{TOKEN}"
-        state.updater.bot.set_webhook(url=webhook_url, secret_token=get_webhook_secret())
-        logger.info(f"Вебхук встановлено за адресою: {webhook_url}")
+        try:
+            state.updater.bot.set_webhook(url=webhook_url, secret_token=get_webhook_secret())
+            logger.info(f"Вебхук встановлено за адресою: {webhook_url}")
+        except Exception as e:
+            logger.exception(f"Не вдалося встановити вебхук: {e}")
     else:
-        logger.warning("Не вдалося встановити вебхук.")
+        logger.warning("Не вдалося встановити вебхук. Updater не ініціалізований або FLY_APP_NAME відсутній.")
 
 # Запуск сервісів
 init_db()
