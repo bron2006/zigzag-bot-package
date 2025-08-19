@@ -9,32 +9,41 @@ from twisted.internet import reactor
 from twisted.internet.defer import maybeDeferred
 from twisted.web.static import File
 
-# Локальні модулі (залишив виклики як у вашому проєкті)
 import state
 import config
 import analysis
 import telegram_ui
+import spotware_connect
+import db
 
-# ---------- ЛОГІНГ ----------
-logging.basicConfig(
-    level=getattr(logging, os.getenv("LOG_LEVEL", "INFO")),
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-)
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"),
+                    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 log = logging.getLogger("main")
 
 app = Klein()
 
-# ---------- JSON УТИЛІТИ ----------
-def on_success(data: Any) -> Dict[str, Any]:
-    return {"ok": True, "data": data}
+# --- Утиліти ---
+def normalize_pair_input(pair: str) -> Dict[str, str]:
+    """Приймає 'eurusd' або 'EUR/USD' або 'eur/usd' і повертає:
+       {'norm': 'EURUSD', 'display': 'EUR/USD'}"""
+    if not pair:
+        return {"norm": "", "display": ""}
+    p = pair.replace("\\", "").replace(" ", "").upper()
+    if "/" in p:
+        parts = p.split("/")
+        if len(parts) >= 2:
+            norm = (parts[0] + parts[1])[:6]
+            display = f"{parts[0]}/{parts[1]}"
+            return {"norm": norm, "display": display}
+    # fallback: assume contiguous like EURUSD
+    p = p.replace("/", "")
+    if len(p) >= 6:
+        display = f"{p[:3]}/{p[3:6]}"
+    else:
+        display = p
+    return {"norm": p, "display": display}
 
-def on_error(code: str, message: str, details: Optional[Any] = None) -> Dict[str, Any]:
-    err = {"ok": False, "error": {"code": code, "message": message}}
-    if details is not None:
-        err["error"]["details"] = details
-    return err
-
-def _json_response(request, payload: Dict[str, Any], status: int = 200):
+def json_response(request, payload: Dict[str, Any], status: int = 200):
     request.setHeader(b"Content-Type", b"application/json; charset=utf-8")
     request.setResponseCode(status)
     return json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -54,40 +63,47 @@ def _get_json_body(request) -> Dict[str, Any]:
     except Exception:
         return {}
 
-# ---------- HEALTH ----------
-@app.route("/health", methods=["GET"])
+# --- Health ---
+@app.route("/health")
 def health(request):
-    payload = on_success(
-        {
-            "status": "ok",
-            "symbols_cached": len(state.symbol_cache) if getattr(state, "symbol_cache", None) else 0,
-            "telegram_webhook": bool(getattr(state, "updater", None)),
-        }
-    )
-    return _json_response(request, payload, 200)
+    data = {
+        "ok": True,
+        "telegram_initialized": bool(getattr(state, "updater", None)),
+        "ctrader_connected": bool(getattr(state, "client", None) and getattr(state.client, "isConnected", False)),
+        "symbols_cached": len(getattr(state, "symbol_cache", {}))
+    }
+    return json_response(request, data, 200)
 
-# ---------- РЕЙТИНГ ПАР ДЛЯ WEBAPP ----------
+# --- Ranked pairs (webapp expects "EUR/USD") ---
 @app.route("/api/get_ranked_pairs", methods=["GET"])
-def get_ranked_pairs(request):
+def api_get_ranked_pairs(request):
     try:
         pairs = []
-        if getattr(state, "symbol_cache", None):
-            for s in state.symbol_cache:
-                sym = str(s)
-                if "/" in sym or "_" in sym:
-                    pairs.append(sym.replace("_", "/"))
-        if not pairs and hasattr(config, "FOREX_PAIRS"):
-            pairs = list(config.FOREX_PAIRS)
+        cache = getattr(state, "symbol_cache", None)
+        if cache and isinstance(cache, dict) and cache:
+            for key in cache.keys():
+                k = str(key).upper().replace(" ", "")
+                if "/" in k:
+                    pairs.append(k)
+                else:
+                    if len(k) >= 6:
+                        pairs.append(f"{k[:3]}/{k[3:6]}")
+                    else:
+                        pairs.append(k)
         if not pairs:
-            pairs = ["EUR/USD", "GBP/USD", "USD/JPY", "BTC/USD", "ETH/USD"]
-        pairs = sorted(set(pairs))
-        data = [{"pair": p, "label": p} for p in pairs[:200]]
-        return _json_response(request, on_success(data), 200)
+            # fallback to config sessions (format them to EUR/USD)
+            sessions = getattr(config, "FOREX_SESSIONS", {})
+            for sess_pairs in sessions.values():
+                for p in sess_pairs:
+                    pnorm = normalize_pair_input(p)["display"]
+                    pairs.append(pnorm)
+        pairs = sorted(dict.fromkeys(pairs))  # unique, ordered by first appearance
+        return json_response(request, {"ok": True, "pairs": pairs}, 200)
     except Exception as e:
         log.exception("get_ranked_pairs failed")
-        return _json_response(request, on_error("RANKED_PAIRS_ERROR", "Не вдалося отримати список пар", str(e)), 200)
+        return json_response(request, {"ok": False, "error": str(e)}, 500)
 
-# ---------- API: СИГНАЛ ----------
+# --- Signal endpoint (accepts eurusd or eur/usd) ---
 @app.route("/api/signal", methods=["GET", "POST"])
 def api_signal(request):
     try:
@@ -95,33 +111,50 @@ def api_signal(request):
         if not pair:
             body = _get_json_body(request)
             pair = body.get("pair") or body.get("symbol")
-
         if not pair:
-            return _json_response(request, on_error("VALIDATION_ERROR", "Пара (pair) обовʼязкова"), 200)
+            return json_response(request, {"ok": False, "error": "pair parameter is required"}, 400)
 
-        d = maybeDeferred(analysis.get_signal, pair)
+        normalized = normalize_pair_input(pair)
+        norm_pair = normalized["norm"]
 
-        @d.addCallback
-        def _ok(res):
-            payload = on_success({"pair": pair, "signal": res})
-            return _json_response(request, payload, 200)
-
-        @d.addErrback
-        def _fail(f):
+        # user id parsing from initData if provided
+        init_data = _get_arg(request, "initData")
+        user_id = None
+        if init_data:
             try:
-                em = f.getErrorMessage()
+                from urllib.parse import parse_qs, unquote
+                params = parse_qs(unquote(init_data))
+                user_raw = params.get('user', [None])[0]
+                if user_raw:
+                    user = json.loads(user_raw)
+                    user_id = user.get('id')
             except Exception:
-                em = str(f)
-            log.error("api_signal error for %s: %s", pair, em)
-            payload = on_error("ANALYSIS_ERROR", "Не вдалося отримати сигнал", em)
-            return _json_response(request, payload, 200)
+                user_id = None
 
+        d = maybeDeferred(analysis.get_api_detailed_signal_data, getattr(state, "client", None), norm_pair, user_id)
+
+        def cb_ok(res):
+            if isinstance(res, dict) and res.get("error"):
+                return json_response(request, {"ok": False, "error": res["error"]}, 200)
+            res_out = {"ok": True, "pair": normalized["display"], "data": res}
+            return json_response(request, res_out, 200)
+
+        def cb_err(f):
+            try:
+                msg = f.getErrorMessage()
+            except Exception:
+                msg = str(f)
+            log.error("api/signal error for %s: %s", norm_pair, msg)
+            return json_response(request, {"ok": False, "error": msg}, 200)
+
+        d.addCallback(cb_ok)
+        d.addErrback(cb_err)
         return d
     except Exception as e:
-        log.exception("api_signal unexpected error")
-        return _json_response(request, on_error("UNEXPECTED", "Непередбачена помилка", str(e)), 200)
+        log.exception("api_signal unexpected")
+        return json_response(request, {"ok": False, "error": str(e)}, 500)
 
-# ---------- API: MTA ----------
+# --- MTA endpoint ---
 @app.route("/api/get_mta", methods=["GET", "POST"])
 def api_get_mta(request):
     try:
@@ -129,117 +162,88 @@ def api_get_mta(request):
         if not pair:
             body = _get_json_body(request)
             pair = body.get("pair") or body.get("symbol")
-
         if not pair:
-            return _json_response(request, on_error("VALIDATION_ERROR", "Пара (pair) обовʼязкова"), 200)
+            return json_response(request, {"ok": False, "error": "pair parameter is required"}, 400)
 
-        d = maybeDeferred(analysis.get_mta, pair)
+        norm_pair = normalize_pair_input(pair)["norm"]
+        d = maybeDeferred(analysis.get_mta_signal, getattr(state, "client", None), norm_pair)
 
-        @d.addCallback
-        def _ok(res):
-            payload = on_success({"pair": pair, "mta": res})
-            return _json_response(request, payload, 200)
+        def cb_ok(res):
+            return json_response(request, {"ok": True, "pair": pair, "mta": res}, 200)
 
-        @d.addErrback
-        def _fail(f):
+        def cb_err(f):
             try:
-                em = f.getErrorMessage()
+                msg = f.getErrorMessage()
             except Exception:
-                em = str(f)
-            log.error("api_get_mta error for %s: %s", pair, em)
-            payload = on_error("MTA_ERROR", "Не вдалося отримати MTA", em)
-            return _json_response(request, payload, 200)
+                msg = str(f)
+            log.error("api/get_mta error for %s: %s", norm_pair, msg)
+            return json_response(request, {"ok": False, "error": msg}, 200)
 
+        d.addCallback(cb_ok)
+        d.addErrback(cb_err)
         return d
     except Exception as e:
-        log.exception("api_get_mta unexpected error")
-        return _json_response(request, on_error("UNEXPECTED", "Непередбачена помилка", str(e)), 200)
+        log.exception("api_get_mta unexpected")
+        return json_response(request, {"ok": False, "error": str(e)}, 500)
 
-# ---------- WEBAPP STATIC (виправлено: Klein route замість app.resource.putChild) ----------
-@app.route('/webapp/', branch=True)
+# --- Static webapp route ---
+@app.route("/webapp/", branch=True)
 def webapp_static(request):
     return File("./webapp")
 
-# ---------- TELEGRAM WEBHOOK ----------
+# --- Telegram webhook route ---
 @app.route("/<token>", methods=["POST"])
 def telegram_webhook(request, token: str):
+    if not getattr(state, "updater", None) or token != getattr(state, "BOT_TOKEN", None):
+        request.setResponseCode(404)
+        return b"Not found"
     try:
-        if not getattr(state, "updater", None) or token != getattr(state, "BOT_TOKEN", None):
-            return _json_response(request, on_error("WEBHOOK_DISABLED", "Бот не ініціалізований або токен не збігається"), 404)
-
         body = request.content.read()
         if not body:
-            return _json_response(request, on_error("EMPTY", "Порожнє тіло запиту"), 200)
-
+            request.setResponseCode(400); return b"Empty"
         from telegram import Update as TgUpdate
-        update = TgUpdate.de_json(json.loads(body.decode("utf-8")), state.updater.bot)
-        state.dispatcher.process_update(update)
-        return _json_response(request, on_success({"status": "accepted"}), 200)
+        upd = TgUpdate.de_json(json.loads(body.decode("utf-8")), state.updater.bot)
+        state.dispatcher.process_update(upd)
+        request.setResponseCode(200); return b"OK"
     except Exception as e:
         log.exception("telegram_webhook failed")
-        return _json_response(request, on_error("WEBHOOK_ERROR", "Помилка обробки вебхука", str(e)), 200)
+        request.setResponseCode(500)
+        return str(e).encode("utf-8")
 
-# ---------- ІНІЦІАЛІЗАЦІЇ ----------
-def _looks_like_token(token: str) -> bool:
-    return bool(token and ":" in token and len(token) > 20)
-
-def init_telegram_bot():
-    token = getattr(config, "TELEGRAM_BOT_TOKEN", os.getenv("TELEGRAM_BOT_TOKEN", "")).strip()
-    state.BOT_TOKEN = token
-
-    if not _looks_like_token(token):
-        log.warning("TELEGRAM_BOT_TOKEN не заданий або виглядає некоректно — бот не буде запущений.")
-        state.updater = None
-        state.dispatcher = None
-        return
-
+# --- Init helpers ---
+def init_services():
     try:
+        db.init_db()
+    except Exception:
+        log.exception("DB init failed")
+    # init telegram
+    try:
+        token = config.get_telegram_token()
+        state.BOT_TOKEN = token
         from telegram.ext import Updater
         state.updater = Updater(token, use_context=True)
         state.dispatcher = state.updater.dispatcher
         telegram_ui.register_handlers(state.dispatcher)
-        webhook_url = getattr(config, "TELEGRAM_WEBHOOK_URL", os.getenv("TELEGRAM_WEBHOOK_URL", "")).strip()
-        if webhook_url:
-            state.updater.bot.set_webhook(webhook_url.rstrip("/") + f"/{token}")
-            log.info("Telegram webhook встановлено: %s", webhook_url)
-        else:
-            log.warning("TELEGRAM_WEBHOOK_URL не заданий — очікуємо оновлення на /<token>.")
+        # do not force webhook here, rely on environment if set
+        log.info("Telegram initialized")
     except Exception as e:
-        log.error("Помилка ініціалізації Telegram-бота: %s", e, exc_info=True)
+        log.error("Telegram init error: %s", e)
         state.updater = None
         state.dispatcher = None
 
-def init_db():
+    # init cTrader client (spotware_connect should set state.client and symbol_cache)
     try:
-        import db
-        db.init_db()
-        log.info("✅ Базу даних ініціалізовано.")
-    except Exception as e:
-        log.error("DB init failed: %s", e, exc_info=True)
-
-def init_ctrader():
-    try:
-        import spotware_connect
-        # Викликаємо старт метод бібліотеки вашої реалізації
-        if hasattr(spotware_connect, "start"):
-            spotware_connect.start()
-        else:
-            # сумісний варіант з вашим модулем
-            if hasattr(spotware_connect, "init_ctrader_client"):
-                spotware_connect.init_ctrader_client()
-        log.info("✅ cTrader клієнт ініціалізовано.")
-    except Exception as e:
-        log.error("cTrader init failed: %s", e, exc_info=True)
-
-# ---------- ЗАПУСК ----------
-if __name__ == "__main__":
-    init_db()
-    init_telegram_bot()
-    try:
-        init_ctrader()
+        spotware_connect.init_ctrader_client()
     except Exception:
-        pass
+        # try alternative start
+        try:
+            spotware_connect.start()
+        except Exception:
+            log.exception("ctrader init failed")
 
+# --- run ---
+if __name__ == "__main__":
+    init_services()
     port = int(os.getenv("PORT", "8080"))
     app.run("0.0.0.0", port)
     reactor.run()

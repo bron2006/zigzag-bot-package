@@ -17,98 +17,134 @@ from telegram.ext import (
     Filters,
 )
 
-import analysis
+import state
 import config
+from analysis import get_api_detailed_signal_data
 
 log = logging.getLogger("telegram_ui")
 
-# ---------- УТИЛІТИ ДЛЯ ВІДПОВІДЕЙ ----------
-def on_success(data):
-    return {"ok": True, "data": data}
+def normalize_for_display(norm: str) -> str:
+    n = (norm or "").upper().replace("/", "")
+    if len(n) >= 6:
+        return f"{n[:3]}/{n[3:6]}"
+    return n
 
-def on_error(code, message, details=None):
-    err = {"ok": False, "error": {"code": code, "message": message}}
-    if details is not None:
-        err["error"]["details"] = str(details)
-    return err
+# --- Keyboards ---
+def main_menu_kb() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup([[KeyboardButton("МЕНЮ")]], resize_keyboard=True, one_time_keyboard=False)
 
-# ---------- ПОСТІЙНА КЛАВІАТУРА ----------
-def _main_menu_kb() -> ReplyKeyboardMarkup:
-    # Саме one_time_keyboard=False фіксує клавіатуру назавжди
-    return ReplyKeyboardMarkup(
-        [[KeyboardButton("МЕНЮ")]],
-        resize_keyboard=True,
-        one_time_keyboard=False,
-    )
+def main_inline_menu_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[InlineKeyboardButton("💹 Валютні пари (Forex)", callback_data="menu_forex")]])
 
-# ---------- INLINE КНОПКИ З ПАРАМИ ----------
-def _pairs_inline_kb(pairs: List[str]) -> InlineKeyboardMarkup:
+def sessions_kb() -> InlineKeyboardMarkup:
+    keyboard = []
+    for session in config.FOREX_SESSIONS:
+        keyboard.append([InlineKeyboardButton(f"--- {session} ---", callback_data=f"session_{session}")])
+    keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="main_menu")])
+    return InlineKeyboardMarkup(keyboard)
+
+def pairs_kb(session: str) -> InlineKeyboardMarkup:
+    pairs = config.FOREX_SESSIONS.get(session, []) if session in config.FOREX_SESSIONS else []
     rows = []
     row = []
-    for i, p in enumerate(pairs):
-        row.append(InlineKeyboardButton(p, callback_data=f"PAIR:{p}"))
-        if (i + 1) % 3 == 0:
-            rows.append(row)
-            row = []
+    for p in pairs:
+        # callback_data as normalized (EURUSD)
+        norm = p.replace("/", "").replace("\\", "").upper().strip()
+        row.append(InlineKeyboardButton(p, callback_data=norm))
+        if len(row) == 3:
+            rows.append(row); row = []
     if row:
         rows.append(row)
+    rows.append([InlineKeyboardButton("⬅️ Назад", callback_data="menu_forex")])
     return InlineKeyboardMarkup(rows)
 
-def _list_pairs() -> List[str]:
-    # Беремо з конфіга або фолбек
-    pairs = getattr(config, "FOREX_PAIRS", None) or ["EUR/USD", "GBP/USD", "USD/JPY", "BTC/USD", "ETH/USD"]
-    # Перші 12 для компактної клавіатури
-    return pairs[:12]
-
-# ---------- ХЕНДЛЕРИ ----------
+# --- Handlers ---
 def cmd_start(update: Update, context: CallbackContext):
     try:
-        update.message.reply_text(
-            "Головне меню відкрито. Оберіть «МЕНЮ» нижче, щоб вибрати пару.",
-            reply_markup=_main_menu_kb(),
-        )
-        # Можемо відразу показати інлайн-кнопки з парами
-        pairs = _list_pairs()
-        update.message.reply_text("Виберіть торгову пару:", reply_markup=_pairs_inline_kb(pairs))
-    except Exception as e:
-        log.exception("cmd_start failed")
-        update.message.reply_text("Виникла помилка при відкритті меню.")
+        update.message.reply_text("Вітаю. Натисніть «МЕНЮ» для вибору активів.", reply_markup=main_menu_kb())
+    except Exception:
+        log.exception("start failed")
 
-def msg_menu(update: Update, context: CallbackContext):
+def reset_ui(update: Update, context: CallbackContext):
+    if getattr(update, "message", None) and update.message.text != "МЕНЮ":
+        cmd_start(update, context)
+
+def menu_handler(update: Update, context: CallbackContext):
     try:
-        pairs = _list_pairs()
-        update.message.reply_text("Виберіть торгову пару:", reply_markup=_pairs_inline_kb(pairs))
-    except Exception as e:
-        log.exception("msg_menu failed")
-        update.message.reply_text("Не вдалося показати меню.")
+        # delete user message if possible
+        try:
+            context.bot.delete_message(chat_id=update.message.chat_id, message_id=update.message.message_id)
+        except Exception:
+            pass
+        sent = update.message.reply_text("🏠 Головне меню:", reply_markup=main_inline_menu_kb())
+        context.user_data['last_menu_id'] = sent.message_id
+    except Exception:
+        log.exception("menu_handler failed")
 
-def cb_pair(update: Update, context: CallbackContext):
+def button_handler(update: Update, context: CallbackContext):
     query = update.callback_query
+    query.answer()
+    data = query.data or ""
+    context.user_data['last_menu_id'] = query.message.message_id
+
+    if data == "main_menu":
+        query.edit_message_text("🏠 Головне меню:", reply_markup=main_inline_menu_kb()); return
+    if data == "menu_forex":
+        query.edit_message_text("💹 Виберіть сесію:", reply_markup=sessions_kb()); return
+    if data.startswith("session_"):
+        session = data.split("_", 1)[1]
+        query.edit_message_text(f"Пари сесії {session}:", reply_markup=pairs_kb(session)); return
+
+    # else data is normalized symbol like EURUSD
+    symbol_norm = data.upper().strip()
+    if not getattr(state, "client", None) or not getattr(state.client, "isConnected", False):
+        query.answer(text="❌ cTrader не підключено", show_alert=True); return
+    if symbol_norm not in state.symbol_cache:
+        query.answer(text=f"⚠️ Символ {symbol_norm} не знайдено", show_alert=True); return
+
+    display = normalize_for_display(symbol_norm)
+    query.edit_message_text(text=f"⏳ Отримую аналіз для {display}...")
+
+    user_id = getattr(query.from_user, "id", None)
+
+    def on_success(result):
+        try:
+            if isinstance(result, dict) and result.get("error"):
+                txt = f"❌ Помилка аналізу: {result['error']}"
+            else:
+                # format result
+                price = result.get("price") if isinstance(result, dict) else None
+                verdict = result.get("verdict_text") if isinstance(result, dict) else str(result)
+                price_str = f"{float(price):.5f}" if price else "N/A"
+                txt = f"📈 Аналіз для {display}\n\nСигнал: {verdict}\nПоточна ціна: `{price_str}`"
+            query.edit_message_text(text=txt, parse_mode='Markdown', reply_markup=sessions_kb())
+        except Exception:
+            log.exception("on_success formatting error")
+            query.edit_message_text(text="❌ Помилка при форматуванні результату", reply_markup=sessions_kb())
+
+    def on_error(failure):
+        try:
+            msg = failure.getErrorMessage() if hasattr(failure, 'getErrorMessage') else str(failure)
+        except Exception:
+            msg = str(failure)
+        log.error("Error getting signal for %s: %s", symbol_norm, msg)
+        query.edit_message_text(text=f"❌ Помилка при отриманні сигналу для {display}", reply_markup=sessions_kb())
+
+    # call analysis (returns Deferred in original code)
+    d = get_api_detailed_signal_data(state.client, symbol_norm, user_id)
     try:
-        query.answer()
-        data = query.data or ""
-        if not data.startswith("PAIR:"):
-            query.edit_message_text("Невідома дія.")
-            return
-        pair = data.split(":", 1)[1]
-        # Отримуємо сигнал
-        res = analysis.get_signal(pair)
-        # Підтримка корутин/синхронного виклику
-        if hasattr(res, "__await__"):
-            # якщо async
-            import asyncio
-            res = asyncio.get_event_loop().run_until_complete(res)
+        d.addCallbacks(on_success, on_error)
+    except Exception:
+        # if it returned sync result
+        try:
+            res = d() if callable(d) else d
+            on_success(res)
+        except Exception:
+            on_error(Exception("Unknown"))
 
-        text = f"Пара: {pair}\nСигнал: {res}"
-        query.edit_message_text(text)
-    except Exception as e:
-        log.exception("cb_pair failed")
-        query.edit_message_text("Помилка аналізу. Спробуйте ще раз.")
-
-# ---------- ПУБЛІЧНИЙ API ДЛЯ main.py ----------
-def register_handlers(dp):
-    dp.add_handler(CommandHandler("start", cmd_start))
-    # Постійна кнопка «МЕНЮ» — звичайний текстовий меседж
-    dp.add_handler(MessageHandler(Filters.regex(r"^(МЕНЮ)$"), msg_menu))
-    # Обробка натискань на інлайн-кнопки з парами
-    dp.add_handler(CallbackQueryHandler(cb_pair))
+# --- registration for main ---
+def register_handlers(dispatcher):
+    dispatcher.add_handler(CommandHandler("start", cmd_start))
+    dispatcher.add_handler(MessageHandler(Filters.regex(r"^(МЕНЮ)$"), menu_handler))
+    dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, reset_ui))
+    dispatcher.add_handler(CallbackQueryHandler(button_handler))
