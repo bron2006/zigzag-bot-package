@@ -62,31 +62,31 @@ def init_telegram_bot():
 
 # --- Ініціалізація cTrader ---
 def on_symbols_loaded(full_symbols):
-    """Обробляє ПОВНИЙ список символів, отриманий від API, та логує їх імена."""
+    """Обробляє ПОВНИЙ список символів та коректно заповнює кеш."""
     temp_cache = {}
     available_symbols_names = []
 
     for symbol_data in full_symbols:
-        # --- ВИПРАВЛЕННЯ: Безпечний доступ до опціонального поля symbolName ---
         symbol_name = getattr(symbol_data, 'symbolName', None)
         
         if not symbol_name:
-            logger.warning(f"Пропущено символ без імені або з порожнім іменем: {symbol_data}")
             continue
         
         available_symbols_names.append(symbol_name)
         
-        try:
-            normalized_name = symbol_name.replace("/", "").strip()
+        # ВИПРАВЛЕНО: Ключем для кешу є ім'я без слеша
+        normalized_name = symbol_name.replace("/", "").strip()
+        
+        # ВИПРАВЛЕНО: Перевіряємо, чи є всі необхідні дані перед додаванням у кеш
+        if hasattr(symbol_data, 'symbolId') and hasattr(symbol_data, 'digits'):
             temp_cache[normalized_name] = {
                 "symbolId": symbol_data.symbolId,
                 "digits": symbol_data.digits
             }
-        except Exception as e:
-            logger.error(f"Помилка обробки символу {symbol_name}: {e}")
-            continue
-    
-    # --- ДІАГНОСТИКА: Виводимо в лог повний список отриманих символів ---
+        else:
+            logger.warning(f"Символ {symbol_name} не має полів symbolId або digits, пропущено.")
+
+    # Діагностичний лог
     logger.info("="*50)
     logger.info(f"СПИСОК СИМВОЛІВ, ОТРИМАНИХ ВІД CTRADER ({len(available_symbols_names)} шт.):")
     logger.info(", ".join(sorted(available_symbols_names)))
@@ -94,6 +94,7 @@ def on_symbols_loaded(full_symbols):
 
     state.symbol_cache.update(temp_cache)
     state.SYMBOLS_LOADED = True
+    # ВИПРАВЛЕНО: Лог тепер показує реальну кількість закешованих символів
     logger.info(f"✅ Кеш символів заповнено. Завантажено дані для {len(state.symbol_cache)} символів. Сервіс готовий.")
 
 
@@ -134,6 +135,7 @@ def get_ranked_pairs(request):
             watchlist = get_watchlist(user['id'])
 
         def format_pair(ticker):
+            # ВИПРАВЛЕНО: Нормалізація тепер відбувається так само, як при заповненні кешу
             norm_ticker = ticker.replace("/", "").strip()
             return {"ticker": ticker, "active": norm_ticker in state.symbol_cache}
 

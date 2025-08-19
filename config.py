@@ -1,3 +1,4 @@
+# config.py
 import os
 from dotenv import load_dotenv
 
@@ -36,11 +37,14 @@ def get_fly_app_name() -> str | None:
 # --- Database ---
 DB_NAME = "bot_data.db"
 
-# --- Списки активів (додано відсутні для повноти) ---
-CRYPTO_PAIRS_FULL = ["BTC/USD", "ETH/USD", "LTC/USD", "XRP/USD"] 
-STOCKS_US_SYMBOLS = ["AAPL", "GOOGL", "MSFT", "AMZN"]
+# --- Списки активів (тільки Forex) ---
+# ВИДАЛЕНО CRYPTO_PAIRS_FULL та STOCKS_US_SYMBOLS
+CRYPTO_PAIRS_FULL = [] 
+STOCKS_US_SYMBOLS = []
+
+# ОНОВЛЕНО: Назви пар відповідають даним з логів (без "/")
 FOREX_SESSIONS = {
-    "Азіатська": ["USD/JPY", "AUD/USD", "NZD/USD", "EUR/JPY", "CHF/JPY"],
-    "Європейська": ["EUR/USD", "GBP/USD", "USD/CHF", "EUR/GBP", "EUR/CHF", "GBP/CHF"],
-    "Американська": ["USD/CAD", "USD/MXN", "USD/BRL", "USD/ZAR"]
+    "Азіатська": ["USDJPY", "AUDUSD", "NZDUSD", "EURJPY", "CHFJPY"],
+    "Європейська": ["EURUSD", "GBPUSD", "USDCHF", "EURGBP", "EURCHF", "GBPCHF"],
+    "Американська": ["USDCAD", "USDMXN", "USDRUB", "USDZAR"] # Замінено BRL на RUB, оскільки BRL немає у списку
 }
