@@ -8,7 +8,6 @@ from ctrader_open_api.messages.OpenApiMessages_pb2 import (
     ProtoOAApplicationAuthReq, ProtoOAApplicationAuthRes,
     ProtoOAAccountAuthReq, ProtoOAAccountAuthRes,
     ProtoOASymbolsListReq, ProtoOASymbolsListRes,
-    ProtoOASymbolByIdRes,
     ProtoOAErrorRes
 )
 from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOAPayloadType
@@ -55,7 +54,7 @@ class SpotwareClient(EventEmitter):
         self._client.startService()
 
     def send(self, message, client_msg_id=None):
-        return self._client.send(message, clientMsgId=client_msg_id, responseTimeoutInSeconds=15)
+        return self._client.send(message, clientMsgId=client_msg_id, responseTimeoutInSeconds=20) # Збільшено таймаут
 
     def _on_connected(self, client):
         logger.info("Встановлено з'єднання з cTrader API. Авторизація додатку...")
@@ -85,11 +84,6 @@ class SpotwareClient(EventEmitter):
             response = ProtoOASymbolsListRes()
             response.ParseFromString(message.payload)
             self.emit("fullSymbolsLoaded", response.symbol)
-        elif payload_type == ProtoOAPayloadType.PROTO_OA_SYMBOL_BY_ID_RES:
-            response = ProtoOASymbolByIdRes()
-            response.ParseFromString(message.payload)
-            if response.symbol:
-                self.emit("symbolDataLoaded", response.symbol[0])
         elif payload_type == ProtoOAPayloadType.PROTO_OA_ERROR_RES:
             response = ProtoOAErrorRes()
             response.ParseFromString(message.payload)
