@@ -8,6 +8,7 @@ from urllib.parse import parse_qs, unquote
 from klein import Klein
 from twisted.web.server import NOT_DONE_YET
 from twisted.internet import reactor, defer
+from twisted.internet.error import TimeoutError
 from twisted.web.static import File
 from telegram import Update
 from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, MessageHandler, Filters
@@ -21,7 +22,6 @@ from config import (
 )
 from db import get_watchlist, toggle_watch, get_signal_history, init_db
 from analysis import get_api_detailed_signal_data
-# from mta_analysis import get_mta_signal # ВИДАЛЕНО
 
 # --- Налаштування логування ---
 logging.basicConfig(
@@ -165,24 +165,33 @@ def get_signal_api(request):
         return json.dumps({"error": "Pair parameter is required"}).encode('utf-8')
     
     d = get_api_detailed_signal_data(state.client, pair, user_id)
+    
     def on_success(result):
-        request.write(json.dumps(result).encode('utf-8'))
-        request.finish()
+        if not request.finished:
+            request.write(json.dumps(result).encode('utf-8'))
+            request.finish()
+    
     def on_error(failure):
-        logger.error(f"API /api/signal: Помилка: {failure.getErrorMessage()}")
-        request.setResponseCode(500)
-        error_response = {"error": f"Внутрішня помилка сервера: {failure.getErrorMessage()}"}
-        request.write(json.dumps(error_response).encode('utf-8'))
-        request.finish()
+        # --- ПОЧАТОК ЗМІН: Покращена обробка помилок ---
+        if not request.finished:
+            error_message = "Внутрішня помилка сервера."
+            # Перевіряємо, чи це помилка таймауту
+            if failure.check(TimeoutError):
+                logger.error(f"API /api/signal: ТАЙМАУТ для пари {pair}")
+                error_message = "Таймаут: Сервер cTrader не відповів на запит історичних даних."
+            else:
+                logger.error(f"API /api/signal: НЕВІДОМА ПОМИЛКА для пари {pair}: {failure.getErrorMessage()}")
+                error_message = f"Внутрішня помилка сервера: {failure.getErrorMessage()}"
+            
+            request.setResponseCode(500)
+            error_response = {"error": error_message}
+            request.write(json.dumps(error_response).encode('utf-8'))
+            request.finish()
+        # --- КІНЕЦЬ ЗМІН ---
+
     d.addCallbacks(on_success, on_error)
     
     return NOT_DONE_YET
-
-# --- ПОЧАТОК ЗМІН: Ендпоінт для MTA видалено ---
-# @app.route('/api/get_mta', methods=['GET'])
-# def get_mta_api(request):
-#     ...
-# --- КІНЕЦЬ ЗМІН ---
 
 @app.route('/api/signal_history', methods=['GET'])
 def get_signal_history_api(request):

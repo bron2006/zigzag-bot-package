@@ -4,7 +4,7 @@ import pandas_ta as ta
 import numpy as np
 import time
 import logging
-import random # Додано імпорт
+import random
 from twisted.internet import defer
 
 from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import ProtoMessage
@@ -20,26 +20,26 @@ MARKET_DATA_CACHE = {}
 def _normalize_pair(pair: str) -> str:
     return pair.replace("/", "").replace("\\", "").upper().strip()
 
-# --- ПОЧАТОК ЗМІН: Логіка МТА перенесена сюди ---
 def _get_mta_signal_data():
     """Імітує отримання сигналу мульти-таймфрейм аналізу (MTA)."""
     timeframes = ["15min", "1h", "4h", "1day"]
     signals = ["BUY", "SELL", "NEUTRAL"]
     return [{"tf": tf, "signal": random.choice(signals)} for tf in timeframes]
-# --- КІНЕЦЬ ЗМІН ---
 
 def get_market_data(client, pair, tf, limit=300):
     norm_pair = _normalize_pair(pair)
     key = f"{norm_pair}_{tf}_{limit}"
-    if key in MARKET_DATA_CACHE:
-        d = defer.Deferred()
-        d.callback(MARKET_DATA_CACHE[key])
-        return d
+    
+    # --- ДІАГНОСТИКА: Логуємо кожен крок ---
+    logger.info(f"[ANALYSIS] Запит даних для {pair} (нормалізовано: {norm_pair}), таймфрейм: {tf}")
 
     from state import symbol_cache
     symbol_details = symbol_cache.get(norm_pair)
     if not symbol_details:
+        logger.error(f"[ANALYSIS] ПОМИЛКА: Символ '{norm_pair}' НЕ ЗНАЙДЕНО в кеші.")
         return defer.fail(Exception(f"Пара '{pair}' не знайдена в кеші."))
+    
+    logger.info(f"[ANALYSIS] Символ '{norm_pair}' знайдено в кеші. Деталі: {symbol_details}")
 
     tf_map = {"15min": TrendbarPeriod.M15, "1h": TrendbarPeriod.H1, "4h": TrendbarPeriod.H4, "1day": TrendbarPeriod.D1}
     if tf not in tf_map:
@@ -57,21 +57,24 @@ def get_market_data(client, pair, tf, limit=300):
         toTimestamp=now
     )
     
+    logger.info(f"[ANALYSIS] Надсилаю запит ProtoOAGetTrendbarsReq: {request}")
     deferred = client.send(request)
 
     def process_response(response_proto: ProtoMessage):
+        logger.info(f"[ANALYSIS] Отримано відповідь від cTrader для {pair} ({tf}). Тип: {response_proto.payloadType}")
         from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOAPayloadType
         if response_proto.payloadType == ProtoOAPayloadType.PROTO_OA_ERROR_RES:
+            logger.error(f"[ANALYSIS] cTrader повернув помилку для {pair}: {response_proto}")
             raise Exception(f"Помилка API при запиті trendbars для {pair}")
 
         trendbars_response = ProtoOAGetTrendbarsRes()
         trendbars_response.ParseFromString(response_proto.payload)
+        
+        logger.info(f"[ANALYSIS] Успішно розпарсено ProtoOAGetTrendbarsRes. Кількість свічок: {len(trendbars_response.trendbar)}")
 
         if not trendbars_response.trendbar:
             return pd.DataFrame()
         
-        # Використовуємо 'digits', яке тепер має бути в кеші, або безпечний fallback.
-        # Для ProtoOALightSymbol 'digits' немає, тому fallback важливий.
         divisor = 10**symbol_details.get('digits', 5)
         bars = [{
             'ts': pd.to_datetime(bar.utcTimestampInMinutes * 60, unit='s', utc=True),
@@ -160,16 +163,14 @@ def get_api_detailed_signal_data(client, pair, user_id=None):
             "low": history_df['low'].tolist(), "close": history_df['close'].tolist() 
         }
         
-        # --- ПОЧАТОК ЗМІН: Додаємо MTA дані до відповіді ---
         mta_data = _get_mta_signal_data()
-        # --- КІНЕЦЬ ЗМІН ---
-
+        
         return { 
             "pair": display_pair, "price": analysis_result['price'], "verdict_text": verdict_text, 
             "verdict_level": verdict_level, "reasons": analysis_result['reasons'], 
             "support": analysis_result['support'], "resistance": analysis_result['resistance'], 
             "history": history,
-            "mta": mta_data # Додано поле mta
+            "mta": mta_data
         }
     
     def on_error(failure):
