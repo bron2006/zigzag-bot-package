@@ -5,7 +5,8 @@ import numpy as np
 import time
 import logging
 import random
-from twisted.internet import defer
+from twisted.internet import defer, reactor
+from twisted.internet.error import TimeoutError
 
 from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import ProtoMessage
 from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOAGetTrendbarsReq, ProtoOAGetTrendbarsRes
@@ -28,9 +29,7 @@ def _get_mta_signal_data():
 
 def get_market_data(client, pair, tf, limit=300):
     norm_pair = _normalize_pair(pair)
-    key = f"{norm_pair}_{tf}_{limit}"
     
-    # --- ДІАГНОСТИКА: Логуємо кожен крок ---
     logger.info(f"[ANALYSIS] Запит даних для {pair} (нормалізовано: {norm_pair}), таймфрейм: {tf}")
 
     from state import symbol_cache
@@ -57,8 +56,37 @@ def get_market_data(client, pair, tf, limit=300):
         toTimestamp=now
     )
     
-    logger.info(f"[ANALYSIS] Надсилаю запит ProtoOAGetTrendbarsReq: {request}")
-    deferred = client.send(request)
+    # --- ПОЧАТОК ФІНАЛЬНОГО ВИПРАВЛЕННЯ: Власний механізм таймауту ---
+    
+    # Створюємо наш власний Deferred, який будемо контролювати
+    outer_deferred = defer.Deferred()
+    
+    # Запускаємо таймер на 10 секунд. Якщо він спрацює, наш Deferred завершиться помилкою.
+    timeout_handler = reactor.callLater(
+        10, 
+        lambda: not outer_deferred.called and outer_deferred.errback(
+            TimeoutError(f"Таймаут 10с для запиту Trendbars для {pair} ({tf})")
+        )
+    )
+
+    def on_success(result):
+        # Якщо ми отримали успішну відповідь, скасовуємо наш таймер і передаємо результат далі
+        if timeout_handler.active():
+            timeout_handler.cancel()
+        if not outer_deferred.called:
+            outer_deferred.callback(result)
+
+    def on_error(failure):
+        # Якщо сталася інша помилка, скасовуємо таймер і передаємо помилку далі
+        if timeout_handler.active():
+            timeout_handler.cancel()
+        if not outer_deferred.called:
+            outer_deferred.errback(failure)
+            
+    logger.info(f"[ANALYSIS] Надсилаю запит ProtoOAGetTrendbarsReq з таймаутом 10с: {request}")
+    # Відправляємо запит і прив'язуємо наші обробники
+    original_deferred = client.send(request)
+    original_deferred.addCallbacks(on_success, on_error)
 
     def process_response(response_proto: ProtoMessage):
         logger.info(f"[ANALYSIS] Отримано відповідь від cTrader для {pair} ({tf}). Тип: {response_proto.payloadType}")
@@ -89,11 +117,13 @@ def get_market_data(client, pair, tf, limit=300):
         if df.empty:
             return df
         df = df.sort_values(by='ts').reset_index(drop=True).tail(limit)
-        MARKET_DATA_CACHE[key] = df
+        MARKET_DATA_CACHE[f"{norm_pair}_{tf}_{limit}"] = df
         return df
+    
+    # Повертаємо наш контрольований Deferred
+    return outer_deferred.addCallback(process_response)
+    # --- КІНЕЦЬ ФІНАЛЬНОГО ВИПРАВЛЕННЯ ---
 
-    deferred.addCallback(process_response)
-    return deferred
 
 def _calculate_core_signal(df, daily_df):
     df.ta.rsi(close=df['close'], length=14, append=True, col_names=('RSI',))
@@ -138,9 +168,9 @@ def get_api_detailed_signal_data(client, pair, user_id=None):
 
         if not (success1 and success2):
             errors = []
-            if not success1: errors.append(f"15min data failed")
-            if not success2: errors.append(f"1day data failed")
-            return {"error": f"Не вдалося завантажити ринкові дані ({', '.join(errors)})."}
+            if not success1: errors.append(f"15min data failed ({results[0][1].getErrorMessage()})")
+            if not success2: errors.append(f"1day data failed ({results[1][1].getErrorMessage()})")
+            return {"error": f"Не вдалося завантажити ринкові дані: {', '.join(errors)}."}
         
         if df.empty or len(df) < 25 or daily_df.empty:
             return {"error": "Недостатньо історичних даних для аналізу."}
