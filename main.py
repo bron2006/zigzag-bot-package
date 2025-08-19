@@ -5,7 +5,8 @@ import json
 import queue
 import threading
 from urllib.parse import parse_qs, unquote
-from klein import Klein, NOT_DONE_YET
+from klein import Klein
+from twisted.web.server import NOT_DONE_YET # ВИПРАВЛЕНО: Правильний імпорт
 from twisted.internet import reactor, defer
 from twisted.web.static import File
 from telegram import Update
