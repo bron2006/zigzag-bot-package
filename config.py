@@ -37,14 +37,12 @@ def get_fly_app_name() -> str | None:
 # --- Database ---
 DB_NAME = "bot_data.db"
 
-# --- Списки активів (тільки Forex) ---
-# ВИДАЛЕНО CRYPTO_PAIRS_FULL та STOCKS_US_SYMBOLS
+# --- Списки активів (тільки Forex, синхронізовано з логами) ---
 CRYPTO_PAIRS_FULL = [] 
 STOCKS_US_SYMBOLS = []
 
-# ОНОВЛЕНО: Назви пар відповідають даним з логів (без "/")
 FOREX_SESSIONS = {
     "Азіатська": ["USDJPY", "AUDUSD", "NZDUSD", "EURJPY", "CHFJPY"],
     "Європейська": ["EURUSD", "GBPUSD", "USDCHF", "EURGBP", "EURCHF", "GBPCHF"],
-    "Американська": ["USDCAD", "USDMXN", "USDRUB", "USDZAR"] # Замінено BRL на RUB, оскільки BRL немає у списку
+    "Американська": ["USDCAD", "USDMXN", "USDRUB", "USDZAR"]
 }

@@ -64,37 +64,24 @@ def init_telegram_bot():
 def on_symbols_loaded(full_symbols):
     """Обробляє ПОВНИЙ список символів та коректно заповнює кеш."""
     temp_cache = {}
-    available_symbols_names = []
-
+    
+    # --- ПОЧАТОК ФІНАЛЬНОГО ВИПРАВЛЕННЯ ---
     for symbol_data in full_symbols:
         symbol_name = getattr(symbol_data, 'symbolName', None)
-        
-        if not symbol_name:
+        symbol_id = getattr(symbol_data, 'symbolId', None)
+
+        if not symbol_name or not symbol_id:
             continue
-        
-        available_symbols_names.append(symbol_name)
-        
-        # ВИПРАВЛЕНО: Ключем для кешу є ім'я без слеша
+
         normalized_name = symbol_name.replace("/", "").strip()
         
-        # ВИПРАВЛЕНО: Перевіряємо, чи є всі необхідні дані перед додаванням у кеш
-        if hasattr(symbol_data, 'symbolId') and hasattr(symbol_data, 'digits'):
-            temp_cache[normalized_name] = {
-                "symbolId": symbol_data.symbolId,
-                "digits": symbol_data.digits
-            }
-        else:
-            logger.warning(f"Символ {symbol_name} не має полів symbolId або digits, пропущено.")
-
-    # Діагностичний лог
-    logger.info("="*50)
-    logger.info(f"СПИСОК СИМВОЛІВ, ОТРИМАНИХ ВІД CTRADER ({len(available_symbols_names)} шт.):")
-    logger.info(", ".join(sorted(available_symbols_names)))
-    logger.info("="*50)
-
+        # Об'єкт ProtoOALightSymbol не містить 'digits', тому ми його не зберігаємо.
+        # analysis.py буде використовувати значення за замовчуванням (5), що коректно для більшості пар Forex.
+        temp_cache[normalized_name] = { "symbolId": symbol_id }
+    # --- КІНЕЦЬ ФІНАЛЬНОГО ВИПРАВЛЕННЯ ---
+            
     state.symbol_cache.update(temp_cache)
     state.SYMBOLS_LOADED = True
-    # ВИПРАВЛЕНО: Лог тепер показує реальну кількість закешованих символів
     logger.info(f"✅ Кеш символів заповнено. Завантажено дані для {len(state.symbol_cache)} символів. Сервіс готовий.")
 
 
@@ -135,7 +122,6 @@ def get_ranked_pairs(request):
             watchlist = get_watchlist(user['id'])
 
         def format_pair(ticker):
-            # ВИПРАВЛЕНО: Нормалізація тепер відбувається так само, як при заповненні кешу
             norm_ticker = ticker.replace("/", "").strip()
             return {"ticker": ticker, "active": norm_ticker in state.symbol_cache}
 
