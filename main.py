@@ -1,9 +1,10 @@
 import os
 import logging
+import asyncio
 from dotenv import load_dotenv
-from threading import Thread
+from threading import Thread, Event
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, Updater
 
 from ctrader_open_api.ctrader_open_api_client import CTraderOpenAPIClient
 from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import *
@@ -14,7 +15,7 @@ import pandas as pd
 import pandas_ta as ta
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
-import asyncio
+from queue import Queue, Empty
 
 # --- Logging ---
 logging.basicConfig(
@@ -32,16 +33,13 @@ API_PORT = 5035
 
 # --- CTrader API Client ---
 class C_Trader_API:
-    def __init__(self, token, bot, user_id):
+    def __init__(self, token):
         self._loop = asyncio.new_event_loop()
         self._client = CTraderOpenAPIClient(API_HOST, API_PORT, self._on_message, loop=self._loop)
         self._token = token
-        self._bot = bot
-        self._user_id = user_id
         self.ctidTraderAccountId = None
-        self._is_ready = asyncio.Event(loop=self._loop)
-        self._analysis_result_event = asyncio.Event(loop=self._loop)
-        self._current_analysis_result = None
+        self._is_ready = Event()
+        self._result_queue = Queue()
 
     def start_in_thread(self):
         thread = Thread(target=self.run_event_loop, daemon=True)
@@ -99,8 +97,8 @@ class C_Trader_API:
             else:
                 signal = "NO DATA"
             
-            self._current_analysis_result = (signal, datetime.now(ZoneInfo("Europe/Kyiv")).strftime('%Y-%m-%d %H:%M:%S'))
-            self._analysis_result_event.set()
+            result = (signal, datetime.now(ZoneInfo("Europe/Kyiv")).strftime('%Y-%m-%d %H:%M:%S'))
+            self._result_queue.put(result)
 
     def _send_async_request(self, request):
         asyncio.run_coroutine_threadsafe(self._client.send(request), self._loop)
@@ -111,10 +109,17 @@ class C_Trader_API:
         request.clientSecret = CLIENT_SECRET
         self._send_async_request(request)
 
-    async def get_analysis_for_symbol(self, symbol_id, period, from_timestamp, to_timestamp):
-        await self._is_ready.wait()
-        self._analysis_result_event.clear()
-        self._current_analysis_result = None
+    def get_analysis_for_symbol(self, symbol_id, period, from_timestamp, to_timestamp):
+        self._is_ready.wait(timeout=15) # Wait for client to be ready
+        if not self._is_ready.is_set():
+            return ("TIMEOUT (Client not ready)", "N/A")
+
+        # Clear the queue before making a new request
+        while not self._result_queue.empty():
+            try:
+                self._result_queue.get_nowait()
+            except Empty:
+                continue
 
         request = ProtoOAGetTrendbarsReq()
         request.ctidTraderAccountId = self.ctidTraderAccountId
@@ -126,10 +131,10 @@ class C_Trader_API:
         self._send_async_request(request)
         
         try:
-            await asyncio.wait_for(self._analysis_result_event.wait(), timeout=15)
-            return self._current_analysis_result
-        except asyncio.TimeoutError:
-            return ("TIMEOUT", "N/A")
+            # Wait for the result from the queue
+            return self._result_queue.get(timeout=20)
+        except Empty:
+            return ("TIMEOUT (No response)", "N/A")
 
 # --- Telegram Bot Handlers ---
 clients = {} 
@@ -148,74 +153,66 @@ def get_main_keyboard():
 def get_back_keyboard():
     return InlineKeyboardMarkup([[InlineKeyboardButton(text="Back", callback_data="back_to_main")]])
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     
     if len(context.args) == 0:
-        await update.message.reply_text("Please provide an access token. Usage: /start YOUR_TOKEN")
+        update.message.reply_text("Please provide an access token. Usage: /start YOUR_TOKEN")
         return
 
     token = context.args[0]
     
-    if user_id in clients:
-        # You might want to stop the old client here if needed
-        pass
-
-    client = C_Trader_API(token=token, bot=context.bot, user_id=user_id)
+    client = C_Trader_API(token=token)
     clients[user_id] = client
     client.start_in_thread()
     client.authenticate_app()
     
-    await update.message.reply_text("Welcome! Select a symbol to analyze:", reply_markup=get_main_keyboard())
+    update.message.reply_text("Welcome! Select a symbol to analyze:", reply_markup=get_main_keyboard())
 
-async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
+    query.answer()
     
     user_id = query.from_user.id
     client = clients.get(user_id)
 
     if not client:
-        await query.edit_message_text(text="Client not initialized. Please use /start.")
+        query.edit_message_text(text="Client not initialized. Please use /start.")
         return
 
     if query.data == "back_to_main":
-        await query.edit_message_text(text="Select a symbol to analyze:", reply_markup=get_main_keyboard())
+        query.edit_message_text(text="Select a symbol to analyze:", reply_markup=get_main_keyboard())
         return
 
     symbol_name = query.data
     symbol_id = symbol_map.get(symbol_name)
 
     if symbol_id:
-        await query.edit_message_text(text=f"Analyzing {symbol_name}, please wait...")
+        query.edit_message_text(text=f"Analyzing {symbol_name}, please wait...")
         
         to_timestamp = int(datetime.now().timestamp() * 1000)
         from_timestamp = int((datetime.now() - timedelta(days=90)).timestamp() * 1000)
         
-        # We need to run the async get_analysis_for_symbol in the client's event loop
-        future = asyncio.run_coroutine_threadsafe(
-            client.get_analysis_for_symbol(symbol_id, ProtoOATrendbarPeriod.H1, from_timestamp, to_timestamp),
-            client._loop
-        )
-        
         try:
-            signal, timestamp = future.result(timeout=20) # Wait for the result
+            signal, timestamp = client.get_analysis_for_symbol(symbol_id, ProtoOATrendbarPeriod.H1, from_timestamp, to_timestamp)
             response_text = f"Analysis for {symbol_name}:\nSignal: {signal}\nLast Updated: {timestamp}"
         except Exception as e:
             logger.error(f"Error getting analysis: {e}")
             response_text = f"An error occurred: {e}"
         
-        await query.edit_message_text(text=response_text, reply_markup=get_back_keyboard())
+        query.edit_message_text(text=response_text, reply_markup=get_back_keyboard())
     else:
-        await query.edit_message_text(text="Unknown symbol.", reply_markup=get_back_keyboard())
+        query.edit_message_text(text="Unknown symbol.", reply_markup=get_back_keyboard())
 
 def main():
-    application = Application.builder().token(BOT_TOKEN).build()
+    updater = Updater(BOT_TOKEN)
+    dispatcher = updater.dispatcher
     
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CallbackQueryHandler(button_callback))
+    dispatcher.add_handler(CommandHandler("start", start))
+    dispatcher.add_handler(CallbackQueryHandler(button_callback))
 
-    application.run_polling()
+    updater.start_polling()
+    updater.idle()
 
 if __name__ == "__main__":
     main()
