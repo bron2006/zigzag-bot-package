@@ -1,23 +1,24 @@
 # Dockerfile
-# Use the official Python image.
+
+# Використовуємо офіційний мінімалістичний образ Python
 FROM python:3.11-slim
 
-# Set the working directory in the container.
+# --- FIX: Встановлюємо git-клієнт ---
+# Це необхідно для того, щоб pip міг завантажувати бібліотеки з GitHub
+RUN apt-get update && apt-get install -y git
+
+# Встановлюємо робочу директорію
 WORKDIR /app
 
-# Set the PYTHONPATH environment variable.
-# This explicitly tells Python to look for packages in /app/packages.
-ENV PYTHONPATH=/app/packages
-
-# Copy the requirements file.
+# Копіюємо файл залежностей і встановлюємо їх
 COPY requirements.txt .
-
-# Install dependencies into the local packages directory.
-# The --target flag forces installation to a specific folder.
 RUN pip install --no-cache-dir --target=/app/packages -r requirements.txt
 
-# Copy the rest of the application code.
+# Копіюємо решту коду додатку
 COPY . .
 
-# Set the command to run the application.
+# Вказуємо Python, де шукати встановлені пакети
+ENV PYTHONPATH=/app/packages
+
+# Команда для запуску додатку
 CMD ["python", "main.py"]
