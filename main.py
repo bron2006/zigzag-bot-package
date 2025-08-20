@@ -4,20 +4,25 @@ import logging
 from twisted.internet import reactor
 # Імпортуємо компоненти з нашої локальної папки ctrader_open_api
 from ctrader_open_api.client import Client
-from ctrader_open_api.protocol import TcpProtocol # Ймовірно, ви мали на увазі tcpProtocol.py
+# FIX: Виправлено шлях імпорту згідно з реальною структурою файлів
+from ctrader_open_api.tcpProtocol import TcpProtocol
 from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import ProtoMessage
 from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOAPayloadType
 from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOAApplicationAuthReq, ProtoOAAccountAuthReq
 from ctrader_open_api.protobuf import Protobuf
-from ctrader_open_api.auth import Auth
-
-from config import HOST, PORT, SSL, APP_CLIENT_ID, APP_CLIENT_SECRET, ACCESS_TOKEN, ACCOUNT_ID
+from config import get_ct_client_id, get_ct_client_secret, get_ctrader_access_token, get_demo_account_id
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# --- Глобальні змінні для колбеків ---
-client_instance = None
+# --- Глобальні змінні ---
+APP_CLIENT_ID = get_ct_client_id()
+APP_CLIENT_SECRET = get_ct_client_secret()
+ACCESS_TOKEN = get_ctrader_access_token()
+ACCOUNT_ID = get_demo_account_id()
+HOST = "demo.ctraderapi.com"
+PORT = 5035
 
+# --- Колбеки ---
 def on_message_received(client, message):
     """
     Обробник для всіх вхідних повідомлень від сервера.
@@ -25,14 +30,12 @@ def on_message_received(client, message):
     payload_type = message.payloadType
     logging.info(f"Message Received: {payload_type} ({Protobuf.ProtoOAPayloadType.Name(payload_type)})")
 
-    # 1. Після успішної авторизації додатку, авторизуємо торговий рахунок
     if payload_type == Protobuf.ProtoOAPayloadType.PROTO_OA_APPLICATION_AUTH_RES:
         logging.info("Application authorized successfully. Now authorizing account...")
         auth_req = ProtoOAAccountAuthReq(ctidTraderAccountId=ACCOUNT_ID, accessToken=ACCESS_TOKEN)
         deferred = client.send(auth_req)
         deferred.addErrback(on_error, "Account Auth")
 
-    # 2. Після успішної авторизації рахунку, бот готовий до роботи
     elif payload_type == Protobuf.ProtoOAPayloadType.PROTO_OA_ACCOUNT_AUTH_RES:
         logging.info("Account authorized successfully. Bot is ready.")
         #
@@ -43,13 +46,10 @@ def on_connected(client):
     """
     Викликається, коли з'єднання з сервером встановлено.
     """
-    global client_instance
-    client_instance = client
     logging.info("Client connected to server. Authorizing application...")
     auth_req = ProtoOAApplicationAuthReq(clientId=APP_CLIENT_ID, clientSecret=APP_CLIENT_SECRET)
     deferred = client.send(auth_req)
     deferred.addErrback(on_error, "Application Auth")
-
 
 def on_disconnected(client, reason):
     """
@@ -72,11 +72,8 @@ def main():
     Головна функція для запуску.
     """
     try:
-        # Правильна ініціалізація, як того вимагає наданий вами код
-        protocol = TcpProtocol
-        client = Client(HOST, PORT, protocol)
-
-        # Встановлюємо колбеки
+        # Правильна ініціалізація згідно з наданими файлами
+        client = Client(HOST, PORT, TcpProtocol)
         client.setConnectedCallback(on_connected)
         client.setDisconnectedCallback(on_disconnected)
         client.setMessageReceivedCallback(on_message_received)
