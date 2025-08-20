@@ -2,19 +2,17 @@
 
 import logging
 from twisted.internet import reactor
-# Правильні імпорти для вашої версії бібліотеки
+# Повертаємось до простого, правильного імпорту
 from ctrader_open_api import Client, Auth, Protobuf
-from ctrader_open_api.protocol import OpenApiProtocol
 from config import HOST, PORT, SSL, APP_CLIENT_ID, APP_CLIENT_SECRET, ACCESS_TOKEN, ACCOUNT_ID
 
 # Налаштування логування
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime=s - %(levelname)s - %(message)s')
 
 # Створюємо екземпляр клієнта
 try:
-    # Створюємо екземпляр OpenApiProtocol і передаємо його в Client
-    protocol = OpenApiProtocol()
-    client = Client(HOST, PORT, protocol)
+    # Повертаємось до простої ініціалізації, як в офіційному прикладі
+    client = Client(HOST, PORT, use_ssl=SSL)
 except Exception as e:
     logging.error(f"Failed to initialize client: {e}")
     exit()
@@ -25,13 +23,11 @@ def on_message_received(message):
     """
     logging.info(f"Message Received: {message.payloadType} ({Protobuf.ProtoOAPayloadType.Name(message.payloadType)})")
 
-    # 1. Після успішної авторизації додатку, авторизуємо торговий рахунок
     if message.payloadType == Protobuf.ProtoOAPayloadType.PROTO_OA_APPLICATION_AUTH_RES:
         logging.info("Application authorized successfully. Now authorizing account...")
         deferred = client.send(Auth.authorize_token(ACCESS_TOKEN, ACCOUNT_ID))
         deferred.addErrback(on_error)
 
-    # 2. Після успішної авторизації рахунку, бот готовий до роботи
     elif message.payloadType == Protobuf.ProtoOAPayloadType.PROTO_OA_ACCOUNT_AUTH_RES:
         logging.info("Account authorized successfully. Bot is ready.")
         #
@@ -62,11 +58,11 @@ def on_error(failure):
     if client.is_running() and reactor.running:
          reactor.stop()
 
-# Прив'язуємо наші функції до подій клієнта
-protocol.events.on_connected(on_connected)
-protocol.events.on_disconnected(on_disconnected)
-protocol.events.on_message_received(on_message_received)
-protocol.events.on_error(on_error)
+# Прив'язуємо наші функції безпосередньо до подій клієнта
+client.events.on_connected(on_connected)
+client.events.on_disconnected(on_disconnected)
+client.events.on_message_received(on_message_received)
+client.events.on_error(on_error)
 
 def main():
     """
