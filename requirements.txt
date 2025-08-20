@@ -16,6 +16,3 @@ cryptography
 
 # --- Protobuf version specified by you ---
 protobuf==3.20.1
-
-# --- FIX: Use the correct package name ('ctrader-open-api') as defined in the library's metadata ---
-git+https://github.com/spotware/OpenApiPy.git#egg=ctrader_open_api
