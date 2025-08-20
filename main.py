@@ -10,8 +10,8 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 # Створюємо екземпляр клієнта
 try:
-    # Змінено: параметр 'ssl' замінено на 'use_ssl' згідно з документацією бібліотеки.
-    client = Client(HOST, PORT, use_ssl=SSL)
+    # Змінено: Видалено всі параметри, крім HOST та PORT, згідно з офіційним прикладом.
+    client = Client(HOST, PORT)
 except Exception as e:
     logging.error(f"Failed to initialize client: {e}")
     exit()
