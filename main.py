@@ -2,17 +2,17 @@
 
 import logging
 from twisted.internet import reactor
-# Повертаємось до простого, правильного імпорту
+# Імпортуємо тільки те, що дійсно існує в офіційній бібліотеці
 from ctrader_open_api import Client, Auth, Protobuf
 from config import HOST, PORT, SSL, APP_CLIENT_ID, APP_CLIENT_SECRET, ACCESS_TOKEN, ACCOUNT_ID
 
-# Налаштування логування
-logging.basicConfig(level=logging.INFO, format='%(asctime=s - %(levelname)s - %(message)s')
+# FIX: Виправлено помилку форматування в налаштуваннях логування
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Створюємо екземпляр клієнта
 try:
-    # Повертаємось до простої ініціалізації, як в офіційному прикладі
-    client = Client(HOST, PORT, use_ssl=SSL)
+    # FIX: Видалено всі зайві аргументи. Це правильний виклик для офіційної бібліотеки.
+    client = Client(HOST, PORT)
 except Exception as e:
     logging.error(f"Failed to initialize client: {e}")
     exit()
