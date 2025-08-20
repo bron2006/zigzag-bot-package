@@ -3,16 +3,13 @@
 # Використовуємо офіційний мінімалістичний образ Python
 FROM python:3.11-slim
 
-# Встановлюємо системні залежності
-RUN apt-get update && apt-get install -y git
-
 # Встановлюємо робочу директорію
 WORKDIR /app
 
 # Копіюємо файл залежностей
 COPY requirements.txt .
 
-# --- FIX: Встановлюємо ВСІ бібліотеки глобально, без --target ---
+# Встановлюємо ВСІ бібліотеки глобально
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Копіюємо решту коду додатку
