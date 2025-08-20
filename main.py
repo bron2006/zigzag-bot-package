@@ -23,19 +23,16 @@ from config import (
 from db import get_watchlist, toggle_watch, get_signal_history, init_db
 from analysis import get_api_detailed_signal_data
 
-# --- Налаштування логування ---
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# --- Ініціалізація ---
 app = Klein()
 TOKEN = get_telegram_token()
 updates_queue = queue.Queue(maxsize=1000)
 
-# --- Воркер для обробки оновлень ---
 def dispatcher_worker():
     while True:
         try:
@@ -47,7 +44,6 @@ def dispatcher_worker():
         except Exception as e:
             logger.exception(f"Помилка в воркері диспетчера: {e}")
 
-# --- Ініціалізація Telegram ---
 def init_telegram_bot():
     state.updater = Updater(TOKEN, use_context=True)
     dispatcher = state.updater.dispatcher
@@ -61,11 +57,8 @@ def init_telegram_bot():
         threading.Thread(target=dispatcher_worker, daemon=True).start()
     logger.info("✅ Воркери для обробки черги Telegram запущені.")
 
-# --- Ініціалізація cTrader ---
 def on_symbols_loaded(full_symbols):
-    """Обробляє ПОВНИЙ список символів та коректно заповнює кеш."""
     temp_cache = {}
-    
     for symbol_data in full_symbols:
         symbol_name = getattr(symbol_data, 'symbolName', None)
         symbol_id = getattr(symbol_data, 'symbolId', None)
@@ -80,7 +73,6 @@ def on_symbols_loaded(full_symbols):
     state.SYMBOLS_LOADED = True
     logger.info(f"✅ Кеш символів заповнено. Завантажено дані для {len(state.symbol_cache)} символів. Сервіс готовий.")
 
-
 def init_ctrader_client():
     api_key = get_ct_client_id()
     api_secret = get_ct_client_secret()
@@ -90,7 +82,6 @@ def init_ctrader_client():
     state.client.connect()
     logger.info("Запущено підключення до cTrader API...")
 
-# --- Допоміжна функція для WebApp ---
 def parse_tg_init_data(init_data_str: str) -> dict | None:
     try:
         params = parse_qs(unquote(init_data_str))
@@ -101,7 +92,6 @@ def parse_tg_init_data(init_data_str: str) -> dict | None:
         logger.error(f"Помилка парсингу initData: {e}")
     return None
 
-# --- API ендпоінти для WebApp ---
 @app.route('/api/get_ranked_pairs', methods=['GET'])
 def get_ranked_pairs(request):
     request.setHeader('Content-Type', 'application/json')
@@ -172,22 +162,16 @@ def get_signal_api(request):
             request.finish()
     
     def on_error(failure):
-        # --- ПОЧАТОК ЗМІН: Покращена обробка помилок ---
         if not request.finished:
-            error_message = "Внутрішня помилка сервера."
-            # Перевіряємо, чи це помилка таймауту
+            error_message = f"Внутрішня помилка сервера: {failure.getErrorMessage()}"
             if failure.check(TimeoutError):
-                logger.error(f"API /api/signal: ТАЙМАУТ для пари {pair}")
-                error_message = "Таймаут: Сервер cTrader не відповів на запит історичних даних."
-            else:
-                logger.error(f"API /api/signal: НЕВІДОМА ПОМИЛКА для пари {pair}: {failure.getErrorMessage()}")
-                error_message = f"Внутрішня помилка сервера: {failure.getErrorMessage()}"
+                error_message = "Таймаут: Сервер cTrader не відповів на запит."
             
+            logger.error(f"API /api/signal: Помилка для пари {pair}: {error_message}")
             request.setResponseCode(500)
             error_response = {"error": error_message}
             request.write(json.dumps(error_response).encode('utf-8'))
             request.finish()
-        # --- КІНЕЦЬ ЗМІН ---
 
     d.addCallbacks(on_success, on_error)
     
@@ -206,7 +190,6 @@ def get_signal_history_api(request):
     history = get_signal_history(user['id'], pair)
     return json.dumps(history).encode('utf-8')
 
-# --- Веб-ручки ---
 @app.route(f"/{TOKEN}", methods=['POST'])
 def webhook_handler(request):
     try:
@@ -254,7 +237,6 @@ def setup_webhook():
     else:
         logger.warning("Не вдалося встановити вебхук.")
 
-# --- Запуск сервісів ---
 init_db()
 logger.info("✅ Базу даних ініціалізовано.")
 init_telegram_bot()

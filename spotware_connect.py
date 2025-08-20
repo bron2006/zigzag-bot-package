@@ -54,7 +54,7 @@ class SpotwareClient(EventEmitter):
         self._client.startService()
 
     def send(self, message, client_msg_id=None):
-        return self._client.send(message, clientMsgId=client_msg_id, responseTimeoutInSeconds=20) # Збільшено таймаут
+        return self._client.send(message, clientMsgId=client_msg_id, responseTimeoutInSeconds=20)
 
     def _on_connected(self, client):
         logger.info("Встановлено з'єднання з cTrader API. Авторизація додатку...")

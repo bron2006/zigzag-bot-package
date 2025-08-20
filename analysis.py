@@ -8,9 +8,7 @@ import random
 from twisted.internet import defer
 
 from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import ProtoMessage
-from ctrader_open_api.messages.OpenApiMessages_pb2 import (
-    ProtoOAGetTrendbarsReq, ProtoOAGetTrendbarsRes
-)
+from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOAGetTrendbarsReq, ProtoOAGetTrendbarsRes
 from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOATrendbarPeriod as TrendbarPeriod
 
 from db import add_signal_to_history
@@ -69,8 +67,7 @@ def get_market_data(client, pair, tf, limit=300):
         if not trendbars_response.trendbar:
             return pd.DataFrame()
         
-        # ВИПРАВЛЕНО: Повертаємось до простої та надійної логіки з вашого архіву.
-        # Використовуємо значення за замовчуванням 5, оскільки детальної інформації немає.
+        # Повертаємось до простої та надійної логіки.
         divisor = 10**5
         bars = [{
             'ts': pd.to_datetime(bar.utcTimestampInMinutes * 60, unit='s', utc=True),
@@ -130,9 +127,10 @@ def get_api_detailed_signal_data(client, pair, user_id=None):
 
         if not (success1 and success2):
             errors = []
-            if not success1: errors.append(f"15min data failed")
-            if not success2: errors.append(f"1day data failed")
-            return {"error": f"Не вдалося завантажити ринкові дані ({', '.join(errors)})."}
+            # Додаємо більш детальну інформацію про помилку
+            if not success1: errors.append(f"15min data failed ({getattr(results[0][1], 'value', 'Unknown error')})")
+            if not success2: errors.append(f"1day data failed ({getattr(results[1][1], 'value', 'Unknown error')})")
+            return {"error": f"Не вдалося завантажити ринкові дані: {', '.join(errors)}."}
         
         if df.empty or len(df) < 25 or daily_df.empty:
             return {"error": "Недостатньо історичних даних для аналізу."}
