@@ -2,14 +2,17 @@
 
 import logging
 from twisted.internet import reactor
+# Імпортуємо всі необхідні компоненти для версії з GitHub
 from ctrader_open_api import Client, Auth, Protobuf
+from ctrader_open_api.protocol import OpenApiProtocol
 from config import HOST, PORT, SSL, APP_CLIENT_ID, APP_CLIENT_SECRET, ACCESS_TOKEN, ACCOUNT_ID
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 try:
-    # Ініціалізація для версії з GitHub, як в офіційному прикладі
-    client = Client(HOST, PORT)
+    # Правильна ініціалізація, як того вимагає бібліотека
+    protocol = OpenApiProtocol()
+    client = Client(HOST, PORT, protocol)
 except Exception as e:
     logging.error(f"Failed to initialize client: {e}")
     exit()
@@ -36,10 +39,11 @@ def on_error(failure):
     if client.is_running() and reactor.running:
          reactor.stop()
 
-client.events.on_connected(on_connected)
-client.events.on_disconnected(on_disconnected)
-client.events.on_message_received(on_message_received)
-client.events.on_error(on_error)
+# Події тепер прив'язуються до об'єкта protocol
+protocol.events.on_connected(on_connected)
+protocol.events.on_disconnected(on_disconnected)
+protocol.events.on_message_received(on_message_received)
+protocol.events.on_error(on_error)
 
 def main():
     logging.info("Starting cTrader client...")
