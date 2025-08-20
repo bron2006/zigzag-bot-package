@@ -9,8 +9,8 @@ WORKDIR /app
 # Copy the requirements file into the container.
 COPY requirements.txt .
 
-# Install numpy separately BEFORE other packages to ensure it's available for dependencies that need it for compilation.
-RUN pip install numpy
+# Install build dependencies separately BEFORE other packages.
+RUN pip install numpy cython
 
 # Install the rest of the dependencies.
 # https://pip.pypa.io/en/stable/cli/pip_install/
