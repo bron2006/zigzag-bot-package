@@ -1,10 +1,9 @@
 import os
 import logging
-import asyncio
 from dotenv import load_dotenv
 from threading import Thread, Event
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, Updater
+from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, CallbackContext
 
 from ctrader_open_api.ctrader_open_api_client import CTraderOpenAPIClient
 from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import *
@@ -16,6 +15,7 @@ import pandas_ta as ta
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from queue import Queue, Empty
+import asyncio
 
 # --- Logging ---
 logging.basicConfig(
@@ -110,11 +110,10 @@ class C_Trader_API:
         self._send_async_request(request)
 
     def get_analysis_for_symbol(self, symbol_id, period, from_timestamp, to_timestamp):
-        self._is_ready.wait(timeout=15) # Wait for client to be ready
+        self._is_ready.wait(timeout=15)
         if not self._is_ready.is_set():
             return ("TIMEOUT (Client not ready)", "N/A")
 
-        # Clear the queue before making a new request
         while not self._result_queue.empty():
             try:
                 self._result_queue.get_nowait()
@@ -131,7 +130,6 @@ class C_Trader_API:
         self._send_async_request(request)
         
         try:
-            # Wait for the result from the queue
             return self._result_queue.get(timeout=20)
         except Empty:
             return ("TIMEOUT (No response)", "N/A")
@@ -153,10 +151,10 @@ def get_main_keyboard():
 def get_back_keyboard():
     return InlineKeyboardMarkup([[InlineKeyboardButton(text="Back", callback_data="back_to_main")]])
 
-def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def start(update: Update, context: CallbackContext):
     user_id = update.message.from_user.id
     
-    if len(context.args) == 0:
+    if not context.args:
         update.message.reply_text("Please provide an access token. Usage: /start YOUR_TOKEN")
         return
 
@@ -169,7 +167,7 @@ def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     update.message.reply_text("Welcome! Select a symbol to analyze:", reply_markup=get_main_keyboard())
 
-def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def button_callback(update: Update, context: CallbackContext):
     query = update.callback_query
     query.answer()
     
@@ -205,7 +203,7 @@ def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         query.edit_message_text(text="Unknown symbol.", reply_markup=get_back_keyboard())
 
 def main():
-    updater = Updater(BOT_TOKEN)
+    updater = Updater(BOT_TOKEN, use_context=True)
     dispatcher = updater.dispatcher
     
     dispatcher.add_handler(CommandHandler("start", start))
