@@ -2,17 +2,19 @@
 
 import logging
 from twisted.internet import reactor
-# Імпортуємо тільки те, що дійсно існує в офіційній бібліотеці
+# Правильні імпорти для офіційної версії бібліотеки
 from ctrader_open_api import Client, Auth, Protobuf
+from ctrader_open_api.protocol import OpenApiProtocol
 from config import HOST, PORT, SSL, APP_CLIENT_ID, APP_CLIENT_SECRET, ACCESS_TOKEN, ACCOUNT_ID
 
-# FIX: Виправлено помилку форматування в налаштуваннях логування
+# Виправлено формат логування
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Створюємо екземпляр клієнта
 try:
-    # FIX: Видалено всі зайві аргументи. Це правильний виклик для офіційної бібліотеки.
-    client = Client(HOST, PORT)
+    # Правильна ініціалізація для офіційної бібліотеки
+    protocol = OpenApiProtocol()
+    client = Client(HOST, PORT, protocol)
 except Exception as e:
     logging.error(f"Failed to initialize client: {e}")
     exit()
@@ -58,11 +60,11 @@ def on_error(failure):
     if client.is_running() and reactor.running:
          reactor.stop()
 
-# Прив'язуємо наші функції безпосередньо до подій клієнта
-client.events.on_connected(on_connected)
-client.events.on_disconnected(on_disconnected)
-client.events.on_message_received(on_message_received)
-client.events.on_error(on_error)
+# Події тепер прив'язуються до об'єкта protocol
+protocol.events.on_connected(on_connected)
+protocol.events.on_disconnected(on_disconnected)
+protocol.events.on_message_received(on_message_received)
+protocol.events.on_error(on_error)
 
 def main():
     """
