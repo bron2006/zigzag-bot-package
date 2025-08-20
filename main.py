@@ -2,8 +2,9 @@
 
 import logging
 from twisted.internet import reactor
-from ctrader_open_api import Client, Auth
-from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import ProtoOAPayloadType
+# Змінено: додано Protobuf до імпорту
+from ctrader_open_api import Client, Auth, Protobuf
+# Видалено: from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import ProtoOAPayloadType
 from config import HOST, PORT, SSL, APP_CLIENT_ID, APP_CLIENT_SECRET, ACCESS_TOKEN, ACCOUNT_ID
 
 # Налаштування логування
@@ -20,16 +21,19 @@ def on_message_received(message):
     """
     Обробник для всіх вхідних повідомлень від сервера.
     """
-    logging.info(f"Message Received: {message.payloadType} ({ProtoOAPayloadType.Name(message.payloadType)})")
+    # Змінено: Використовуємо Protobuf.ProtoOAPayloadType.Name()
+    logging.info(f"Message Received: {message.payloadType} ({Protobuf.ProtoOAPayloadType.Name(message.payloadType)})")
 
     # 1. Після успішної авторизації додатку, авторизуємо торговий рахунок
-    if message.payloadType == ProtoOAPayloadType.PROTO_OA_APPLICATION_AUTH_RES:
+    # Змінено: Використовуємо Protobuf.ProtoOAPayloadType
+    if message.payloadType == Protobuf.ProtoOAPayloadType.PROTO_OA_APPLICATION_AUTH_RES:
         logging.info("Application authorized successfully. Now authorizing account...")
         deferred = client.send(Auth.authorize_token(ACCESS_TOKEN, ACCOUNT_ID))
         deferred.addErrback(on_error) # Додаємо обробник помилок для цього конкретного запиту
 
     # 2. Після успішної авторизації рахунку, бот готовий до роботи
-    elif message.payloadType == ProtoOAPayloadType.PROTO_OA_ACCOUNT_AUTH_RES:
+    # Змінено: Використовуємо Protobuf.ProtoOAPayloadType
+    elif message.payloadType == Protobuf.ProtoOAPayloadType.PROTO_OA_ACCOUNT_AUTH_RES:
         logging.info("Account authorized successfully. Bot is ready.")
         #
         # ТУТ ПОЧИНАЄТЬСЯ ОСНОВНА ЛОГІКА ВАШОГО БОТА
@@ -58,11 +62,11 @@ def on_disconnected():
     if reactor.running:
         reactor.stop()
 
-def on_error(error):
+def on_error(failure):
     """
     Обробник помилок. Записує помилку в лог і зупиняє роботу.
     """
-    logging.error(f"An error occurred: {error.getErrorMessage()}")
+    logging.error(f"An error occurred: {failure.getErrorMessage()}")
     if client.is_running() and reactor.running:
          reactor.stop()
 
