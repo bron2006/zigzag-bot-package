@@ -16,3 +16,6 @@ cryptography
 
 # --- Protobuf version specified by you ---
 protobuf==3.20.1
+
+# --- Official ctrader-open-api from GitHub ---
+git+https://github.com/spotware/OpenApiPy.git#egg=ctrader_open_api

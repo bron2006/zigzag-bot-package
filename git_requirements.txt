@@ -1,2 +1,0 @@
-# git_requirements.txt
-git+https://github.com/spotware/OpenApiPy.git#egg=ctrader_open_api
