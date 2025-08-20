@@ -57,21 +57,24 @@ def init_telegram_bot():
         threading.Thread(target=dispatcher_worker, daemon=True).start()
     logger.info("✅ Воркери для обробки черги Telegram запущені.")
 
+# --- ПОЧАТОК ЗМІН (за рекомендацією експерта) ---
 def on_symbols_loaded(full_symbols):
     temp_cache = {}
     for symbol_data in full_symbols:
         symbol_name = getattr(symbol_data, 'symbolName', None)
         symbol_id = getattr(symbol_data, 'symbolId', None)
+        digits = getattr(symbol_data, 'digits', None)
 
-        if not symbol_name or not symbol_id:
+        if not symbol_name or symbol_id is None: # symbolId може бути 0
             continue
 
         normalized_name = symbol_name.replace("/", "").strip()
-        temp_cache[normalized_name] = { "symbolId": symbol_id }
-            
+        temp_cache[normalized_name] = { "symbolId": symbol_id, "digits": digits or 5 }
+
     state.symbol_cache.update(temp_cache)
     state.SYMBOLS_LOADED = True
     logger.info(f"✅ Кеш символів заповнено. Завантажено дані для {len(state.symbol_cache)} символів. Сервіс готовий.")
+# --- КІНЕЦЬ ЗМІН ---
 
 def init_ctrader_client():
     api_key = get_ct_client_id()
@@ -163,14 +166,9 @@ def get_signal_api(request):
     
     def on_error(failure):
         if not request.finished:
-            # ВИПРАВЛЕНО: Більш надійна обробка будь-якої помилки, особливо таймауту
-            error_message = "Сталася невідома помилка."
-            try:
-                failure.raiseException()
-            except TimeoutError:
-                error_message = "Таймаут: Сервер cTrader не відповів на запит вчасно."
-            except Exception as e:
-                error_message = f"Внутрішня помилка: {e}"
+            error_message = f"Внутрішня помилка сервера: {failure.getErrorMessage()}"
+            if failure.check(TimeoutError):
+                error_message = "Таймаут: Сервер cTrader не відповів на запит."
             
             logger.error(f"API /api/signal: Помилка для пари {pair}: {error_message}")
             request.setResponseCode(500)
