@@ -7,9 +7,9 @@ from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import ProtoOAPayloadTy
 from ctrader_open_api.messages.OpenApiMessages_pb2 import *
 from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoMessage
 import pandas as pd
+import pandas_ta as ta  # <-- ЗАМІНА
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
-from zigzag import zigzag
 from aiogram import Bot, Dispatcher, Router, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.filters import CommandStart
@@ -29,7 +29,7 @@ class C_Trader_API:
         self._token = token
         self.ctidTraderAccountId = None
         self.analysis_results = {}
-        self._is_ready = asyncio.Event()  # Подія для сигналізації про готовність
+        self._is_ready = asyncio.Event()
 
     def start(self):
         self._client.start()
@@ -43,13 +43,13 @@ class C_Trader_API:
             request = ProtoOAGetAccountListByAccessTokenReq()
             request.accessToken = self._token
             await self._client.send(request)
-        
+
         elif message.payloadType == ProtoOAPayloadType.PROTO_OA_GET_ACCOUNTS_BY_ACCESS_TOKEN_RES:
             accounts = message.payload.ctidTraderAccount
             if accounts:
                 self.ctidTraderAccountId = accounts[0].ctidTraderAccountId
                 print(f"Account ID set: {self.ctidTraderAccountId}")
-                self._is_ready.set()  # Сигнал, що клієнт готовий до роботи
+                self._is_ready.set()
             else:
                 print("No accounts found for this access token.")
 
@@ -69,14 +69,22 @@ class C_Trader_API:
             
             if not df.empty:
                 df['timestamp'] = pd.to_datetime(df['timestamp'], unit='m')
-                pivots = zigzag(df['open'], df['high'], ['low'], df['close'])
-                last_pivots = pivots.tail(2)
-                
-                if len(last_pivots) >= 2:
-                    last_pivot_type = last_pivots.iloc[-1]['type']
-                    signal = 'BUY' if last_pivot_type == 'min' else 'SELL'
+                df.set_index('timestamp', inplace=True)
+
+                # <-- НОВА ЛОГІКА З PANDAS-TA
+                df.ta.zigzag(inplace=True)
+                zigzag_col = next((col for col in df.columns if 'ZIGZAG' in col), None)
+
+                if zigzag_col:
+                    pivots = df[df[zigzag_col] != 0]
+                    if len(pivots) >= 2:
+                        last_pivot_type = pivots[zigzag_col].iloc[-1]
+                        signal = 'BUY' if last_pivot_type == -1 else 'SELL'
+                    else:
+                        signal = "NEUTRAL"
                 else:
-                    signal = "NEUTRAL"
+                    signal = "ERROR: ZigZag indicator not calculated"
+                # <-- КІНЕЦЬ НОВОЇ ЛОГІКИ
             else:
                 signal = "NO DATA"
 
@@ -89,9 +97,8 @@ class C_Trader_API:
         asyncio.run_coroutine_threadsafe(self._client.send(request), self._client.loop)
 
     async def get_analysis_for_symbol(self, symbol_id, period, from_timestamp, to_timestamp):
-        await self._is_ready.wait()  # 1. Чекаємо, доки клієнт буде повністю готовий
+        await self._is_ready.wait()
 
-        # 2. Видаляємо старий результат, щоб завжди отримувати свіжі дані
         if symbol_id in self.analysis_results:
             del self.analysis_results[symbol_id]
 
@@ -104,7 +111,6 @@ class C_Trader_API:
         
         await self._client.send(request)
         
-        # Чекаємо на результат
         while symbol_id not in self.analysis_results:
             await asyncio.sleep(0.1)
             
@@ -161,7 +167,7 @@ async def button_callback(callback_query: CallbackQuery):
             await callback_query.answer("Analyzing, please wait...")
 
             to_timestamp = int(datetime.now().timestamp() * 1000)
-            from_timestamp = int((datetime.now() - timedelta(days=30)).timestamp() * 1000)
+            from_timestamp = int((datetime.now() - timedelta(days=90)).timestamp() * 1000) # Збільшено період для кращого розрахунку
             
             signal, timestamp = await client.get_analysis_for_symbol(
                 symbol_id, 
