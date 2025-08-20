@@ -6,10 +6,13 @@ FROM python:3.11-slim
 # Set the working directory in the container.
 WORKDIR /app
 
+# Install system-level build dependencies required for compiling Python packages with C extensions.
+RUN apt-get update && apt-get install -y build-essential python3-dev
+
 # Copy the requirements file into the container.
 COPY requirements.txt .
 
-# Install build dependencies separately BEFORE other packages.
+# Install Python build dependencies separately BEFORE other packages.
 RUN pip install numpy cython
 
 # Install the rest of the dependencies.
