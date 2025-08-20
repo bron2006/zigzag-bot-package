@@ -1,5 +1,5 @@
 # requirements.txt
-ctrader-open-api-py-sdk
+ctrader_open_api
 aiogram>=3.0.0
 python-dotenv==1.0.1
 pandas==2.1.4
