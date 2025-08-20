@@ -1,23 +1,33 @@
 # Dockerfile
-# Use the official Python image.
-FROM python:3.11-slim
 
-# Set the working directory in the container.
+# --- Етап 1: "Будівельник" ---
+# Створюємо тимчасове середовище для чистого встановлення бібліотек
+FROM python:3.11-slim as builder
+
 WORKDIR /app
 
-# Set the PYTHONPATH environment variable to include a local packages directory.
-# This ensures that Python can find the packages we install locally.
-ENV PYTHONPATH=/app/packages
+# Встановлюємо залежності, необхідні для збірки
+RUN pip install --upgrade pip
 
-# Copy the requirements file.
 COPY requirements.txt .
+# Встановлюємо всі бібліотеки в окрему папку
+RUN pip wheel --no-cache-dir --wheel-dir=/app/wheels -r requirements.txt
 
-# Install dependencies into the local packages directory.
-# The --target flag specifies the installation directory.
-RUN pip install --no-cache-dir --target=/app/packages -r requirements.txt
 
-# Copy the rest of the application code.
+# --- Етап 2: "Фінальний образ" ---
+# Створюємо чистий образ, в який перенесемо все готове
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Копіюємо вже скомпільовані та завантажені бібліотеки з "будівельника"
+COPY --from=builder /app/wheels /wheels/
+COPY requirements.txt .
+# Встановлюємо бібліотеки з локальних файлів, а не з інтернету
+RUN pip install --no-cache-dir --no-index --find-links=/wheels/ -r requirements.txt
+
+# Копіюємо код нашого додатку
 COPY . .
 
-# Set the command to run the application.
+# Вказуємо команду для запуску
 CMD ["python", "main.py"]
