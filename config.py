@@ -1,48 +1,40 @@
 # config.py
 import os
-from dotenv import load_dotenv
+import logging
 
-load_dotenv()
+# --- Статичні налаштування для cTrader API (Demo Account) ---
+# Згідно з офіційною документацією Spotware.
+HOST = "demo.ctraderapi.com"
+PORT = 5035
+SSL = True
 
-def _get_required_env(var_name: str) -> str:
-    value = os.getenv(var_name)
-    if value is None:
-        raise ValueError(f"Помилка: обов'язкова змінна оточення '{var_name}' не встановлена.")
-    return value
+# --- Читання секретів з оточення Fly.io ---
+# Цей код отримує значення, які ви встановили через 'fly secrets set'.
 
-# --- Telegram ---
-def get_telegram_token() -> str:
-    return _get_required_env("TELEGRAM_BOT_TOKEN")
+# Client ID та Client Secret вашого додатку
+APP_CLIENT_ID = os.getenv("CT_CLIENT_ID")
+APP_CLIENT_SECRET = os.getenv("CT_CLIENT_SECRET")
 
-def get_webhook_secret() -> str:
-    return _get_required_env("WEBHOOK_SECRET")
+# Токен доступу для авторизації торгового рахунку
+ACCESS_TOKEN = os.getenv("CTRADER_ACCESS_TOKEN")
 
-# --- cTrader ---
-def get_ct_client_id() -> str:
-    return _get_required_env("CT_CLIENT_ID")
+# ID вашого демо-рахунку. Конвертуємо в ціле число.
+try:
+    ACCOUNT_ID = int(os.getenv("DEMO_ACCOUNT_ID"))
+except (ValueError, TypeError):
+    logging.error("DEMO_ACCOUNT_ID не знайдено або має невірний формат. Перевірте секрети.")
+    ACCOUNT_ID = None
 
-def get_ct_client_secret() -> str:
-    return _get_required_env("CT_CLIENT_SECRET")
-
-def get_ctrader_access_token() -> str:
-    return _get_required_env("CTRADER_ACCESS_TOKEN")
-
-def get_demo_account_id() -> int:
-    return int(_get_required_env("DEMO_ACCOUNT_ID"))
-
-# --- Fly.io ---
-def get_fly_app_name() -> str | None:
-    return os.getenv("FLY_APP_NAME")
-
-# --- Database ---
-DB_NAME = "bot_data.db"
-
-# --- Списки активів (тільки Forex, синхронізовано з логами) ---
-CRYPTO_PAIRS_FULL = [] 
-STOCKS_US_SYMBOLS = []
-
-FOREX_SESSIONS = {
-    "Азіатська": ["USDJPY", "AUDUSD", "NZDUSD", "EURJPY", "CHFJPY"],
-    "Європейська": ["EURUSD", "GBPUSD", "USDCHF", "EURGBP", "EURCHF", "GBPCHF"],
-    "Американська": ["USDCAD", "USDMXN", "USDRUB", "USDZAR"]
-}
+# --- Перевірка наявності всіх змінних ---
+# Переконуємось, що всі необхідні секрети були завантажені.
+if not all([APP_CLIENT_ID, APP_CLIENT_SECRET, ACCESS_TOKEN, ACCOUNT_ID]):
+    missing = [
+        name for name, var in {
+            "CT_CLIENT_ID": APP_CLIENT_ID,
+            "CT_CLIENT_SECRET": APP_CLIENT_SECRET,
+            "CTRADER_ACCESS_TOKEN": ACCESS_TOKEN,
+            "DEMO_ACCOUNT_ID": ACCOUNT_ID
+        }.items() if not var
+    ]
+    raise ImportError(f"Не вдалося завантажити наступні секрети з оточення: {', '.join(missing)}. "
+                      f"Будь ласка, перевірте налаштування в Fly.io.")
