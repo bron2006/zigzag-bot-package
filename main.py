@@ -1,247 +1,192 @@
-# main.py
-import logging
+import asyncio
 import os
-import json
-import queue
-import threading
-from urllib.parse import parse_qs, unquote
-from klein import Klein
-from twisted.web.server import NOT_DONE_YET
-from twisted.internet import reactor, defer
-from twisted.internet.error import TimeoutError
-from twisted.web.static import File
-from telegram import Update
-from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, MessageHandler, Filters
+from dotenv import load_dotenv
+from ctrader_open_api.ctrader_open_api_client import CTraderOpenAPIClient
+from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import *
+from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import ProtoOAPayloadType
+from ctrader_open_api.messages.OpenApiMessages_pb2 import *
+from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoMessage
+import pandas as pd
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+from zigzag import zigzag
+from aiogram import Bot, Dispatcher, Router, F
+from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.filters import CommandStart
 
-import state
-from telegram_ui import start, menu, button_handler, reset_ui
-from spotware_connect import SpotwareClient
-from config import (
-    get_telegram_token, get_ct_client_id, get_ct_client_secret, 
-    get_fly_app_name, get_webhook_secret, FOREX_SESSIONS, CRYPTO_PAIRS_FULL, STOCKS_US_SYMBOLS
-)
-from db import get_watchlist, toggle_watch, get_signal_history, init_db
-from analysis import get_api_detailed_signal_data
+# --- Environment and Configuration ---
+load_dotenv()
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+CLIENT_ID = os.getenv("CLIENT_ID")
+CLIENT_SECRET = os.getenv("CLIENT_SECRET")
+API_HOST = "live.ctraderapi.com"
+API_PORT = 5035
 
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO
-)
-logger = logging.getLogger(__name__)
+# --- CTrader API Client ---
+class C_Trader_API:
+    def __init__(self, token):
+        self._client = CTraderOpenAPIClient(API_HOST, API_PORT, self._on_message)
+        self._token = token
+        self.ctidTraderAccountId = None
+        self.analysis_results = {}
+        self._is_ready = asyncio.Event()  # Подія для сигналізації про готовність
 
-app = Klein()
-TOKEN = get_telegram_token()
-updates_queue = queue.Queue(maxsize=1000)
+    def start(self):
+        self._client.start()
 
-def dispatcher_worker():
-    while True:
-        try:
-            update_data = updates_queue.get()
-            if state.updater:
-                update = Update.de_json(update_data, state.updater.bot)
-                state.updater.dispatcher.process_update(update)
-            updates_queue.task_done()
-        except Exception as e:
-            logger.exception(f"Помилка в воркері диспетчера: {e}")
+    def stop(self):
+        self._client.stop()
 
-def init_telegram_bot():
-    state.updater = Updater(TOKEN, use_context=True)
-    dispatcher = state.updater.dispatcher
-    dispatcher.add_handler(CommandHandler("start", start))
-    dispatcher.add_handler(MessageHandler(Filters.text("МЕНЮ"), menu))
-    dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, reset_ui))
-    dispatcher.add_handler(CallbackQueryHandler(button_handler))
-    logger.info("✅ Обробники Telegram зареєстровані.")
-    
-    for _ in range(4):
-        threading.Thread(target=dispatcher_worker, daemon=True).start()
-    logger.info("✅ Воркери для обробки черги Telegram запущені.")
-
-# --- ПОЧАТОК ЗМІН (за рекомендацією експерта) ---
-def on_symbols_loaded(full_symbols):
-    temp_cache = {}
-    for symbol_data in full_symbols:
-        symbol_name = getattr(symbol_data, 'symbolName', None)
-        symbol_id = getattr(symbol_data, 'symbolId', None)
-        digits = getattr(symbol_data, 'digits', None)
-
-        if not symbol_name or symbol_id is None: # symbolId може бути 0
-            continue
-
-        normalized_name = symbol_name.replace("/", "").strip()
-        temp_cache[normalized_name] = { "symbolId": symbol_id, "digits": digits or 5 }
-
-    state.symbol_cache.update(temp_cache)
-    state.SYMBOLS_LOADED = True
-    logger.info(f"✅ Кеш символів заповнено. Завантажено дані для {len(state.symbol_cache)} символів. Сервіс готовий.")
-# --- КІНЕЦЬ ЗМІН ---
-
-def init_ctrader_client():
-    api_key = get_ct_client_id()
-    api_secret = get_ct_client_secret()
-    state.client = SpotwareClient(api_key, api_secret)
-    state.client.on("fullSymbolsLoaded")(on_symbols_loaded)
-    state.client.on("error")(lambda err: logger.error(f"Помилка cTrader: {err}"))
-    state.client.connect()
-    logger.info("Запущено підключення до cTrader API...")
-
-def parse_tg_init_data(init_data_str: str) -> dict | None:
-    try:
-        params = parse_qs(unquote(init_data_str))
-        user_data_str = params.get('user', [None])[0]
-        if user_data_str:
-            return json.loads(user_data_str)
-    except Exception as e:
-        logger.error(f"Помилка парсингу initData: {e}")
-    return None
-
-@app.route('/api/get_ranked_pairs', methods=['GET'])
-def get_ranked_pairs(request):
-    request.setHeader('Content-Type', 'application/json')
-    request.setHeader('Access-Control-Allow-Origin', '*')
-
-    if not state.SYMBOLS_LOADED:
-        return json.dumps({"status": "initializing"}).encode('utf-8')
-
-    try:
-        init_data = request.args.get(b'initData', [b''])[0].decode()
-        user = parse_tg_init_data(init_data)
-        watchlist = []
-        if user and user.get('id'):
-            watchlist = get_watchlist(user['id'])
-
-        def format_pair(ticker):
-            norm_ticker = ticker.replace("/", "").strip()
-            return {"ticker": ticker, "active": norm_ticker in state.symbol_cache}
-
-        response_data = {
-            "watchlist": watchlist,
-            "forex": {session: [format_pair(p) for p in pairs] for session, pairs in FOREX_SESSIONS.items()},
-            "crypto": [format_pair(p) for p in CRYPTO_PAIRS_FULL],
-            "stocks": [format_pair(p) for p in STOCKS_US_SYMBOLS]
-        }
+    async def _on_message(self, message: ProtoMessage):
+        if message.payloadType == ProtoOAPayloadType.PROTO_OA_APPLICATION_AUTH_RES:
+            print("Application authenticated")
+            request = ProtoOAGetAccountListByAccessTokenReq()
+            request.accessToken = self._token
+            await self._client.send(request)
         
-        return json.dumps({"status": "ready", "data": response_data}).encode('utf-8')
-    except Exception:
-        logger.exception("!!! ПОМИЛКА в /api/get_ranked_pairs")
-        request.setResponseCode(500)
-        return json.dumps({"status": "error", "error": "Internal Server Error"}).encode('utf-8')
+        elif message.payloadType == ProtoOAPayloadType.PROTO_OA_GET_ACCOUNTS_BY_ACCESS_TOKEN_RES:
+            accounts = message.payload.ctidTraderAccount
+            if accounts:
+                self.ctidTraderAccountId = accounts[0].ctidTraderAccountId
+                print(f"Account ID set: {self.ctidTraderAccountId}")
+                self._is_ready.set()  # Сигнал, що клієнт готовий до роботи
+            else:
+                print("No accounts found for this access token.")
 
-@app.route('/api/toggle_watchlist', methods=['GET'])
-def toggle_watchlist_api(request):
-    init_data = request.args.get(b'initData', [b''])[0].decode()
-    pair = request.args.get(b'pair', [b''])[0].decode()
-    user = parse_tg_init_data(init_data)
-    request.setHeader('Content-Type', 'application/json')
-    request.setHeader('Access-Control-Allow-Origin', '*')
-    if not user or not user.get('id') or not pair:
-        request.setResponseCode(400)
-        return json.dumps({"success": False, "error": "Invalid parameters"}).encode('utf-8')
-    try:
-        toggle_watch(user['id'], pair)
-        return json.dumps({"success": True}).encode('utf-8')
-    except Exception as e:
-        logger.error(f"Помилка toggle_watchlist: {e}")
-        request.setResponseCode(500)
-        return json.dumps({"success": False, "error": "Database error"}).encode('utf-8')
-
-@app.route('/api/signal', methods=['GET'])
-def get_signal_api(request):
-    pair = request.args.get(b'pair', [b''])[0].decode()
-    init_data = request.args.get(b'initData', [b''])[0].decode()
-    user = parse_tg_init_data(init_data)
-    user_id = user.get('id') if user else None
-    request.setHeader('Content-Type', 'application/json')
-    request.setHeader('Access-Control-Allow-Origin', '*')
-    if not pair:
-        request.setResponseCode(400)
-        return json.dumps({"error": "Pair parameter is required"}).encode('utf-8')
-    
-    d = get_api_detailed_signal_data(state.client, pair, user_id)
-    
-    def on_success(result):
-        if not request.finished:
-            request.write(json.dumps(result).encode('utf-8'))
-            request.finish()
-    
-    def on_error(failure):
-        if not request.finished:
-            error_message = f"Внутрішня помилка сервера: {failure.getErrorMessage()}"
-            if failure.check(TimeoutError):
-                error_message = "Таймаут: Сервер cTrader не відповів на запит."
+        elif message.payloadType == ProtoOAPayloadType.PROTO_OA_GET_TRENDBARS_RES:
+            print("Received trendbars")
+            trendbars = message.payload.trendbar
+            symbol_id = message.payload.symbolId
             
-            logger.error(f"API /api/signal: Помилка для пари {pair}: {error_message}")
-            request.setResponseCode(500)
-            error_response = {"error": error_message}
-            request.write(json.dumps(error_response).encode('utf-8'))
-            request.finish()
+            df = pd.DataFrame([{
+                'timestamp': bar.utcTimestampInMinutes,
+                'open': bar.low + bar.deltaOpen,
+                'high': bar.low + bar.deltaHigh,
+                'low': bar.low,
+                'close': bar.low + bar.deltaClose,
+                'volume': bar.volume,
+            } for bar in trendbars])
+            
+            if not df.empty:
+                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='m')
+                pivots = zigzag(df['open'], df['high'], df['low'], df['close'])
+                last_pivots = pivots.tail(2)
+                
+                if len(last_pivots) >= 2:
+                    last_pivot_type = last_pivots.iloc[-1]['type']
+                    signal = 'BUY' if last_pivot_type == 'min' else 'SELL'
+                else:
+                    signal = "NEUTRAL"
+            else:
+                signal = "NO DATA"
 
-    d.addCallbacks(on_success, on_error)
+            self.analysis_results[symbol_id] = (signal, datetime.now(ZoneInfo("Europe/Kyiv")).strftime('%Y-%m-%d %H:%M:%S'))
+
+    def authenticate_app(self):
+        request = ProtoOAApplicationAuthReq()
+        request.clientId = CLIENT_ID
+        request.clientSecret = CLIENT_SECRET
+        asyncio.run_coroutine_threadsafe(self._client.send(request), self._client.loop)
+
+    async def get_analysis_for_symbol(self, symbol_id, period, from_timestamp, to_timestamp):
+        await self._is_ready.wait()  # 1. Чекаємо, доки клієнт буде повністю готовий
+
+        # 2. Видаляємо старий результат, щоб завжди отримувати свіжі дані
+        if symbol_id in self.analysis_results:
+            del self.analysis_results[symbol_id]
+
+        request = ProtoOAGetTrendbarsReq()
+        request.ctidTraderAccountId = self.ctidTraderAccountId
+        request.symbolId = symbol_id
+        request.period = period
+        request.fromTimestamp = from_timestamp
+        request.toTimestamp = to_timestamp
+        
+        await self._client.send(request)
+        
+        # Чекаємо на результат
+        while symbol_id not in self.analysis_results:
+            await asyncio.sleep(0.1)
+            
+        return self.analysis_results[symbol_id]
+
+# --- Telegram Bot ---
+router = Router()
+clients = {} 
+symbol_map = {
+    "EURUSD": 1, "GBPUSD": 2, "USDJPY": 3, "AUDUSD": 5, "USDCAD": 6, 
+    "NZDUSD": 7, "EURJPY": 9, "GBPJPY": 10, "EURGBP": 11, "XAUUSD": 22
+}
+
+def create_main_keyboard():
+    buttons = [
+        [InlineKeyboardButton(text=symbol, callback_data=symbol) for symbol in list(symbol_map.keys())[i:i+3]]
+        for i in range(0, len(symbol_map), 3)
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def create_back_keyboard():
+    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Back", callback_data="back_to_main")]])
+
+@router.message(CommandStart())
+async def start_handler(message: Message):
+    token = message.text.split(' ')[1] if len(message.text.split(' ')) > 1 else None
+    if not token:
+        await message.answer("Please provide an access token with the /start command. Example: /start YOUR_TOKEN")
+        return
+
+    client = C_Trader_API(token=token)
+    clients[message.from_user.id] = client
+    client.start()
+    client.authenticate_app()
     
-    return NOT_DONE_YET
+    await message.answer("Welcome to the C-Trader Bot! Please select a symbol to analyze.", reply_markup=create_main_keyboard())
 
-@app.route('/api/signal_history', methods=['GET'])
-def get_signal_history_api(request):
-    init_data = request.args.get(b'initData', [b''])[0].decode()
-    pair = request.args.get(b'pair', [b''])[0].decode()
-    user = parse_tg_init_data(init_data)
-    request.setHeader('Content-Type', 'application/json')
-    request.setHeader('Access-Control-Allow-Origin', '*')
-    if not user or not user.get('id') or not pair:
-        request.setResponseCode(400)
-        return json.dumps([]).encode('utf-8')
-    history = get_signal_history(user['id'], pair)
-    return json.dumps(history).encode('utf-8')
+@router.callback_query(F.data == "back_to_main")
+async def back_to_main_handler(callback_query: CallbackQuery):
+    await callback_query.message.edit_text("Please select a symbol to analyze.", reply_markup=create_main_keyboard())
 
-@app.route(f"/{TOKEN}", methods=['POST'])
-def webhook_handler(request):
+@router.callback_query()
+async def button_callback(callback_query: CallbackQuery):
+    client = clients.get(callback_query.from_user.id)
+    if not client:
+        await callback_query.answer("Client not initialized. Please use /start.", show_alert=True)
+        return
+
+    symbol_name = callback_query.data
+    symbol_id = symbol_map.get(symbol_name)
+    
+    if symbol_id:
+        try:
+            await callback_query.answer("Analyzing, please wait...")
+
+            to_timestamp = int(datetime.now().timestamp() * 1000)
+            from_timestamp = int((datetime.now() - timedelta(days=30)).timestamp() * 1000)
+            
+            signal, timestamp = await client.get_analysis_for_symbol(
+                symbol_id, 
+                ProtoOATrendbarPeriod.H1, 
+                from_timestamp, 
+                to_timestamp
+            )
+            
+            response_text = f"Analysis for {symbol_name}:\nSignal: {signal}\nLast Updated: {timestamp}"
+            await callback_query.message.edit_text(response_text, reply_markup=create_back_keyboard())
+        except Exception as e:
+            print(f"Error during analysis: {e}")
+            await callback_query.message.edit_text(f"An error occurred during analysis: {e}", reply_markup=create_back_keyboard())
+    else:
+        await callback_query.answer("Unknown symbol.", show_alert=True)
+
+async def main():
+    bot = Bot(token=BOT_TOKEN)
+    dp = Dispatcher()
+    dp.include_router(router)
+    await bot.delete_webhook(drop_pending_updates=True)
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
     try:
-        body = request.content.read()
-        if request.getHeader("X-Telegram-Bot-Api-Secret-Token") != get_webhook_secret():
-            request.setResponseCode(403)
-            return b"Forbidden"
-        update_data = json.loads(body.decode())
-        updates_queue.put_nowait(update_data)
-        request.setResponseCode(200)
-        return b"OK"
-    except queue.Full:
-        request.setResponseCode(503)
-        return b"Busy"
-    except Exception:
-        request.setResponseCode(400)
-        return b"Bad Request"
-
-@app.route("/health")
-def health_check(request):
-    request.setResponseCode(200)
-    return b"OK"
-
-@app.route("/")
-def home(request):
-    app_name = get_fly_app_name()
-    if app_name:
-        webapp_url = f"https://{app_name}.fly.dev/webapp/index.html"
-        request.redirect(webapp_url.encode('utf-8'))
-        request.finish()
-        return b""
-    else:
-        return b"Telegram Bot and Web Service is running"
-
-@app.route('/webapp/', branch=True)
-def webapp_static(request):
-    return File("./webapp")
-
-def setup_webhook():
-    app_name = get_fly_app_name()
-    if app_name and state.updater:
-        webhook_url = f"https://{app_name}.fly.dev/{TOKEN}"
-        state.updater.bot.set_webhook(url=webhook_url, secret_token=get_webhook_secret())
-        logger.info(f"Вебхук встановлено за адресою: {webhook_url}")
-    else:
-        logger.warning("Не вдалося встановити вебхук.")
-
-init_db()
-logger.info("✅ Базу даних ініціалізовано.")
-init_telegram_bot()
-reactor.callWhenRunning(setup_webhook)
-reactor.callWhenRunning(init_ctrader_client)
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        print("Bot stopped")
