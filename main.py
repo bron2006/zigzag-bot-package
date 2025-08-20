@@ -163,9 +163,14 @@ def get_signal_api(request):
     
     def on_error(failure):
         if not request.finished:
-            error_message = f"Внутрішня помилка сервера: {failure.getErrorMessage()}"
-            if failure.check(TimeoutError):
-                error_message = "Таймаут: Сервер cTrader не відповів на запит."
+            # ВИПРАВЛЕНО: Більш надійна обробка будь-якої помилки, особливо таймауту
+            error_message = "Сталася невідома помилка."
+            try:
+                failure.raiseException()
+            except TimeoutError:
+                error_message = "Таймаут: Сервер cTrader не відповів на запит вчасно."
+            except Exception as e:
+                error_message = f"Внутрішня помилка: {e}"
             
             logger.error(f"API /api/signal: Помилка для пари {pair}: {error_message}")
             request.setResponseCode(500)
