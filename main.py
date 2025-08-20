@@ -2,8 +2,9 @@
 
 import logging
 from twisted.internet import reactor
-# Змінено: додано OpenApiProtocol до імпорту
-from ctrader_open_api import Client, Auth, Protobuf, OpenApiProtocol
+# Правильні імпорти для вашої версії бібліотеки
+from ctrader_open_api import Client, Auth, Protobuf
+from ctrader_open_api.protocol import OpenApiProtocol
 from config import HOST, PORT, SSL, APP_CLIENT_ID, APP_CLIENT_SECRET, ACCESS_TOKEN, ACCOUNT_ID
 
 # Налаштування логування
@@ -11,7 +12,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 # Створюємо екземпляр клієнта
 try:
-    # Змінено: Створюємо екземпляр OpenApiProtocol і передаємо його в Client.
+    # Створюємо екземпляр OpenApiProtocol і передаємо його в Client
     protocol = OpenApiProtocol()
     client = Client(HOST, PORT, protocol)
 except Exception as e:
@@ -35,11 +36,6 @@ def on_message_received(message):
         logging.info("Account authorized successfully. Bot is ready.")
         #
         # ТУТ ПОЧИНАЄТЬСЯ ОСНОВНА ЛОГІКА ВАШОГО БОТА
-        #
-        # Приклад: підписка на тіки для EURUSD
-        # from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOASubscribeSpotsReq
-        # subscribe_request = ProtoOASubscribeSpotsReq(ctidTraderAccountId=ACCOUNT_ID, symbolId=[1])
-        # client.send(subscribe_request)
         #
 
 def on_connected():
