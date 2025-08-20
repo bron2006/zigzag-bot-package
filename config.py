@@ -1,40 +1,34 @@
 # config.py
 import os
-import logging
+from dotenv import load_dotenv
 
-# --- Статичні налаштування для cTrader API (Demo Account) ---
-# Згідно з офіційною документацією Spotware.
-HOST = "demo.ctraderapi.com"
-PORT = 5035
-SSL = True
+load_dotenv()
 
-# --- Читання секретів з оточення Fly.io ---
-# Цей код отримує значення, які ви встановили через 'fly secrets set'.
+# --- FIX: Define configuration as simple global variables ---
 
-# Client ID та Client Secret вашого додатку
-APP_CLIENT_ID = os.getenv("CT_CLIENT_ID")
-APP_CLIENT_SECRET = os.getenv("CT_CLIENT_SECRET")
+# --- Telegram ---
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
 
-# Токен доступу для авторизації торгового рахунку
-ACCESS_TOKEN = os.getenv("CTRADER_ACCESS_TOKEN")
+# --- cTrader ---
+CT_CLIENT_ID = os.getenv("CT_CLIENT_ID")
+CT_CLIENT_SECRET = os.getenv("CT_CLIENT_SECRET")
+CTRADER_ACCESS_TOKEN = os.getenv("CTRADER_ACCESS_TOKEN")
+DEMO_ACCOUNT_ID = int(os.getenv("DEMO_ACCOUNT_ID", 0))
 
-# ID вашого демо-рахунку. Конвертуємо в ціле число.
-try:
-    ACCOUNT_ID = int(os.getenv("DEMO_ACCOUNT_ID"))
-except (ValueError, TypeError):
-    logging.error("DEMO_ACCOUNT_ID не знайдено або має невірний формат. Перевірте секрети.")
-    ACCOUNT_ID = None
+# --- Fly.io ---
+FLY_APP_NAME = os.getenv("FLY_APP_NAME")
 
-# --- Перевірка наявності всіх змінних ---
-# Переконуємось, що всі необхідні секрети були завантажені.
-if not all([APP_CLIENT_ID, APP_CLIENT_SECRET, ACCESS_TOKEN, ACCOUNT_ID]):
-    missing = [
-        name for name, var in {
-            "CT_CLIENT_ID": APP_CLIENT_ID,
-            "CT_CLIENT_SECRET": APP_CLIENT_SECRET,
-            "CTRADER_ACCESS_TOKEN": ACCESS_TOKEN,
-            "DEMO_ACCOUNT_ID": ACCOUNT_ID
-        }.items() if not var
-    ]
-    raise ImportError(f"Не вдалося завантажити наступні секрети з оточення: {', '.join(missing)}. "
-                      f"Будь ласка, перевірте налаштування в Fly.io.")
+# --- Database ---
+DB_NAME = "bot_data.db"
+
+# --- Asset Lists ---
+FOREX_SESSIONS = {
+    "Азіатська": ["USDJPY", "AUDUSD", "NZDUSD", "EURJPY", "CHFJPY"],
+    "Європейська": ["EURUSD", "GBPUSD", "USDCHF", "EURGBP", "EURCHF", "GBPCHF"],
+    "Американська": ["USDCAD", "USDMXN", "USDRUB", "USDZAR"]
+}
+
+# --- Validation ---
+if not all([TELEGRAM_BOT_TOKEN, CT_CLIENT_ID, CT_CLIENT_SECRET, CTRADER_ACCESS_TOKEN, DEMO_ACCOUNT_ID]):
+    raise ValueError("One or more required environment variables are not set.")
