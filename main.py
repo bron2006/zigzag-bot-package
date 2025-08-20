@@ -8,8 +8,8 @@ from config import HOST, PORT, SSL, APP_CLIENT_ID, APP_CLIENT_SECRET, ACCESS_TOK
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 try:
-    # Ініціалізація для стабільної версії бібліотеки
-    client = Client(HOST, PORT, ssl=SSL)
+    # FIX: Видалено всі зайві аргументи. Це правильний виклик для стабільної версії.
+    client = Client(HOST, PORT)
 except Exception as e:
     logging.error(f"Failed to initialize client: {e}")
     exit()
