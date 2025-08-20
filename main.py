@@ -7,7 +7,7 @@ from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import ProtoOAPayloadTy
 from ctrader_open_api.messages.OpenApiMessages_pb2 import *
 from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoMessage
 import pandas as pd
-import pandas_ta as ta  # <-- ЗАМІНА
+import pandas_ta as ta
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from aiogram import Bot, Dispatcher, Router, F
@@ -71,20 +71,23 @@ class C_Trader_API:
                 df['timestamp'] = pd.to_datetime(df['timestamp'], unit='m')
                 df.set_index('timestamp', inplace=True)
 
-                # <-- НОВА ЛОГІКА З PANDAS-TA
+                # --- НОВА, НАДІЙНА ЛОГІКА З PANDAS-TA ---
                 df.ta.zigzag(inplace=True)
+                # Знаходимо стовпець, який створила бібліотека
                 zigzag_col = next((col for col in df.columns if 'ZIGZAG' in col), None)
 
                 if zigzag_col:
-                    pivots = df[df[zigzag_col] != 0]
+                    # Відфільтровуємо лише точки розвороту (де значення не 0)
+                    pivots = df[df[zigzag_col].notna() & (df[zigzag_col] != 0)]
                     if len(pivots) >= 2:
-                        last_pivot_type = pivots[zigzag_col].iloc[-1]
-                        signal = 'BUY' if last_pivot_type == -1 else 'SELL'
+                        last_pivot_value = pivots[zigzag_col].iloc[-1]
+                        # pandas-ta позначає мінімуми як -1, а максимуми як 1
+                        signal = 'BUY' if last_pivot_value == -1 else 'SELL'
                     else:
                         signal = "NEUTRAL"
                 else:
                     signal = "ERROR: ZigZag indicator not calculated"
-                # <-- КІНЕЦЬ НОВОЇ ЛОГІКИ
+                # --- КІНЕЦЬ НОВОЇ ЛОГІКИ ---
             else:
                 signal = "NO DATA"
 
