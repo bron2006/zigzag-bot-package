@@ -1,6 +1,10 @@
-import asyncio
 import os
+import logging
 from dotenv import load_dotenv
+from threading import Thread
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+
 from ctrader_open_api.ctrader_open_api_client import CTraderOpenAPIClient
 from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import *
 from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import ProtoOAPayloadType
@@ -10,9 +14,13 @@ import pandas as pd
 import pandas_ta as ta
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
-from aiogram import Bot, Dispatcher, Router, F
-from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
-from aiogram.filters import CommandStart
+import asyncio
+
+# --- Logging ---
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
 # --- Environment and Configuration ---
 load_dotenv()
@@ -24,22 +32,29 @@ API_PORT = 5035
 
 # --- CTrader API Client ---
 class C_Trader_API:
-    def __init__(self, token):
-        self._client = CTraderOpenAPIClient(API_HOST, API_PORT, self._on_message)
+    def __init__(self, token, bot, user_id):
+        self._loop = asyncio.new_event_loop()
+        self._client = CTraderOpenAPIClient(API_HOST, API_PORT, self._on_message, loop=self._loop)
         self._token = token
+        self._bot = bot
+        self._user_id = user_id
         self.ctidTraderAccountId = None
-        self.analysis_results = {}
-        self._is_ready = asyncio.Event()
+        self._is_ready = asyncio.Event(loop=self._loop)
+        self._analysis_result_event = asyncio.Event(loop=self._loop)
+        self._current_analysis_result = None
 
-    def start(self):
+    def start_in_thread(self):
+        thread = Thread(target=self.run_event_loop, daemon=True)
+        thread.start()
+
+    def run_event_loop(self):
+        asyncio.set_event_loop(self._loop)
         self._client.start()
-
-    def stop(self):
-        self._client.stop()
+        self._loop.run_forever()
 
     async def _on_message(self, message: ProtoMessage):
         if message.payloadType == ProtoOAPayloadType.PROTO_OA_APPLICATION_AUTH_RES:
-            print("Application authenticated")
+            logger.info("Application authenticated")
             request = ProtoOAGetAccountListByAccessTokenReq()
             request.accessToken = self._token
             await self._client.send(request)
@@ -48,15 +63,14 @@ class C_Trader_API:
             accounts = message.payload.ctidTraderAccount
             if accounts:
                 self.ctidTraderAccountId = accounts[0].ctidTraderAccountId
-                print(f"Account ID set: {self.ctidTraderAccountId}")
+                logger.info(f"Account ID set: {self.ctidTraderAccountId}")
                 self._is_ready.set()
             else:
-                print("No accounts found for this access token.")
+                logger.error("No accounts found for this access token.")
 
         elif message.payloadType == ProtoOAPayloadType.PROTO_OA_GET_TRENDBARS_RES:
-            print("Received trendbars")
+            logger.info("Received trendbars")
             trendbars = message.payload.trendbar
-            symbol_id = message.payload.symbolId
             
             df = pd.DataFrame([{
                 'timestamp': bar.utcTimestampInMinutes,
@@ -70,40 +84,37 @@ class C_Trader_API:
             if not df.empty:
                 df['timestamp'] = pd.to_datetime(df['timestamp'], unit='m')
                 df.set_index('timestamp', inplace=True)
-
-                # --- НОВА, НАДІЙНА ЛОГІКА З PANDAS-TA ---
                 df.ta.zigzag(inplace=True)
-                # Знаходимо стовпець, який створила бібліотека
                 zigzag_col = next((col for col in df.columns if 'ZIGZAG' in col), None)
 
                 if zigzag_col:
-                    # Відфільтровуємо лише точки розвороту (де значення не 0)
                     pivots = df[df[zigzag_col].notna() & (df[zigzag_col] != 0)]
                     if len(pivots) >= 2:
                         last_pivot_value = pivots[zigzag_col].iloc[-1]
-                        # pandas-ta позначає мінімуми як -1, а максимуми як 1
                         signal = 'BUY' if last_pivot_value == -1 else 'SELL'
                     else:
                         signal = "NEUTRAL"
                 else:
                     signal = "ERROR: ZigZag indicator not calculated"
-                # --- КІНЕЦЬ НОВОЇ ЛОГІКИ ---
             else:
                 signal = "NO DATA"
+            
+            self._current_analysis_result = (signal, datetime.now(ZoneInfo("Europe/Kyiv")).strftime('%Y-%m-%d %H:%M:%S'))
+            self._analysis_result_event.set()
 
-            self.analysis_results[symbol_id] = (signal, datetime.now(ZoneInfo("Europe/Kyiv")).strftime('%Y-%m-%d %H:%M:%S'))
+    def _send_async_request(self, request):
+        asyncio.run_coroutine_threadsafe(self._client.send(request), self._loop)
 
     def authenticate_app(self):
         request = ProtoOAApplicationAuthReq()
         request.clientId = CLIENT_ID
         request.clientSecret = CLIENT_SECRET
-        asyncio.run_coroutine_threadsafe(self._client.send(request), self._client.loop)
+        self._send_async_request(request)
 
     async def get_analysis_for_symbol(self, symbol_id, period, from_timestamp, to_timestamp):
         await self._is_ready.wait()
-
-        if symbol_id in self.analysis_results:
-            del self.analysis_results[symbol_id]
+        self._analysis_result_event.clear()
+        self._current_analysis_result = None
 
         request = ProtoOAGetTrendbarsReq()
         request.ctidTraderAccountId = self.ctidTraderAccountId
@@ -112,90 +123,99 @@ class C_Trader_API:
         request.fromTimestamp = from_timestamp
         request.toTimestamp = to_timestamp
         
-        await self._client.send(request)
+        self._send_async_request(request)
         
-        while symbol_id not in self.analysis_results:
-            await asyncio.sleep(0.1)
-            
-        return self.analysis_results[symbol_id]
+        try:
+            await asyncio.wait_for(self._analysis_result_event.wait(), timeout=15)
+            return self._current_analysis_result
+        except asyncio.TimeoutError:
+            return ("TIMEOUT", "N/A")
 
-# --- Telegram Bot ---
-router = Router()
+# --- Telegram Bot Handlers ---
 clients = {} 
 symbol_map = {
     "EURUSD": 1, "GBPUSD": 2, "USDJPY": 3, "AUDUSD": 5, "USDCAD": 6, 
     "NZDUSD": 7, "EURJPY": 9, "GBPJPY": 10, "EURGBP": 11, "XAUUSD": 22
 }
 
-def create_main_keyboard():
+def get_main_keyboard():
     buttons = [
         [InlineKeyboardButton(text=symbol, callback_data=symbol) for symbol in list(symbol_map.keys())[i:i+3]]
         for i in range(0, len(symbol_map), 3)
     ]
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
+    return InlineKeyboardMarkup(buttons)
 
-def create_back_keyboard():
-    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Back", callback_data="back_to_main")]])
+def get_back_keyboard():
+    return InlineKeyboardMarkup([[InlineKeyboardButton(text="Back", callback_data="back_to_main")]])
 
-@router.message(CommandStart())
-async def start_handler(message: Message):
-    token = message.text.split(' ')[1] if len(message.text.split(' ')) > 1 else None
-    if not token:
-        await message.answer("Please provide an access token with the /start command. Example: /start YOUR_TOKEN")
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    
+    if len(context.args) == 0:
+        await update.message.reply_text("Please provide an access token. Usage: /start YOUR_TOKEN")
         return
 
-    client = C_Trader_API(token=token)
-    clients[message.from_user.id] = client
-    client.start()
+    token = context.args[0]
+    
+    if user_id in clients:
+        # You might want to stop the old client here if needed
+        pass
+
+    client = C_Trader_API(token=token, bot=context.bot, user_id=user_id)
+    clients[user_id] = client
+    client.start_in_thread()
     client.authenticate_app()
     
-    await message.answer("Welcome to the C-Trader Bot! Please select a symbol to analyze.", reply_markup=create_main_keyboard())
+    await update.message.reply_text("Welcome! Select a symbol to analyze:", reply_markup=get_main_keyboard())
 
-@router.callback_query(F.data == "back_to_main")
-async def back_to_main_handler(callback_query: CallbackQuery):
-    await callback_query.message.edit_text("Please select a symbol to analyze.", reply_markup=create_main_keyboard())
+async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    client = clients.get(user_id)
 
-@router.callback_query()
-async def button_callback(callback_query: CallbackQuery):
-    client = clients.get(callback_query.from_user.id)
     if not client:
-        await callback_query.answer("Client not initialized. Please use /start.", show_alert=True)
+        await query.edit_message_text(text="Client not initialized. Please use /start.")
         return
 
-    symbol_name = callback_query.data
+    if query.data == "back_to_main":
+        await query.edit_message_text(text="Select a symbol to analyze:", reply_markup=get_main_keyboard())
+        return
+
+    symbol_name = query.data
     symbol_id = symbol_map.get(symbol_name)
-    
+
     if symbol_id:
+        await query.edit_message_text(text=f"Analyzing {symbol_name}, please wait...")
+        
+        to_timestamp = int(datetime.now().timestamp() * 1000)
+        from_timestamp = int((datetime.now() - timedelta(days=90)).timestamp() * 1000)
+        
+        # We need to run the async get_analysis_for_symbol in the client's event loop
+        future = asyncio.run_coroutine_threadsafe(
+            client.get_analysis_for_symbol(symbol_id, ProtoOATrendbarPeriod.H1, from_timestamp, to_timestamp),
+            client._loop
+        )
+        
         try:
-            await callback_query.answer("Analyzing, please wait...")
-
-            to_timestamp = int(datetime.now().timestamp() * 1000)
-            from_timestamp = int((datetime.now() - timedelta(days=90)).timestamp() * 1000) # Збільшено період для кращого розрахунку
-            
-            signal, timestamp = await client.get_analysis_for_symbol(
-                symbol_id, 
-                ProtoOATrendbarPeriod.H1, 
-                from_timestamp, 
-                to_timestamp
-            )
-            
+            signal, timestamp = future.result(timeout=20) # Wait for the result
             response_text = f"Analysis for {symbol_name}:\nSignal: {signal}\nLast Updated: {timestamp}"
-            await callback_query.message.edit_text(response_text, reply_markup=create_back_keyboard())
         except Exception as e:
-            print(f"Error during analysis: {e}")
-            await callback_query.message.edit_text(f"An error occurred during analysis: {e}", reply_markup=create_back_keyboard())
+            logger.error(f"Error getting analysis: {e}")
+            response_text = f"An error occurred: {e}"
+        
+        await query.edit_message_text(text=response_text, reply_markup=get_back_keyboard())
     else:
-        await callback_query.answer("Unknown symbol.", show_alert=True)
+        await query.edit_message_text(text="Unknown symbol.", reply_markup=get_back_keyboard())
 
-async def main():
-    bot = Bot(token=BOT_TOKEN)
-    dp = Dispatcher()
-    dp.include_router(router)
-    await bot.delete_webhook(drop_pending_updates=True)
-    await dp.start_polling(bot)
+def main():
+    application = Application.builder().token(BOT_TOKEN).build()
+    
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CallbackQueryHandler(button_callback))
+
+    application.run_polling()
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except (KeyboardInterrupt, SystemExit):
-        print("Bot stopped")
+    main()
