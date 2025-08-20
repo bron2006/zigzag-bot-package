@@ -69,7 +69,7 @@ class C_Trader_API:
             
             if not df.empty:
                 df['timestamp'] = pd.to_datetime(df['timestamp'], unit='m')
-                pivots = zigzag(df['open'], df['high'], df['low'], df['close'])
+                pivots = zigzag(df['open'], df['high'], ['low'], df['close'])
                 last_pivots = pivots.tail(2)
                 
                 if len(last_pivots) >= 2:

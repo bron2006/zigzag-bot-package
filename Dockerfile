@@ -1,9 +1,20 @@
-FROM python:3.11-slim-bullseye
+# Dockerfile
+# Use the official Python image.
+# https://hub.docker.com/_/python
+FROM python:3.11-slim
+
+# Set the working directory in the container.
 WORKDIR /app
-RUN apt-get update && apt-get install -y git curl && rm -rf /var/lib/apt/lists/*
+
+# Copy the requirements file into the container.
 COPY requirements.txt .
+
+# Install the dependencies.
+# https://pip.pypa.io/en/stable/cli/pip_install/
 RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy the rest of the application code into the container.
 COPY . .
-EXPOSE 8080
-# Змінюємо команду запуску на новий файл run.py
-CMD ["python", "run.py"]
+
+# Set the command to run the application.
+CMD ["python", "main.py"]
