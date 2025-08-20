@@ -2,16 +2,21 @@
 # Use the official Python image.
 FROM python:3.11-slim
 
-# Cache buster: 2025-08-20 20:52:00 EEST
+# Set the working directory in the container.
 WORKDIR /app
 
-# Copy the requirements file into the container.
+# Set the PYTHONPATH environment variable to include a local packages directory.
+# This ensures that Python can find the packages we install locally.
+ENV PYTHONPATH=/app/packages
+
+# Copy the requirements file.
 COPY requirements.txt .
 
-# Install the dependencies.
-RUN pip install --no-cache-dir -r requirements.txt
+# Install dependencies into the local packages directory.
+# The --target flag specifies the installation directory.
+RUN pip install --no-cache-dir --target=/app/packages -r requirements.txt
 
-# Copy the rest of the application code into the container.
+# Copy the rest of the application code.
 COPY . .
 
 # Set the command to run the application.
