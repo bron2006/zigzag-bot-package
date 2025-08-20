@@ -17,5 +17,5 @@ cryptography
 # --- Protobuf version specified by you ---
 protobuf==3.20.1
 
-# --- FIX: Force installation of the official ctrader-open-api library ---
--e git+https://github.com/spotware/OpenApiPy.git#egg=ctrader_open_api
+# --- FIX: Install from git in standard (non-editable) mode ---
+git+https://github.com/spotware/OpenApiPy.git#egg=ctrader_open_api
