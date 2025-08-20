@@ -3,20 +3,16 @@
 # Використовуємо офіційний мінімалістичний образ Python
 FROM python:3.11-slim
 
-# Встановлюємо системні залежності
+# Встановлюємо системні залежності (git потрібен для requirements.txt)
 RUN apt-get update && apt-get install -y git
 
 # Встановлюємо робочу директорію
 WORKDIR /app
 
-# --- Крок 1: Клонуємо офіційний репозиторій бібліотеки ---
-RUN git clone https://github.com/spotware/OpenApiPy.git
-
-# --- Крок 2: Встановлюємо бібліотеку з завантаженого коду ---
-RUN pip install --no-cache-dir ./OpenApiPy
-
-# --- Крок 3: Встановлюємо решту залежностей ---
+# Копіюємо файл залежностей
 COPY requirements.txt .
+
+# --- FIX: Встановлюємо ВСІ бібліотеки глобально, без --target ---
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Копіюємо решту коду додатку
