@@ -2,9 +2,7 @@
 
 import logging
 from twisted.internet import reactor
-# Змінено: додано Protobuf до імпорту
 from ctrader_open_api import Client, Auth, Protobuf
-# Видалено: from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import ProtoOAPayloadType
 from config import HOST, PORT, SSL, APP_CLIENT_ID, APP_CLIENT_SECRET, ACCESS_TOKEN, ACCOUNT_ID
 
 # Налаштування логування
@@ -12,7 +10,8 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 # Створюємо екземпляр клієнта
 try:
-    client = Client(HOST, PORT, ssl=SSL)
+    # Змінено: параметр 'ssl' замінено на 'use_ssl' згідно з документацією бібліотеки.
+    client = Client(HOST, PORT, use_ssl=SSL)
 except Exception as e:
     logging.error(f"Failed to initialize client: {e}")
     exit()
@@ -21,34 +20,29 @@ def on_message_received(message):
     """
     Обробник для всіх вхідних повідомлень від сервера.
     """
-    # Змінено: Використовуємо Protobuf.ProtoOAPayloadType.Name()
     logging.info(f"Message Received: {message.payloadType} ({Protobuf.ProtoOAPayloadType.Name(message.payloadType)})")
 
     # 1. Після успішної авторизації додатку, авторизуємо торговий рахунок
-    # Змінено: Використовуємо Protobuf.ProtoOAPayloadType
     if message.payloadType == Protobuf.ProtoOAPayloadType.PROTO_OA_APPLICATION_AUTH_RES:
         logging.info("Application authorized successfully. Now authorizing account...")
         deferred = client.send(Auth.authorize_token(ACCESS_TOKEN, ACCOUNT_ID))
-        deferred.addErrback(on_error) # Додаємо обробник помилок для цього конкретного запиту
+        deferred.addErrback(on_error)
 
     # 2. Після успішної авторизації рахунку, бот готовий до роботи
-    # Змінено: Використовуємо Protobuf.ProtoOAPayloadType
     elif message.payloadType == Protobuf.ProtoOAPayloadType.PROTO_OA_ACCOUNT_AUTH_RES:
         logging.info("Account authorized successfully. Bot is ready.")
         #
         # ТУТ ПОЧИНАЄТЬСЯ ОСНОВНА ЛОГІКА ВАШОГО БОТА
-        # Наприклад, підписка на ринкові дані, аналіз, тощо.
         #
         # Приклад: підписка на тіки для EURUSD
         # from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOASubscribeSpotsReq
-        # subscribe_request = ProtoOASubscribeSpotsReq(ctidTraderAccountId=ACCOUNT_ID, symbolId=[1]) # 1 - зазвичай ID для EURUSD
+        # subscribe_request = ProtoOASubscribeSpotsReq(ctidTraderAccountId=ACCOUNT_ID, symbolId=[1])
         # client.send(subscribe_request)
         #
 
 def on_connected():
     """
     Викликається, коли з'єднання з сервером встановлено.
-    Починаємо процес авторизації додатку.
     """
     logging.info("Client connected to server. Authorizing application...")
     deferred = client.send(Auth.authorize_app(APP_CLIENT_ID, APP_CLIENT_SECRET))
@@ -83,7 +77,6 @@ def main():
     logging.info("Starting cTrader client...")
     client.start()
     logging.info("Twisted Reactor is running. Press Ctrl+C to stop.")
-    # Запускаємо реактор. Цей виклик блокує виконання і підтримує роботу програми.
     reactor.run()
     logging.info("Reactor stopped. Exiting.")
 
