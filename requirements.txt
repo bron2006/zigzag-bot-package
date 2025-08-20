@@ -1,13 +1,21 @@
 # requirements.txt
-ctrader_open_api
+
+# --- Telegram Bot and other utilities ---
 python-telegram-bot==13.15
-Twisted
 python-dotenv==1.0.1
 pandas==2.1.4
 pandas-ta
-protobuf==3.20.1
 requests
 cachetools
+
+# --- Core dependencies for Twisted and Cryptography ---
+Twisted
 service-identity
 pyOpenSSL
 cryptography
+
+# --- Protobuf version specified by you ---
+protobuf==3.20.1
+
+# --- FIX: Force installation of the official ctrader-open-api library ---
+-e git+https://github.com/spotware/OpenApiPy.git#egg=ctrader_open_api
