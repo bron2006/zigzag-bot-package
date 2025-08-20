@@ -1,75 +1,63 @@
 # main.py
-
 import logging
-from twisted.internet import reactor
-# FIX 1: Імпортуємо TcpProtocol безпосередньо з пакету, згідно з __init__.py
-from ctrader_open_api import Client, Auth, Protobuf, TcpProtocol
-# FIX 2: Імпортуємо функції для отримання конфігурації
-from config import (
-    get_ct_client_id, get_ct_client_secret, 
-    get_ctrader_access_token, get_demo_account_id
-)
-from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import ProtoMessage
-from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOAPayloadType
-from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOAApplicationAuthReq, ProtoOAAccountAuthReq
+from twisted.internet import reactor, endpoints
+from twisted.web.server import Site
+from klein import Klein
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+import state
+from spotware_connect import SpotwareClient
+from telegram_ui import setup_telegram_bot # Уявімо, що ця функція налаштовує бота
 
-# --- Глобальні змінні, отримані з функцій конфігурації ---
-APP_CLIENT_ID = get_ct_client_id()
-APP_CLIENT_SECRET = get_ct_client_secret()
-ACCESS_TOKEN = get_ctrader_access_token()
-ACCOUNT_ID = get_demo_account_id()
-HOST = "demo.ctraderapi.com"
-PORT = 5035
+# Налаштування логування
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
-# --- Колбеки ---
-def on_message_received(client, message):
-    payload_type = message.payloadType
-    logging.info(f"Message Received: {payload_type} ({Protobuf.ProtoOAPayloadType.Name(payload_type)})")
+# Створюємо Klein app для веб-частини (наприклад, для вебхуків Telegram)
+app = Klein()
 
-    if payload_type == Protobuf.ProtoOAPayloadType.PROTO_OA_APPLICATION_AUTH_RES:
-        logging.info("Application authorized successfully. Now authorizing account...")
-        auth_req = ProtoOAAccountAuthReq(ctidTraderAccountId=ACCOUNT_ID, accessToken=ACCESS_TOKEN)
-        deferred = client.send(auth_req)
-        deferred.addErrback(on_error, "Account Auth")
+@app.route("/")
+def home(request):
+    return "cTrader Bot is running."
 
-    elif payload_type == Protobuf.ProtoOAPayloadType.PROTO_OA_ACCOUNT_AUTH_RES:
-        logging.info("Account authorized successfully. Bot is ready.")
+def on_symbols_loaded(symbols):
+    """Колбек, який викликається, коли символи завантажено."""
+    logger.info(f"Завантажено {len(symbols)} символів. Ініціалізую кеш...")
+    state.symbol_cache = {s.symbolName.replace("/", ""): {'symbolId': s.symbolId, 'digits': s.digits} for s in symbols}
+    state.SYMBOLS_LOADED = True
+    logger.info("Кеш символів готовий. Бот повністю функціональний.")
+    
+    # Тут можна запустити Telegram бота, коли ми впевнені, що API готове
+    # state.updater = setup_telegram_bot()
+    # logger.info("Telegram Bot запущено.")
 
-def on_connected(client):
-    logging.info("Client connected to server. Authorizing application...")
-    auth_req = ProtoOAApplicationAuthReq(clientId=APP_CLIENT_ID, clientSecret=APP_CLIENT_SECRET)
-    deferred = client.send(auth_req)
-    deferred.addErrback(on_error, "Application Auth")
-
-def on_disconnected(client, reason):
-    logging.warning(f"Client disconnected from server. Reason: {reason.getErrorMessage()}")
-    if reactor.running:
-        reactor.stop()
-
-def on_error(failure, context="Unknown"):
-    logging.error(f"An error occurred in '{context}': {failure.getErrorMessage()}")
+def on_client_error(failure):
+    """Колбек для критичних помилок клієнта."""
+    logger.critical(f"Критична помилка cTrader клієнта: {failure.getErrorMessage()}. Зупиняю реактор.")
     if reactor.running:
         reactor.stop()
 
 def main():
-    try:
-        # Правильна ініціалізація згідно з наданими файлами
-        client = Client(HOST, PORT, TcpProtocol)
-        client.setConnectedCallback(on_connected)
-        client.setDisconnectedCallback(on_disconnected)
-        client.setMessageReceivedCallback(on_message_received)
+    logger.info("Запуск cTrader Bot...")
+    
+    # Ініціалізуємо наш cTrader клієнт
+    state.client = SpotwareClient()
+    
+    # Додаємо обробники на події готовності та помилок
+    d = state.client.isReady()
+    d.addCallbacks(on_symbols_loaded, on_client_error)
+    
+    # Запускаємо процес підключення
+    state.client.connect()
 
-    except Exception as e:
-        logging.error(f"Failed to initialize client: {e}")
-        exit()
-
-    logging.info("Starting cTrader client...")
-    client.startService()
-    logging.info("Twisted Reactor is running. Press Ctrl+C to stop.")
+    # Налаштовуємо та запускаємо веб-сервер Klein
+    endpoint_str = "tcp:port=8080:interface=0.0.0.0"
+    endpoint = endpoints.serverFromString(reactor, endpoint_str)
+    endpoint.listen(Site(app.resource()))
+    
+    logger.info("Twisted Reactor запущено. Веб-сервер слухає на порту 8080.")
+    
+    # Запускаємо головний цикл Twisted
     reactor.run()
-    logging.info("Reactor stopped. Exiting.")
 
 if __name__ == "__main__":
     main()
