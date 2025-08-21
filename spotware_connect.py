@@ -1,7 +1,6 @@
 # spotware_connect.py
 import logging
 from twisted.internet import reactor, defer
-# FIX 1: Імпортуємо TcpProtocol напряму, як вказано в __init__.py
 from ctrader_open_api import Client as SpotwareClientBase, TcpProtocol, Protobuf
 from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import ProtoMessage
 from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOAPayloadType
@@ -9,8 +8,8 @@ from ctrader_open_api.messages.OpenApiMessages_pb2 import (
     ProtoOAApplicationAuthReq, ProtoOAAccountAuthReq,
     ProtoOASymbolsListReq, ProtoOASymbolsListRes, ProtoOAErrorRes
 )
-# FIX 2: Імпортуємо функції конфігурації, як це було зроблено у вас
-from config import get_ct_client_id, get_ct_client_secret, get_ctrader_access_token, get_demo_account_id
+# FIX: Import global variables instead of functions
+from config import CT_CLIENT_ID, CT_CLIENT_SECRET, CTRADER_ACCESS_TOKEN, DEMO_ACCOUNT_ID
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +25,6 @@ class EventEmitter:
     def emit(self, event, *args, **kwargs):
         if event in self._events:
             for func in self._events[event]:
-                # Використовуємо callFromThread для безпечної взаємодії з Twisted
                 reactor.callFromThread(func, *args, **kwargs)
 
 class SpotwareClient(EventEmitter):
@@ -34,9 +32,8 @@ class SpotwareClient(EventEmitter):
         super().__init__()
         self.host = "demo.ctraderapi.com"
         self.port = 5035
-        self._is_ready = defer.Deferred() # Deferred для відстеження готовності
+        self._is_ready = defer.Deferred()
         
-        # FIX 3: Правильна ініціалізація клієнта згідно з вашим client.py
         self._client = SpotwareClientBase(self.host, self.port, TcpProtocol)
         self._client.setConnectedCallback(self._on_connected)
         self._client.setMessageReceivedCallback(self._on_message_received)
@@ -53,7 +50,8 @@ class SpotwareClient(EventEmitter):
 
     def _on_connected(self, client):
         logger.info("Встановлено з'єднання з cTrader API. Авторизація додатку...")
-        request = ProtoOAApplicationAuthReq(clientId=get_ct_client_id(), clientSecret=get_ct_client_secret())
+        # FIX: Use global variable
+        request = ProtoOAApplicationAuthReq(clientId=CT_CLIENT_ID, clientSecret=CT_CLIENT_SECRET)
         self.send(request).addErrback(lambda err: self.emit("error", f"Помилка авторизації додатку: {err.getErrorMessage()}"))
 
     def _on_disconnected(self, client, reason):
@@ -74,25 +72,25 @@ class SpotwareClient(EventEmitter):
         elif payload_type == ProtoOAPayloadType.PROTO_OA_SYMBOLS_LIST_RES:
             response = Protobuf.extract(message)
             logger.info("Отримано повний список символів.")
-            # Сигналізуємо, що клієнт готовий до роботи
             if not self._is_ready.called:
                 self._is_ready.callback(response.symbol)
         elif payload_type == ProtoOAPayloadType.PROTO_OA_ERROR_RES:
             response = Protobuf.extract(message)
             error_message = f"Помилка від cTrader: {response.errorCode} - {response.description}"
             logger.error(error_message)
-            # Якщо сталася помилка до готовності, провалюємо Deferred
             if not self._is_ready.called:
                 self._is_ready.errback(Exception(error_message))
             self.emit("error", error_message)
 
     def _authorize_account(self):
+        # FIX: Use global variables
         request = ProtoOAAccountAuthReq(
-            ctidTraderAccountId=get_demo_account_id(), 
-            accessToken=get_ctrader_access_token()
+            ctidTraderAccountId=DEMO_ACCOUNT_ID, 
+            accessToken=CTRADER_ACCESS_TOKEN
         )
         self.send(request).addErrback(lambda err: self.emit("error", f"Помилка авторизації рахунку: {err.getErrorMessage()}"))
 
     def _request_symbols(self):
-        request = ProtoOASymbolsListReq(ctidTraderAccountId=get_demo_account_id())
+        # FIX: Use global variable
+        request = ProtoOASymbolsListReq(ctidTraderAccountId=DEMO_ACCOUNT_ID)
         self.send(request).addErrback(lambda err: self.emit("error", f"Помилка запиту символів: {err.getErrorMessage()}"))
