@@ -41,14 +41,11 @@ class SpotwareConnect(EventEmitter):
         self._client.setConnectedCallback(self._on_connected)
         self._client.setMessageReceivedCallback(self._on_message_received)
         self._client.setDisconnectedCallback(self._on_disconnected)
-        self._client.factory.clientConnectionFailed = self.clientConnectionFailed
+        # Рядок, що викликав помилку, видалено. Обробка помилок підключення буде
+        # здійснюватися через стандартний механізм перепідключення Twisted.
 
     def start(self):
         self._client.startService()
-
-    def clientConnectionFailed(self, connector, reason):
-        logger.error(f"Connection Failed. Reason: {reason.getErrorMessage()}")
-        self.emit("error", f"Connection Failed: {reason.getErrorMessage()}")
 
     def send(self, message, client_msg_id=None):
         return self._client.send(message, clientMsgId=client_msg_id, responseTimeoutInSeconds=30)
@@ -80,7 +77,6 @@ class SpotwareConnect(EventEmitter):
         elif payload_type == ProtoOAPayloadType.PROTO_OA_SYMBOLS_LIST_RES:
             response = ProtoOASymbolsListRes()
             response.ParseFromString(message.payload)
-            # Емітуємо відповідь для обробки в main.py
             self.emit("symbolsLoaded", response)
         elif payload_type == ProtoOAPayloadType.PROTO_OA_ERROR_RES:
             response = ProtoOAErrorRes()
@@ -99,6 +95,4 @@ class SpotwareConnect(EventEmitter):
     def get_all_symbols(self):
         logger.info("Requesting symbol list...")
         request = ProtoOASymbolsListReq(ctidTraderAccountId=get_demo_account_id())
-        deferred = self.send(request)
-        # Повертаємо Deferred, щоб можна було додати обробники
-        return deferred
+        return self.send(request)
