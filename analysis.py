@@ -11,14 +11,12 @@ from db import add_signal_to_history
 
 logger = logging.getLogger(__name__)
 
-# Словник для перетворення рядків у об'єкти періодів
 PERIOD_MAP = {
     "15min": TrendbarPeriod.M15, "1h": TrendbarPeriod.H1,
     "4h": TrendbarPeriod.H4, "1day": TrendbarPeriod.D1
 }
 
 def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: int) -> Deferred:
-    """Запитує та обробляє історичні дані, повертаючи DataFrame."""
     d = Deferred()
     symbol_details = symbol_cache.get(norm_pair)
 
@@ -47,7 +45,6 @@ def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: in
         if not response.trendbar:
             return pd.DataFrame()
 
-        # Використовуємо 'digits' для правильного розрахунку ціни
         divisor = 10**symbol_details.digits
         bars = [{
             'ts': pd.to_datetime(bar.utcTimestampInMinutes * 60, unit='s', utc=True),
@@ -70,7 +67,6 @@ def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: in
     return d
 
 def _calculate_core_signal(df, daily_df):
-    """Розраховує сигнал на основі індикаторів та повертає результат."""
     df.ta.rsi(close=df['close'], length=14, append=True, col_names=('RSI',))
     df.ta.kama(close=df['close'], length=14, append=True, col_names=('KAMA',))
     last = df.iloc[-1]
@@ -96,7 +92,6 @@ def _calculate_core_signal(df, daily_df):
     }
 
 def _generate_verdict(score):
-    """Генерує текстовий вердикт на основі балів."""
     if score > 65: return "⬆️ Сильний сигнал: КУПУВАТИ"
     if score > 55: return "↗️ Помірний сигнал: КУПУВАТИ"
     if score < 35: return "⬇️ Сильний сигнал: ПРОДАВАТИ"
@@ -104,8 +99,6 @@ def _generate_verdict(score):
     return "🟡 НЕЙТРАЛЬНА СИТУАЦІЯ"
 
 def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int) -> Deferred:
-    """Головна функція: запускає паралельне завантаження даних та їх аналіз."""
-    
     def on_data_ready(results):
         try:
             success1, df = results[0]
@@ -132,9 +125,9 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int
             logger.exception(f"Критична помилка під час фінального аналізу {symbol}: {e}")
             return {"error": "Внутрішня помилка обробки даних."}
 
-    # Паралельно запитуємо дані за 15 хв та 1 день
-    d1 = get_market_data(client, symbol_cache, symbol, '15min', 100)
-    d2 = get_market_data(client, symbol_cache, symbol, '1day', 100)
+    # КЛЮЧОВА ЗМІНА: Запитуємо 50 свічок замість 100
+    d1 = get_market_data(client, symbol_cache, symbol, '15min', 50)
+    d2 = get_market_data(client, symbol_cache, symbol, '1day', 50)
     
     d_list = DeferredList([d1, d2], consumeErrors=True)
     d_list.addCallback(on_data_ready)
