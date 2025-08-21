@@ -3,6 +3,7 @@ import logging
 import pandas as pd
 import pandas_ta as ta
 import numpy as np
+import time
 from twisted.internet.defer import Deferred, DeferredList
 
 from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOAGetTrendbarsReq, ProtoOAGetTrendbarsRes
@@ -17,6 +18,7 @@ PERIOD_MAP = {
 }
 
 def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: int) -> Deferred:
+    """Запитує та обробляє історичні дані, повертаючи DataFrame."""
     d = Deferred()
     symbol_details = symbol_cache.get(norm_pair)
 
@@ -27,14 +29,22 @@ def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: in
     if not tf_proto:
         return Deferred.fail(Exception(f"Непідтримуваний таймфрейм: {period}"))
 
+    # --- КЛЮЧОВЕ ВИПРАВЛЕННЯ: Повертаємось до запиту за проміжком часу ---
+    now = int(time.time() * 1000)
+    seconds_per_bar = {'15min': 900, '1h': 3600, '4h': 14400, '1day': 86400}
+    # Розраховуємо початковий час на основі кількості та періоду
+    from_ts = now - (count * seconds_per_bar[period] * 1000)
+
     request = ProtoOAGetTrendbarsReq(
         ctidTraderAccountId=client._client.account_id,
         symbolId=symbol_details.symbolId,
         period=tf_proto,
-        count=count
+        fromTimestamp=from_ts,
+        toTimestamp=now
     )
+    # --- КІНЕЦЬ ВИПРАВЛЕННЯ ---
 
-    logger.info(f"Роблю запит на {count} свічок для {norm_pair} ({period})...")
+    logger.info(f"Роблю запит на свічки для {norm_pair} ({period}) з {pd.to_datetime(from_ts, unit='ms')}...")
     deferred = client.send(request, timeout=25)
 
     def process_response(message):
@@ -84,8 +94,7 @@ def _calculate_core_signal(df, daily_df):
     elif last['RSI'] > 70: score -= 20; reasons.append("RSI в зоні перекупленості (>70)")
     
     return {
-        "score": int(np.clip(score, 0, 100)),
-        "reasons": reasons,
+        "score": int(np.clip(score, 0, 100)), "reasons": reasons,
         "support": float(support) if pd.notna(support) else None,
         "resistance": float(resistance) if pd.notna(resistance) else None,
         "price": current_price
@@ -112,8 +121,8 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int
             verdict = _generate_verdict(analysis['score'])
 
             add_signal_to_history({
-                'user_id': user_id, 'pair': symbol, 
-                'price': analysis['price'], 'bull_percentage': analysis['score']
+                'user_id': user_id, 'pair': symbol, 'price': analysis['price'], 
+                'bull_percentage': analysis['score']
             })
             
             return {
@@ -125,9 +134,9 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int
             logger.exception(f"Критична помилка під час фінального аналізу {symbol}: {e}")
             return {"error": "Внутрішня помилка обробки даних."}
 
-    # КЛЮЧОВА ЗМІНА: Запитуємо 50 свічок замість 100
-    d1 = get_market_data(client, symbol_cache, symbol, '15min', 50)
-    d2 = get_market_data(client, symbol_cache, symbol, '1day', 50)
+    # Запитуємо 100 свічок, але тепер за допомогою проміжку часу
+    d1 = get_market_data(client, symbol_cache, symbol, '15min', 100)
+    d2 = get_market_data(client, symbol_cache, symbol, '1day', 100)
     
     d_list = DeferredList([d1, d2], consumeErrors=True)
     d_list.addCallback(on_data_ready)
