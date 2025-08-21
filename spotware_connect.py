@@ -60,24 +60,39 @@ class SpotwareConnect(EventEmitter):
     def _on_message_received(self, client, message: ProtoMessage):
         payload_type = message.payloadType
         if payload_type == ProtoOAPayloadType.PROTO_OA_APPLICATION_AUTH_RES:
-            logger.info("Application authorized. Authorizing account...")
+            logger.info("Application authorized. Authorizing trading account...")
             self._authorize_account()
         elif payload_type == ProtoOAPayloadType.PROTO_OA_ACCOUNT_AUTH_RES:
             response = ProtoOAAccountAuthRes()
             response.ParseFromString(message.payload)
             self._client.account_id = response.ctidTraderAccountId
             self.is_authorized = True
-            logger.info(f"Account {self._client.account_id} authorized.")
+            logger.info(f"✅ Account {self._client.account_id} authorized successfully.")
             self.emit("ready")
         elif payload_type == ProtoOAPayloadType.PROTO_OA_ERROR_RES:
             response = ProtoOAErrorRes()
             response.ParseFromString(message.payload)
-            logger.error(f"cTrader API Error: {response.errorCode} - {response.description}")
+            # Зробимо помилку більш помітною
+            logger.error("==================== CTrader API Error ====================")
+            logger.error(f"Error Code: {response.errorCode}")
+            logger.error(f"Description: {response.description}")
+            if hasattr(response, 'maintenanceEndTimestamp') and response.maintenanceEndTimestamp:
+                 logger.error(f"Maintenance End: {response.maintenanceEndTimestamp}")
+            logger.error("=========================================================")
 
     def _authorize_account(self):
+        account_id = get_demo_account_id()
+        access_token = get_ctrader_access_token()
+        
+        # ДОДАНО ДЕТАЛЬНЕ ЛОГУВАННЯ
+        logger.info(f"Attempting to authorize account ID: {account_id}...")
+        if not account_id or not access_token:
+            logger.error("CRITICAL: Demo Account ID or Access Token is missing from config. Please check environment variables.")
+            return
+
         request = ProtoOAAccountAuthReq(
-            ctidTraderAccountId=get_demo_account_id(),
-            accessToken=get_ctrader_access_token()
+            ctidTraderAccountId=account_id,
+            accessToken=access_token
         )
         self.send(request)
 
