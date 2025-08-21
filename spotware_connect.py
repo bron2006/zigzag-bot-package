@@ -8,35 +8,29 @@ from ctrader_open_api.messages.OpenApiMessages_pb2 import (
     ProtoOAApplicationAuthReq, ProtoOAAccountAuthReq,
     ProtoOASymbolsListReq, ProtoOASymbolsListRes
 )
-# FIX: Import global variables from config
-from config import CTRADER_ACCESS_TOKEN, DEMO_ACCOUNT_ID
+# FIX: Імпортуємо глобальні змінні
+from config import CT_CLIENT_ID, CT_CLIENT_SECRET, CTRADER_ACCESS_TOKEN, DEMO_ACCOUNT_ID
 
 logger = logging.getLogger(__name__)
 
 class EventEmitter:
+    # ... (код EventEmitter залишається без змін) ...
     def __init__(self):
         self._events = {}
-
     def on(self, event, func):
-        if event not in self._events:
-            self._events[event] = []
+        if event not in self._events: self._events[event] = []
         self._events[event].append(func)
-
     def emit(self, event, *args, **kwargs):
         if event in self._events:
-            for func in self._events[event]:
-                reactor.callFromThread(func, *args, **kwargs)
+            for func in self._events[event]: reactor.callFromThread(func, *args, **kwargs)
 
 class SpotwareClient(EventEmitter):
-    # FIX: The constructor now accepts client_id and client_secret
-    def __init__(self, client_id, client_secret):
+    # FIX: Конструктор не приймає аргументів, він бере їх з конфігу
+    def __init__(self):
         super().__init__()
         self.host = "demo.ctraderapi.com"
         self.port = 5035
-        self._client_id = client_id
-        self._client_secret = client_secret
         self._is_ready = defer.Deferred()
-        
         self._client = SpotwareClientBase(self.host, self.port, TcpProtocol)
         self._client.setConnectedCallback(self._on_connected)
         self._client.setMessageReceivedCallback(self._on_message_received)
@@ -53,8 +47,7 @@ class SpotwareClient(EventEmitter):
 
     def _on_connected(self, client):
         logger.info("Встановлено з'єднання з cTrader API. Авторизація додатку...")
-        # FIX: Use the arguments passed to the constructor
-        request = ProtoOAApplicationAuthReq(clientId=self._client_id, clientSecret=self._client_secret)
+        request = ProtoOAApplicationAuthReq(clientId=CT_CLIENT_ID, clientSecret=CT_CLIENT_SECRET)
         self.send(request).addErrback(lambda err: self.emit("error", f"Помилка авторизації додатку: {err.getErrorMessage()}"))
 
     def _on_disconnected(self, client, reason):
@@ -64,7 +57,6 @@ class SpotwareClient(EventEmitter):
 
     def _on_message_received(self, client, message: ProtoMessage):
         payload_type = message.payloadType
-        
         if payload_type == ProtoOAPayloadType.PROTO_OA_APPLICATION_AUTH_RES:
             logger.info("Додаток успішно авторизовано. Авторизація торгового рахунку...")
             self._authorize_account()
@@ -81,15 +73,11 @@ class SpotwareClient(EventEmitter):
             response = Protobuf.extract(message)
             error_message = f"Помилка від cTrader: {response.errorCode} - {response.description}"
             logger.error(error_message)
-            if not self._is_ready.called:
-                self._is_ready.errback(Exception(error_message))
+            if not self._is_ready.called: self._is_ready.errback(Exception(error_message))
             self.emit("error", error_message)
 
     def _authorize_account(self):
-        request = ProtoOAAccountAuthReq(
-            ctidTraderAccountId=DEMO_ACCOUNT_ID, 
-            accessToken=CTRADER_ACCESS_TOKEN
-        )
+        request = ProtoOAAccountAuthReq(ctidTraderAccountId=DEMO_ACCOUNT_ID, accessToken=CTRADER_ACCESS_TOKEN)
         self.send(request).addErrback(lambda err: self.emit("error", f"Помилка авторизації рахунку: {err.getErrorMessage()}"))
 
     def _request_symbols(self):
