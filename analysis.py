@@ -1,86 +1,141 @@
 # analysis.py
 import logging
-from twisted.internet.defer import Deferred
-from twisted.internet import reactor
+import pandas as pd
+import pandas_ta as ta
+import numpy as np
+from twisted.internet.defer import Deferred, DeferredList
+
 from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOAGetTrendbarsReq, ProtoOAGetTrendbarsRes
-from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOATrendbarPeriod
+from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOATrendbarPeriod as TrendbarPeriod
+from db import add_signal_to_history
 
 logger = logging.getLogger(__name__)
 
+# Словник для перетворення рядків у об'єкти періодів
 PERIOD_MAP = {
-    '1min': ProtoOATrendbarPeriod.M1, '5min': ProtoOATrendbarPeriod.M5,
-    '15min': ProtoOATrendbarPeriod.M15, '1hour': ProtoOATrendbarPeriod.H1,
-    '4hour': ProtoOATrendbarPeriod.H4, '1day': ProtoOATrendbarPeriod.D1
+    "15min": TrendbarPeriod.M15, "1h": TrendbarPeriod.H1,
+    "4h": TrendbarPeriod.H4, "1day": TrendbarPeriod.D1
 }
 
 def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: int) -> Deferred:
+    """Запитує та обробляє історичні дані, повертаючи DataFrame."""
     d = Deferred()
     symbol_details = symbol_cache.get(norm_pair)
 
     if not symbol_details:
-        return Deferred.fail(Exception(f"Деталі для {norm_pair} не знайдено в кеші."))
+        return Deferred.fail(Exception(f"Пара '{norm_pair}' не знайдена в кеші."))
 
-    trendbar_period = PERIOD_MAP.get(period)
-    if not trendbar_period:
-        return Deferred.fail(Exception(f"Невідомий період: {period}"))
-    
-    # ДОДАНО ЛОГУВАННЯ
-    logger.info(f"Знайдено деталі для {norm_pair}. ID символу: {symbol_details.symbolId}")
+    tf_proto = PERIOD_MAP.get(period)
+    if not tf_proto:
+        return Deferred.fail(Exception(f"Непідтримуваний таймфрейм: {period}"))
 
     request = ProtoOAGetTrendbarsReq(
         ctidTraderAccountId=client._client.account_id,
         symbolId=symbol_details.symbolId,
-        period=trendbar_period,
+        period=tf_proto,
         count=count
     )
 
-    logger.info(f"Роблю запит на отримання {count} свічок для {norm_pair}...")
-    deferred = client.send(request, timeout=15) # Зменшимо таймаут для швидшої реакції
-    
-    def on_success(message):
+    logger.info(f"Роблю запит на {count} свічок для {norm_pair} ({period})...")
+    deferred = client.send(request, timeout=25)
+
+    def process_response(message):
         response = ProtoOAGetTrendbarsRes()
         response.ParseFromString(message.payload)
-        logger.info(f"✅ Отримано {len(response.trendbar)} свічок для {norm_pair}.")
-        d.callback(response.trendbar)
+        logger.info(f"✅ Отримано {len(response.trendbar)} свічок для {norm_pair} ({period}).")
+        
+        if not response.trendbar:
+            return pd.DataFrame()
+
+        # Використовуємо 'digits' для правильного розрахунку ціни
+        divisor = 10**symbol_details.digits
+        bars = [{
+            'ts': pd.to_datetime(bar.utcTimestampInMinutes * 60, unit='s', utc=True),
+            'open': bar.open / divisor,
+            'high': bar.high / divisor,
+            'low': bar.low / divisor,
+            'close': bar.close / divisor,
+            'volume': bar.volume
+        } for bar in response.trendbar]
+        
+        df = pd.DataFrame(bars)
+        d.callback(df.sort_values(by='ts').reset_index(drop=True))
 
     def on_error(failure):
-        # failure.getErrorMessage() може не існувати, тому робимо перевірку
         error_text = failure.getErrorMessage() if hasattr(failure, 'getErrorMessage') else str(failure)
-        logger.error(f"❌ Помилка отримання свічок для {norm_pair}: {error_text}")
+        logger.error(f"❌ Помилка отримання даних для {norm_pair} ({period}): {error_text}")
         d.errback(failure)
-        
-    deferred.addCallbacks(on_success, on_error)
+
+    deferred.addCallbacks(process_response, on_error)
     return d
+
+def _calculate_core_signal(df, daily_df):
+    """Розраховує сигнал на основі індикаторів та повертає результат."""
+    df.ta.rsi(close=df['close'], length=14, append=True, col_names=('RSI',))
+    df.ta.kama(close=df['close'], length=14, append=True, col_names=('KAMA',))
+    last = df.iloc[-1]
+    current_price = float(last['close'])
+    
+    lows = daily_df['low'].tail(30)
+    highs = daily_df['high'].tail(30)
+    support = lows[lows < current_price].max()
+    resistance = highs[highs > current_price].min()
+
+    score, reasons = 50, []
+    if current_price > last['KAMA']: score += 15; reasons.append("Ціна вище лінії KAMA(14)")
+    else: score -= 15; reasons.append("Ціна нижче лінії KAMA(14)")
+    if last['RSI'] < 30: score += 20; reasons.append("RSI в зоні перепроданості (<30)")
+    elif last['RSI'] > 70: score -= 20; reasons.append("RSI в зоні перекупленості (>70)")
+    
+    return {
+        "score": int(np.clip(score, 0, 100)),
+        "reasons": reasons,
+        "support": float(support) if pd.notna(support) else None,
+        "resistance": float(resistance) if pd.notna(resistance) else None,
+        "price": current_price
+    }
+
+def _generate_verdict(score):
+    """Генерує текстовий вердикт на основі балів."""
+    if score > 65: return "⬆️ Сильний сигнал: КУПУВАТИ"
+    if score > 55: return "↗️ Помірний сигнал: КУПУВАТИ"
+    if score < 35: return "⬇️ Сильний сигнал: ПРОДАВАТИ"
+    if score < 45: return "↘️ Помірний сигнал: ПРОДАВАТИ"
+    return "🟡 НЕЙТРАЛЬНА СИТУАЦІЯ"
 
 def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int) -> Deferred:
-    d = Deferred()
-    deferred_bars = get_market_data(client, symbol_cache, symbol, '15min', 100)
-
-    def on_bars_received(bars):
+    """Головна функція: запускає паралельне завантаження даних та їх аналіз."""
+    
+    def on_data_ready(results):
         try:
-            if not bars:
-                raise Exception("Отримано порожній список свічок.")
+            success1, df = results[0]
+            success2, daily_df = results[1]
 
-            last_bar = bars[-1]
-            price_close = last_bar.close / 100000.0
-            price_open = last_bar.open / 100000.0
-            price_low = last_bar.low / 100000.0
-            price_high = last_bar.high / 100000.0
+            if not (success1 and success2) or df.empty or len(df) < 25 or daily_df.empty:
+                logger.warning(f"Недостатньо даних для аналізу {symbol}.")
+                return {"error": "Недостатньо історичних даних для аналізу."}
+
+            analysis = _calculate_core_signal(df, daily_df)
+            verdict = _generate_verdict(analysis['score'])
+
+            add_signal_to_history({
+                'user_id': user_id, 'pair': symbol, 
+                'price': analysis['price'], 'bull_percentage': analysis['score']
+            })
             
-            verdict = "🟢 Рекомендовано Купувати" if price_close > price_open else "🔴 Рекомендовано Продавати"
-            
-            result = {
-                "pair": symbol, "price": price_close, "verdict_text": verdict,
-                "support": price_low, "resistance": price_high,
-                "reasons": [f"Аналіз останньої свічки на періоді M15."]
+            return {
+                "pair": symbol, "price": analysis['price'], "verdict_text": verdict,
+                "reasons": analysis['reasons'], "support": analysis['support'],
+                "resistance": analysis['resistance']
             }
-            d.callback(result)
         except Exception as e:
-            logger.error(f"Помилка під час аналізу свічок для {symbol}: {e}")
-            d.errback(e)
+            logger.exception(f"Критична помилка під час фінального аналізу {symbol}: {e}")
+            return {"error": "Внутрішня помилка обробки даних."}
 
-    def on_bars_error(failure):
-        d.errback(failure)
-
-    deferred_bars.addCallbacks(on_bars_received, on_bars_error)
-    return d
+    # Паралельно запитуємо дані за 15 хв та 1 день
+    d1 = get_market_data(client, symbol_cache, symbol, '15min', 100)
+    d2 = get_market_data(client, symbol_cache, symbol, '1day', 100)
+    
+    d_list = DeferredList([d1, d2], consumeErrors=True)
+    d_list.addCallback(on_data_ready)
+    return d_list
