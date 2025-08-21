@@ -1,38 +1,55 @@
 # config.py
 import os
 
-# cTrader / Spotware
-CT_CLIENT_ID = os.environ.get("CT_CLIENT_ID")
-CT_CLIENT_SECRET = os.environ.get("CT_CLIENT_SECRET")
-CTRADER_ACCESS_TOKEN = os.environ.get("CTRADER_ACCESS_TOKEN")
-CTRADER_REFRESH_TOKEN = os.environ.get("CTRADER_REFRESH_TOKEN")
-DEMO_ACCOUNT_ID = os.environ.get("DEMO_ACCOUNT_ID")
 
-def get_demo_account_id():
-    """Повертає DEMO_ACCOUNT_ID як int якщо можливо, інакше None."""
+def _getenv(name: str, default=None, required: bool = False):
+    """Get env var; if required and missing → raise."""
+    value = os.getenv(name, default)
+    if required and (value is None or value == ""):
+        raise RuntimeError(f"Missing required env var: {name}")
+    return value
+
+
+# ---------- Base ----------
+PORT = int(_getenv("PORT", "8080"))
+FLY_APP_NAME = _getenv("FLY_APP_NAME")
+
+# ---------- Telegram ----------
+TELEGRAM_BOT_TOKEN = _getenv("TELEGRAM_BOT_TOKEN", required=True)
+CHAT_ID = _getenv("CHAT_ID")
+MY_TELEGRAM_ID = _getenv("MY_TELEGRAM_ID")
+WEBHOOK_SECRET = _getenv("WEBHOOK_SECRET", "dev")
+
+# ---------- cTrader ----------
+CT_CLIENT_ID = _getenv("CT_CLIENT_ID")
+CT_CLIENT_SECRET = _getenv("CT_CLIENT_SECRET")
+CTRADER_ACCESS_TOKEN = _getenv("CTRADER_ACCESS_TOKEN")
+CTRADER_REFRESH_TOKEN = _getenv("CTRADER_REFRESH_TOKEN")
+DEMO_ACCOUNT_ID_ENV = _getenv("DEMO_ACCOUNT_ID")  # raw value from env
+
+def get_demo_account_id() -> int:
+    """
+    Backward-compatible getter expected by analysis.py.
+    Parses DEMO_ACCOUNT_ID to int and errors if missing/invalid.
+    """
+    if not DEMO_ACCOUNT_ID_ENV:
+        raise RuntimeError("Missing required env var: DEMO_ACCOUNT_ID")
     try:
-        return int(DEMO_ACCOUNT_ID)
-    except (TypeError, ValueError):
-        return None
+        return int(str(DEMO_ACCOUNT_ID_ENV).strip())
+    except ValueError as e:
+        raise RuntimeError("DEMO_ACCOUNT_ID must be an integer") from e
 
-# Telegram
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.environ.get("CHAT_ID") or os.environ.get("MY_TELEGRAM_ID")
 
-# API ключі інших сервісів
-FINNHUB_API_KEY = os.environ.get("FINNHUB_API_KEY")
-TWELVEDATA_API_KEY = os.environ.get("TWELVEDATA_API_KEY")
+# ---------- Market Data ----------
+FINNHUB_API_KEY = _getenv("FINNHUB_API_KEY")
+TWELVEDATA_API_KEY = _getenv("TWELVEDATA_API_KEY")
 
-# Fly.io app
-FLY_APP_NAME = os.environ.get("FLY_APP_NAME")
-WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET")
+# ---------- Legacy ----------
+TOKEN = _getenv("TOKEN")
 
-# Порт (для Klein/Flask)
-PORT = int(os.environ.get("PORT", 8080))
+# ---------- DB ----------
+DB_NAME = _getenv("DB_NAME", "/data/zigzag.sqlite3")
 
-# Приклад форекс-сесій
-FOREX_SESSIONS = {
-    "Asia": ["EUR/USD", "GBP/USD", "USD/JPY"],
-    "Europe": ["EUR/USD", "GBP/USD", "EUR/GBP"],
-    "America": ["USD/CHF", "USD/CAD", "EUR/USD"],
-}
+def get_db_name() -> str:
+    """Optional getter for modules that prefer a function."""
+    return DB_NAME
