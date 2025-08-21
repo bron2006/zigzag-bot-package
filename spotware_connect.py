@@ -1,85 +1,83 @@
-# spotware_connect.py
 import logging
-from twisted.internet import reactor, defer
-from ctrader_open_api import Client as SpotwareClientBase, TcpProtocol, Protobuf
-from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import ProtoMessage
-from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOAPayloadType
-from ctrader_open_api.messages.OpenApiMessages_pb2 import (
-    ProtoOAApplicationAuthReq, ProtoOAAccountAuthReq,
-    ProtoOASymbolsListReq, ProtoOASymbolsListRes
-)
-# FIX: Імпортуємо глобальні змінні
+from ctrader_open_api.client import Client
+from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import ProtoOAPayloadType
+from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOAApplicationAuthReq, ProtoOAAccountAuthReq, ProtoOASymbolsListReq
 from config import CT_CLIENT_ID, CT_CLIENT_SECRET, CTRADER_ACCESS_TOKEN, DEMO_ACCOUNT_ID
 
+# Налаштування логування
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
-class EventEmitter:
-    # ... (код EventEmitter залишається без змін) ...
-    def __init__(self):
-        self._events = {}
-    def on(self, event, func):
-        if event not in self._events: self._events[event] = []
-        self._events[event].append(func)
-    def emit(self, event, *args, **kwargs):
-        if event in self._events:
-            for func in self._events[event]: reactor.callFromThread(func, *args, **kwargs)
+class SpotwareConnect:
+    def __init__(self, reactor, client_endpoint, factory, client_id, client_secret, ctid, access_token):
+        self.reactor = reactor
+        self._client_endpoint = client_endpoint
+        self._factory = factory
+        self._client_id = client_id
+        self._client_secret = client_secret
+        self._ctid = ctid
+        self._access_token = access_token
+        self._client = None
+        self._is_authorized = False
 
-class SpotwareClient(EventEmitter):
-    # FIX: Конструктор не приймає аргументів, він бере їх з конфігу
-    def __init__(self):
-        super().__init__()
-        self.host = "demo.ctraderapi.com"
-        self.port = 5035
-        self._is_ready = defer.Deferred()
-        self._client = SpotwareClientBase(self.host, self.port, TcpProtocol)
-        self._client.setConnectedCallback(self._on_connected)
-        self._client.setMessageReceivedCallback(self._on_message_received)
-        self._client.setDisconnectedCallback(self._on_disconnected)
+        self._factory.setConnectedCallback(self._connected_callback)
+        self._factory.setDisconnectedCallback(self._disconnected_callback)
+        self._factory.setMessageReceivedCallback(self._message_received_callback)
 
-    def isReady(self):
-        return self._is_ready
+    def start(self):
+        """Запускає процес підключення."""
+        self._client_endpoint.connect(self._factory)
 
-    def connect(self):
-        self._client.startService()
-
-    def send(self, message, client_msg_id=None):
-        return self._client.send(message, clientMsgId=client_msg_id, responseTimeoutInSeconds=30)
-
-    def _on_connected(self, client):
+    def _connected_callback(self, client: Client):
+        """Викликається після успішного встановлення з'єднання."""
+        self._client = client
         logger.info("Встановлено з'єднання з cTrader API. Авторизація додатку...")
-        request = ProtoOAApplicationAuthReq(clientId=CT_CLIENT_ID, clientSecret=CT_CLIENT_SECRET)
-        self.send(request).addErrback(lambda err: self.emit("error", f"Помилка авторизації додатку: {err.getErrorMessage()}"))
+        self._authorize_application()
 
-    def _on_disconnected(self, client, reason):
-        error_msg = reason.getErrorMessage()
-        logger.warning(f"Відключено від cTrader API. Причина: {error_msg}")
-        self.emit("error", f"Відключено: {error_msg}")
+    def _disconnected_callback(self, client: Client, reason):
+        """Викликається при відключенні."""
+        logger.warning(f"Відключено від cTrader API. Причина: {reason}")
+        self._is_authorized = False
 
-    def _on_message_received(self, client, message: ProtoMessage):
-        payload_type = message.payloadType
-        if payload_type == ProtoOAPayloadType.PROTO_OA_APPLICATION_AUTH_RES:
+    def _message_received_callback(self, client: Client, message):
+        """Обробляє вхідні повідомлення від сервера."""
+        if message.payloadType == ProtoOAPayloadType.PROTO_OA_APPLICATION_AUTH_RES:
             logger.info("Додаток успішно авторизовано. Авторизація торгового рахунку...")
             self._authorize_account()
-        elif payload_type == ProtoOAPayloadType.PROTO_OA_ACCOUNT_AUTH_RES:
-            response = Protobuf.extract(message)
-            logger.info(f"Торговий рахунок {response.ctidTraderAccountId} успішно авторизовано.")
-            self._request_symbols()
-        elif payload_type == ProtoOAPayloadType.PROTO_OA_SYMBOLS_LIST_RES:
-            response = Protobuf.extract(message)
+
+        elif message.payloadType == ProtoOAPayloadType.PROTO_OA_ACCOUNT_AUTH_RES:
+            logger.info(f"Торговий рахунок {self._ctid} успішно авторизовано.")
+            self._is_authorized = True
+            self._get_all_symbols()
+
+        elif message.payloadType == ProtoOAPayloadType.PROTO_OA_SYMBOLS_LIST_RES:
             logger.info("Отримано повний список символів.")
-            if not self._is_ready.called:
-                self._is_ready.callback(response.symbol)
-        elif payload_type == ProtoOAPayloadType.PROTO_OA_ERROR_RES:
-            response = Protobuf.extract(message)
-            error_message = f"Помилка від cTrader: {response.errorCode} - {response.description}"
-            logger.error(error_message)
-            if not self._is_ready.called: self._is_ready.errback(Exception(error_message))
-            self.emit("error", error_message)
+            symbols = message.payload.symbol
+            logger.info(f"Завантажено {len(symbols)} символів. Ініціалізую кеш...")
+            # Тут буде подальша логіка обробки символів
+
+        elif message.payloadType == ProtoOAPayloadType.PROTO_OA_ERROR_RES:
+            logger.error(f"Помилка від API: {message.payload.description}. Код: {message.payload.errorCode}")
+
+    def _authorize_application(self):
+        """Надсилає запит на авторизацію додатку."""
+        request = ProtoOAApplicationAuthReq()
+        request.clientId = self._client_id
+        request.clientSecret = self._client_secret
+        self._client.send(request)
 
     def _authorize_account(self):
-        request = ProtoOAAccountAuthReq(ctidTraderAccountId=DEMO_ACCOUNT_ID, accessToken=CTRADER_ACCESS_TOKEN)
-        self.send(request).addErrback(lambda err: self.emit("error", f"Помилка авторизації рахунку: {err.getErrorMessage()}"))
+        """Надсилає запит на авторизацію торгового рахунку."""
+        request = ProtoOAAccountAuthReq()
+        request.ctidTraderAccountId = self._ctid
+        request.accessToken = self._access_token
+        self._client.send(request)
 
-    def _request_symbols(self):
-        request = ProtoOASymbolsListReq(ctidTraderAccountId=DEMO_ACCOUNT_ID)
-        self.send(request).addErrback(lambda err: self.emit("error", f"Помилка запиту символів: {err.getErrorMessage()}"))
+    def _get_all_symbols(self):
+        """Запитує список всіх доступних символів."""
+        request = ProtoOASymbolsListReq()
+        request.ctidTraderAccountId = self._ctid
+        self._client.send(request)
