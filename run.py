@@ -1,27 +1,36 @@
+# run.py
 import os
+import asyncio
 import logging
-from twisted.internet import reactor
-from twisted.web.server import Site
-from twisted.web.wsgi import WSGIResource
+import threading
 
+# Імпорт після встановлення env/логів
 from main import app, start_ctrader_client
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+
+def _start_ctrader_bg():
+    """
+    Запускає start_ctrader_client у бекґраунді.
+    Працює і з sync, і з async реалізацією.
+    """
+    try:
+        result = start_ctrader_client()
+        if asyncio.iscoroutine(result):
+            asyncio.run(result)
+    except Exception:
+        logging.exception("start_ctrader_client failed")
+
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8080))
+    logging.basicConfig(
+        level=os.getenv("LOG_LEVEL", "INFO"),
+        format="%(asctime)s %(levelname)s %(message)s",
+    )
 
-    # Обгортаємо Klein app у WSGI ресурс Twisted
-    resource = WSGIResource(reactor, reactor.getThreadPool(), app.resource())
-    site = Site(resource)
+    # Стартуємо cTrader в окремому потоці, щоб не блокувати веб-сервер
+    threading.Thread(target=_start_ctrader_bg, daemon=True).start()
 
-    # Слухаємо порт
-    reactor.listenTCP(port, site)
-    logger.info(f"Klein веб-сервер запущено на порту {port}")
+    import uvicorn
 
-    # Запускаємо cTrader клієнт після старту реактора
-    reactor.callWhenRunning(start_ctrader_client)
-
-    # Стартуємо головний цикл
-    reactor.run()
+    port = int(os.getenv("PORT", "8080"))
+    uvicorn.run(app, host="0.0.0.0", port=port)
