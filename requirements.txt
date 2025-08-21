@@ -10,3 +10,5 @@ cachetools
 service-identity
 pyOpenSSL
 cryptography
+numpy
+ctrader-open-api-py
