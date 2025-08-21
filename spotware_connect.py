@@ -1,5 +1,5 @@
-import logging
 from twisted.internet import reactor
+from twisted.python import log  # <-- 1. Імпортуємо логгер Twisted
 from ctrader_open_api.client import Client as SpotwareClientBase
 from ctrader_open_api.tcpProtocol import TcpProtocol
 from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import ProtoMessage
@@ -9,12 +9,10 @@ from ctrader_open_api.messages.OpenApiMessages_pb2 import (
     ProtoOASymbolsListReq, ProtoOASymbolsListRes,
     ProtoOAErrorRes
 )
-# Правильний імпорт згідно з вашим бекапом
 from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOAPayloadType
-# Правильна логіка отримання конфігурації
 from config import get_ct_client_id, get_ct_client_secret, get_ctrader_access_token, get_demo_account_id
 
-logger = logging.getLogger(__name__)
+# Глобальний logger більше не потрібен
 
 class EventEmitter:
     def __init__(self):
@@ -28,7 +26,6 @@ class EventEmitter:
     def emit(self, event, *args, **kwargs):
         if event in self._events:
             for func in self._events[event]:
-                # Використовуємо reactor для безпечних викликів між потоками
                 reactor.callFromThread(func, *args, **kwargs)
 
 class SpotwareConnect(EventEmitter):
@@ -49,18 +46,17 @@ class SpotwareConnect(EventEmitter):
         self._client.startService()
 
     def send(self, message, client_msg_id=None):
-        # Використовуємо deferreds для обробки відповідей
         return self._client.send(message, clientMsgId=client_msg_id, responseTimeoutInSeconds=30)
 
     def _on_connected(self, client):
-        logger.info("Встановлено з'єднання з cTrader API. Авторизація додатку...")
+        log.msg("Встановлено з'єднання з cTrader API. Авторизація додатку...")
         request = ProtoOAApplicationAuthReq(clientId=self._client_id, clientSecret=self._client_secret)
         self.send(request)
 
     def _on_disconnected(self, client, reason):
         self._is_authorized = False
         error_msg = reason.getErrorMessage()
-        logger.warning(f"Відключено від cTrader API. Причина: {error_msg}")
+        log.msg(f"Відключено від cTrader API. Причина: {error_msg}")
         self.emit("error", f"Відключено: {error_msg}")
 
     def _on_message_received(self, client, message: ProtoMessage):
@@ -68,19 +64,19 @@ class SpotwareConnect(EventEmitter):
         
         if payload_type == ProtoOAPayloadType.PROTO_OA_APPLICATION_AUTH_RES:
             ProtoOAApplicationAuthRes().ParseFromString(message.payload)
-            logger.info("Додаток успішно авторизовано. Авторизація торгового рахунку...")
+            log.msg("Додаток успішно авторизовано. Авторизація торгового рахунку...")
             self._authorize_account()
         elif payload_type == ProtoOAPayloadType.PROTO_OA_ACCOUNT_AUTH_RES:
             response = ProtoOAAccountAuthRes()
             response.ParseFromString(message.payload)
-            logger.info(f"Торговий рахунок {response.ctidTraderAccountId} успішно авторизовано.")
+            log.msg(f"Торговий рахунок {response.ctidTraderAccountId} успішно авторизовано.")
             self._is_authorized = True
-            self.emit("ready") # Сигнал, що клієнт готовий до роботи
+            self.emit("ready")
         elif payload_type == ProtoOAPayloadType.PROTO_OA_ERROR_RES:
             response = ProtoOAErrorRes()
             response.ParseFromString(message.payload)
             error_message = f"Помилка від cTrader: {response.errorCode} - {response.description}"
-            logger.error(error_message)
+            log.msg(error_message) # <-- 2. Використовуємо log.msg
             self.emit("error", error_message)
 
     def _authorize_account(self):
@@ -91,6 +87,6 @@ class SpotwareConnect(EventEmitter):
         self.send(request)
 
     def get_all_symbols(self):
-        logger.info("Надсилаю запит на отримання списку символів...")
+        log.msg("Надсилаю запит на отримання списку символів...")
         request = ProtoOASymbolsListReq(ctidTraderAccountId=get_demo_account_id())
         return self.send(request)
