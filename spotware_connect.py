@@ -1,5 +1,6 @@
 import logging
 from twisted.internet import reactor
+from twisted.internet.defer import Deferred, TimeoutError
 from ctrader_open_api.client import Client as SpotwareClientBase
 from ctrader_open_api.tcpProtocol import TcpProtocol
 from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import ProtoMessage
@@ -39,13 +40,38 @@ class SpotwareConnect(EventEmitter):
         self._client.setConnectedCallback(self._on_connected)
         self._client.setMessageReceivedCallback(self._on_message_received)
         self._client.setDisconnectedCallback(self._on_disconnected)
-        self._client.account_id = None # Для зберігання ID рахунку
+        self._client.account_id = None
 
     def start(self):
         self._client.startService()
 
-    def send(self, message, client_msg_id=None):
-        return self._client.send(message, clientMsgId=client_msg_id, responseTimeoutInSeconds=30)
+    def send(self, message, client_msg_id=None, timeout=30):
+        """Відправляє повідомлення з обробкою таймауту."""
+        deferred = self._client.send(message, clientMsgId=client_msg_id)
+        
+        # Створюємо новий Deferred, який ми контролюємо
+        timeout_deferred = Deferred()
+        
+        # Встановлюємо таймаут
+        timeout_call = reactor.callLater(timeout, lambda: deferred.cancel() if not deferred.called else None)
+
+        def on_success(result):
+            if not timeout_call.called: timeout_call.cancel()
+            if not timeout_deferred.called: timeout_deferred.callback(result)
+
+        def on_error(failure):
+            if not timeout_call.called: timeout_call.cancel()
+            if not timeout_deferred.called:
+                # Створюємо більш інформативне повідомлення про помилку
+                if failure.check(TimeoutError):
+                    err_msg = f"Таймаут запиту ({timeout}s) для повідомлення типу {type(message).__name__}"
+                    logger.error(err_msg)
+                    timeout_deferred.errback(Exception(err_msg))
+                else:
+                    timeout_deferred.errback(failure)
+
+        deferred.addCallbacks(on_success, on_error)
+        return timeout_deferred
 
     def _on_connected(self, client):
         logger.info("Connection successful. Authorizing application...")
@@ -72,28 +98,19 @@ class SpotwareConnect(EventEmitter):
         elif payload_type == ProtoOAPayloadType.PROTO_OA_ERROR_RES:
             response = ProtoOAErrorRes()
             response.ParseFromString(message.payload)
-            # Зробимо помилку більш помітною
             logger.error("==================== CTrader API Error ====================")
             logger.error(f"Error Code: {response.errorCode}")
             logger.error(f"Description: {response.description}")
-            if hasattr(response, 'maintenanceEndTimestamp') and response.maintenanceEndTimestamp:
-                 logger.error(f"Maintenance End: {response.maintenanceEndTimestamp}")
             logger.error("=========================================================")
 
     def _authorize_account(self):
         account_id = get_demo_account_id()
         access_token = get_ctrader_access_token()
-        
-        # ДОДАНО ДЕТАЛЬНЕ ЛОГУВАННЯ
         logger.info(f"Attempting to authorize account ID: {account_id}...")
         if not account_id or not access_token:
-            logger.error("CRITICAL: Demo Account ID or Access Token is missing from config. Please check environment variables.")
+            logger.error("CRITICAL: Demo Account ID or Access Token is missing.")
             return
-
-        request = ProtoOAAccountAuthReq(
-            ctidTraderAccountId=account_id,
-            accessToken=access_token
-        )
+        request = ProtoOAAccountAuthReq(ctidTraderAccountId=account_id, accessToken=access_token)
         self.send(request)
 
     def get_all_symbols(self):
