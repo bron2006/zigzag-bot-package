@@ -1,5 +1,3 @@
-# requirements.txt
-
 # --- Web Framework ---
 klein
 
@@ -19,3 +17,6 @@ cryptography
 
 # --- Protobuf version specified by you ---
 protobuf==3.20.1
+
+# --- Protobuf compiler tools ---
+grpcio-tools
