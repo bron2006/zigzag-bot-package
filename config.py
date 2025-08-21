@@ -35,3 +35,11 @@ def get_demo_account_id() -> int:
 def get_fly_app_name() -> str:
     """Повертає назву додатку на Fly.io для побудови URL."""
     return os.getenv("FLY_APP_NAME")
+
+# --- Словник з валютними парами для меню ---
+FOREX_SESSIONS = {
+    "Європейська": ["EUR/USD", "GBP/USD", "USD/CHF", "EUR/GBP", "EUR/CHF"],
+    "Американська": ["USD/CAD", "USD/JPY", "GBP/JPY", "EUR/JPY", "CAD/JPY"],
+    "Азіатська": ["AUD/USD", "NZD/USD", "AUD/JPY", "NZD/JPY", "AUD/NZD"],
+    "Тихоокеанська": ["AUD/CAD", "AUD/CHF", "CAD/CHF", "GBP/AUD", "EUR/AUD"]
+}
