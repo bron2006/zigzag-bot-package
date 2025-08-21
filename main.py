@@ -1,15 +1,14 @@
 # main.py
-
 import logging
 from klein import Klein
 from twisted.internet import reactor
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackQueryHandler
 
-# 1. Імпортуємо класи та конфігурації
 from spotware_connect import SpotwareConnect
-import state  # Імпортуємо модуль стану як контейнер
+import state
 from config import TELEGRAM_BOT_TOKEN, get_ct_client_id, get_ct_client_secret
-from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOASymbolsListRes
+# <-- Імпортуємо правильний тип відповіді
+from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOAGetSymbolsRes
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -18,74 +17,58 @@ app = Klein()
 
 @app.route("/")
 def home(request):
-    """Сторінка для перевірки стану, яку бачить fly.io."""
-    if state.client and state.client.is_authorized:
-        status = "авторизований"
-    else:
-        status = "не авторизований"
+    status = "авторизований" if state.client and state.client.is_authorized else "не авторизований"
     return f"cTrader клієнт запущено, статус: {status}."
 
 def on_ctrader_ready():
-    """Викликається, коли клієнт cTrader готовий."""
-    logger.info("cTrader клієнт готовий. Завантажую символи...")
-    deferred = state.client.get_all_symbols()
+    """Викликається, коли клієнт cTrader готовий. Завантажує ПОВНІ символи."""
+    logger.info("cTrader клієнт готовий. Завантажую повний список символів...")
+    # <-- ВИКЛИКАЄМО НОВИЙ МЕТОД
+    deferred = state.client.get_all_symbols_full() 
     deferred.addCallbacks(on_symbols_loaded, on_symbols_error)
 
 def on_symbols_loaded(raw_message):
-    """Обробляє та зберігає список символів у глобальному стані."""
+    """Обробляє та зберігає ПОВНИЙ список символів у глобальному стані."""
     try:
-        symbols_response = ProtoOASymbolsListRes()
+        # <-- ВИКОРИСТОВУЄМО ПРАВИЛЬНИЙ ТИП ВІДПОВІДІ
+        symbols_response = ProtoOAGetSymbolsRes()
         symbols_response.ParseFromString(raw_message.payload)
+        
+        # Зберігаємо символи у глобальному кеші. Тепер це будуть повні ProtoOASymbol
         state.symbol_cache = {s.symbolName.replace("/", ""): s for s in symbols_response.symbol}
         state.SYMBOLS_LOADED = True
-        logger.info(f"Успішно завантажено та збережено {len(state.symbol_cache)} символів.")
+        logger.info(f"✅ Успішно завантажено та збережено {len(state.symbol_cache)} повних символів.")
     except Exception as e:
-        logger.error(f"Помилка обробки символів: {e}")
+        logger.error(f"Помилка обробки символів: {e}", exc_info=True)
 
 def on_symbols_error(failure):
-    """Обробляє помилку завантаження символів."""
     logger.error(f"Не вдалося завантажити символи: {failure.getErrorMessage()}")
 
 def setup_and_run():
-    """Налаштовує всі компоненти та запускає їх."""
-    # --- ЕТАП 1: Ініціалізація об'єктів ---
     logger.info("Ініціалізація компонентів...")
     if not TELEGRAM_BOT_TOKEN:
-        logger.error("TELEGRAM_BOT_TOKEN не знайдено!")
-        return
+        logger.error("TELEGRAM_BOT_TOKEN не знайдено!"); return
 
-    # Створюємо Updater та клієнт cTrader
     updater = Updater(token=TELEGRAM_BOT_TOKEN, use_context=True)
     client = SpotwareConnect(get_ct_client_id(), get_ct_client_secret())
-
-    # "Реєструємо" їх у глобальному стані
-    state.updater = updater
-    state.client = client
-
-    # --- ЕТАП 2: Підключення залежних модулів ---
-    # ТІЛЬКИ ТЕПЕР, коли state заповнений, імпортуємо UI
+    state.updater = updater; state.client = client
+    
     import telegram_ui
     logger.info("Модуль telegram_ui імпортовано.")
 
-    # --- ЕТАП 3: Налаштування та запуск ---
-    # Реєструємо обробники з telegram_ui
     dp = updater.dispatcher
     dp.add_handler(CommandHandler("start", telegram_ui.start))
     dp.add_handler(MessageHandler(Filters.text("МЕНЮ"), telegram_ui.menu))
-    # Важливо: цей обробник має бути останнім для текстових повідомлень
     dp.add_handler(MessageHandler(Filters.text & ~Filters.command, telegram_ui.reset_ui))
     dp.add_handler(CallbackQueryHandler(telegram_ui.button_handler))
     logger.info("Обробники Telegram зареєстровано.")
-
-    # Запускаємо Telegram бота
+    
     updater.start_polling()
     logger.info("Telegram bot запущено в режимі polling.")
 
-    # Налаштовуємо та запускаємо cTrader клієнт
     client.on("ready", on_ctrader_ready)
     client.start()
     logger.info("cTrader клієнт запущено.")
 
-# Запускаємо налаштування при старті реактора
 reactor.callWhenRunning(setup_and_run)
 logger.info("Налаштування програми завершено. Klein запускає reactor.")

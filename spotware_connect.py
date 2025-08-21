@@ -1,3 +1,4 @@
+# spotware_connect.py
 import logging
 from twisted.internet import reactor
 from twisted.internet.defer import Deferred, TimeoutError
@@ -7,7 +8,8 @@ from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import ProtoMessage
 from ctrader_open_api.messages.OpenApiMessages_pb2 import (
     ProtoOAApplicationAuthReq, ProtoOAApplicationAuthRes,
     ProtoOAAccountAuthReq, ProtoOAAccountAuthRes,
-    ProtoOASymbolsListReq, ProtoOASymbolsListRes,
+    ProtoOASymbolsListReq, # Залишаємо для сумісності, хоч і не використовуємо
+    ProtoOAGetSymbolsReq, ProtoOAGetSymbolsRes, # <-- Новий, правильний запит
     ProtoOAErrorRes
 )
 from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOAPayloadType
@@ -18,11 +20,9 @@ logger = logging.getLogger(__name__)
 class EventEmitter:
     def __init__(self):
         self._events = {}
-
     def on(self, event, func):
         if event not in self._events: self._events[event] = []
         self._events[event].append(func)
-
     def emit(self, event, *args, **kwargs):
         if event in self._events:
             for func in self._events[event]:
@@ -31,10 +31,8 @@ class EventEmitter:
 class SpotwareConnect(EventEmitter):
     def __init__(self, client_id, client_secret):
         super().__init__()
-        self.host = "demo.ctraderapi.com"
-        self.port = 5035
-        self._client_id = client_id
-        self._client_secret = client_secret
+        self.host = "demo.ctraderapi.com"; self.port = 5035
+        self._client_id = client_id; self._client_secret = client_secret
         self.is_authorized = False
         self._client = SpotwareClientBase(self.host, self.port, TcpProtocol)
         self._client.setConnectedCallback(self._on_connected)
@@ -46,30 +44,21 @@ class SpotwareConnect(EventEmitter):
         self._client.startService()
 
     def send(self, message, client_msg_id=None, timeout=30):
-        """Відправляє повідомлення з обробкою таймауту."""
         deferred = self._client.send(message, clientMsgId=client_msg_id)
-        
-        # Створюємо новий Deferred, який ми контролюємо
         timeout_deferred = Deferred()
-        
-        # Встановлюємо таймаут
         timeout_call = reactor.callLater(timeout, lambda: deferred.cancel() if not deferred.called else None)
-
         def on_success(result):
             if not timeout_call.called: timeout_call.cancel()
             if not timeout_deferred.called: timeout_deferred.callback(result)
-
         def on_error(failure):
             if not timeout_call.called: timeout_call.cancel()
             if not timeout_deferred.called:
-                # Створюємо більш інформативне повідомлення про помилку
                 if failure.check(TimeoutError):
-                    err_msg = f"Таймаут запиту ({timeout}s) для повідомлення типу {type(message).__name__}"
+                    err_msg = f"Таймаут запиту ({timeout}s) для {type(message).__name__}"
                     logger.error(err_msg)
                     timeout_deferred.errback(Exception(err_msg))
                 else:
                     timeout_deferred.errback(failure)
-
         deferred.addCallbacks(on_success, on_error)
         return timeout_deferred
 
@@ -89,23 +78,20 @@ class SpotwareConnect(EventEmitter):
             logger.info("Application authorized. Authorizing trading account...")
             self._authorize_account()
         elif payload_type == ProtoOAPayloadType.PROTO_OA_ACCOUNT_AUTH_RES:
-            response = ProtoOAAccountAuthRes()
-            response.ParseFromString(message.payload)
+            response = ProtoOAAccountAuthRes(); response.ParseFromString(message.payload)
             self._client.account_id = response.ctidTraderAccountId
             self.is_authorized = True
             logger.info(f"✅ Account {self._client.account_id} authorized successfully.")
             self.emit("ready")
         elif payload_type == ProtoOAPayloadType.PROTO_OA_ERROR_RES:
-            response = ProtoOAErrorRes()
-            response.ParseFromString(message.payload)
+            response = ProtoOAErrorRes(); response.ParseFromString(message.payload)
             logger.error("==================== CTrader API Error ====================")
             logger.error(f"Error Code: {response.errorCode}")
             logger.error(f"Description: {response.description}")
             logger.error("=========================================================")
 
     def _authorize_account(self):
-        account_id = get_demo_account_id()
-        access_token = get_ctrader_access_token()
+        account_id = get_demo_account_id(); access_token = get_ctrader_access_token()
         logger.info(f"Attempting to authorize account ID: {account_id}...")
         if not account_id or not access_token:
             logger.error("CRITICAL: Demo Account ID or Access Token is missing.")
@@ -113,7 +99,8 @@ class SpotwareConnect(EventEmitter):
         request = ProtoOAAccountAuthReq(ctidTraderAccountId=account_id, accessToken=access_token)
         self.send(request)
 
-    def get_all_symbols(self):
-        logger.info("Requesting symbol list...")
-        request = ProtoOASymbolsListReq(ctidTraderAccountId=get_demo_account_id())
+    def get_all_symbols_full(self): # <-- НОВИЙ МЕТОД
+        """Робить запит на отримання ПОВНОЇ інформації про всі символи."""
+        logger.info("Requesting full symbol list...")
+        request = ProtoOAGetSymbolsReq(ctidTraderAccountId=self._client.account_id)
         return self.send(request)
