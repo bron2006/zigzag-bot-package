@@ -6,8 +6,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # --- Налаштування бази даних ---
-# ОСЬ ЦЕЙ РЯДОК ПОТРІБНО ДОДАТИ
-DB_NAME = os.getenv("DB_NAME", "signals.db") # Назва файлу бази даних SQLite
+DB_NAME = os.getenv("DB_NAME", "signals.db")
 
 # --- Telegram ---
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -32,7 +31,8 @@ def get_ctrader_access_token() -> str:
 
 def get_demo_account_id() -> int:
     """Повертає ID демо-рахунку cTrader, перетворюючи його на ціле число."""
-    account_id_str = os.getenv("CT_DEMO_ACCOUNT_ID")
+    # ВИПРАВЛЕНО: Змінено "CT_DEMO_ACCOUNT_ID" на "DEMO_ACCOUNT_ID"
+    account_id_str = os.getenv("DEMO_ACCOUNT_ID")
     return int(account_id_str) if account_id_str else None
 
 # --- Fly.io ---
