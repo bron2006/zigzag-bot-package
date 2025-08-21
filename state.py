@@ -1,7 +1,7 @@
 # state.py
+# Глобальний стан, який буде доступний для всіх модулів програми.
 
-# Глобальний стан, доступний для всіх модулів.
-client = None
-symbol_cache = {}
-updater = None
-SYMBOLS_LOADED = False
+client = None         # Тут буде зберігатися екземпляр клієнта cTrader
+symbol_cache = {}   # Кеш для завантажених символів
+updater = None        # Екземпляр Telegram Updater
+SYMBOLS_LOADED = False # Прапорець, що символи завантажено

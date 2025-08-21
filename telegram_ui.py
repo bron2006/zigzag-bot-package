@@ -1,23 +1,23 @@
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
-from telegram.ext import CallbackContext, CallbackQueryHandler
+from telegram.ext import CallbackContext
 from twisted.internet import reactor
 from telegram.error import BadRequest
 
-# Імпортуємо глобальний стан
-from state import state
+from state import state # Тепер це працює, бо state - це модуль
 from analysis import get_api_detailed_signal_data
 from config import FOREX_SESSIONS
 
 logger = logging.getLogger(__name__)
 
-# --- КЛАВІАТУРИ (з вашого файлу) ---
 def get_main_menu_kb() -> InlineKeyboardMarkup:
+    # ... (ваш код без змін)
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("💹 Валютні пари (Forex)", callback_data="menu_forex")],
     ])
 
 def get_forex_sessions_kb() -> InlineKeyboardMarkup:
+    # ... (ваш код без змін)
     keyboard = []
     for session in FOREX_SESSIONS:
         keyboard.append([InlineKeyboardButton(f"--- {session} сесія ---", callback_data=f"session_{session}")])
@@ -25,58 +25,47 @@ def get_forex_sessions_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(keyboard)
 
 def get_pairs_kb(session: str) -> InlineKeyboardMarkup:
+    # ... (ваш код без змін)
     pairs = FOREX_SESSIONS.get(session, [])
     keyboard = []
     row = []
     for pair in pairs:
-        # Важливо: callback_data не повинен містити '/', бо це може ламати логіку
         row.append(InlineKeyboardButton(pair, callback_data=pair.replace("/", "")))
         if len(row) == 3:
             keyboard.append(row)
             row = []
-    if row:
-        keyboard.append(row)
+    if row: keyboard.append(row)
     keyboard.append([InlineKeyboardButton("⬅️ Назад до сесій", callback_data="menu_forex")])
     return InlineKeyboardMarkup(keyboard)
 
-# --- ОБРОБНИКИ (з вашого файлу) ---
 def start(update: Update, context: CallbackContext) -> None:
-    """Створює головну, постійну клавіатуру з кнопкою МЕНЮ."""
+    # ... (ваш код без змін)
     keyboard = [["МЕНЮ"]]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
-    update.message.reply_text(
-        "👋 Вітаю! Натисніть «МЕНЮ» для вибору активів.",
-        reply_markup=reply_markup
-    )
+    update.message.reply_text("👋 Вітаю! Натисніть «МЕНЮ» для вибору активів.", reply_markup=reply_markup)
 
 def reset_ui(update: Update, context: CallbackContext) -> None:
-    """При будь-якому текстовому повідомленні, крім 'МЕНЮ', не робить нічого (щоб не спамити)."""
-    pass
+    # ... (ваш код без змін)
+    if update.message.text != "МЕНЮ":
+        start(update, context)
 
 def menu(update: Update, context: CallbackContext) -> None:
-    """Обробляє натискання на кнопку 'МЕНЮ' і показує inline-меню."""
-    try:
-        context.bot.delete_message(chat_id=update.message.chat_id, message_id=update.message.message_id)
-    except BadRequest:
-        pass
+    # ... (ваш код без змін)
+    try: context.bot.delete_message(chat_id=update.message.chat_id, message_id=update.message.message_id)
+    except BadRequest: pass
     if 'last_menu_id' in context.user_data:
-        try:
-            context.bot.delete_message(chat_id=update.message.chat_id, message_id=context.user_data['last_menu_id'])
-        except BadRequest:
-            pass
+        try: context.bot.delete_message(chat_id=update.message.chat_id, message_id=context.user_data['last_menu_id'])
+        except BadRequest: pass
     sent_message = update.message.reply_text("🏠 Головне меню:", reply_markup=get_main_menu_kb())
     context.user_data['last_menu_id'] = sent_message.message_id
 
 def _format_signal_message(result: dict) -> str:
-    # Ця функція залишається без змін, як у вашому файлі
+    # ... (ваш код без змін)
     if result.get("error"): return f"❌ Помилка аналізу: {result['error']}"
-    pair = result.get('pair', 'N/A'); price = result.get('price', 0)
-    verdict = result.get('verdict_text', 'Не вдалося визначити.')
-    support = result.get('support'); resistance = result.get('resistance')
-    reasons = result.get('reasons', []); price_str = f"{price:.5f}" if price else "N/A"
-    message = f"📈 **Аналіз для {pair}**\n\n"
-    message += f"**Сигнал:** {verdict}\n"
-    message += f"**Поточна ціна:** `{price_str}`\n\n"
+    pair = result.get('pair', 'N/A'); price = result.get('price', 0); verdict = result.get('verdict_text', 'Не вдалося визначити.')
+    support = result.get('support'); resistance = result.get('resistance'); reasons = result.get('reasons', [])
+    price_str = f"{price:.5f}" if price else "N/A"
+    message = f"📈 **Аналіз для {pair}**\n\n**Сигнал:** {verdict}\n**Поточна ціна:** `{price_str}`\n\n"
     if support or resistance:
         message += "🔑 **Ключові рівні:**\n"
         if support: message += f"    - Підтримка: `{support:.5f}`\n"
@@ -84,16 +73,15 @@ def _format_signal_message(result: dict) -> str:
         message += "\n"
     if reasons:
         message += "📑 **Фактори аналізу:**\n"
-        for r in reasons: message += f"    - {r}\n"
+        for reason in reasons: message += f"    - {reason}\n"
     return message
 
 def button_handler(update: Update, context: CallbackContext) -> None:
-    """Обробляє всі натискання на inline-кнопки."""
+    # ... (ваш код без змін)
     query = update.callback_query
     query.answer()
     data = query.data
     context.user_data['last_menu_id'] = query.message.message_id
-
     if data == "main_menu":
         query.edit_message_text("🏠 Головне меню:", reply_markup=get_main_menu_kb())
     elif data == "menu_forex":
@@ -107,22 +95,17 @@ def button_handler(update: Update, context: CallbackContext) -> None:
             query.answer(text="❌ З'єднання з cTrader ще не встановлено.", show_alert=True)
             return
         if symbol not in state.symbol_cache:
-            query.answer(text=f"⚠️ Символ {symbol} не знайдено в кеші.", show_alert=True)
+            query.answer(text=f"⚠️ Символ {symbol} не знайдено.", show_alert=True)
             return
-        
         query.edit_message_text(text=f"⏳ Обрано {symbol}. Отримую дані для аналізу...")
-        
+        user_id = query.from_user.id
         def on_success(result):
             message_text = _format_signal_message(result)
             query.edit_message_text(text=message_text, parse_mode='Markdown', reply_markup=get_forex_sessions_kb())
-        
         def on_error(failure):
-            logger.error(f"❌ Помилка при отриманні сигналу для {symbol}: {failure}")
+            logger.error(f"❌ Помилка при отриманні сигналу для {symbol}: {failure.getErrorMessage()}")
             query.edit_message_text(text=f"❌ Виникла помилка під час аналізу {symbol}.", reply_markup=get_forex_sessions_kb())
-        
         def do_analysis():
-            # Передаємо клієнт та символ в аналітичну функцію
-            d = get_api_detailed_signal_data(state.client, symbol)
+            d = get_api_detailed_signal_data(state.client, symbol, user_id)
             d.addCallbacks(on_success, on_error)
-        
         reactor.callFromThread(do_analysis)

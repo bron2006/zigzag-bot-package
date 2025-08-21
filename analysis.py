@@ -13,13 +13,12 @@ from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOATrendbarPe
 
 from db import add_signal_to_history
 from config import get_demo_account_id
+from state import state # Імпортуємо глобальний стан
 
 logger = logging.getLogger(__name__)
 
-# --- ПОЧАТОК ЗМІН (за рекомендацією експерта) ---
 MARKET_DATA_CACHE = {}
 MARKET_DATA_INFLIGHT = {}
-# --- КІНЕЦЬ ЗМІН ---
 
 def _normalize_pair(pair: str) -> str:
     return pair.replace("/", "").replace("\\", "").upper().strip()
@@ -29,7 +28,6 @@ def _get_mta_signal_data():
     signals = ["BUY", "SELL", "NEUTRAL"]
     return [{"tf": tf, "signal": random.choice(signals)} for tf in timeframes]
 
-# --- ПОЧАТОК ЗМІН (за рекомендацією експерта) ---
 def get_market_data(client, pair, tf, limit=300):
     norm_pair = _normalize_pair(pair)
     key = f"{norm_pair}_{tf}_{limit}"
@@ -40,11 +38,11 @@ def get_market_data(client, pair, tf, limit=300):
 
     if key in MARKET_DATA_INFLIGHT:
         return MARKET_DATA_INFLIGHT[key]
-
-    from state import symbol_cache
-    symbol_details = symbol_cache.get(norm_pair)
-    if not symbol_details or 'symbolId' not in symbol_details:
-        return defer.fail(Exception(f"Пара '{pair}' не знайдена в кеші або відсутній symbolId."))
+    
+    # Використовуємо symbol_cache з глобального стану
+    symbol_details = state.symbol_cache.get(norm_pair)
+    if not symbol_details:
+        return defer.fail(Exception(f"Пара '{pair}' не знайдена в кеші."))
 
     tf_map = {"15min": TrendbarPeriod.M15, "1h": TrendbarPeriod.H1, "4h": TrendbarPeriod.H4, "1day": TrendbarPeriod.D1}
     if tf not in tf_map:
@@ -56,77 +54,59 @@ def get_market_data(client, pair, tf, limit=300):
 
     request = ProtoOAGetTrendbarsReq(
         ctidTraderAccountId=get_demo_account_id(),
-        symbolId=symbol_details['symbolId'],
+        symbolId=symbol_details.symbolId,
         period=tf_map[tf],
         fromTimestamp=from_ts,
         toTimestamp=now
     )
-
     deferred = client.send(request)
     MARKET_DATA_INFLIGHT[key] = deferred
 
     def process_response(response_proto: ProtoMessage):
         MARKET_DATA_INFLIGHT.pop(key, None)
-
         from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOAPayloadType
         if response_proto.payloadType == ProtoOAPayloadType.PROTO_OA_ERROR_RES:
             raise Exception(f"Помилка API при запиті trendbars для {pair}")
 
         trendbars_response = ProtoOAGetTrendbarsRes()
         trendbars_response.ParseFromString(response_proto.payload)
-
+        
         if not trendbars_response.trendbar:
-            df = pd.DataFrame()
-            MARKET_DATA_CACHE[key] = df
-            return df
+            df = pd.DataFrame(); MARKET_DATA_CACHE[key] = df; return df
 
-        divisor = 10**symbol_details.get('digits', 5)
-        bars = [{
-            'ts': pd.to_datetime(bar.utcTimestampInMinutes * 60, unit='s', utc=True),
-            'open': (bar.low + bar.deltaOpen) / divisor,
-            'high': (bar.low + bar.deltaHigh) / divisor,
-            'low': bar.low / divisor,
-            'close': (bar.low + bar.deltaClose) / divisor,
-            'volume': bar.volume
-        } for bar in trendbars_response.trendbar]
-
+        divisor = 10**symbol_details.digits
+        bars = [{'ts': pd.to_datetime(b.utcTimestampInMinutes * 60, unit='s', utc=True),
+                 'open': (b.low + b.deltaOpen) / divisor, 'high': (b.low + b.deltaHigh) / divisor,
+                 'low': b.low / divisor, 'close': (b.low + b.deltaClose) / divisor,
+                 'volume': b.volume} for b in trendbars_response.trendbar]
         df = pd.DataFrame(bars)
-        if df.empty:
-            MARKET_DATA_CACHE[key] = df
-            return df
+        if df.empty: MARKET_DATA_CACHE[key] = df; return df
         df = df.sort_values(by='ts').reset_index(drop=True).tail(limit)
         MARKET_DATA_CACHE[key] = df
         return df
 
     def on_err(failure):
-        MARKET_DATA_INFLIGHT.pop(key, None)
-        return failure
+        MARKET_DATA_INFLIGHT.pop(key, None); return failure
 
     deferred.addCallbacks(process_response, on_err)
     return deferred
-# --- КІНЕЦЬ ЗМІН ---
 
 def _calculate_core_signal(df, daily_df):
     df.ta.rsi(close=df['close'], length=14, append=True, col_names=('RSI',))
     df.ta.kama(close=df['close'], length=14, append=True, col_names=('KAMA',))
-    last = df.iloc[-1]
-    current_price = float(last['close'])
-    
-    lows = daily_df['low'].tail(30)
-    highs = daily_df['high'].tail(30)
+    last = df.iloc[-1]; current_price = float(last['close'])
+    lows = daily_df['low'].tail(30); highs = daily_df['high'].tail(30)
     support = lows[lows < current_price].max()
     resistance = highs[highs > current_price].min()
     support = float(support) if pd.notna(support) else None
     resistance = float(resistance) if pd.notna(resistance) else None
-
     score, reasons = 50, []
     if current_price > last['KAMA']: score += 15; reasons.append("Ціна вище лінії KAMA(14)")
     else: score -= 15; reasons.append("Ціна нижче лінії KAMA(14)")
     if last['RSI'] < 30: score += 20; reasons.append("RSI в зоні перепроданості (<30)")
     elif last['RSI'] > 70: score -= 20; reasons.append("RSI в зоні перекупленості (>70)")
-    
     score = int(np.clip(score, 0, 100))
-    return { "score": score, "reasons": reasons, "support": support, "resistance": resistance, "price": current_price }
+    return {"score": score, "reasons": reasons, "support": support, "resistance": resistance, "price": current_price}
 
 def _generate_verdict(analysis):
     score = analysis['score']
@@ -140,45 +120,22 @@ def get_api_detailed_signal_data(client, pair, user_id=None):
     norm_pair = _normalize_pair(pair)
 
     def on_data_ready(results):
-        success1, df = results[0]
-        success2, daily_df = results[1]
-
+        success1, df = results[0]; success2, daily_df = results[1]
         if not (success1 and success2):
             errors = []
-            if not success1: errors.append(f"15min data failed ({getattr(results[0][1], 'value', 'Unknown error')})")
-            if not success2: errors.append(f"1day data failed ({getattr(results[1][1], 'value', 'Unknown error')})")
+            if not success1: errors.append(f"15min data failed")
+            if not success2: errors.append(f"1day data failed")
             return {"error": f"Не вдалося завантажити ринкові дані: {', '.join(errors)}."}
-        
         if df.empty or len(df) < 25 or daily_df.empty:
             return {"error": "Недостатньо історичних даних для аналізу."}
 
         analysis_result = _calculate_core_signal(df, daily_df)
         verdict_text, verdict_level = _generate_verdict(analysis_result)
-
-        if user_id:
-            add_signal_to_history({
-                'user_id': user_id, 
-                'pair': norm_pair, 
-                'price': analysis_result['price'], 
-                'bull_percentage': analysis_result['score']
-            })
-        
+        if user_id: add_signal_to_history({'user_id': user_id, 'pair': norm_pair, 'price': analysis_result['price'], 'bull_percentage': analysis_result['score']})
         history_df = df.tail(50)
-        history = { 
-            "dates": history_df['ts'].dt.strftime('%Y-%m-%d %H:%M:%S').tolist(), 
-            "open": history_df['open'].tolist(), "high": history_df['high'].tolist(), 
-            "low": history_df['low'].tolist(), "close": history_df['close'].tolist() 
-        }
-        
+        history = {"dates": history_df['ts'].dt.strftime('%Y-%m-%d %H:%M:%S').tolist(), "open": history_df['open'].tolist(), "high": history_df['high'].tolist(), "low": history_df['low'].tolist(), "close": history_df['close'].tolist()}
         mta_data = _get_mta_signal_data()
-        
-        return { 
-            "pair": pair, "price": analysis_result['price'], "verdict_text": verdict_text, 
-            "verdict_level": verdict_level, "reasons": analysis_result['reasons'], 
-            "support": analysis_result['support'], "resistance": analysis_result['resistance'], 
-            "history": history,
-            "mta": mta_data
-        }
+        return {"pair": pair, "price": analysis_result['price'], "verdict_text": verdict_text, "verdict_level": verdict_level, "reasons": analysis_result['reasons'], "support": analysis_result['support'], "resistance": analysis_result['resistance'], "history": history, "mta": mta_data}
 
     d1 = get_market_data(client, norm_pair, '15min', 100)
     d2 = get_market_data(client, norm_pair, '1day', 100)
