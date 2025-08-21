@@ -1,26 +1,38 @@
 # config.py
 import os
-from dotenv import load_dotenv
 
-load_dotenv()
+# cTrader / Spotware
+CT_CLIENT_ID = os.environ.get("CT_CLIENT_ID")
+CT_CLIENT_SECRET = os.environ.get("CT_CLIENT_SECRET")
+CTRADER_ACCESS_TOKEN = os.environ.get("CTRADER_ACCESS_TOKEN")
+CTRADER_REFRESH_TOKEN = os.environ.get("CTRADER_REFRESH_TOKEN")
+DEMO_ACCOUNT_ID = os.environ.get("DEMO_ACCOUNT_ID")
 
-# --- Глобальні змінні конфігурації ---
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
-CT_CLIENT_ID = os.getenv("CT_CLIENT_ID")
-CT_CLIENT_SECRET = os.getenv("CT_CLIENT_SECRET")
-CTRADER_ACCESS_TOKEN = os.getenv("CTRADER_ACCESS_TOKEN")
-DEMO_ACCOUNT_ID = int(os.getenv("DEMO_ACCOUNT_ID", 0))
-FLY_APP_NAME = os.getenv("FLY_APP_NAME")
-DB_NAME = "bot_data.db"
+def get_demo_account_id():
+    """Повертає DEMO_ACCOUNT_ID як int якщо можливо, інакше None."""
+    try:
+        return int(DEMO_ACCOUNT_ID)
+    except (TypeError, ValueError):
+        return None
 
-# --- Списки активів ---
+# Telegram
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.environ.get("CHAT_ID") or os.environ.get("MY_TELEGRAM_ID")
+
+# API ключі інших сервісів
+FINNHUB_API_KEY = os.environ.get("FINNHUB_API_KEY")
+TWELVEDATA_API_KEY = os.environ.get("TWELVEDATA_API_KEY")
+
+# Fly.io app
+FLY_APP_NAME = os.environ.get("FLY_APP_NAME")
+WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET")
+
+# Порт (для Klein/Flask)
+PORT = int(os.environ.get("PORT", 8080))
+
+# Приклад форекс-сесій
 FOREX_SESSIONS = {
-    "Азіатська": ["USDJPY", "AUDUSD", "NZDUSD", "EURJPY", "CHFJPY"],
-    "Європейська": ["EURUSD", "GBPUSD", "USDCHF", "EURGBP", "EURCHF", "GBPCHF"],
-    "Американська": ["USDCAD", "USDMXN", "USDRUB", "USDZAR"]
+    "Asia": ["EUR/USD", "GBP/USD", "USD/JPY"],
+    "Europe": ["EUR/USD", "GBP/USD", "EUR/GBP"],
+    "America": ["USD/CHF", "USD/CAD", "EUR/USD"],
 }
-
-# --- Валідація ---
-if not all([CT_CLIENT_ID, CT_CLIENT_SECRET, CTRADER_ACCESS_TOKEN, DEMO_ACCOUNT_ID]):
-    raise ValueError("Одна або декілька обов'язкових змінних cTrader не встановлені в оточенні.")
