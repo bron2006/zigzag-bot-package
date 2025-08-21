@@ -1,87 +1,171 @@
 # telegram_ui.py
 
 import logging
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, WebAppInfo
 from telegram.ext import CallbackContext
+from twisted.internet import reactor
+from telegram.error import BadRequest
 
-# Імпортуємо глобальний стан, який вже ініціалізовано в main.py
 import state
+from config import FOREX_SESSIONS, get_fly_app_name
+# Припускаємо, що у вас є цей файл та функція згідно з резервною копією
+from analysis import get_api_detailed_signal_data
 
 logger = logging.getLogger(__name__)
 
-# --- Клавіатури ---
+# --- ОСНОВНА КЛАВІАТУРА З КНОПКАМИ "МЕНЮ" ТА "WEBAPP" ---
+def get_reply_keyboard() -> ReplyKeyboardMarkup:
+    """Створює клавіатуру, яка завжди присутня внизу екрана."""
+    app_name = get_fly_app_name()
+    if not app_name:
+        logger.error("FLY_APP_NAME не встановлено! WebApp недоступний.")
+        # Повертаємо клавіатуру без WebApp, якщо назва не знайдена
+        return ReplyKeyboardMarkup([["МЕНЮ"]], resize_keyboard=True)
 
-def get_main_menu_keyboard():
-    """Створює головну клавіатуру меню."""
+    webapp_info = WebAppInfo(url=f"https://{app_name}.fly.dev/webapp/index.html")
     keyboard = [
-        [InlineKeyboardButton("📈 Статус підключення", callback_data='status')],
-        [InlineKeyboardButton("📂 Список рахунків", callback_data='accounts')],
-        [InlineKeyboardButton("⚙️ Налаштування", callback_data='settings')],
+        [
+            KeyboardButton("МЕНЮ"),
+            KeyboardButton("WebApp", web_app=webapp_info)
+        ]
     ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+# --- ВБУДОВАНІ (INLINE) КЛАВІАТУРИ ДЛЯ МЕНЮ ---
+def get_main_menu_kb() -> InlineKeyboardMarkup:
+    """Головне меню вибору активів."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("💹 Валютні пари (Forex)", callback_data="menu_forex")],
+    ])
+
+def get_forex_sessions_kb() -> InlineKeyboardMarkup:
+    """Меню вибору торгових сесій."""
+    keyboard = []
+    for session in FOREX_SESSIONS:
+        keyboard.append([InlineKeyboardButton(f"--- {session} сесія ---", callback_data=f"session_{session}")])
+    keyboard.append([InlineKeyboardButton("⬅️ Назад до меню", callback_data="main_menu")])
     return InlineKeyboardMarkup(keyboard)
 
-def get_accounts_keyboard():
-    """Створює клавіатуру для списку рахунків."""
-    # У майбутньому тут буде динамічне отримання рахунків з state.client
-    keyboard = [
-        [InlineKeyboardButton("Рахунок Demo 12345", callback_data='acc_details_12345')],
-        [InlineKeyboardButton("Рахунок Live 67890", callback_data='acc_details_67890')],
-        [InlineKeyboardButton("⬅️ Назад", callback_data='main_menu')],
-    ]
+def get_pairs_kb(session: str) -> InlineKeyboardMarkup:
+    """Меню вибору валютних пар для конкретної сесії."""
+    pairs = FOREX_SESSIONS.get(session, [])
+    keyboard = []
+    row = []
+    for pair in pairs:
+        row.append(InlineKeyboardButton(pair, callback_data=pair.replace("/", "")))
+        if len(row) == 3:
+            keyboard.append(row)
+            row = []
+    if row:
+        keyboard.append(row)
+    keyboard.append([InlineKeyboardButton("⬅️ Назад до сесій", callback_data="menu_forex")])
     return InlineKeyboardMarkup(keyboard)
 
-# --- Обробники команд (викликаються з main.py) ---
+
+# --- ОБРОБНИКИ КОМАНД ТА ПОВІДОМЛЕНЬ ---
 
 def start(update: Update, context: CallbackContext) -> None:
-    """Обробник команди /start."""
-    user = update.effective_user
-    update.message.reply_html(
-        f"👋 Привіт, {user.mention_html()}!\n\n"
-        "Я ваш торговий асистент для cTrader. Оберіть опцію нижче:",
-        reply_markup=get_main_menu_keyboard()
+    """Обробник команди /start. Показує вітальне повідомлення та головну клавіатуру."""
+    update.message.reply_text(
+        "👋 Вітаю! Натисніть «МЕНЮ» для вибору активів або «WebApp» для відкриття терміналу.",
+        reply_markup=get_reply_keyboard()
     )
 
 def menu(update: Update, context: CallbackContext) -> None:
-    """Обробник текстового повідомлення 'МЕНЮ'."""
-    update.message.reply_text(
-        "Головне меню:",
-        reply_markup=get_main_menu_keyboard()
-    )
+    """Обробник кнопки 'МЕНЮ'. Видаляє старе меню та надсилає нове."""
+    # Видаляємо попереднє повідомлення меню, щоб уникнути безладу
+    if 'last_menu_id' in context.user_data:
+        try:
+            context.bot.delete_message(chat_id=update.message.chat_id, message_id=context.user_data['last_menu_id'])
+        except BadRequest:
+            pass  # Ігноруємо помилку, якщо повідомлення вже видалено
+
+    sent_message = update.message.reply_text("🏠 Головне меню:", reply_markup=get_main_menu_kb())
+    # Зберігаємо ID нового меню для майбутнього видалення
+    context.user_data['last_menu_id'] = sent_message.message_id
 
 def reset_ui(update: Update, context: CallbackContext) -> None:
-    """Скидає будь-який ввід і показує меню."""
+    """Обробляє будь-який текстовий ввід, який не є командою 'МЕНЮ'."""
     update.message.reply_text(
         f"Невідома команда: '{update.message.text}'.\n"
-        "Будь ласка, використовуйте кнопки меню.",
-        reply_markup=get_main_menu_keyboard()
+        "Будь ласка, використовуйте кнопки «МЕНЮ» або «WebApp».",
+        reply_markup=get_reply_keyboard()
     )
 
-# --- Обробник кнопок (CallbackQueryHandler) ---
+
+# --- ФОРМАТУВАННЯ ВІДПОВІДІ ВІД АНАЛІЗАТОРА ---
+
+def _format_signal_message(result: dict) -> str:
+    """Форматує результат аналізу у зрозуміле повідомлення."""
+    if result.get("error"):
+        return f"❌ Помилка аналізу: {result['error']}"
+
+    pair = result.get('pair', 'N/A')
+    price = result.get('price', 0)
+    verdict = result.get('verdict_text', 'Не вдалося визначити.')
+    support = result.get('support')
+    resistance = result.get('resistance')
+    reasons = result.get('reasons', [])
+
+    price_str = f"{price:.5f}" if price else "N/A"
+    message = f"📈 **Аналіз для {pair}**\n\n"
+    message += f"**Сигнал:** {verdict}\n"
+    message += f"**Поточна ціна:** `{price_str}`\n\n"
+
+    if support or resistance:
+        message += "🔑 **Ключові рівні:**\n"
+        if support: message += f"    - Підтримка: `{support:.5f}`\n"
+        if resistance: message += f"    - Опір: `{resistance:.5f}`\n"
+        message += "\n"
+
+    if reasons:
+        message += "📑 **Фактори аналізу:**\n"
+        for reason in reasons:
+            message += f"    - {reason}\n"
+
+    return message
+
+
+# --- ОБРОБНИК НАТИСКАННЯ КНОПОК INLINE-МЕНЮ ---
 
 def button_handler(update: Update, context: CallbackContext) -> None:
-    """Центральний обробник для всіх натискань на inline-кнопки."""
+    """Центральний обробник для всіх inline-кнопок."""
     query = update.callback_query
-    query.answer()  # Обов'язково відповідаємо на запит
+    query.answer()
     data = query.data
+    context.user_data['last_menu_id'] = query.message.message_id
 
-    if data == 'main_menu':
-        query.edit_message_text(text="Головне меню:", reply_markup=get_main_menu_keyboard())
+    if data == "main_menu":
+        query.edit_message_text("🏠 Головне меню:", reply_markup=get_main_menu_kb())
 
-    elif data == 'status':
-        if state.client and state.client.is_authorized:
-            status_text = "✅ Авторизовано та підключено."
-        else:
-            status_text = "❌ Відключено або в процесі підключення."
-        query.edit_message_text(text=f"Статус підключення до cTrader:\n\n{status_text}", reply_markup=get_main_menu_keyboard())
+    elif data == "menu_forex":
+        query.edit_message_text("💹 Виберіть торгову сесію:", reply_markup=get_forex_sessions_kb())
 
-    elif data == 'accounts':
-        query.edit_message_text(text="Оберіть рахунок:", reply_markup=get_accounts_keyboard())
-    
-    elif data.startswith('acc_details_'):
-        account_id = data.replace('acc_details_', '')
-        # Тут буде логіка отримання реальних даних
-        details_text = f"Детальна інформація по рахунку {account_id}:\n\n- Баланс: ...\n- кредитне плече: ..."
-        query.edit_message_text(text=details_text, reply_markup=get_accounts_keyboard())
+    elif data.startswith("session_"):
+        session_name = data.split("_")[1]
+        query.edit_message_text(f"Виберіть пару для сесії '{session_name}':", reply_markup=get_pairs_kb(session_name))
 
-    elif data == 'settings':
-        query.edit_message_text(text="Розділ налаштувань наразі в розробці.", reply_markup=get_main_menu_keyboard())
+    else: # Якщо натиснуто на валютну пару
+        symbol = data
+        if not state.client or not state.client.is_authorized:
+            query.answer(text="❌ З'єднання з cTrader API ще не встановлено.", show_alert=True)
+            return
+        if symbol not in state.symbol_cache:
+            query.answer(text=f"⚠️ Символ {symbol} не знайдено або ще не завантажено.", show_alert=True)
+            return
+
+        query.edit_message_text(text=f"⏳ Обрано {symbol}. Отримую дані для аналізу...")
+
+        def on_success(result):
+            message_text = _format_signal_message(result)
+            query.edit_message_text(text=message_text, parse_mode='Markdown', reply_markup=get_pairs_kb(query.message.reply_markup.inline_keyboard[-1][0].callback_data.split("_")[1]))
+
+        def on_error(failure):
+            logger.error(f"❌ Помилка при отриманні сигналу для {symbol}: {failure.getErrorMessage()}")
+            query.edit_message_text(text=f"❌ Виникла помилка під час аналізу {symbol}.", reply_markup=get_main_menu_kb())
+
+        def do_analysis():
+            d = get_api_detailed_signal_data(state.client, symbol, query.from_user.id)
+            d.addCallbacks(on_success, on_error)
+
+        reactor.callFromThread(do_analysis)

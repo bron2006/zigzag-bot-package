@@ -1,26 +1,37 @@
+# config.py
 import os
 from dotenv import load_dotenv
 
+# Завантажуємо змінні оточення з файлу .env
 load_dotenv()
 
-# --- cTrader API ---
-CT_CLIENT_ID = os.getenv("CT_CLIENT_ID")
-CT_CLIENT_SECRET = os.getenv("CT_CLIENT_SECRET")
-CTRADER_ACCESS_TOKEN = os.getenv("CTRADER_ACCESS_TOKEN")
-DEMO_ACCOUNT_ID = os.getenv("DEMO_ACCOUNT_ID")
-
-# --- Telegram Bot ---
+# --- Telegram ---
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID") # Поки не використовується, але може знадобитись
 
-# Словник сесій та пар для меню, як у вашому telegram_ui.py
-FOREX_SESSIONS = {
-    "Європейська": ["EUR/USD", "GBP/USD", "USD/CHF"],
-    "Американська": ["USD/JPY", "USD/CAD", "AUD/USD"],
-    "Азійська": ["NZD/USD", "AUD/JPY", "GBP/JPY"],
-}
+def get_chat_id() -> int:
+    """Повертає Telegram Chat ID, перетворюючи його на ціле число."""
+    chat_id_str = os.getenv("TELEGRAM_CHAT_ID")
+    return int(chat_id_str) if chat_id_str else None
 
-def get_ct_client_id(): return CT_CLIENT_ID
-def get_ct_client_secret(): return CT_CLIENT_SECRET
-def get_ctrader_access_token(): return CTRADER_ACCESS_TOKEN
-def get_demo_account_id(): return int(DEMO_ACCOUNT_ID)
+# --- cTrader ---
+def get_ct_client_id() -> str:
+    """Повертає cTrader Client ID."""
+    return os.getenv("CT_CLIENT_ID")
+
+def get_ct_client_secret() -> str:
+    """Повертає cTrader Client Secret."""
+    return os.getenv("CT_CLIENT_SECRET")
+
+def get_ctrader_access_token() -> str:
+    """Повертає Access Token для доступу до рахунку."""
+    return os.getenv("CTRADER_ACCESS_TOKEN")
+
+def get_demo_account_id() -> int:
+    """Повертає ID демо-рахунку cTrader, перетворюючи його на ціле число."""
+    account_id_str = os.getenv("CT_DEMO_ACCOUNT_ID")
+    return int(account_id_str) if account_id_str else None
+
+# --- Fly.io ---
+def get_fly_app_name() -> str:
+    """Повертає назву додатку на Fly.io для побудови URL."""
+    return os.getenv("FLY_APP_NAME")
