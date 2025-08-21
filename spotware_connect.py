@@ -19,8 +19,7 @@ class EventEmitter:
         self._events = {}
 
     def on(self, event, func):
-        if event not in self._events:
-            self._events[event] = []
+        if event not in self._events: self._events[event] = []
         self._events[event].append(func)
 
     def emit(self, event, *args, **kwargs):
@@ -36,14 +35,11 @@ class SpotwareConnect(EventEmitter):
         self._client_id = client_id
         self._client_secret = client_secret
         self.is_authorized = False
-        
         self._client = SpotwareClientBase(self.host, self.port, TcpProtocol)
-        # FIX: Зберігаємо account_id для доступу ззовні
-        self._client.account_id = None
-        
         self._client.setConnectedCallback(self._on_connected)
         self._client.setMessageReceivedCallback(self._on_message_received)
         self._client.setDisconnectedCallback(self._on_disconnected)
+        self._client.account_id = None # Для зберігання ID рахунку
 
     def start(self):
         self._client.startService()
@@ -58,39 +54,29 @@ class SpotwareConnect(EventEmitter):
 
     def _on_disconnected(self, client, reason):
         self.is_authorized = False
-        self._client.account_id = None
-        error_msg = reason.getErrorMessage()
-        logger.warning(f"Disconnected from cTrader API. Reason: {error_msg}")
-        self.emit("error", f"Disconnected: {error_msg}")
+        logger.warning(f"Disconnected from cTrader API. Reason: {reason.getErrorMessage()}")
+        self.emit("error", f"Disconnected: {reason.getErrorMessage()}")
 
     def _on_message_received(self, client, message: ProtoMessage):
         payload_type = message.payloadType
-        
         if payload_type == ProtoOAPayloadType.PROTO_OA_APPLICATION_AUTH_RES:
-            ProtoOAApplicationAuthRes().ParseFromString(message.payload)
             logger.info("Application authorized. Authorizing account...")
             self._authorize_account()
         elif payload_type == ProtoOAPayloadType.PROTO_OA_ACCOUNT_AUTH_RES:
             response = ProtoOAAccountAuthRes()
             response.ParseFromString(message.payload)
-            self._client.account_id = response.ctidTraderAccountId # Зберігаємо ID
-            logger.info(f"Account {self._client.account_id} authorized.")
+            self._client.account_id = response.ctidTraderAccountId
             self.is_authorized = True
+            logger.info(f"Account {self._client.account_id} authorized.")
             self.emit("ready")
-        elif payload_type == ProtoOAPayloadType.PROTO_OA_SYMBOLS_LIST_RES:
-            response = ProtoOASymbolsListRes()
-            response.ParseFromString(message.payload)
-            self.emit("symbolsLoaded", response)
         elif payload_type == ProtoOAPayloadType.PROTO_OA_ERROR_RES:
             response = ProtoOAErrorRes()
             response.ParseFromString(message.payload)
-            error_message = f"cTrader API Error: {response.errorCode} - {response.description}"
-            logger.error(error_message)
-            self.emit("error", error_message)
+            logger.error(f"cTrader API Error: {response.errorCode} - {response.description}")
 
     def _authorize_account(self):
         request = ProtoOAAccountAuthReq(
-            ctidTraderAccountId=get_demo_account_id(), 
+            ctidTraderAccountId=get_demo_account_id(),
             accessToken=get_ctrader_access_token()
         )
         self.send(request)
