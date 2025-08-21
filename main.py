@@ -1,64 +1,58 @@
+# main.py
 import logging
 from klein import Klein
 from twisted.internet import reactor
-# Імпортуємо конкретний тип відповіді, щоб "розпакувати" в нього
 from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOASymbolsListRes
 from spotware_connect import SpotwareConnect
 from telegram_ui import TelegramUI
+from state import AppState
 from config import get_ct_client_id, get_ct_client_secret
 
-# Налаштування логування
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# --- Ініціалізація основних компонентів ---
+# --- Ініціалізація компонентів ---
 app = Klein()
-telegram_bot = TelegramUI()
+app_state = AppState()
+telegram_bot = TelegramUI(app_state)
 client = SpotwareConnect(get_ct_client_id(), get_ct_client_secret())
 
 @app.route("/")
 def home(request):
-    logger.info("Web root requested.")
-    if client.is_authorized:
-        return "cTrader client is connected and authorized."
-    else:
-        return "cTrader client is running but not authorized yet."
+    """Сторінка для перевірки стану."""
+    status = "connected and authorized" if client.is_authorized else "running but not authorized"
+    return f"cTrader client is {status}."
 
 def on_ctrader_ready():
-    logger.info("cTrader Client is ready. Notifying user via Telegram.")
+    """Викликається, коли клієнт cTrader готовий."""
+    logger.info("cTrader Client готовий. Надсилаю сповіщення...")
     account_id = client._client.account_id
     telegram_bot.send_startup_message(account_id)
-
-    # Запитуємо символи
+    
     deferred = client.get_all_symbols()
-    # Прив'язуємо обробники до результату запиту
     deferred.addCallbacks(on_symbols_loaded, on_symbols_error)
 
 def on_symbols_loaded(raw_message):
-    """Обробник успішного завантаження символів."""
-    # --- КЛЮЧОВЕ ВИПРАВЛЕННЯ ---
-    # 1. Створюємо порожній об'єкт-відповідь потрібного нам типу.
-    symbols_response = ProtoOASymbolsListRes()
-    # 2. "Розпаковуємо" вміст "конверта" (raw_message.payload) в наш об'єкт.
-    symbols_response.ParseFromString(raw_message.payload)
-    # 3. Тепер ми можемо безпечно звертатися до поля .symbol
-    symbols = symbols_response.symbol
-    # ---------------------------
-    
-    logger.info(f"Successfully loaded {len(symbols)} symbols.")
-    telegram_bot.send_message(f"📚 Завантажено {len(symbols)} символів.")
+    """Обробляє та зберігає список символів."""
+    try:
+        symbols_response = ProtoOASymbolsListRes()
+        symbols_response.ParseFromString(raw_message.payload)
+        app_state.set_symbols(symbols_response.symbol)
+        
+        count = len(app_state.get_symbols())
+        logger.info(f"Успішно завантажено та збережено {count} символів.")
+        telegram_bot.send_message(f"📚 Завантажено {count} символів.")
+    except Exception as e:
+        logger.error(f"Помилка обробки символів: {e}")
+        telegram_bot.send_message(f"❌ Виникла помилка при обробці списку символів.")
 
 def on_symbols_error(failure):
-    """Обробник помилки завантаження символів."""
+    """Обробляє помилку завантаження символів."""
     error_message = failure.getErrorMessage()
-    logger.error(f"Failed to load symbols: {error_message}")
+    logger.error(f"Не вдалося завантажити символи: {error_message}")
     telegram_bot.send_message(f"❌ Помилка завантаження символів: {error_message}")
 
-# --- Налаштування зв'язків та запуск ---
+# --- Запуск ---
 client.on("ready", on_ctrader_ready)
 reactor.callWhenRunning(client.start)
-
-logger.info("Application setup complete. Klein will start the reactor.")
+logger.info("Налаштування програми завершено. Klein запускає reactor.")

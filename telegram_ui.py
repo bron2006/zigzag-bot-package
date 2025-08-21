@@ -1,51 +1,65 @@
+# telegram_ui.py
 import logging
-from telegram import Bot
-from telegram.ext import Updater, CommandHandler, CallbackContext
+from telegram import Bot, ReplyKeyboardMarkup, Update
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
 from config import TELEGRAM_BOT_TOKEN, CHAT_ID
+from state import AppState
 
 logger = logging.getLogger(__name__)
 
 class TelegramUI:
-    def __init__(self):
-        """Ініціалізує та налаштовує Telegram-бота."""
+    def __init__(self, app_state: AppState):
         if not TELEGRAM_BOT_TOKEN:
-            logger.error("Telegram bot token not found!")
-            raise ValueError("TELEGRAM_BOT_TOKEN is not set")
+            raise ValueError("TELEGRAM_BOT_TOKEN не встановлено!")
             
+        self.state = app_state
         self.bot = Bot(token=TELEGRAM_BOT_TOKEN)
         self.updater = Updater(token=TELEGRAM_BOT_TOKEN, use_context=True)
         self.dispatcher = self.updater.dispatcher
 
-        # Реєструємо обробники команд
         self._register_handlers()
-
-        # Запускаємо бота в неблокуючому режимі
         self.updater.start_polling()
-        logger.info("Telegram bot has started polling.")
+        logger.info("Telegram bot запущено.")
 
     def _register_handlers(self):
-        """Реєструє обробники команд для бота."""
+        """Реєструє обробники команд та кнопок."""
         self.dispatcher.add_handler(CommandHandler("start", self.start_command))
-        # Тут можна додати інші команди (status, help, etc.)
+        self.dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, self.handle_menu))
 
-    def start_command(self, update, context: CallbackContext):
+    def _get_main_menu(self):
+        """Створює клавіатуру головного меню."""
+        keyboard = [["📋 Список пар"]]
+        return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+    def start_command(self, update: Update, context: CallbackContext):
         """Обробник команди /start."""
-        user_id = update.effective_chat.id
-        logger.info(f"Received /start command from user {user_id}")
-        update.message.reply_text("👋 Вітаю! Бот запущено і готовий до роботи.")
+        update.message.reply_text(
+            "👋 Вітаю! Бот готовий до роботи. Оберіть дію з меню:",
+            reply_markup=self._get_main_menu()
+        )
 
-    def send_message(self, text):
-        """Надсилає повідомлення визначеному користувачу."""
-        if not CHAT_ID:
-            logger.warning("CHAT_ID is not set, can't send message.")
-            return
+    def handle_menu(self, update: Update, context: CallbackContext):
+        """Обробляє натискання кнопок."""
+        if update.message.text == "📋 Список пар":
+            self.list_symbols_command(update)
+
+    def list_symbols_command(self, update: Update):
+        """Надсилає користувачу список торгових пар."""
+        symbols = self.state.get_symbols()
+        if symbols:
+            message_text = "📈 **Доступні торгові пари:**\n\n`" + "`, `".join(symbols) + "`"
+            update.message.reply_text(message_text, parse_mode='Markdown')
+        else:
+            update.message.reply_text("Список символів ще завантажується, зачекайте...")
+
+    def send_message(self, text, parse_mode=None):
+        """Централізований метод для надсилання повідомлень."""
         try:
-            self.bot.send_message(chat_id=CHAT_ID, text=text)
-            logger.info(f"Sent message to chat {CHAT_ID}: '{text}'")
+            self.bot.send_message(chat_id=CHAT_ID, text=text, parse_mode=parse_mode)
         except Exception as e:
-            logger.error(f"Failed to send message to chat {CHAT_ID}: {e}")
+            logger.error(f"Не вдалося надіслати повідомлення: {e}")
 
     def send_startup_message(self, account_id):
-        """Надсилає вітальне повідомлення при успішному запуску."""
-        message = f"✅ **Бот Онлайн**\n\nУспішно підключено до рахунку cTrader: `{account_id}`"
-        self.send_message(message)
+        """Надсилає повідомлення про успішний запуск."""
+        message = f"✅ **Бот Онлайн**\n\nПідключено до рахунку cTrader: `{account_id}`"
+        self.send_message(message, parse_mode='Markdown')

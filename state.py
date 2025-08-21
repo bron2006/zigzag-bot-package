@@ -1,12 +1,16 @@
 # state.py
-from typing import Optional, Dict, Any
-from telegram.ext import Updater
-# from spotware_connect import SpotwareClient
+class AppState:
+    """Клас для зберігання стану програми."""
+    def __init__(self):
+        self.symbols = []
+        # Тут можна додавати інші дані, які потрібно зберігати
+        # наприклад, self.account_info = {}
 
-# Спільний стан додатку, доступний для всіх модулів.
-client: Optional['SpotwareClient'] = None
-symbol_cache: Dict[str, Dict[str, Any]] = {}
-updater: Optional[Updater] = None
+    def set_symbols(self, symbols_list):
+        """Зберігає відсортований список імен символів."""
+        if symbols_list:
+            self.symbols = sorted([s.symbolName for s in symbols_list])
 
-# Прапорець, що сигналізує про завершення завантаження даних від cTrader
-SYMBOLS_LOADED: bool = False
+    def get_symbols(self):
+        """Повертає збережений список символів."""
+        return self.symbols
