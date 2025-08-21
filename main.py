@@ -1,54 +1,53 @@
-# main.py
 import logging
-import os
-from twisted.internet import reactor
 from klein import Klein
-
-import state
-from spotware_connect import SpotwareClient
+from twisted.internet import reactor
+from spotware_connect import SpotwareConnect
+from config import get_ct_client_id, get_ct_client_secret
 
 # Налаштування логування
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
-# Створюємо Klein app
+# Створюємо екземпляр веб-додатку
 app = Klein()
+
+# Створюємо екземпляр клієнта cTrader
+# Передаємо Client ID та Secret, як це було в оригінальному коді
+client = SpotwareConnect(get_ct_client_id(), get_ct_client_secret())
 
 @app.route("/")
 def home(request):
-    """Головна сторінка, яка віддає статичний HTML."""
-    try:
-        with open("templates/index.html", "r", encoding="utf-8") as f:
-            # Klein коректно обробляє рядки, кодувати в байти не потрібно
-            return f.read()
-    except FileNotFoundError:
-        logger.warning("templates/index.html не знайдено.")
-        return "cTrader Bot is running."
+    """Головна сторінка для перевірки стану."""
+    logger.info("Web root requested.")
+    if client.is_authorized:
+        return "cTrader client is connected and authorized."
+    else:
+        return "cTrader client is running but not authorized yet."
 
-def on_symbols_loaded(symbols):
-    """Колбек, який викликається, коли символи завантажено."""
-    logger.info(f"Завантажено {len(symbols)} символів. Ініціалізую кеш...")
-    for s in symbols:
-        normalized_name = s.symbolName.replace("/", "")
-        state.symbol_cache[normalized_name] = {'symbolId': s.symbolId, 'digits': s.digits}
-    state.SYMBOLS_LOADED = True
-    logger.info("Кеш символів готовий. Бот повністю функціональний.")
-    
-def on_client_error(failure):
-    """Колбек для критичних помилок клієнта."""
-    error_message = failure.getErrorMessage() if hasattr(failure, 'getErrorMessage') else str(failure)
-    logger.critical(f"Критична помилка cTrader клієнта: {error_message}. Зупиняю реактор.")
-    if reactor.running:
-        reactor.stop()
+def on_ctrader_ready():
+    """Обробник події, коли клієнт готовий до роботи."""
+    logger.info("cTrader Client is ready. Requesting symbols...")
+    # Запитуємо символи і додаємо обробники результату
+    deferred = client.get_all_symbols()
+    deferred.addCallbacks(on_symbols_loaded, on_symbols_error)
 
-def start_ctrader_client():
-    """Функція, яка ініціалізує та запускає cTrader клієнт."""
-    logger.info("Ініціалізація cTrader клієнта...")
-    state.client = SpotwareClient()
-    d = state.client.isReady()
-    d.addCallbacks(on_symbols_loaded, on_client_error)
-    state.client.connect()
+def on_symbols_loaded(symbols_response):
+    """Обробник успішного завантаження символів."""
+    symbols = symbols_response.symbol
+    logger.info(f"Successfully loaded {len(symbols)} symbols.")
+    # Тут можна додати подальшу логіку
 
-# --- Запуск логіки при старті реактора ---
-# Це гарантує, що клієнт почне підключатися, коли Twisted буде готовий
-reactor.callWhenRunning(start_ctrader_client)
+def on_symbols_error(failure):
+    """Обробник помилки завантаження символів."""
+    logger.error(f"Failed to load symbols: {failure.getErrorMessage()}")
+
+# Підписуємось на подію 'ready' від клієнта
+client.on("ready", on_ctrader_ready)
+
+# Запускаємо підключення до cTrader при старті реактора
+reactor.callWhenRunning(client.start)
+
+logger.info("Application setup complete. Klein will start the reactor.")
