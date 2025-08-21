@@ -1,7 +1,7 @@
 import logging
 from ctrader_open_api.client import Client
-from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import ProtoOAPayloadType
-from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOAApplicationAuthReq, ProtoOAAccountAuthReq, ProtoOASymbolsListReq
+# Виправлено імпорт: ProtoOAPayloadType знаходиться в OpenApiMessages_pb2
+from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOAPayloadType, ProtoOAApplicationAuthReq, ProtoOAAccountAuthReq, ProtoOASymbolsListReq
 from config import CT_CLIENT_ID, CT_CLIENT_SECRET, CTRADER_ACCESS_TOKEN, DEMO_ACCOUNT_ID
 
 # Налаштування логування
