@@ -4,35 +4,36 @@ FROM python:3.9-slim
 # Встановлюємо робочу директорію
 WORKDIR /app
 
-# Встановлюємо git, необхідний для клонування репозиторію
-RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
+# Встановлюємо git та sed
+RUN apt-get update && apt-get install -y git sed && rm -rf /var/lib/apt/lists/*
 
 # Копіюємо файл залежностей та встановлюємо їх
-# Це прискорює білд, оскільки залежності перевстановлюються тільки якщо requirements.txt змінився
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Спочатку копіюємо всі файли проекту
 COPY . .
 
-# --- Крок регенерації Protobuf (тепер виконується ПІСЛЯ копіювання) ---
+# --- Крок регенерації Protobuf ---
 # Клонуємо офіційний репозиторій з .proto файлами
 RUN git clone https://github.com/spotware/openapi-proto-messages.git /tmp/proto-messages
 
-# Створюємо директорію для скомпільованих файлів, якщо її немає
-# (Хоча після COPY вона вже має існувати, це для надійності)
+# Створюємо директорію для скомпільованих файлів
 RUN mkdir -p /app/ctrader_open_api/messages
 
-# Компілюємо .proto файли, перезаписуючи існуючі старі файли в проекті
+# Компілюємо .proto файли, перезаписуючи існуючі
 RUN python -m grpc_tools.protoc \
     -I=/tmp/proto-messages/ \
     --python_out=/app/ctrader_open_api/messages \
     /tmp/proto-messages/*.proto
 
+# *** ВАЖЛИВИЙ КРОК: Виправляємо абсолютні імпорти на відносні у згенерованих файлах ***
+RUN sed -i 's/^import \(.*_pb2\)/from . import \1/' /app/ctrader_open_api/messages/*_pb2.py
+
 # Створюємо порожній __init__.py, щоб директорія розглядалась як Python-пакет
 RUN touch /app/ctrader_open_api/messages/__init__.py
 
-# Видаляємо тимчасовий репозиторій, щоб зменшити розмір образу
+# Видаляємо тимчасовий репозиторій
 RUN rm -rf /tmp/proto-messages
 # --- Кінець кроку регенерації ---
 
