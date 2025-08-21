@@ -2,6 +2,7 @@ import os
 import logging
 from klein import Klein
 from twisted.internet import reactor
+from twisted.web.server import Site  # <-- 1. Імпортуємо Site
 from spotware_connect import SpotwareConnect
 
 # Налаштування логування
@@ -35,12 +36,12 @@ def on_symbols_error(failure):
 def start_services():
     try:
         web_port = int(os.environ.get("PORT", 8080))
-        reactor.listenTCP(web_port, app.resource(), interface='0.0.0.0')
+        # 2. Обгортаємо ресурс у Site()
+        site = Site(app.resource())
+        reactor.listenTCP(web_port, site, interface='0.0.0.0')
         logger.info(f"Веб-сервер запущено на порту {web_port}")
         
-        # Підписуємось на подію 'ready' від клієнта
         ctrader_client.on("ready", on_ctrader_ready)
-        # Запускаємо підключення
         ctrader_client.start()
 
         logger.info("Запуск головного циклу reactor...")
