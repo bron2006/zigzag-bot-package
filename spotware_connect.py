@@ -38,11 +38,12 @@ class SpotwareConnect(EventEmitter):
         self.is_authorized = False
         
         self._client = SpotwareClientBase(self.host, self.port, TcpProtocol)
+        # FIX: Зберігаємо account_id для доступу ззовні
+        self._client.account_id = None
+        
         self._client.setConnectedCallback(self._on_connected)
         self._client.setMessageReceivedCallback(self._on_message_received)
         self._client.setDisconnectedCallback(self._on_disconnected)
-        # Рядок, що викликав помилку, видалено. Обробка помилок підключення буде
-        # здійснюватися через стандартний механізм перепідключення Twisted.
 
     def start(self):
         self._client.startService()
@@ -57,6 +58,7 @@ class SpotwareConnect(EventEmitter):
 
     def _on_disconnected(self, client, reason):
         self.is_authorized = False
+        self._client.account_id = None
         error_msg = reason.getErrorMessage()
         logger.warning(f"Disconnected from cTrader API. Reason: {error_msg}")
         self.emit("error", f"Disconnected: {error_msg}")
@@ -71,7 +73,8 @@ class SpotwareConnect(EventEmitter):
         elif payload_type == ProtoOAPayloadType.PROTO_OA_ACCOUNT_AUTH_RES:
             response = ProtoOAAccountAuthRes()
             response.ParseFromString(message.payload)
-            logger.info(f"Account {response.ctidTraderAccountId} authorized.")
+            self._client.account_id = response.ctidTraderAccountId # Зберігаємо ID
+            logger.info(f"Account {self._client.account_id} authorized.")
             self.is_authorized = True
             self.emit("ready")
         elif payload_type == ProtoOAPayloadType.PROTO_OA_SYMBOLS_LIST_RES:
