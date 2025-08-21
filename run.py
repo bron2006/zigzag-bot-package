@@ -2,12 +2,7 @@ import os
 import logging
 from klein import Klein
 from twisted.internet import reactor
-from twisted.internet.endpoints import clientFromString
-from twisted.web.server import Site
-from ctrader_open_api.factory import Factory
 from spotware_connect import SpotwareConnect
-# Імпортуємо змінні з уніфікованими іменами з config.py
-from config import host, port, CT_CLIENT_ID, CT_CLIENT_SECRET, DEMO_ACCOUNT_ID, CTRADER_ACCESS_TOKEN
 
 # Налаштування логування
 logging.basicConfig(
@@ -16,58 +11,44 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Ініціалізація веб-додатку Klein
 app = Klein()
+ctrader_client = SpotwareConnect()
 
 @app.route("/")
 def index(request):
-    """Головна сторінка, яка підтверджує, що сервіс працює."""
     logger.info("Web root requested.")
     return b"Hello, cTrader bot is running!"
 
-def start_ctrader_client():
-    """Функція для запуску cTrader клієнта."""
-    logger.info("Ініціалізація cTrader клієнта...")
-    try:
-        client = clientFromString(reactor, f"ssl:{host}:{port}")
-        factory = Factory()
+def on_ctrader_ready():
+    logger.info("cTrader Client готовий. Запитую символи...")
+    d = ctrader_client.get_all_symbols()
+    d.addCallbacks(on_symbols_loaded, on_symbols_error)
 
-        # Використовуємо змінні, імпортовані з config.py
-        spotware_connect = SpotwareConnect(
-            reactor,
-            client,
-            factory,
-            CT_CLIENT_ID,
-            CT_CLIENT_SECRET,
-            DEMO_ACCOUNT_ID,
-            CTRADER_ACCESS_TOKEN,
-        )
+def on_symbols_loaded(response):
+    symbols = response.symbol
+    logger.info(f"Завантажено {len(symbols)} символів.")
+    # Тут буде подальша логіка...
 
-        spotware_connect.start()
-        logger.info("Процес підключення до cTrader запущено.")
+def on_symbols_error(failure):
+    logger.error(f"Не вдалося завантажити символи: {failure.getErrorMessage()}")
 
-    except Exception as e:
-        logger.critical(f"Критична помилка під час ініціалізації cTrader: {e}", exc_info=True)
-        if reactor.running:
-            reactor.stop()
-
-def main():
-    """Головна функція для налаштування та запуску сервісів."""
+def start_services():
     try:
         web_port = int(os.environ.get("PORT", 8080))
-        site = Site(app.resource())
-        reactor.listenTCP(web_port, site, interface='0.0.0.0')
+        reactor.listenTCP(web_port, app.resource(), interface='0.0.0.0')
         logger.info(f"Веб-сервер запущено на порту {web_port}")
-
-        reactor.callWhenRunning(start_ctrader_client)
+        
+        # Підписуємось на подію 'ready' від клієнта
+        ctrader_client.on("ready", on_ctrader_ready)
+        # Запускаємо підключення
+        ctrader_client.start()
 
         logger.info("Запуск головного циклу reactor...")
         reactor.run()
-
     except Exception as e:
-        logger.critical(f"Помилка під час запуску main: {e}", exc_info=True)
+        logger.critical(f"Помилка під час запуску сервісів: {e}", exc_info=True)
         if reactor.running:
             reactor.stop()
 
 if __name__ == "__main__":
-    main()
+    start_services()
