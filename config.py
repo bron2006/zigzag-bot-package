@@ -5,6 +5,10 @@ from dotenv import load_dotenv
 # Завантажуємо змінні оточення з файлу .env
 load_dotenv()
 
+# --- Налаштування бази даних ---
+# ОСЬ ЦЕЙ РЯДОК ПОТРІБНО ДОДАТИ
+DB_NAME = os.getenv("DB_NAME", "signals.db") # Назва файлу бази даних SQLite
+
 # --- Telegram ---
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
