@@ -6,10 +6,10 @@ from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import ProtoMessage
 from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOAPayloadType
 from ctrader_open_api.messages.OpenApiMessages_pb2 import (
     ProtoOAApplicationAuthReq, ProtoOAAccountAuthReq,
-    ProtoOASymbolsListReq, ProtoOASymbolsListRes, ProtoOAErrorRes
+    ProtoOASymbolsListReq, ProtoOASymbolsListRes
 )
-# FIX: Import global variables instead of functions
-from config import CT_CLIENT_ID, CT_CLIENT_SECRET, CTRADER_ACCESS_TOKEN, DEMO_ACCOUNT_ID
+# FIX: Import global variables from config
+from config import CTRADER_ACCESS_TOKEN, DEMO_ACCOUNT_ID
 
 logger = logging.getLogger(__name__)
 
@@ -28,10 +28,13 @@ class EventEmitter:
                 reactor.callFromThread(func, *args, **kwargs)
 
 class SpotwareClient(EventEmitter):
-    def __init__(self):
+    # FIX: The constructor now accepts client_id and client_secret
+    def __init__(self, client_id, client_secret):
         super().__init__()
         self.host = "demo.ctraderapi.com"
         self.port = 5035
+        self._client_id = client_id
+        self._client_secret = client_secret
         self._is_ready = defer.Deferred()
         
         self._client = SpotwareClientBase(self.host, self.port, TcpProtocol)
@@ -50,8 +53,8 @@ class SpotwareClient(EventEmitter):
 
     def _on_connected(self, client):
         logger.info("Встановлено з'єднання з cTrader API. Авторизація додатку...")
-        # FIX: Use global variable
-        request = ProtoOAApplicationAuthReq(clientId=CT_CLIENT_ID, clientSecret=CT_CLIENT_SECRET)
+        # FIX: Use the arguments passed to the constructor
+        request = ProtoOAApplicationAuthReq(clientId=self._client_id, clientSecret=self._client_secret)
         self.send(request).addErrback(lambda err: self.emit("error", f"Помилка авторизації додатку: {err.getErrorMessage()}"))
 
     def _on_disconnected(self, client, reason):
@@ -83,7 +86,6 @@ class SpotwareClient(EventEmitter):
             self.emit("error", error_message)
 
     def _authorize_account(self):
-        # FIX: Use global variables
         request = ProtoOAAccountAuthReq(
             ctidTraderAccountId=DEMO_ACCOUNT_ID, 
             accessToken=CTRADER_ACCESS_TOKEN
@@ -91,6 +93,5 @@ class SpotwareClient(EventEmitter):
         self.send(request).addErrback(lambda err: self.emit("error", f"Помилка авторизації рахунку: {err.getErrorMessage()}"))
 
     def _request_symbols(self):
-        # FIX: Use global variable
         request = ProtoOASymbolsListReq(ctidTraderAccountId=DEMO_ACCOUNT_ID)
         self.send(request).addErrback(lambda err: self.emit("error", f"Помилка запиту символів: {err.getErrorMessage()}"))
