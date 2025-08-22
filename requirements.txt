@@ -2,7 +2,6 @@ python-telegram-bot==13.15
 Flask==2.3.3
 pandas==2.1.4
 pandas-ta==0.3.14b
-twelvedata==1.2.24
 gunicorn==21.2.0
 python-dotenv
 cachetools==4.2.2
