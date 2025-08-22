@@ -1,35 +1,46 @@
-# config.py
 import os
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# --- Налаштування бази даних ---
-# ПОВЕРТАЄМОСЬ ДО ПРОСТОЇ НАЗВИ ФАЙЛУ
-DB_NAME = os.getenv("DB_NAME", "signals.db")
+def _get_required_env(var_name: str) -> str:
+    value = os.getenv(var_name)
+    if value is None:
+        raise ValueError(f"Помилка: обов'язкова змінна оточення '{var_name}' не встановлена.")
+    return value
 
 # --- Telegram ---
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+def get_telegram_token() -> str:
+    return _get_required_env("TELEGRAM_BOT_TOKEN")
 
-def get_chat_id() -> int:
-    chat_id_str = os.getenv("TELEGRAM_CHAT_ID")
-    return int(chat_id_str) if chat_id_str else None
+def get_webhook_secret() -> str:
+    return _get_required_env("WEBHOOK_SECRET")
 
 # --- cTrader ---
-def get_ct_client_id() -> str: return os.getenv("CT_CLIENT_ID")
-def get_ct_client_secret() -> str: return os.getenv("CT_CLIENT_SECRET")
-def get_ctrader_access_token() -> str: return os.getenv("CTRADER_ACCESS_TOKEN")
+def get_ct_client_id() -> str:
+    return _get_required_env("CT_CLIENT_ID")
+
+def get_ct_client_secret() -> str:
+    return _get_required_env("CT_CLIENT_SECRET")
+
+def get_ctrader_access_token() -> str:
+    return _get_required_env("CTRADER_ACCESS_TOKEN")
+
 def get_demo_account_id() -> int:
-    account_id_str = os.getenv("DEMO_ACCOUNT_ID")
-    return int(account_id_str) if account_id_str else None
+    return int(_get_required_env("DEMO_ACCOUNT_ID"))
 
 # --- Fly.io ---
-def get_fly_app_name() -> str: return os.getenv("FLY_APP_NAME")
+def get_fly_app_name() -> str | None:
+    return os.getenv("FLY_APP_NAME")
 
-# --- Словник з валютними парами для меню ---
+# --- Database ---
+DB_NAME = "bot_data.db"
+
+# --- Списки активів (додано відсутні для повноти) ---
+CRYPTO_PAIRS_FULL = ["BTC/USD", "ETH/USD", "LTC/USD", "XRP/USD"] 
+STOCKS_US_SYMBOLS = ["AAPL", "GOOGL", "MSFT", "AMZN"]
 FOREX_SESSIONS = {
-    "Європейська": ["EUR/USD", "GBP/USD", "USD/CHF", "EUR/GBP", "EUR/CHF"],
-    "Американська": ["USD/CAD", "USD/JPY", "GBP/JPY", "EUR/JPY", "CAD/JPY"],
-    "Азіатська": ["AUD/USD", "NZD/USD", "AUD/JPY", "NZD/JPY", "AUD/NZD"],
-    "Тихоокеанська": ["AUD/CAD", "AUD/CHF", "CAD/CHF", "GBP/AUD", "EUR/AUD"]
+    "Азіатська": ["USD/JPY", "AUD/USD", "NZD/USD", "EUR/JPY", "CHF/JPY"],
+    "Європейська": ["EUR/USD", "GBP/USD", "USD/CHF", "EUR/GBP", "EUR/CHF", "GBP/CHF"],
+    "Американська": ["USD/CAD", "USD/MXN", "USD/BRL", "USD/ZAR"]
 }

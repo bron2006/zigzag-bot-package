@@ -1,5 +1,3 @@
-# telegram_ui.py
-
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, WebAppInfo
 from telegram.ext import CallbackContext
@@ -8,23 +6,15 @@ from telegram.error import BadRequest
 
 import state
 from config import FOREX_SESSIONS, get_fly_app_name
-# Імпортуємо оновлену функцію аналізу
 from analysis import get_api_detailed_signal_data
 
 logger = logging.getLogger(__name__)
 
-# --- КЛАВІАТУРИ (без змін) ---
-def get_reply_keyboard() -> ReplyKeyboardMarkup:
-    app_name = get_fly_app_name()
-    if not app_name:
-        logger.error("FLY_APP_NAME не встановлено! WebApp недоступний.")
-        return ReplyKeyboardMarkup([["МЕНЮ"]], resize_keyboard=True)
-    webapp_info = WebAppInfo(url=f"https://{app_name}.fly.dev/webapp/index.html")
-    keyboard = [[KeyboardButton("МЕНЮ"), KeyboardButton("WebApp", web_app=webapp_info)]]
-    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-
+# --- КЛАВІАТУРИ ---
 def get_main_menu_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([[InlineKeyboardButton("💹 Валютні пари (Forex)", callback_data="menu_forex")]])
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("💹 Валютні пари (Forex)", callback_data="menu_forex")],
+    ])
 
 def get_forex_sessions_kb() -> InlineKeyboardMarkup:
     keyboard = []
@@ -39,31 +29,49 @@ def get_pairs_kb(session: str) -> InlineKeyboardMarkup:
     row = []
     for pair in pairs:
         row.append(InlineKeyboardButton(pair, callback_data=pair.replace("/", "")))
-        if len(row) == 3: keyboard.append(row); row = []
-    if row: keyboard.append(row)
+        if len(row) == 3:
+            keyboard.append(row)
+            row = []
+    if row:
+        keyboard.append(row)
     keyboard.append([InlineKeyboardButton("⬅️ Назад до сесій", callback_data="menu_forex")])
     return InlineKeyboardMarkup(keyboard)
 
-# --- ОБРОБНИКИ КОМАНД (без змін) ---
+# --- ОБРОБНИКИ ---
 def start(update: Update, context: CallbackContext) -> None:
+    app_name = get_fly_app_name()
+    if not app_name:
+        logger.error("FLY_APP_NAME не встановлено! WebApp недоступний.")
+        update.message.reply_text("Помилка конфігурації сервера. WebApp недоступний.")
+        return
+
+    webapp_info = WebAppInfo(url=f"https://{app_name}.fly.dev/webapp/index.html")
+    
+    keyboard = [
+        [
+            KeyboardButton("МЕНЮ"), 
+            KeyboardButton("WebApp", web_app=webapp_info)
+        ]
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
     update.message.reply_text(
-        "👋 Вітаю! Натисніть «МЕНЮ» для вибору активів або «WebApp» для відкриття терміналу.",
-        reply_markup=get_reply_keyboard()
+        "👋 Вітаю! Натисніть «МЕНЮ» для вибору активів або «WebApp» для відкриття терміналу.", 
+        reply_markup=reply_markup
     )
 
 def menu(update: Update, context: CallbackContext) -> None:
     if 'last_menu_id' in context.user_data:
-        try: context.bot.delete_message(chat_id=update.message.chat_id, message_id=context.user_data['last_menu_id'])
-        except BadRequest: pass
+        try:
+            context.bot.delete_message(chat_id=update.message.chat_id, message_id=context.user_data['last_menu_id'])
+        except BadRequest:
+            pass
+            
     sent_message = update.message.reply_text("🏠 Головне меню:", reply_markup=get_main_menu_kb())
     context.user_data['last_menu_id'] = sent_message.message_id
 
-def reset_ui(update: Update, context: CallbackContext) -> None:
-    update.message.reply_text(f"Невідома команда: '{update.message.text}'. Використовуйте кнопки.", reply_markup=get_reply_keyboard())
-
-# --- ФОРМАТУВАННЯ ВІДПОВІДІ (без змін) ---
 def _format_signal_message(result: dict) -> str:
-    if result.get("error"): return f"❌ Помилка аналізу: {result['error']}"
+    if result.get("error"):
+        return f"❌ Помилка аналізу: {result['error']}"
     pair = result.get('pair', 'N/A')
     price = result.get('price', 0)
     verdict = result.get('verdict_text', 'Не вдалося визначити.')
@@ -76,15 +84,17 @@ def _format_signal_message(result: dict) -> str:
     message += f"**Поточна ціна:** `{price_str}`\n\n"
     if support or resistance:
         message += "🔑 **Ключові рівні:**\n"
-        if support: message += f"    - Підтримка: `{support:.5f}`\n"
-        if resistance: message += f"    - Опір: `{resistance:.5f}`\n"
+        if support:
+            message += f"   - Підтримка: `{support:.5f}`\n"
+        if resistance:
+            message += f"   - Опір: `{resistance:.5f}`\n"
         message += "\n"
     if reasons:
         message += "📑 **Фактори аналізу:**\n"
-        for reason in reasons: message += f"    - {reason}\n"
+        for reason in reasons:
+            message += f"   - {reason}\n"
     return message
 
-# --- ОБРОБНИК НАТИСКАННЯ КНОПОК ---
 def button_handler(update: Update, context: CallbackContext) -> None:
     query = update.callback_query
     query.answer()
@@ -100,25 +110,27 @@ def button_handler(update: Update, context: CallbackContext) -> None:
         query.edit_message_text(f"Виберіть пару для сесії '{session_name}':", reply_markup=get_pairs_kb(session_name))
     else:
         symbol = data
-        if not state.client or not state.client.is_authorized:
-            query.answer(text="❌ З'єднання з cTrader ще не встановлено.", show_alert=True); return
-        if not state.SYMBOLS_LOADED or symbol not in state.symbol_cache:
-            query.answer(text=f"⚠️ Символи ще завантажуються або {symbol} не знайдено.", show_alert=True); return
+        if not state.client or not state.client.isConnected:
+            query.answer(text="❌ З'єднання з cTrader API ще не встановлено.", show_alert=True)
+            return
+        if symbol not in state.symbol_cache:
+            query.answer(text=f"⚠️ Символ {symbol} не знайдено.", show_alert=True)
+            return
+        query.edit_message_text(text=f"⏳ Обрано {symbol}. Отримую дані для аналізу...")
         
-        query.edit_message_text(text=f"⏳ Обрано {symbol}. Роблю запит до API...")
-        
+        user_id = query.from_user.id
+        chat_id = query.message.chat_id
+
         def on_success(result):
             message_text = _format_signal_message(result)
-            query.edit_message_text(text=message_text, parse_mode='Markdown', reply_markup=get_main_menu_kb())
-
+            query.edit_message_text(text=message_text, parse_mode='Markdown', reply_markup=get_forex_sessions_kb())
         def on_error(failure):
-            error_message = failure.getErrorMessage() if hasattr(failure, 'getErrorMessage') else str(failure)
-            logger.error(f"❌ Помилка при отриманні сигналу для {symbol}: {error_message}")
-            query.edit_message_text(text=f"❌ Виникла помилка під час аналізу {symbol}: {error_message}", reply_markup=get_main_menu_kb())
-
+            logger.error(f"❌ Помилка при отриманні сигналу для {symbol}: {failure.getErrorMessage()}")
+            query.edit_message_text(
+                text=f"❌ Виникла помилка під час аналізу {symbol}.",
+                reply_markup=get_forex_sessions_kb()
+            )
         def do_analysis():
-            # КЛЮЧОВА ЗМІНА: Передаємо state.symbol_cache в функцію аналізу
-            deferred = get_api_detailed_signal_data(state.client, state.symbol_cache, symbol, query.from_user.id)
-            deferred.addCallbacks(on_success, on_error)
-            
+            d = get_api_detailed_signal_data(state.client, symbol, user_id)
+            d.addCallbacks(on_success, on_error)
         reactor.callFromThread(do_analysis)
