@@ -1,5 +1,6 @@
 python-telegram-bot==13.15
 Flask==2.3.3
+ccxt==4.2.18
 pandas==2.1.4
 pandas-ta==0.3.14b
 twelvedata==1.2.24
@@ -7,7 +8,3 @@ gunicorn==21.2.0
 python-dotenv
 cachetools==4.2.2
 Flask-Cors
-requests
-protobuf==3.20.3
-websockets==12.0
-ctrader-open-api # <-- ДОДАНО ОФІЦІЙНУ БІБЛІОТЕКУ
