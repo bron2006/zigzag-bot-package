@@ -1,4 +1,4 @@
-import logging, os
+import logging, os, json
 from klein import Klein
 from twisted.internet import reactor
 from twisted.web.server import Site
@@ -7,7 +7,7 @@ from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, Callb
 
 from spotware_connect import SpotwareConnect
 import state
-from config import TELEGRAM_BOT_TOKEN, get_ct_client_id, get_ct_client_secret
+from config import TELEGRAM_BOT_TOKEN, get_ct_client_id, get_ct_client_secret, FOREX_SESSIONS
 from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOASymbolsListRes
 
 logging.basicConfig(level=logging.INFO,
@@ -35,6 +35,26 @@ def static_files(request, filename):
         return File(WEB_DIR).render(request)
     request.setResponseCode(404)
     return b"Not Found"
+
+# --- ПОЧАТОК ЗМІН: API ендпоінт для веб-додатку ---
+@app.route("/api/get_pairs", methods=['GET'])
+def get_pairs(request):
+    """
+    Віддає статичний список пар для WebApp.
+    """
+    logger.info("API call received for /api/get_pairs")
+    request.setHeader(b"Content-Type", b"application/json; charset=utf-8")
+    
+    # На даному етапі просто віддаємо статичні дані з конфігу.
+    # У майбутньому 'watchlist' можна буде завантажувати з бази даних.
+    response_data = {
+        "forex": FOREX_SESSIONS,
+        "watchlist": [], # Поки що порожній, будемо реалізовувати пізніше
+        "crypto": [],    # Аналогічно
+        "stocks": []     # Аналогічно
+    }
+    return json.dumps(response_data).encode('utf-8')
+# --- КІНЕЦЬ ЗМІН ---
 
 def on_ctrader_ready():
     logger.info("cTrader client is ready. Loading symbols...")
