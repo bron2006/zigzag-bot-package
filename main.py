@@ -1,9 +1,7 @@
 import logging
-import os
 from klein import Klein
 from twisted.internet import reactor
 from twisted.web.server import Site
-from twisted.web.static import File
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackQueryHandler
 
 from spotware_connect import SpotwareConnect
@@ -16,28 +14,11 @@ logger = logging.getLogger(__name__)
 
 app = Klein()
 
-# --- Статичні файли ---
-WEBAPP_DIR = os.path.join(os.path.dirname(__file__), "webapp")
-
 @app.route("/")
 def home(request):
-    index_path = os.path.join(WEBAPP_DIR, "index.html")
-    try:
-        with open(index_path, "rb") as f:
-            request.setHeader(b"content-type", b"text/html; charset=utf-8")
-            return f.read()
-    except Exception as e:
-        logger.error(f"Не вдалося відкрити index.html: {e}")
-        return b"Помилка завантаження сторінки."
-
-# /static/* → папка webapp
-app.resource().putChild(b"static", File(WEBAPP_DIR.encode()))
-
-# --- API endpoint для статусу ---
-@app.route("/status")
-def status(request):
+    request.setHeader("Content-Type", "text/html; charset=utf-8")  # ✅ Виправлено
     status = "авторизований" if state.client and state.client.is_authorized else "не авторизований"
-    return f"cTrader клієнт: {status}."
+    return f"<h2>cTrader клієнт: {status}.</h2>"
 
 def on_ctrader_ready():
     logger.info("cTrader client is ready. Loading symbols...")
@@ -81,7 +62,7 @@ def setup_and_run():
     client.start()
     logger.info("cTrader client started.")
 
-# --- Запуск Klein-сервера ---
+# --- Ключове: запускаємо Klein-сервер на 0.0.0.0:8080 ---
 site = Site(app.resource())
 reactor.listenTCP(8080, site, interface="0.0.0.0")
 
