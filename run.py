@@ -12,5 +12,4 @@ logger = logging.getLogger(__name__)
 
 if __name__ == "__main__":
     logger.info("🚀 Запуск Twisted reactor...")
-    # reactor.run блокує виконання та тримає процес живим
     reactor.run()
