@@ -1,4 +1,3 @@
-# app.py
 import logging
 import os
 import json
@@ -7,10 +6,8 @@ import threading
 from flask import Flask, jsonify, send_from_directory, Response, request
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackQueryHandler
 
-# --- ПОЧАТОК ЗМІН: Інтегруємо crochet ---
 import crochet
 crochet.setup()
-# --- КІНЕЦЬ ЗМІН ---
 
 import state
 from spotware_connect import SpotwareConnect
@@ -48,7 +45,6 @@ def on_symbols_loaded(raw_message):
 def on_symbols_error(failure):
     logger.error(f"Failed to load symbols: {failure.getErrorMessage()}")
 
-# --- ПОЧАТОК ЗМІН: Спрощуємо запуск сервісів, crochet керує реактором ---
 def start_background_services():
     logger.info("Initializing background services (Telegram, cTrader)...")
     if not TELEGRAM_BOT_TOKEN:
@@ -71,10 +67,8 @@ def start_background_services():
     logger.info("Telegram bot started.")
 
     client.on("ready", on_ctrader_ready)
-    # Запускаємо клієнт; crochet вже запустив реактор у фоні
     client.start()
     logger.info("cTrader client started.")
-# --- КІНЕЦЬ ЗМІН ---
 
 @app.route("/")
 def home():
@@ -109,23 +103,28 @@ def get_pairs():
         "watchlist": [], "crypto": [], "stocks": []
     })
 
-# --- ПОЧАТОК ЗМІН: Використовуємо crochet для безпечних асинхронних викликів ---
+# --- ПОЧАТОК ЗМІН: Додаємо перевірки готовності сервісів ---
 @app.route("/api/signal")
 def api_signal():
     pair = request.args.get("pair")
     if not pair:
         return jsonify({"error": "pair is required"}), 400
     
+    # КЛЮЧОВЕ ВИПРАВЛЕННЯ: Перевіряємо, чи готовий клієнт до роботи
+    if not state.client or not state.client.is_authorized:
+        return jsonify({"error": "cTrader client is not connected or authorized yet. Please try again in a moment."}), 503
+        
+    if not state.SYMBOLS_LOADED or pair not in state.symbol_cache:
+        return jsonify({"error": f"Symbol data is not loaded yet or '{pair}' not found. Please try again in a moment."}), 503
+
     logger.info(f"Received signal request for pair: {pair}")
 
     @crochet.run_in_reactor
     def do_analysis_and_get_result():
-        # Ця функція тепер виконується в безпечному потоці Twisted
         deferred = get_api_detailed_signal_data(state.client, state.symbol_cache, pair, 0)
         return deferred
 
     try:
-        # crochet.wait чекає на результат, не блокуючи GIL
         result = do_analysis_and_get_result(timeout=30)
         return jsonify(result)
     except crochet.TimeoutError:
@@ -134,6 +133,7 @@ def api_signal():
     except Exception as e:
         logger.error(f"Error in signal API for {pair}: {e}", exc_info=True)
         return jsonify({"error": "Internal server error"}), 500
+# --- КІНЕЦЬ ЗМІН ---
 
 @app.route("/api/get_mta")
 def api_get_mta():
@@ -151,7 +151,6 @@ def api_get_mta():
         return jsonify(result)
     except Exception:
         return jsonify([]), 200
-# --- КІНЕЦЬ ЗМІН ---
 
 if __name__ != "__main__":
     start_background_services()
