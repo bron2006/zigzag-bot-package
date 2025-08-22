@@ -1,4 +1,3 @@
-# analysis.py
 import logging
 import pandas as pd
 import pandas_ta as ta
@@ -8,7 +7,7 @@ from twisted.internet.defer import Deferred, DeferredList
 
 from ctrader_open_api.messages.OpenApiMessages_pb2 import (
     ProtoOAGetTrendbarsReq, ProtoOAGetTrendbarsRes,
-    ProtoOASubscribeSpotsReq, ProtoOAUnsubscribeSpotsReq # <-- НОВІ ІМПОРТИ
+    ProtoOASubscribeSpotsReq, ProtoOAUnsubscribeSpotsReq
 )
 from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOATrendbarPeriod as TrendbarPeriod
 from db import add_signal_to_history
@@ -20,9 +19,7 @@ PERIOD_MAP = {
     "4h": TrendbarPeriod.H4, "1day": TrendbarPeriod.D1
 }
 
-# --- ПОЧАТОК ЗМІН: Нова функція для отримання актуальної ціни ---
 def get_live_price(client, symbol_cache, norm_pair: str) -> Deferred:
-    """Робить короткочасну підписку для отримання актуальної ціни Bid/Ask."""
     d = Deferred()
     symbol_details = symbol_cache.get(norm_pair)
     if not symbol_details:
@@ -34,27 +31,28 @@ def get_live_price(client, symbol_cache, norm_pair: str) -> Deferred:
     
     def on_spot_event(spot_event):
         logger.info(f"Live price received for {norm_pair}. Unsubscribing...")
-        # Відписуємося
         unsubscribe_req = ProtoOAUnsubscribeSpotsReq(ctidTraderAccountId=account_id, symbolId=[symbol_id])
         client.send(unsubscribe_req)
         
-        # Видаляємо слухача, щоб не було витоків пам'яті
         client.remove_listener(event_name, on_spot_event)
         
-        # Розраховуємо середню ціну і повертаємо результат
-        price = (spot_event.bidPrice + spot_event.askPrice) / 2
-        d.callback(price / (10**5))
+        # --- ПОЧАТОК ЗМІН: Використовуємо правильні імена полів 'bid' та 'ask' ---
+        # Перевіряємо наявність полів перед використанням
+        if spot_event.HasField('bid') and spot_event.HasField('ask'):
+            price = (spot_event.bid + spot_event.ask) / 2
+            d.callback(price / (10**5))
+        else:
+            # Якщо з якоїсь причини ціни немає, повертаємо None
+            d.callback(None)
+        # --- КІНЕЦЬ ЗМІН ---
 
-    # Підписуємося на подію
     client.on(event_name, on_spot_event)
 
-    # Відправляємо запит на підписку
     logger.info(f"Subscribing to live price for {norm_pair} (symbolId: {symbol_id})")
     subscribe_req = ProtoOASubscribeSpotsReq(ctidTraderAccountId=account_id, symbolId=[symbol_id])
     client.send(subscribe_req)
 
     return d
-# --- КІНЕЦЬ ЗМІН ---
 
 def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: int) -> Deferred:
     d = Deferred()
@@ -139,11 +137,9 @@ def _generate_verdict(score):
     if score < 45: return "↘️ Moderate SELL"
     return "🟡 NEUTRAL"
 
-# --- ПОЧАТОК ЗМІН: Оновлюємо логіку, щоб отримувати актуальну ціну ---
 def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int) -> Deferred:
     def on_data_ready(results):
         try:
-            # Розпаковуємо результати
             success1, df = results[0]
             success2, daily_df = results[1]
             success3, live_price = results[2]
@@ -152,11 +148,9 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int
                 logger.warning(f"Not enough historical data to analyze {symbol}.")
                 return {"error": "Not enough historical data for analysis."}
 
-            # Проводимо аналіз на історичних даних
             analysis = _calculate_core_signal(df, daily_df)
             
-            # Використовуємо актуальну ціну, якщо вона є, інакше — ціну закриття
-            current_price = live_price if success3 and live_price else analysis['price']
+            current_price = live_price if success3 and live_price is not None else analysis['price']
 
             verdict = _generate_verdict(analysis['score'])
             add_signal_to_history({
@@ -166,7 +160,7 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int
             
             response_data = {
                 "pair": symbol, 
-                "price": current_price, # <-- ВИКОРИСТОВУЄМО АКТУАЛЬНУ ЦІНУ
+                "price": current_price,
                 "verdict_text": verdict, 
                 "reasons": analysis['reasons'], 
                 "support": analysis['support'], 
@@ -180,7 +174,6 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int
             logger.exception(f"Critical analysis error for {symbol}: {e}")
             return {"error": "Internal data processing error."}
 
-    # Запускаємо всі три запити паралельно
     d1 = get_market_data(client, symbol_cache, symbol, '15min', 100)
     d2 = get_market_data(client, symbol_cache, symbol, '1day', 100)
     d3 = get_live_price(client, symbol_cache, symbol)
@@ -188,4 +181,3 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int
     d_list = DeferredList([d1, d2, d3], consumeErrors=True)
     d_list.addCallback(on_data_ready)
     return d_list
-# --- КІНЕЦЬ ЗМІН ---
