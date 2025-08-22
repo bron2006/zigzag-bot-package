@@ -1,5 +1,3 @@
-# telegram_ui.py
-
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, WebAppInfo
 from telegram.ext import CallbackContext
@@ -8,20 +6,23 @@ from telegram.error import BadRequest
 
 import state
 from config import FOREX_SESSIONS, get_fly_app_name
-# Імпортуємо оновлену функцію аналізу
 from analysis import get_api_detailed_signal_data
 
 logger = logging.getLogger(__name__)
 
-# --- КЛАВІАТУРИ (без змін) ---
+# --- ПОЧАТОК ЗМІН: Виправляємо URL для WebApp ---
 def get_reply_keyboard() -> ReplyKeyboardMarkup:
     app_name = get_fly_app_name()
     if not app_name:
         logger.error("FLY_APP_NAME не встановлено! WebApp недоступний.")
         return ReplyKeyboardMarkup([["МЕНЮ"]], resize_keyboard=True)
-    webapp_info = WebAppInfo(url=f"https://{app_name}.fly.dev/webapp/index.html")
+    
+    # КЛЮЧОВЕ ВИПРАВЛЕННЯ: URL має вказувати на корінь сайту "/"
+    webapp_info = WebAppInfo(url=f"https://{app_name}.fly.dev/")
+    
     keyboard = [[KeyboardButton("МЕНЮ"), KeyboardButton("WebApp", web_app=webapp_info)]]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+# --- КІНЕЦЬ ЗМІН ---
 
 def get_main_menu_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[InlineKeyboardButton("💹 Валютні пари (Forex)", callback_data="menu_forex")]])
@@ -44,7 +45,6 @@ def get_pairs_kb(session: str) -> InlineKeyboardMarkup:
     keyboard.append([InlineKeyboardButton("⬅️ Назад до сесій", callback_data="menu_forex")])
     return InlineKeyboardMarkup(keyboard)
 
-# --- ОБРОБНИКИ КОМАНД (без змін) ---
 def start(update: Update, context: CallbackContext) -> None:
     update.message.reply_text(
         "👋 Вітаю! Натисніть «МЕНЮ» для вибору активів або «WebApp» для відкриття терміналу.",
@@ -61,7 +61,6 @@ def menu(update: Update, context: CallbackContext) -> None:
 def reset_ui(update: Update, context: CallbackContext) -> None:
     update.message.reply_text(f"Невідома команда: '{update.message.text}'. Використовуйте кнопки.", reply_markup=get_reply_keyboard())
 
-# --- ФОРМАТУВАННЯ ВІДПОВІДІ (без змін) ---
 def _format_signal_message(result: dict) -> str:
     if result.get("error"): return f"❌ Помилка аналізу: {result['error']}"
     pair = result.get('pair', 'N/A')
@@ -84,7 +83,6 @@ def _format_signal_message(result: dict) -> str:
         for reason in reasons: message += f"    - {reason}\n"
     return message
 
-# --- ОБРОБНИК НАТИСКАННЯ КНОПОК ---
 def button_handler(update: Update, context: CallbackContext) -> None:
     query = update.callback_query
     query.answer()
@@ -117,7 +115,6 @@ def button_handler(update: Update, context: CallbackContext) -> None:
             query.edit_message_text(text=f"❌ Виникла помилка під час аналізу {symbol}: {error_message}", reply_markup=get_main_menu_kb())
 
         def do_analysis():
-            # КЛЮЧОВА ЗМІНА: Передаємо state.symbol_cache в функцію аналізу
             deferred = get_api_detailed_signal_data(state.client, state.symbol_cache, symbol, query.from_user.id)
             deferred.addCallbacks(on_success, on_error)
             
