@@ -1,5 +1,4 @@
 # fly.toml
-
 app = "zigzag-bot-package"
 
 [build]
@@ -13,14 +12,12 @@ app = "zigzag-bot-package"
   min_machines_running = 0
   processes = ["app"]
 
-  # --- ПОЧАТОК ЗМІН: Додаємо перевірку працездатності ---
-  # Це буде "тримати в тонусі" наш сервер, не даючи йому заснути
   [[http_service.checks]]
-    interval = "15s" # Перевіряти кожні 15 секунд
-    timeout = "2s"   # Давати 2 секунди на відповідь
+    interval = "20s"
+    timeout = "5s"
     method = "GET"
-    path = "/"       # Робити запит на головну сторінку
-  # --- КІНЕЦЬ ЗМІН ---
+    path = "/health" # ЗМІНЕНО: Повертаємо на надійний шлях для перевірки
+    grace_period = "90s"
 
 [[vm]]
   cpu_kind = "shared"

@@ -1,35 +1,53 @@
 # bot.py
 import traceback
 import json
-from urllib.parse import parse_qs
-from flask import request, jsonify
+from urllib.parse import parse_qs, unquote
+from flask import request, jsonify, send_from_directory
 from flask_cors import CORS
 from telegram import Update
 
-from config import app, bot, dp, WEBHOOK_SECRET, logger, CRYPTO_PAIRS_FULL, FOREX_SESSIONS, STOCK_TICKERS, FOREX_PAIRS_MAP
-# --- Змінено: додаємо get_signal_history ---
-from db import init_db, get_watchlist, toggle_watch, get_signal_history
+from config import app, bot, dp, WEBHOOK_SECRET, logger, CRYPTO_PAIRS_FULL, FOREX_SESSIONS, STOCK_TICKERS, MY_TELEGRAM_ID, CTRADER_ACCESS_TOKEN, CTRADER_REFRESH_TOKEN
+from db import init_db, get_watchlist, toggle_watch, get_signal_history, get_ctrader_token, save_ctrader_token
 from analysis import get_api_detailed_signal_data, rank_assets_for_api, get_api_mta_data
 import telegram_ui
 
 CORS(app)
 
 def _get_user_id_from_request(req):
-    """Допоміжна функція для отримання user_id з initData."""
     init_data = req.args.get("initData")
-    if not init_data: return None
+    if not init_data:
+        return int(MY_TELEGRAM_ID) if MY_TELEGRAM_ID else None
     try:
-        parsed = parse_qs(init_data)
+        decoded_init_data = unquote(init_data)
+        parsed = parse_qs(decoded_init_data)
         user_json_str = parsed.get("user", [None])[0]
         if user_json_str:
             return json.loads(user_json_str).get("id")
     except Exception as e:
         logger.warning(f"Failed to parse initData: {e}")
-    return None
+    return int(MY_TELEGRAM_ID) if MY_TELEGRAM_ID else None
+
+def init_ctrader_token():
+    if not MY_TELEGRAM_ID or not CTRADER_ACCESS_TOKEN or not CTRADER_REFRESH_TOKEN:
+        logger.warning("Змінні середовища для cTrader не встановлені. Пропускаю ініціалізацію токену.")
+        return
+    try:
+        user_id = int(MY_TELEGRAM_ID)
+        if get_ctrader_token(user_id) is None:
+            logger.info(f"Токен cTrader для користувача {user_id} не знайдено. Зберігаю з секретів...")
+            # --- ЗМІНЕНО: Даємо токену 1 годину життя, щоб уникнути миттєвого оновлення ---
+            save_ctrader_token(user_id, CTRADER_ACCESS_TOKEN, CTRADER_REFRESH_TOKEN, expires_in=3600)
+            logger.info("Токен cTrader успішно збережено в базу даних.")
+        else:
+            logger.info(f"Токен cTrader для користувача {user_id} вже існує в базі даних.")
+    except Exception as e:
+        logger.error(f"Помилка під час ініціалізації токену cTrader: {e}")
 
 @app.before_request
 def log_request():
-    logger.info(f"[{request.method}] {request.path} - args={request.args.to_dict()}")
+    if request.path.startswith(('/script.js', '/style.css')) or request.path in ['/health', '/favicon.ico']:
+        return
+    logger.info(f"[{request.method}] {request.path}")
 
 @app.route(f"/{WEBHOOK_SECRET}", methods=["POST"])
 def webhook_handler():
@@ -43,44 +61,39 @@ def webhook_handler():
 @app.route("/api/signal", methods=["GET"])
 def api_signal():
     pair = request.args.get("pair")
+    user_id = _get_user_id_from_request(request)
     if not pair: return jsonify({"error": "pair is required"}), 400
     try:
-        data = get_api_detailed_signal_data(pair)
-        if "error" in data: return jsonify(data)
+        data = get_api_detailed_signal_data(pair, user_id=user_id)
+        if "error" in data: return jsonify(data), 500
         return jsonify(data)
     except Exception as e:
         logger.error(f"API error for pair {pair}: {e}\n{traceback.format_exc()}")
         return jsonify({"error": f"Внутрішня помилка сервера"}), 500
 
-@app.route("/api/get_pairs", methods=["GET"])
-def api_get_pairs():
+@app.route("/api/get_ranked_pairs", methods=["GET"])
+def api_get_ranked_pairs():
     user_id = _get_user_id_from_request(request)
     watchlist = get_watchlist(user_id) if user_id else []
-    return jsonify({ "watchlist": watchlist, "crypto": CRYPTO_PAIRS_FULL, "forex": FOREX_SESSIONS, "stocks": STOCK_TICKERS })
-
-@app.route("/api/get_active_markets", methods=["GET"])
-def api_get_active_markets():
     try:
-        ranked_crypto = rank_assets_for_api(CRYPTO_PAIRS_FULL, 'crypto')
-        top_crypto = [p['ticker'] for p in ranked_crypto[:5]]
-        ranked_stocks = rank_assets_for_api(STOCK_TICKERS, 'stocks')
-        top_stocks = [p['ticker'] for p in ranked_stocks[:5]]
-        all_forex_pairs = list(FOREX_PAIRS_MAP.keys())
-        ranked_forex = rank_assets_for_api(all_forex_pairs, 'forex')
-        top_forex = [p['ticker'] for p in ranked_forex[:5]]
-        return jsonify({ "active_crypto": top_crypto, "active_stocks": top_stocks, "active_forex": top_forex })
+        ranked_crypto_data = rank_assets_for_api(CRYPTO_PAIRS_FULL, 'crypto', user_id=user_id)
+        ranked_crypto = [{'ticker': p['ticker'], 'active': bool(p['score'] != -1)} for p in ranked_crypto_data]
+        static_stocks = [{'ticker': p, 'active': True} for p in STOCK_TICKERS]
+        static_forex = { session: [{'ticker': p, 'active': True} for p in pairs] for session, pairs in FOREX_SESSIONS.items() }
+        return jsonify({ "watchlist": watchlist, "crypto": ranked_crypto, "forex": static_forex, "stocks": static_stocks })
     except Exception as e:
-        logger.error(f"API error for active markets: {e}\n{traceback.format_exc()}")
-        return jsonify({"error": "Помилка при аналізі ринків"}), 500
+        logger.error(f"API error for ranked pairs: {e}\n{traceback.format_exc()}")
+        return jsonify({ "watchlist": watchlist, "crypto": [{'ticker': p, 'active': True} for p in CRYPTO_PAIRS_FULL], "forex": {session: [{'ticker': p, 'active': True} for p in pairs] for session, pairs in FOREX_SESSIONS.items()}, "stocks": [{'ticker': p, 'active': True} for p in STOCK_TICKERS], "error_message": "Помилка при сортуванні, показано стандартний список." })
 
 @app.route("/api/get_mta", methods=["GET"])
 def api_get_mta():
     pair = request.args.get("pair")
+    user_id = _get_user_id_from_request(request)
     if not pair: return jsonify({"error": "pair is required"}), 400
     asset_type = 'stocks'
     if '/' in pair: asset_type = 'crypto' if 'USDT' in pair else 'forex'
     try:
-        mta_data = get_api_mta_data(pair, asset_type)
+        mta_data = get_api_mta_data(pair, asset_type, user_id=user_id)
         return jsonify(mta_data)
     except Exception as e:
         logger.error(f"API error for MTA on {pair}: {e}\n{traceback.format_exc()}")
@@ -90,8 +103,7 @@ def api_get_mta():
 def toggle_watchlist_route():
     user_id = _get_user_id_from_request(request)
     pair = request.args.get("pair")
-    if not user_id or not pair:
-        return jsonify({"success": False, "error": "Missing required parameters"}), 400
+    if not user_id or not pair: return jsonify({"success": False, "error": "Missing required parameters"}), 400
     try:
         toggle_watch(user_id, pair)
         return jsonify({"success": True})
@@ -99,28 +111,33 @@ def toggle_watchlist_route():
         logger.error(f"Error in toggle_watchlist: {e}")
         return jsonify({"success": False, "error": "Internal server error"}), 500
 
-# --- ПОЧАТОК НОВОГО КОДУ: API для історії сигналів ---
 @app.route("/api/signal_history", methods=["GET"])
 def api_signal_history():
     user_id = _get_user_id_from_request(request)
     pair = request.args.get("pair")
-
-    if not user_id:
-        return jsonify({"error": "Not authorized"}), 401
-    if not pair:
-        return jsonify({"error": "pair is required"}), 400
-    
+    if not user_id: return jsonify({"error": "Not authorized"}), 401
+    if not pair: return jsonify({"error": "pair is required"}), 400
     try:
         history = get_signal_history(user_id, pair)
         return jsonify(history)
     except Exception as e:
         logger.error(f"API error for signal history on {pair}: {e}\n{traceback.format_exc()}")
         return jsonify({"error": "Помилка при отриманні історії"}), 500
-# --- КІНЕЦЬ НОВОГО КОДУ ---
 
-@app.route("/", methods=["GET"])
-def index():
-    return "ZigZag Bot v4.3 Backend with Watchlist API 🟢"
+@app.route('/health')
+def health_check():
+    return "OK", 200
+
+@app.route('/')
+def serve_index():
+    return send_from_directory('webapp', 'index.html')
+
+@app.route('/<path:filename>')
+def serve_webapp_files(filename):
+    return send_from_directory('webapp', filename)
 
 if __name__ != "__main__":
-    init_db()
+    with app.app_context():
+        init_db()
+        init_ctrader_token()
+    telegram_ui.register_handlers(dp)
