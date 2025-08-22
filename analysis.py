@@ -1,4 +1,3 @@
-# analysis.py
 import logging
 import pandas as pd
 import pandas_ta as ta
@@ -34,7 +33,7 @@ def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: in
 
     request = ProtoOAGetTrendbarsReq(
         ctidTraderAccountId=client._client.account_id,
-        symbolId=symbol_details.symbolId, # <-- Тепер це працює, бо ми беремо ID з ProtoOALightSymbol
+        symbolId=symbol_details.symbolId,
         period=tf_proto,
         fromTimestamp=from_ts,
         toTimestamp=now
@@ -50,8 +49,6 @@ def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: in
         
         if not response.trendbar: return pd.DataFrame()
 
-        # --- КЛЮЧОВЕ ВИПРАВЛЕННЯ З ВАШОГО КОДУ ---
-        # Використовуємо жорстко заданий дільник, оскільки '.digits' недоступний
         divisor = 10**5
         bars = [{
             'ts': pd.to_datetime(bar.utcTimestampInMinutes * 60, unit='s', utc=True),
@@ -61,7 +58,6 @@ def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: in
             'close': (bar.low + bar.deltaClose) / divisor,
             'volume': bar.volume
         } for bar in response.trendbar]
-        # --- КІНЕЦЬ ВИПРАВЛЕННЯ ---
         
         df = pd.DataFrame(bars)
         d.callback(df.sort_values(by='ts').reset_index(drop=True))
@@ -103,6 +99,7 @@ def _generate_verdict(score):
     if score < 45: return "↘️ Moderate SELL"
     return "🟡 NEUTRAL"
 
+# --- ПОЧАТОК ЗМІН: Формуємо правильний об'єкт відповіді для API ---
 def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int) -> Deferred:
     def on_data_ready(results):
         try:
@@ -113,9 +110,24 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int
 
             analysis = _calculate_core_signal(df, daily_df)
             verdict = _generate_verdict(analysis['score'])
-            add_signal_to_history({'user_id': user_id, 'pair': symbol, 'price': analysis['price'], 'bull_percentage': analysis['score']})
+            add_signal_to_history({
+                'user_id': user_id, 'pair': symbol, 
+                'price': analysis['price'], 'bull_percentage': analysis['score']
+            })
             
-            return {"pair": symbol, "price": analysis['price'], "verdict_text": verdict, "reasons": analysis['reasons'], "support": analysis['support'], "resistance": analysis['resistance']}
+            # Створюємо фінальний об'єкт відповіді, додаючи bull/bear percentages
+            response_data = {
+                "pair": symbol, 
+                "price": analysis['price'], 
+                "verdict_text": verdict, 
+                "reasons": analysis['reasons'], 
+                "support": analysis['support'], 
+                "resistance": analysis['resistance'],
+                "bull_percentage": analysis['score'], # <-- Додано
+                "bear_percentage": 100 - analysis['score'] # <-- Додано
+            }
+            return response_data
+            
         except Exception as e:
             logger.exception(f"Critical analysis error for {symbol}: {e}")
             return {"error": "Internal data processing error."}
@@ -126,3 +138,4 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int
     d_list = DeferredList([d1, d2], consumeErrors=True)
     d_list.addCallback(on_data_ready)
     return d_list
+# --- КІНЕЦЬ ЗМІН ---
