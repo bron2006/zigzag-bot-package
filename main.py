@@ -2,6 +2,7 @@
 import logging
 from klein import Klein
 from twisted.internet import reactor
+from twisted.web.static import File
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackQueryHandler
 
 from spotware_connect import SpotwareConnect
@@ -17,20 +18,27 @@ app = Klein()
 @app.route("/")
 def home(request):
     status = "авторизований" if state.client and state.client.is_authorized else "не авторизований"
-    return f"cTrader клієнт: {status}."
+    return f"cTrader bot status: {status}."
+
+# --- КЛЮЧОВА ЗМІНА: ДОДАЄМО ВІДДАЧУ СТАТИЧНИХ ФАЙЛІВ ---
+@app.route("/webapp/", branch=True)
+def webapp_files(request):
+    logger.info(f"Serving static files from ./webapp/ for request: {request.uri.decode()}")
+    return File("./webapp/")
+# --- КІНЕЦЬ ЗМІНИ ---
 
 def on_ctrader_ready():
-    logger.info("cTrader client is ready. Loading symbols...")
-    deferred = state.client.get_all_symbols() # <-- ВИКЛИКАЄМО СТАРИЙ МЕТОД
+    logger.info("cTrader client ready. Loading symbols...")
+    deferred = state.client.get_all_symbols()
     deferred.addCallbacks(on_symbols_loaded, on_symbols_error)
 
 def on_symbols_loaded(raw_message):
     try:
-        symbols_response = ProtoOASymbolsListRes() # <-- ПРАВИЛЬНИЙ ТИП ВІДПОВІДІ
+        symbols_response = ProtoOASymbolsListRes()
         symbols_response.ParseFromString(raw_message.payload)
         state.symbol_cache = {s.symbolName.replace("/", ""): s for s in symbols_response.symbol}
         state.SYMBOLS_LOADED = True
-        logger.info(f"✅ Successfully loaded {len(state.symbol_cache)} light symbols.")
+        logger.info(f"✅ Loaded {len(state.symbol_cache)} symbols.")
     except Exception as e:
         logger.error(f"Symbol processing error: {e}", exc_info=True)
 
@@ -60,5 +68,6 @@ def setup_and_run():
     client.start()
     logger.info("cTrader client started.")
 
+# Запускаємо налаштування при старті реактора
 reactor.callWhenRunning(setup_and_run)
-logger.info("Application setup complete. Reactor is running.")
+logger.info("Application setup complete. Reactor will be started by run.py.")

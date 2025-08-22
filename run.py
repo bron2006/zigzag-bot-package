@@ -1,6 +1,7 @@
-import os
-from main import app
+# run.py
+from twisted.internet import reactor
+from main import app # Імпортуємо наш Klein-додаток з main.py
 
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host="0.0.0.0", port=port)
+# --- КЛЮЧОВА ЗМІНА: ЗАПУСКАЄМО WEBSERVER ---
+if __name__ == '__main__':
+    app.run(host="0.0.0.0", port=8080)
