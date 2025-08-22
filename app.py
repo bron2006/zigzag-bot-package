@@ -12,7 +12,6 @@ from spotware_connect import SpotwareConnect
 from config import TELEGRAM_BOT_TOKEN, get_ct_client_id, get_ct_client_secret, FOREX_SESSIONS, get_fly_app_name
 from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOASymbolsListRes
 
-# --- Нові імпорти для асинхронного мосту ---
 from twisted.internet import reactor
 from analysis import get_api_detailed_signal_data
 from mta_analysis import get_mta_signal
@@ -73,6 +72,13 @@ def run_background_services():
     client.on("ready", on_ctrader_ready)
     client.start()
     logger.info("cTrader client started.")
+    
+    # --- ПОЧАТОК ЗМІН: Запускаємо "двигун" Twisted ---
+    # Цей виклик є блокуючим і буде утримувати цей потік живим,
+    # обробляючи всі асинхронні події.
+    logger.info("Starting Twisted reactor in background thread...")
+    reactor.run(installSignalHandlers=False)
+    # --- КІНЕЦЬ ЗМІН ---
 
 # --- Маршрути Flask (API та веб-сторінки) ---
 @app.route("/")
@@ -113,7 +119,6 @@ def get_pairs():
     }
     return jsonify(response_data)
 
-# --- ПОЧАТОК ЗМІН: Додаємо відсутні API ендпоінти ---
 @app.route("/api/signal")
 def api_signal():
     pair = request.args.get("pair")
@@ -122,7 +127,6 @@ def api_signal():
     
     logger.info(f"Received signal request for pair: {pair}")
     
-    # Створюємо "міст" для очікування результату з асинхронного потоку
     q = Queue()
     event = threading.Event()
 
@@ -136,13 +140,11 @@ def api_signal():
         event.set()
         
     def do_analysis():
-        # User ID для WebApp поки що можна вважати фіксованим, наприклад 0
         deferred = get_api_detailed_signal_data(state.client, state.symbol_cache, pair, 0)
         deferred.addCallbacks(on_success, on_error)
 
-    # Відправляємо завдання в потік Twisted і чекаємо на результат
     reactor.callFromThread(do_analysis)
-    event.wait(timeout=30) # Чекаємо до 30 секунд
+    event.wait(timeout=30)
 
     if not event.is_set() or q.empty():
         return jsonify({"error": "Request timed out or failed internally"}), 504
@@ -155,7 +157,6 @@ def api_get_mta():
     if not pair:
         return jsonify({"error": "pair is required"}), 400
 
-    # Створюємо "міст" для імітаційної функції
     q = Queue()
     event = threading.Event()
 
@@ -171,10 +172,9 @@ def api_get_mta():
     event.wait(timeout=5)
 
     if not event.is_set() or q.empty():
-        return jsonify([]), 200 # Повертаємо порожній список у разі помилки
+        return jsonify([]), 200
 
     return jsonify(q.get())
-# --- КІНЕЦЬ ЗМІН ---
 
 # --- Запуск фонових сервісів при старті Gunicorn ---
 if __name__ != "__main__":
