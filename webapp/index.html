@@ -1,25 +1,14 @@
 <!DOCTYPE html>
 <html lang="uk">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Торгові Сигнали</title>
-    <link rel="stylesheet" href="style.css">
-    <script src="https://cdn.plot.ly/plotly-2.12.1.min.js"></script>
-    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <meta charset="UTF-8">
+  <title>ZigZag Bot Dashboard</title>
+  <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-    <div id="loader" class="hidden">
-        <div class="spinner"></div>
-    </div>
+  <h1>📊 ZigZag Bot</h1>
+  <p>Статус підключення: <span id="status">Завантаження...</span></p>
 
-    <div class="container">
-        <div id="signalOutput"></div>
-        <div id="chart"></div>
-        <div id="historyContainer"></div>
-        <div id="listsContainer"></div>
-    </div>
-
-    <script src="script.js"></script>
+  <script src="/static/script.js"></script>
 </body>
 </html>
