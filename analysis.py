@@ -1,3 +1,4 @@
+# analysis.py
 import logging
 import pandas as pd
 import pandas_ta as ta
@@ -36,15 +37,11 @@ def get_live_price(client, symbol_cache, norm_pair: str) -> Deferred:
         
         client.remove_listener(event_name, on_spot_event)
         
-        # --- ПОЧАТОК ЗМІН: Використовуємо правильні імена полів 'bid' та 'ask' ---
-        # Перевіряємо наявність полів перед використанням
         if spot_event.HasField('bid') and spot_event.HasField('ask'):
             price = (spot_event.bid + spot_event.ask) / 2
             d.callback(price / (10**5))
         else:
-            # Якщо з якоїсь причини ціни немає, повертаємо None
             d.callback(None)
-        # --- КІНЕЦЬ ЗМІН ---
 
     client.on(event_name, on_spot_event)
 
@@ -90,11 +87,11 @@ def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: in
         divisor = 10**5
         bars = [{
             'ts': pd.to_datetime(bar.utcTimestampInMinutes * 60, unit='s', utc=True),
-            'open': (bar.low + bar.deltaOpen) / divisor,
-            'high': (bar.low + bar.deltaHigh) / divisor,
-            'low': bar.low / divisor,
-            'close': (bar.low + bar.deltaClose) / divisor,
-            'volume': bar.volume
+            'Open': (bar.low + bar.deltaOpen) / divisor, # <-- Змінено на велику літеру
+            'High': (bar.low + bar.deltaHigh) / divisor, # <-- Змінено на велику літеру
+            'Low': bar.low / divisor, # <-- Змінено на велику літеру
+            'Close': (bar.low + bar.deltaClose) / divisor, # <-- Змінено на велику літеру
+            'Volume': bar.volume
         } for bar in response.trendbar]
         
         df = pd.DataFrame(bars)
@@ -108,27 +105,104 @@ def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: in
     deferred.addCallbacks(process_response, on_error)
     return d
 
-def _calculate_core_signal(df, daily_df):
+# --- ПОЧАТОК ЗМІН: Повертаємо логіку зі старого проекту ---
+def group_close_values(values, threshold=0.01):
+    if not len(values): return []
+    values = sorted(values)
+    groups, current_group = [], [values[0]]
+    for value in values[1:]:
+        if value - current_group[-1] <= threshold * value:
+            current_group.append(value)
+        else:
+            groups.append(np.mean(current_group))
+            current_group = [value]
+    groups.append(np.mean(current_group))
+    return groups
+
+def identify_support_resistance_levels(df, window=20, threshold=0.01):
+    try:
+        lows = df['Low'].rolling(window=window, center=True, min_periods=3).min()
+        highs = df['High'].rolling(window=window, center=True, min_periods=3).max()
+        support_levels = group_close_values(df.loc[df['Low'] == lows, 'Low'].tolist(), threshold)
+        resistance_levels = group_close_values(df.loc[df['High'] == highs, 'High'].tolist(), threshold)
+        return sorted(support_levels), sorted(resistance_levels, reverse=True)
+    except Exception as e:
+        logger.error(f"Помилка в identify_support_resistance_levels: {e}")
+        return [], []
+
+def analyze_candle_patterns(df: pd.DataFrame):
+    try:
+        patterns = df.ta.cdl_pattern(name="all")
+        if patterns.empty: return None
+        last_candle = patterns.iloc[-1]
+        found_patterns = last_candle[last_candle != 0]
+        if found_patterns.empty: return None
+        signal_strength = found_patterns.iloc[0]
+        if abs(signal_strength) < 100:
+            return None
+        pattern_name = found_patterns.index[0].replace("CDL_", "")
+        pattern_type = 'bullish' if signal_strength > 0 else 'bearish'
+        arrow = '⬆️' if pattern_type == 'bullish' else '⬇️'
+        text = f'{arrow} {pattern_name}'
+        return {'name': pattern_name, 'type': pattern_type, 'text': text}
+    except Exception as e:
+        logger.error(f"Помилка в analyze_candle_patterns: {e}")
+        return None
+
+def analyze_volume(df):
+    if df.empty or 'Volume' not in df.columns or len(df) < 21: return "Недостатньо даних"
+    df['Volume_MA'] = df['Volume'].rolling(window=20).mean()
+    last = df.iloc[-1]
+    if pd.isna(last['Volume_MA']): return "Недостатньо даних"
+    if last['Volume'] > last['Volume_MA'] * 1.5:
+        return "🟢 Підвищений об'єм"
+    elif last['Volume'] < last['Volume_MA'] * 0.5:
+        return "🧊 Аномально низький об'єм"
+    return "Об'єм нейтральний"
+
+def _calculate_core_signal(df, daily_df, current_price):
     df.ta.rsi(length=14, append=True, col_names=('RSI',))
     df.ta.kama(length=14, append=True, col_names=('KAMA',))
     last = df.iloc[-1]
-    price = float(last['close'])
-    
-    lows = daily_df['low'].tail(30); highs = daily_df['high'].tail(30)
-    support = lows[lows < price].max(); resistance = highs[highs > price].min()
+    if pd.isna(last['RSI']) or pd.isna(last['KAMA']):
+        raise ValueError("Помилка розрахунку індикаторів")
 
-    score, reasons = 50, []
-    if price > last['KAMA']: score += 15; reasons.append("Price > KAMA(14)")
-    else: score -= 15; reasons.append("Price < KAMA(14)")
-    if last['RSI'] < 30: score += 20; reasons.append("RSI < 30 (oversold)")
-    elif last['RSI'] > 70: score -= 20; reasons.append("RSI > 70 (overbought)")
+    support_levels, resistance_levels = identify_support_resistance_levels(daily_df)
+    candle_pattern = analyze_candle_patterns(df)
+    volume_info = analyze_volume(df)
+    
+    score = 50
+    reasons = []
+    if current_price > last['KAMA']: score += 10; reasons.append("Ціна вище KAMA(14)")
+    else: score -= 10; reasons.append("Ціна нижче KAMA(14)")
+    
+    rsi = float(last['RSI'])
+    if rsi < 30: score += 15; reasons.append("RSI в зоні перепроданості")
+    elif rsi > 70: score -= 15; reasons.append("RSI в зоні перекупленості")
+    
+    if support_levels:
+        dist_to_support = min(abs(current_price - sl) for sl in support_levels)
+        if dist_to_support / current_price < 0.003:
+            score += 15; reasons.append("Ціна ДУЖЕ близько до підтримки")
+            
+    if resistance_levels:
+        dist_to_resistance = min(abs(current_price - rl) for rl in resistance_levels)
+        if dist_to_resistance / current_price < 0.003:
+            score -= 15; reasons.append("Ціна ДУЖЕ близько до опору")
+            
+    if "Аномально низький" in volume_info:
+        score = np.clip(score, 25, 75)
+        reasons.append("Низький об'єм!")
+        
+    score = int(np.clip(score, 0, 100))
+    support = min(support_levels, key=lambda x: abs(x - current_price)) if support_levels else None
+    resistance = min(resistance_levels, key=lambda x: abs(x - current_price)) if resistance_levels else None
     
     return {
-        "score": int(np.clip(score, 0, 100)), "reasons": reasons,
-        "support": float(support) if pd.notna(support) else None,
-        "resistance": float(resistance) if pd.notna(resistance) else None,
-        "price": price
+        "score": score, "reasons": reasons, "support": support, "resistance": resistance,
+        "candle_pattern": candle_pattern, "volume_info": volume_info
     }
+# --- КІНЕЦЬ ЗМІН ---
 
 def _generate_verdict(score):
     if score > 65: return "⬆️ Strong BUY"
@@ -137,6 +211,7 @@ def _generate_verdict(score):
     if score < 45: return "↘️ Moderate SELL"
     return "🟡 NEUTRAL"
 
+# --- ПОЧАТОК ЗМІН: Інтегруємо новий аналіз в основну функцію ---
 def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int) -> Deferred:
     def on_data_ready(results):
         try:
@@ -148,16 +223,18 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int
                 logger.warning(f"Not enough historical data to analyze {symbol}.")
                 return {"error": "Not enough historical data for analysis."}
 
-            analysis = _calculate_core_signal(df, daily_df)
+            current_price = live_price if success3 and live_price is not None else df.iloc[-1]['Close']
             
-            current_price = live_price if success3 and live_price is not None else analysis['price']
-
+            # Викликаємо розширений аналіз
+            analysis = _calculate_core_signal(df, daily_df, current_price)
+            
             verdict = _generate_verdict(analysis['score'])
             add_signal_to_history({
                 'user_id': user_id, 'pair': symbol, 
                 'price': current_price, 'bull_percentage': analysis['score']
             })
             
+            # Готуємо відповідь для API, включаючи нові дані
             response_data = {
                 "pair": symbol, 
                 "price": current_price,
@@ -166,7 +243,9 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int
                 "support": analysis['support'], 
                 "resistance": analysis['resistance'],
                 "bull_percentage": analysis['score'],
-                "bear_percentage": 100 - analysis['score']
+                "bear_percentage": 100 - analysis['score'],
+                "candle_pattern": analysis.get('candle_pattern'),
+                "volume_analysis": analysis.get('volume_info')
             }
             return response_data
             
@@ -181,3 +260,4 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int
     d_list = DeferredList([d1, d2, d3], consumeErrors=True)
     d_list.addCallback(on_data_ready)
     return d_list
+# --- КІНЕЦЬ ЗМІН ---
