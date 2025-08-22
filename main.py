@@ -20,18 +20,15 @@ app = Klein()
 WEB_DIR = os.path.join(os.path.dirname(__file__), "webapp")
 INDEX_FILE = os.path.join(WEB_DIR, "index.html")
 
-# --- ПОЧАТОК ЗМІН: Додано заголовок для заборони кешування ---
 @app.route("/")
 def home(request):
     """
     Читає index.html, додає cache busting і віддає його клієнту,
     забороняючи кешування самої сторінки.
     """
-    # ДІАГНОСТИЧНЕ ЛОГУВАННЯ: перевіряємо, чи виконується цей код
     logger.info("Dynamic index.html page requested. Applying cache busting...")
 
     request.setHeader(b"content-type", b"text/html; charset=utf-8")
-    # КЛЮЧОВА ЗМІНА: Забороняємо CDN та браузеру кешувати цю HTML-сторінку
     request.setHeader(b"Cache-Control", b"no-cache, no-store, must-revalidate")
     
     try:
@@ -47,16 +44,17 @@ def home(request):
         logger.error(f"Error serving index.html: {e}", exc_info=True)
         request.setResponseCode(500)
         return b"Internal Server Error"
-# --- КІНЕЦЬ ЗМІН ---
 
-# --- віддача статичних файлів ---
+# --- ПОЧАТОК ЗМІН: Спрощуємо віддачу статичних файлів ---
 @app.route("/<path:filename>")
 def static_files(request, filename):
-    file_path = os.path.join(WEB_DIR, filename)
-    if os.path.exists(file_path):
-        return File(WEB_DIR).render(request)
-    request.setResponseCode(404)
-    return b"Not Found"
+    """
+    Віддає статичні файли (js, css).
+    Ми прибираємо ручну перевірку os.path.exists, оскільки вона не працює
+    з параметрами запиту (cache busting). Довіряємо це Twisted.
+    """
+    return File(WEB_DIR).render(request)
+# --- КІНЕЦЬ ЗМІН ---
 
 # --- API ендпоінт для веб-додатку ---
 @app.route("/api/get_pairs", methods=['GET'])
