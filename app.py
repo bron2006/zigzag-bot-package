@@ -3,6 +3,7 @@ import os
 import json
 import time
 import threading
+import traceback # <-- НОВИЙ ІМПОРТ
 from flask import Flask, jsonify, send_from_directory, Response, request
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackQueryHandler
 
@@ -109,26 +110,20 @@ def api_signal():
     if not pair:
         return jsonify({"error": "pair is required"}), 400
     
-    # --- ПОЧАТОК ЗМІН: Нормалізуємо ім'я пари ---
     pair_normalized = pair.replace("/", "")
-    # --- КІНЕЦЬ ЗМІН ---
 
     if not state.client or not state.client.is_authorized:
         return jsonify({"error": "cTrader client is not connected or authorized yet. Please try again in a moment."}), 503
         
-    # --- ПОЧАТОК ЗМІН: Використовуємо нормалізоване ім'я ---
     if not state.SYMBOLS_LOADED or pair_normalized not in state.symbol_cache:
         return jsonify({"error": f"Symbol data is not loaded yet or '{pair}' not found. Please try again in a moment."}), 503
-    # --- КІНЕЦЬ ЗМІН ---
 
     logger.info(f"Received signal request for pair: {pair} (normalized: {pair_normalized})")
 
     @crochet.run_in_reactor
     def do_analysis_and_get_result():
-        # --- ПОЧАТОК ЗМІН: Передаємо нормалізоване ім'я в функцію аналізу ---
         deferred = get_api_detailed_signal_data(state.client, state.symbol_cache, pair_normalized, 0)
         return deferred
-        # --- КІНЕЦЬ ЗМІН ---
 
     try:
         result = do_analysis_and_get_result(timeout=30)
@@ -136,9 +131,16 @@ def api_signal():
     except crochet.TimeoutError:
         logger.error(f"Request timed out for pair: {pair}")
         return jsonify({"error": "Request timed out"}), 504
+    # --- ПОЧАТОК ЗМІН: Повертаємо детальну помилку ---
     except Exception as e:
-        logger.error(f"Error in signal API for {pair}: {e}", exc_info=True)
-        return jsonify({"error": "Internal server error"}), 500
+        tb_str = traceback.format_exc()
+        logger.error(f"Error in signal API for {pair}: {e}\n{tb_str}")
+        return jsonify({
+            "error": "Internal server error",
+            "details": str(e),
+            "traceback": tb_str
+        }), 500
+    # --- КІНЕЦЬ ЗМІН ---
 
 @app.route("/api/get_mta")
 def api_get_mta():
@@ -146,16 +148,12 @@ def api_get_mta():
     if not pair:
         return jsonify({"error": "pair is required"}), 400
 
-    # --- ПОЧАТОК ЗМІН: Нормалізуємо ім'я пари і тут ---
     pair_normalized = pair.replace("/", "")
-    # --- КІНЕЦЬ ЗМІН ---
 
     @crochet.run_in_reactor
     def do_mta_and_get_result():
-        # --- ПОЧАТОК ЗМІН: Передаємо нормалізоване ім'я ---
         deferred = get_mta_signal(state.client, pair_normalized)
         return deferred
-        # --- КІНЕЦЬ ЗМІН ---
 
     try:
         result = do_mta_and_get_result(timeout=5)
