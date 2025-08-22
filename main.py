@@ -12,7 +12,7 @@ from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOASymbolsListRes
 
 logging.basicConfig(level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+logger = a=logging.getLogger(__name__)
 
 app = Klein()
 
@@ -45,18 +45,14 @@ def home(request):
         request.setResponseCode(500)
         return b"Internal Server Error"
 
-# --- ПОЧАТОК ЗМІН: Спрощуємо віддачу статичних файлів ---
 @app.route("/<path:filename>")
 def static_files(request, filename):
     """
     Віддає статичні файли (js, css).
-    Ми прибираємо ручну перевірку os.path.exists, оскільки вона не працює
-    з параметрами запиту (cache busting). Довіряємо це Twisted.
     """
     return File(WEB_DIR).render(request)
-# --- КІНЕЦЬ ЗМІН ---
 
-# --- API ендпоінт для веб-додатку ---
+# --- ПОЧАТОК ЗМІН: Виправляємо кодування JSON ---
 @app.route("/api/get_pairs", methods=['GET'])
 def get_pairs(request):
     """
@@ -71,7 +67,13 @@ def get_pairs(request):
         "crypto": [],
         "stocks": []
     }
-    return json.dumps(response_data).encode('utf-8')
+    
+    # Додаємо логування даних для діагностики
+    logger.info(f"Sending pair data: {response_data}")
+
+    # КЛЮЧОВЕ ВИПРАВЛЕННЯ: Додаємо ensure_ascii=False для коректної обробки кирилиці
+    return json.dumps(response_data, ensure_ascii=False).encode('utf-8')
+# --- КІНЕЦЬ ЗМІН ---
 
 def on_ctrader_ready():
     logger.info("cTrader client is ready. Loading symbols...")
