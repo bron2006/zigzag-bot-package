@@ -16,15 +16,25 @@ logger = logging.getLogger(__name__)
 
 app = Klein()
 
+# --- шляхи до фронтенду ---
+WEB_DIR = os.path.join(os.path.dirname(__file__), "webapp")
+INDEX_FILE = os.path.join(WEB_DIR, "index.html")
+
 # --- головна сторінка ---
 @app.route("/")
 def home(request):
-    status = "авторизований" if state.client and state.client.is_authorized else "не авторизований"
-    return f"cTrader клієнт: {status}."
+    request.setHeader(b"content-type", b"text/html; charset=utf-8")
+    with open(INDEX_FILE, "rb") as f:
+        return f.read()
 
-# --- віддаємо статичні файли з webapp/ ---
-WEB_DIR = os.path.join(os.path.dirname(__file__), "webapp")
-app.route("/webapp/")(File(WEB_DIR).render)
+# --- віддача статичних файлів ---
+@app.route("/<path:filename>")
+def static_files(request, filename):
+    file_path = os.path.join(WEB_DIR, filename)
+    if os.path.exists(file_path):
+        return File(WEB_DIR).render(request)
+    request.setResponseCode(404)
+    return b"Not Found"
 
 def on_ctrader_ready():
     logger.info("cTrader client is ready. Loading symbols...")
