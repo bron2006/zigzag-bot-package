@@ -16,8 +16,9 @@ app = Klein()
 
 @app.route("/")
 def home(request):
+    request.setHeader("Content-Type", "text/html; charset=utf-8")  # ✅ Виправлено
     status = "авторизований" if state.client and state.client.is_authorized else "не авторизований"
-    return f"cTrader клієнт: {status}."
+    return f"<h2>cTrader клієнт: {status}.</h2>"
 
 def on_ctrader_ready():
     logger.info("cTrader client is ready. Loading symbols...")
