@@ -8,8 +8,9 @@ from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import ProtoMessage
 from ctrader_open_api.messages.OpenApiMessages_pb2 import (
     ProtoOAApplicationAuthReq, ProtoOAApplicationAuthRes,
     ProtoOAAccountAuthReq, ProtoOAAccountAuthRes,
-    ProtoOASymbolsListReq, # <-- ПОВЕРТАЄМО ПРАВИЛЬНИЙ ЗАПИТ
-    ProtoOAErrorRes
+    ProtoOASymbolsListReq,
+    ProtoOAErrorRes,
+    ProtoOASpotEvent # <-- НОВИЙ ІМПОРТ
 )
 from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOAPayloadType
 from config import get_ctrader_access_token, get_demo_account_id
@@ -24,6 +25,12 @@ class EventEmitter:
     def emit(self, event, *args, **kwargs):
         if event in self._events:
             for func in self._events[event]: reactor.callFromThread(func, *args, **kwargs)
+    # --- ПОЧАТОК ЗМІН: Додаємо метод для видалення слухача ---
+    def remove_listener(self, event, func):
+        if event in self._events:
+            if func in self._events[event]:
+                self._events[event].remove(func)
+    # --- КІНЕЦЬ ЗМІН ---
 
 class SpotwareConnect(EventEmitter):
     def __init__(self, client_id, client_secret):
@@ -80,6 +87,15 @@ class SpotwareConnect(EventEmitter):
         elif pt == ProtoOAPayloadType.PROTO_OA_ERROR_RES:
             res = ProtoOAErrorRes(); res.ParseFromString(message.payload)
             logger.error(f"API Error: {res.errorCode} - {res.description}")
+        # --- ПОЧАТОК ЗМІН: Обробляємо спотові події ---
+        elif pt == ProtoOAPayloadType.PROTO_OA_SPOT_EVENT:
+            spot_event = ProtoOASpotEvent()
+            spot_event.ParseFromString(message.payload)
+            # Генеруємо унікальну подію для конкретного символу
+            event_name = f"spot_event_{spot_event.symbolId}"
+            logger.info(f"Spot event received for symbol {spot_event.symbolId}. Emitting '{event_name}'")
+            self.emit(event_name, spot_event)
+        # --- КІНЕЦЬ ЗМІН ---
 
     def _authorize_account(self):
         acc_id = get_demo_account_id(); token = get_ctrader_access_token()
@@ -88,7 +104,6 @@ class SpotwareConnect(EventEmitter):
             logger.error("CRITICAL: Account ID or Access Token is missing."); return
         self.send(ProtoOAAccountAuthReq(ctidTraderAccountId=acc_id, accessToken=token))
 
-    def get_all_symbols(self): # <-- ВИКОРИСТОВУЄМО ЦЕЙ МЕТОД
-        """Робить запит на отримання 'легкого' списку символів."""
+    def get_all_symbols(self):
         logger.info("Requesting light symbol list...")
         return self.send(ProtoOASymbolsListReq(ctidTraderAccountId=self._client.account_id))
