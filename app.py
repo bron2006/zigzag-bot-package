@@ -1,16 +1,22 @@
-# app.py
 import logging
 import os
 import json
 import time
 import threading
-from flask import Flask, jsonify, send_from_directory, Response
+from queue import Queue
+from flask import Flask, jsonify, send_from_directory, Response, request
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackQueryHandler
 
 import state
 from spotware_connect import SpotwareConnect
 from config import TELEGRAM_BOT_TOKEN, get_ct_client_id, get_ct_client_secret, FOREX_SESSIONS, get_fly_app_name
 from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOASymbolsListRes
+
+# --- Нові імпорти для асинхронного мосту ---
+from twisted.internet import reactor
+from analysis import get_api_detailed_signal_data
+from mta_analysis import get_mta_signal
+
 
 # --- Налаштування логування ---
 logging.basicConfig(level=logging.INFO,
@@ -106,6 +112,69 @@ def get_pairs():
         "stocks": []
     }
     return jsonify(response_data)
+
+# --- ПОЧАТОК ЗМІН: Додаємо відсутні API ендпоінти ---
+@app.route("/api/signal")
+def api_signal():
+    pair = request.args.get("pair")
+    if not pair:
+        return jsonify({"error": "pair is required"}), 400
+    
+    logger.info(f"Received signal request for pair: {pair}")
+    
+    # Створюємо "міст" для очікування результату з асинхронного потоку
+    q = Queue()
+    event = threading.Event()
+
+    def on_success(result):
+        q.put(result)
+        event.set()
+
+    def on_error(failure):
+        error_message = failure.getErrorMessage() if hasattr(failure, 'getErrorMessage') else str(failure)
+        q.put({"error": error_message})
+        event.set()
+        
+    def do_analysis():
+        # User ID для WebApp поки що можна вважати фіксованим, наприклад 0
+        deferred = get_api_detailed_signal_data(state.client, state.symbol_cache, pair, 0)
+        deferred.addCallbacks(on_success, on_error)
+
+    # Відправляємо завдання в потік Twisted і чекаємо на результат
+    reactor.callFromThread(do_analysis)
+    event.wait(timeout=30) # Чекаємо до 30 секунд
+
+    if not event.is_set() or q.empty():
+        return jsonify({"error": "Request timed out or failed internally"}), 504
+
+    return jsonify(q.get())
+
+@app.route("/api/get_mta")
+def api_get_mta():
+    pair = request.args.get("pair")
+    if not pair:
+        return jsonify({"error": "pair is required"}), 400
+
+    # Створюємо "міст" для імітаційної функції
+    q = Queue()
+    event = threading.Event()
+
+    def on_result(result):
+        q.put(result)
+        event.set()
+
+    def do_mta():
+        deferred = get_mta_signal(state.client, pair)
+        deferred.addCallback(on_result)
+
+    reactor.callFromThread(do_mta)
+    event.wait(timeout=5)
+
+    if not event.is_set() or q.empty():
+        return jsonify([]), 200 # Повертаємо порожній список у разі помилки
+
+    return jsonify(q.get())
+# --- КІНЕЦЬ ЗМІН ---
 
 # --- Запуск фонових сервісів при старті Gunicorn ---
 if __name__ != "__main__":
