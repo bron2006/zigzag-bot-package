@@ -1,11 +1,16 @@
+# app.py
 import logging
 import os
 import json
 import time
 import threading
-from queue import Queue
 from flask import Flask, jsonify, send_from_directory, Response, request
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackQueryHandler
+
+# --- ПОЧАТОК ЗМІН: Інтегруємо crochet ---
+import crochet
+crochet.setup()
+# --- КІНЕЦЬ ЗМІН ---
 
 import state
 from spotware_connect import SpotwareConnect
@@ -16,20 +21,15 @@ from twisted.internet import reactor
 from analysis import get_api_detailed_signal_data
 from mta_analysis import get_mta_signal
 
-
-# --- Налаштування логування ---
 logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# --- Ініціалізація Flask ---
 app = Flask(__name__)
 app.config['JSON_AS_ASCII'] = False
 
-# --- Шляхи до фронтенду ---
 WEBAPP_DIR = os.path.join(os.path.dirname(__file__), "webapp")
 
-# --- Логіка cTrader і Telegram Bot ---
 def on_ctrader_ready():
     logger.info("cTrader client is ready. Loading symbols...")
     deferred = state.client.get_all_symbols()
@@ -48,7 +48,8 @@ def on_symbols_loaded(raw_message):
 def on_symbols_error(failure):
     logger.error(f"Failed to load symbols: {failure.getErrorMessage()}")
 
-def run_background_services():
+# --- ПОЧАТОК ЗМІН: Спрощуємо запуск сервісів, crochet керує реактором ---
+def start_background_services():
     logger.info("Initializing background services (Telegram, cTrader)...")
     if not TELEGRAM_BOT_TOKEN:
         logger.error("TELEGRAM_BOT_TOKEN not found!")
@@ -70,17 +71,11 @@ def run_background_services():
     logger.info("Telegram bot started.")
 
     client.on("ready", on_ctrader_ready)
+    # Запускаємо клієнт; crochet вже запустив реактор у фоні
     client.start()
     logger.info("cTrader client started.")
-    
-    # --- ПОЧАТОК ЗМІН: Запускаємо "двигун" Twisted ---
-    # Цей виклик є блокуючим і буде утримувати цей потік живим,
-    # обробляючи всі асинхронні події.
-    logger.info("Starting Twisted reactor in background thread...")
-    reactor.run(installSignalHandlers=False)
-    # --- КІНЕЦЬ ЗМІН ---
+# --- КІНЕЦЬ ЗМІН ---
 
-# --- Маршрути Flask (API та веб-сторінки) ---
 @app.route("/")
 def home():
     try:
@@ -89,7 +84,6 @@ def home():
 
         app_name = get_fly_app_name()
         if not app_name:
-            logger.error("FLY_APP_NAME is not set!")
             app_name = "zigzag-bot-package"
 
         api_base_url = f"https://{app_name}.fly.dev"
@@ -110,15 +104,12 @@ def static_files(filename):
 
 @app.route("/api/get_pairs")
 def get_pairs():
-    logger.info("API call received for /api/get_pairs")
-    response_data = {
+    return jsonify({
         "forex": FOREX_SESSIONS,
-        "watchlist": [],
-        "crypto": [],
-        "stocks": []
-    }
-    return jsonify(response_data)
+        "watchlist": [], "crypto": [], "stocks": []
+    })
 
+# --- ПОЧАТОК ЗМІН: Використовуємо crochet для безпечних асинхронних викликів ---
 @app.route("/api/signal")
 def api_signal():
     pair = request.args.get("pair")
@@ -126,30 +117,23 @@ def api_signal():
         return jsonify({"error": "pair is required"}), 400
     
     logger.info(f"Received signal request for pair: {pair}")
-    
-    q = Queue()
-    event = threading.Event()
 
-    def on_success(result):
-        q.put(result)
-        event.set()
-
-    def on_error(failure):
-        error_message = failure.getErrorMessage() if hasattr(failure, 'getErrorMessage') else str(failure)
-        q.put({"error": error_message})
-        event.set()
-        
-    def do_analysis():
+    @crochet.run_in_reactor
+    def do_analysis_and_get_result():
+        # Ця функція тепер виконується в безпечному потоці Twisted
         deferred = get_api_detailed_signal_data(state.client, state.symbol_cache, pair, 0)
-        deferred.addCallbacks(on_success, on_error)
+        return deferred
 
-    reactor.callFromThread(do_analysis)
-    event.wait(timeout=30)
-
-    if not event.is_set() or q.empty():
-        return jsonify({"error": "Request timed out or failed internally"}), 504
-
-    return jsonify(q.get())
+    try:
+        # crochet.wait чекає на результат, не блокуючи GIL
+        result = do_analysis_and_get_result(timeout=30)
+        return jsonify(result)
+    except crochet.TimeoutError:
+        logger.error(f"Request timed out for pair: {pair}")
+        return jsonify({"error": "Request timed out"}), 504
+    except Exception as e:
+        logger.error(f"Error in signal API for {pair}: {e}", exc_info=True)
+        return jsonify({"error": "Internal server error"}), 500
 
 @app.route("/api/get_mta")
 def api_get_mta():
@@ -157,28 +141,17 @@ def api_get_mta():
     if not pair:
         return jsonify({"error": "pair is required"}), 400
 
-    q = Queue()
-    event = threading.Event()
-
-    def on_result(result):
-        q.put(result)
-        event.set()
-
-    def do_mta():
+    @crochet.run_in_reactor
+    def do_mta_and_get_result():
         deferred = get_mta_signal(state.client, pair)
-        deferred.addCallback(on_result)
+        return deferred
 
-    reactor.callFromThread(do_mta)
-    event.wait(timeout=5)
-
-    if not event.is_set() or q.empty():
+    try:
+        result = do_mta_and_get_result(timeout=5)
+        return jsonify(result)
+    except Exception:
         return jsonify([]), 200
+# --- КІНЕЦЬ ЗМІН ---
 
-    return jsonify(q.get())
-
-# --- Запуск фонових сервісів при старті Gunicorn ---
 if __name__ != "__main__":
-    logger.info("Starting background services in a separate thread...")
-    bg_thread = threading.Thread(target=run_background_services)
-    bg_thread.daemon = True
-    bg_thread.start()
+    start_background_services()

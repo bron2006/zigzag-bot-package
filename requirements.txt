@@ -13,3 +13,4 @@ service-identity
 pyOpenSSL
 cryptography
 numpy
+crochet==2.1.1
