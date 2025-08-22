@@ -1,271 +1,128 @@
 # analysis.py
+import logging
 import pandas as pd
 import pandas_ta as ta
 import numpy as np
-from concurrent.futures import ThreadPoolExecutor
+import time
+from twisted.internet.defer import Deferred, DeferredList
 
+from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOAGetTrendbarsReq, ProtoOAGetTrendbarsRes
+from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOATrendbarPeriod as TrendbarPeriod
 from db import add_signal_to_history
-from config import logger, binance, td, CACHE, ANALYSIS_TIMEFRAMES
 
-_executor = None
-def get_executor():
-    global _executor
-    if _executor is None:
-        _executor = ThreadPoolExecutor(max_workers=2)
-    return _executor
+logger = logging.getLogger(__name__)
 
-def get_market_data(pair, tf, asset, limit=300):
-    key = f"{pair}_{tf}_{limit}"
-    if key in CACHE: return CACHE[key]
-    try:
-        df = pd.DataFrame()
-        if asset == 'crypto':
-            bars = binance.fetch_ohlcv(pair, timeframe=tf, limit=limit)
-            df = pd.DataFrame(bars, columns=['ts','o','h','l','c','v'])
-            df['ts'] = pd.to_datetime(df['ts'], unit='ms', utc=True)
-            df = df.rename(columns={'o':'Open','h':'High','l':'Low','c':'Close','v':'Volume'})
-        elif asset in ('forex', 'stocks'):
-            td_tf = tf.replace('m', 'min').replace('h', 'hour') if tf != '1d' else '1day'
-            ts = td.time_series(symbol=pair, interval=td_tf, outputsize=limit)
-            df = ts.as_pandas()
-            if not df.empty:
-                df = df.rename(columns={'open':'Open','high':'High','low':'Low','close':'Close','volume':'Volume'}).reset_index()
-                if 'datetime' in df.columns:
-                    df['datetime'] = pd.to_datetime(df['datetime']).dt.tz_localize('UTC')
-        if df.empty:
-            logger.warning(f"API повернуло порожній результат для {pair} на ТФ {tf}")
-            return pd.DataFrame()
-        CACHE[key] = df
-        return df
-    except Exception as e:
-        logger.error(f"Помилка отримання даних для {pair} на ТФ {tf}: {e}")
-        return pd.DataFrame()
+PERIOD_MAP = {
+    "15min": TrendbarPeriod.M15, "1h": TrendbarPeriod.H1,
+    "4h": TrendbarPeriod.H4, "1day": TrendbarPeriod.D1
+}
 
-def group_close_values(values, threshold=0.01):
-    if not len(values): return []
-    values = sorted(values)
-    groups, current_group = [], [values[0]]
-    for value in values[1:]:
-        if value - current_group[-1] <= threshold * value:
-            current_group.append(value)
-        else:
-            groups.append(np.mean(current_group))
-            current_group = [value]
-    groups.append(np.mean(current_group))
-    return groups
+def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: int) -> Deferred:
+    d = Deferred()
+    symbol_details = symbol_cache.get(norm_pair)
 
-def identify_support_resistance_levels(df, window=20, threshold=0.01):
-    try:
-        lows = df['Low'].rolling(window=window, center=True, min_periods=3).min()
-        highs = df['High'].rolling(window=window, center=True, min_periods=3).max()
-        support_levels = group_close_values(df.loc[df['Low'] == lows, 'Low'].tolist(), threshold)
-        resistance_levels = group_close_values(df.loc[df['High'] == highs, 'High'].tolist(), threshold)
-        return sorted(support_levels), sorted(resistance_levels, reverse=True)
-    except Exception as e:
-        logger.error(f"Помилка в identify_support_resistance_levels: {e}")
-        return [], []
+    if not symbol_details:
+        return Deferred.fail(Exception(f"Пара '{norm_pair}' не знайдена в кеші."))
 
-def analyze_candle_patterns(df: pd.DataFrame):
-    try:
-        patterns = df.ta.cdl_pattern(name="all")
-        if patterns.empty: return None
-        last_candle = patterns.iloc[-1]
-        found_patterns = last_candle[last_candle != 0]
-        if found_patterns.empty: return None
-        signal_strength = found_patterns.iloc[0]
-        if abs(signal_strength) < 100:
-            return None
-        pattern_name = found_patterns.index[0].replace("CDL_", "")
-        pattern_type = 'bullish' if signal_strength > 0 else 'bearish'
-        arrow = '⬆️' if pattern_type == 'bullish' else '⬇️'
-        text = f'{arrow} {pattern_name}'
-        return {'name': pattern_name, 'type': pattern_type, 'text': text}
-    except Exception as e:
-        logger.error(f"Помилка в analyze_candle_patterns: {e}")
-        return None
+    tf_proto = PERIOD_MAP.get(period)
+    if not tf_proto:
+        return Deferred.fail(Exception(f"Непідтримуваний таймфрейм: {period}"))
 
-def analyze_volume(df):
-    if df.empty or 'Volume' not in df.columns or len(df) < 21: return "Недостатньо даних"
-    df['Volume_MA'] = df['Volume'].rolling(window=20).mean()
-    last = df.iloc[-1]
-    if pd.isna(last['Volume_MA']): return "Недостатньо даних"
-    if last['Volume'] > last['Volume_MA'] * 1.5:
-        return "🟢 Підвищений об'єм"
-    elif last['Volume'] < last['Volume_MA'] * 0.5:
-        return "🧊 Аномально низький об'єм"
-    return "Об'єм нейтральний"
+    now = int(time.time() * 1000)
+    seconds_per_bar = {'15min': 900, '1h': 3600, '4h': 14400, '1day': 86400}
+    from_ts = now - (count * seconds_per_bar[period] * 1000)
+
+    request = ProtoOAGetTrendbarsReq(
+        ctidTraderAccountId=client._client.account_id,
+        symbolId=symbol_details.symbolId, # <-- Тепер це працює, бо ми беремо ID з ProtoOALightSymbol
+        period=tf_proto,
+        fromTimestamp=from_ts,
+        toTimestamp=now
+    )
+    
+    logger.info(f"Requesting candles for {norm_pair} ({period})...")
+    deferred = client.send(request, timeout=25)
+
+    def process_response(message):
+        response = ProtoOAGetTrendbarsRes()
+        response.ParseFromString(message.payload)
+        logger.info(f"✅ Received {len(response.trendbar)} candles for {norm_pair} ({period}).")
+        
+        if not response.trendbar: return pd.DataFrame()
+
+        # --- КЛЮЧОВЕ ВИПРАВЛЕННЯ З ВАШОГО КОДУ ---
+        # Використовуємо жорстко заданий дільник, оскільки '.digits' недоступний
+        divisor = 10**5
+        bars = [{
+            'ts': pd.to_datetime(bar.utcTimestampInMinutes * 60, unit='s', utc=True),
+            'open': (bar.low + bar.deltaOpen) / divisor,
+            'high': (bar.low + bar.deltaHigh) / divisor,
+            'low': bar.low / divisor,
+            'close': (bar.low + bar.deltaClose) / divisor,
+            'volume': bar.volume
+        } for bar in response.trendbar]
+        # --- КІНЕЦЬ ВИПРАВЛЕННЯ ---
+        
+        df = pd.DataFrame(bars)
+        d.callback(df.sort_values(by='ts').reset_index(drop=True))
+
+    def on_error(failure):
+        err = failure.getErrorMessage() if hasattr(failure, 'getErrorMessage') else str(failure)
+        logger.error(f"❌ Data request failed for {norm_pair} ({period}): {err}")
+        d.errback(failure)
+
+    deferred.addCallbacks(process_response, on_error)
+    return d
 
 def _calculate_core_signal(df, daily_df):
     df.ta.rsi(length=14, append=True, col_names=('RSI',))
     df.ta.kama(length=14, append=True, col_names=('KAMA',))
     last = df.iloc[-1]
-    if pd.isna(last['RSI']) or pd.isna(last['KAMA']):
-        raise ValueError("Помилка розрахунку індикаторів")
-    current_price = float(last['Close'])
-    support_levels, resistance_levels = identify_support_resistance_levels(daily_df)
-    candle_pattern = analyze_candle_patterns(df)
-    volume_info = analyze_volume(df)
-    score = 50
-    reasons = []
-    if current_price > last['KAMA']: score += 10; reasons.append("Ціна вище KAMA(14)")
-    else: score -= 10; reasons.append("Ціна нижче KAMA(14)")
-    rsi = float(last['RSI'])
-    if rsi < 30: score += 15; reasons.append("RSI в зоні перепроданості")
-    elif rsi > 70: score -= 15; reasons.append("RSI в зоні перекупленості")
-    if support_levels:
-        dist_to_support = min(abs(current_price - sl) for sl in support_levels)
-        if dist_to_support / current_price < 0.003:
-            score += 15; reasons.append("Ціна ДУЖЕ близько до підтримки")
-    if resistance_levels:
-        dist_to_resistance = min(abs(current_price - rl) for rl in resistance_levels)
-        if dist_to_resistance / current_price < 0.003:
-            score -= 15; reasons.append("Ціна ДУЖЕ близько до опору")
-    if "Аномально низький" in volume_info:
-        score = np.clip(score, 25, 75)
-        reasons.append("Низький об'єм!")
-    score = int(np.clip(score, 0, 100))
-    support = min(support_levels, key=lambda x: abs(x - current_price)) if support_levels else None
-    resistance = min(resistance_levels, key=lambda x: abs(x - current_price)) if resistance_levels else None
+    price = float(last['close'])
+    
+    lows = daily_df['low'].tail(30); highs = daily_df['high'].tail(30)
+    support = lows[lows < price].max(); resistance = highs[highs > price].min()
+
+    score, reasons = 50, []
+    if price > last['KAMA']: score += 15; reasons.append("Price > KAMA(14)")
+    else: score -= 15; reasons.append("Price < KAMA(14)")
+    if last['RSI'] < 30: score += 20; reasons.append("RSI < 30 (oversold)")
+    elif last['RSI'] > 70: score -= 20; reasons.append("RSI > 70 (overbought)")
+    
     return {
-        "score": score, "reasons": reasons, "support": support, "resistance": resistance,
-        "candle_pattern": candle_pattern, "volume_info": volume_info, "price": current_price
+        "score": int(np.clip(score, 0, 100)), "reasons": reasons,
+        "support": float(support) if pd.notna(support) else None,
+        "resistance": float(resistance) if pd.notna(resistance) else None,
+        "price": price
     }
 
-def get_signal_strength_verdict(pair, display_name, asset, user_id=None):
-    df = get_market_data(pair, '1m', asset, limit=50)
-    if df.empty or len(df) < 25:
-        return f"⚠️ Недостатньо даних для 1-хв аналізу *{display_name}*."
-    try:
-        daily_df = get_market_data(pair, '1d', asset, limit=30)
-        analysis = _calculate_core_signal(df, daily_df)
-        bull_percentage = analysis['score']
-        if user_id:
-            signal_data = {
-                'user_id': user_id,
-                'pair': pair,
-                'price': analysis['price'],
-                'bull_percentage': bull_percentage
-            }
-            add_signal_to_history(signal_data)
-        bear_percentage = 100 - bull_percentage
-        direction_arrow = "⬆️" if bull_percentage >= 50 else "⬇️"
-        strength_line = f"🐂 Бики {bull_percentage}% ⬆️\n🐃 Ведмеді {bear_percentage}% ⬇️"
-        reason_line = f"Підстава: {', '.join(analysis['reasons'])}." if analysis['reasons'] else "Змішані сигнали."
-        disclaimer = "\n\n_⚠️ Це не фінансова порада._"
-        sr_info = "Рівні не визначені"
-        if analysis['support'] or analysis['resistance']:
-            sr_parts = []
-            if analysis['support']: sr_parts.append(f"Підтримка: `{analysis['support']:.4f}`")
-            if analysis['resistance']: sr_parts.append(f"Опір: `{analysis['resistance']:.4f}`")
-            sr_info = " | ".join(sr_parts)
-        final_message = f"{direction_arrow}\n\n"
-        final_message += (f"**🕯️ Індекс сили ринку (1хв):** *{display_name}*\n"
-                         f"**Поточна ціна:** `{analysis['price']:.4f}`\n\n"
-                         f"**Баланс сил:**\n{strength_line}\n\n")
-        if analysis['candle_pattern']:
-            final_message += f"**Свічковий патерн:**\n{analysis['candle_pattern']['text']}\n\n"
-        final_message += f"**Рівні S/R (денні):**\n{sr_info}\n\n"
-        final_message += f"**Аналіз об'єму:**\n{analysis['volume_info']}\n\n"
-        final_message += f"_{reason_line}_{disclaimer}"
-        return final_message
-    except Exception as e:
-        logger.error(f"Помилка розрахунку індексу для {pair}: {e}")
-        return f"⚠️ Помилка аналізу *{display_name}*."
+def _generate_verdict(score):
+    if score > 65: return "⬆️ Strong BUY"
+    if score > 55: return "↗️ Moderate BUY"
+    if score < 35: return "⬇️ Strong SELL"
+    if score < 45: return "↘️ Moderate SELL"
+    return "🟡 NEUTRAL"
 
-def get_api_detailed_signal_data(pair):
-    asset = 'stocks'
-    if '/' in pair:
-        asset = 'crypto' if 'USDT' in pair else 'forex'
-    df = get_market_data(pair, '1m', asset, limit=100)
-    if df.empty or len(df) < 25:
-        return {"error": "Недостатньо даних для аналізу."}
-    try:
-        daily_df = get_market_data(pair, '1d', asset, limit=100)
-        analysis = _calculate_core_signal(df, daily_df)
-        score = analysis['score']
-        history_df = df.tail(50)
-        date_col = 'ts' if 'ts' in history_df.columns else 'datetime'
-        history = {
-            "dates": history_df[date_col].dt.strftime('%Y-%m-%d %H:%M:%S').tolist(),
-            "open": history_df['Open'].tolist(), "high": history_df['High'].tolist(),
-            "low": history_df['Low'].tolist(), "close": history_df['Close'].tolist()
-        }
-        return {
-            "pair": pair, "price": analysis['price'], "bull_percentage": score,
-            "bear_percentage": 100 - score, "reasons": analysis['reasons'], 
-            "support": analysis['support'], "resistance": analysis['resistance'],
-            "candle_pattern": analysis['candle_pattern'],
-            "volume_analysis": analysis['volume_info'],
-            "history": history
-        }
-    except Exception as e:
-        logger.error(f"Error in get_api_detailed_signal_data for {pair}: {e}")
-        return {"error": str(e)}
-
-def get_full_mta_verdict(pair, display_name, asset):
-    def worker(tf):
-        df = get_market_data(pair, tf, asset, limit=200)
-        if df.empty or len(df) < 55: return (tf, None)
-        df.ta.ema(length=21, append=True, col_names='EMA_fast')
-        df.ta.ema(length=55, append=True, col_names='EMA_slow')
-        sig = "✅ BUY" if df.iloc[-1]['EMA_fast'] > df.iloc[-1]['EMA_slow'] else "❌ SELL"
-        return (tf, sig)
-    executor = get_executor()
-    results = executor.map(worker, ANALYSIS_TIMEFRAMES)
-    rows = [r for r in results if r[1] is not None]
-    table = "\n".join([f"| {tf:<4} | {sig} |" for tf, sig in rows])
-    return f"**📊 Детальний огляд тренду:** *{display_name}*\n\n| ТФ   | Сигнал |\n|:----:|:---:|\n{table}"
-
-def get_api_mta_data(pair, asset):
-    def worker(tf):
-        df = get_market_data(pair, tf, asset, limit=200)
-        if df.empty or len(df) < 55: return None
-        df.ta.ema(length=21, append=True, col_names='EMA_fast')
-        df.ta.ema(length=55, append=True, col_names='EMA_slow')
-        last_row = df.iloc[-1]
-        if pd.isna(last_row['EMA_fast']) or pd.isna(last_row['EMA_slow']): return None
-        signal = "BUY" if last_row['EMA_fast'] > last_row['EMA_slow'] else "SELL"
-        return {"tf": tf, "signal": signal}
-    executor = get_executor()
-    results = executor.map(worker, ANALYSIS_TIMEFRAMES)
-    mta_data = [r for r in results if r is not None]
-    return mta_data
-
-def rank_crypto_chunk(pairs_chunk):
-    def fetch_score(pair):
+def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int) -> Deferred:
+    def on_data_ready(results):
         try:
-            df = get_market_data(pair, '1h', 'crypto', limit=50)
-            if df.empty: return None
-            rsi = df.ta.rsi(length=14).iloc[-1]
-            if pd.isna(rsi): return None
-            return {'display_name': pair, 'ticker': pair, 'score': abs(rsi - 50)}
-        except Exception as e:
-            logger.error(f"Не вдалося проаналізувати пару {pair}: {e}")
-            return None
-    executor = get_executor()
-    results = executor.map(fetch_score, pairs_chunk)
-    ranked_pairs = [r for r in results if r is not None]
-    return sorted(ranked_pairs, key=lambda x: x['score'], reverse=True)
+            success1, df = results[0]; success2, daily_df = results[1]
+            if not (success1 and success2) or df.empty or len(df) < 25 or daily_df.empty:
+                logger.warning(f"Not enough data to analyze {symbol}.")
+                return {"error": "Not enough historical data for analysis."}
 
-def rank_assets_for_api(pairs, asset_type):
-    def fetch_score(pair):
-        try:
-            timeframe = '1h' if asset_type == 'crypto' else '15min'
-            df = get_market_data(pair, timeframe, asset_type, limit=50)
-            if df.empty: return None
-            if asset_type in ('stocks', 'forex'):
-                date_col = 'datetime' if 'datetime' in df.columns else 'ts'
-                if date_col not in df.columns: return None
-                last_update_time = df[date_col].iloc[-1]
-                if pd.Timestamp.now(tz='UTC') - last_update_time > timedelta(hours=4): return None
-            rsi = df.ta.rsi(length=14).iloc[-1]
-            if pd.isna(rsi): return None
-            score = abs(rsi - 50)
-            return {'ticker': pair, 'score': score}
+            analysis = _calculate_core_signal(df, daily_df)
+            verdict = _generate_verdict(analysis['score'])
+            add_signal_to_history({'user_id': user_id, 'pair': symbol, 'price': analysis['price'], 'bull_percentage': analysis['score']})
+            
+            return {"pair": symbol, "price": analysis['price'], "verdict_text": verdict, "reasons": analysis['reasons'], "support": analysis['support'], "resistance": analysis['resistance']}
         except Exception as e:
-            logger.error(f"Не вдалося проаналізувати активність {pair}: {e}")
-            return None
-    executor = get_executor()
-    results = executor.map(fetch_score, pairs)
-    ranked_pairs = [r for r in results if r is not None]
-    return sorted(ranked_pairs, key=lambda x: x['score'], reverse=True)
+            logger.exception(f"Critical analysis error for {symbol}: {e}")
+            return {"error": "Internal data processing error."}
+
+    d1 = get_market_data(client, symbol_cache, symbol, '15min', 100)
+    d2 = get_market_data(client, symbol_cache, symbol, '1day', 100)
+    
+    d_list = DeferredList([d1, d2], consumeErrors=True)
+    d_list.addCallback(on_data_ready)
+    return d_list
