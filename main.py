@@ -1,7 +1,7 @@
 import logging, os, json, time
 from klein import Klein
 from twisted.internet import reactor
-from twisted.web.server import Site
+from twisted.web.server import Site, NOT_DONE_YET
 from twisted.web.static import File
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackQueryHandler
 
@@ -12,7 +12,7 @@ from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOASymbolsListRes
 
 logging.basicConfig(level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = a=logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 app = Klein()
 
@@ -22,23 +22,15 @@ INDEX_FILE = os.path.join(WEB_DIR, "index.html")
 
 @app.route("/")
 def home(request):
-    """
-    Читає index.html, додає cache busting і віддає його клієнту,
-    забороняючи кешування самої сторінки.
-    """
     logger.info("Dynamic index.html page requested. Applying cache busting...")
-
     request.setHeader(b"content-type", b"text/html; charset=utf-8")
     request.setHeader(b"Cache-Control", b"no-cache, no-store, must-revalidate")
-    
     try:
         with open(INDEX_FILE, "r", encoding="utf-8") as f:
             content = f.read()
-        
         cache_buster = int(time.time())
         content = content.replace("script.js", f"script.js?v={cache_buster}")
         content = content.replace("style.css", f"style.css?v={cache_buster}")
-
         return content.encode("utf-8")
     except Exception as e:
         logger.error(f"Error serving index.html: {e}", exc_info=True)
@@ -47,19 +39,15 @@ def home(request):
 
 @app.route("/<path:filename>")
 def static_files(request, filename):
-    """
-    Віддає статичні файли (js, css).
-    """
     return File(WEB_DIR).render(request)
 
-# --- ПОЧАТОК ЗМІН: Виправляємо кодування JSON ---
+# --- ПОЧАТОК ЗМІН: Використовуємо надійний метод відправки відповіді ---
 @app.route("/api/get_pairs", methods=['GET'])
 def get_pairs(request):
     """
-    Віддає статичний список пар для WebApp.
+    Віддає статичний список пар, використовуючи надійний метод request.write/finish.
     """
     logger.info("API call received for /api/get_pairs")
-    request.setHeader(b"Content-Type", b"application/json; charset=utf-8")
     
     response_data = {
         "forex": FOREX_SESSIONS,
@@ -68,12 +56,21 @@ def get_pairs(request):
         "stocks": []
     }
     
-    # Додаємо логування даних для діагностики
     logger.info(f"Sending pair data: {response_data}")
+    json_bytes = json.dumps(response_data, ensure_ascii=False).encode('utf-8')
 
-    # КЛЮЧОВЕ ВИПРАВЛЕННЯ: Додаємо ensure_ascii=False для коректної обробки кирилиці
-    return json.dumps(response_data, ensure_ascii=False).encode('utf-8')
+    # Встановлюємо заголовки
+    request.setHeader(b"Content-Type", b"application/json; charset=utf-8")
+    request.setHeader(b'Content-Length', str(len(json_bytes)).encode('utf-8'))
+    
+    # Явно записуємо дані у відповідь і закриваємо з'єднання
+    request.write(json_bytes)
+    request.finish()
+    
+    # Повертаємо спеціальний маркер, щоб повідомити Twisted, що ми самі обробили запит
+    return NOT_DONE_YET
 # --- КІНЕЦЬ ЗМІН ---
+
 
 def on_ctrader_ready():
     logger.info("cTrader client is ready. Loading symbols...")
