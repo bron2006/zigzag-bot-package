@@ -1,4 +1,4 @@
-import logging, os, json
+import logging, os, json, time
 from klein import Klein
 from twisted.internet import reactor
 from twisted.web.server import Site
@@ -20,12 +20,29 @@ app = Klein()
 WEB_DIR = os.path.join(os.path.dirname(__file__), "webapp")
 INDEX_FILE = os.path.join(WEB_DIR, "index.html")
 
-# --- головна сторінка ---
+# --- ПОЧАТОК ЗМІН: Динамічна віддача index.html з cache busting ---
 @app.route("/")
 def home(request):
+    """
+    Читає index.html, додає до script.js версію для скидання кешу (cache busting)
+    і віддає його клієнту.
+    """
     request.setHeader(b"content-type", b"text/html; charset=utf-8")
-    with open(INDEX_FILE, "rb") as f:
-        return f.read()
+    try:
+        with open(INDEX_FILE, "r", encoding="utf-8") as f:
+            content = f.read()
+        
+        # Додаємо timestamp до script.js для cache busting
+        cache_buster = int(time.time())
+        content = content.replace("script.js", f"script.js?v={cache_buster}")
+        content = content.replace("style.css", f"style.css?v={cache_buster}")
+
+        return content.encode("utf-8")
+    except Exception as e:
+        logger.error(f"Error serving index.html: {e}", exc_info=True)
+        request.setResponseCode(500)
+        return b"Internal Server Error"
+# --- КІНЕЦЬ ЗМІН ---
 
 # --- віддача статичних файлів ---
 @app.route("/<path:filename>")
@@ -36,7 +53,7 @@ def static_files(request, filename):
     request.setResponseCode(404)
     return b"Not Found"
 
-# --- ПОЧАТОК ЗМІН: API ендпоінт для веб-додатку ---
+# --- API ендпоінт для веб-додатку ---
 @app.route("/api/get_pairs", methods=['GET'])
 def get_pairs(request):
     """
@@ -45,16 +62,13 @@ def get_pairs(request):
     logger.info("API call received for /api/get_pairs")
     request.setHeader(b"Content-Type", b"application/json; charset=utf-8")
     
-    # На даному етапі просто віддаємо статичні дані з конфігу.
-    # У майбутньому 'watchlist' можна буде завантажувати з бази даних.
     response_data = {
         "forex": FOREX_SESSIONS,
-        "watchlist": [], # Поки що порожній, будемо реалізовувати пізніше
-        "crypto": [],    # Аналогічно
-        "stocks": []     # Аналогічно
+        "watchlist": [],
+        "crypto": [],
+        "stocks": []
     }
     return json.dumps(response_data).encode('utf-8')
-# --- КІНЕЦЬ ЗМІН ---
 
 def on_ctrader_ready():
     logger.info("cTrader client is ready. Loading symbols...")
