@@ -1,18 +1,18 @@
 # config.py
 import os
 from dotenv import load_dotenv
+from pathlib import Path  # критичний імпорт
 
 load_dotenv()
 
 # --- Налаштування бази даних ---
-# ПОВЕРТАЄМОСЬ ДО ПРОСТОЇ НАЗВИ ФАЙЛУ
 DB_NAME = os.getenv("DB_NAME", "/data/signals.db")
 DB_PATH = Path(os.getenv("DB_PATH", DB_NAME))
 
 try:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 except Exception:
-    # Якщо файловий шар read-only — не падати на імпорті
+    # якщо шар read-only — не падати на імпорті
     pass
 
 # --- Telegram ---
@@ -33,6 +33,7 @@ def get_ctrader_access_token() -> str: return os.getenv("CTRADER_ACCESS_TOKEN")
 def get_demo_account_id() -> int:
     account_id_str = os.getenv("DEMO_ACCOUNT_ID")
     return int(account_id_str) if account_id_str else None
+
 # Utility: повний шлях до файлу бази
 def get_db_path():
     return str(DB_PATH)
