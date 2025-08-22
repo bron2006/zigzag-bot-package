@@ -10,17 +10,14 @@ from analysis import get_api_detailed_signal_data
 
 logger = logging.getLogger(__name__)
 
-# --- ПОЧАТОК ЗМІН: Виправляємо URL для WebApp ---
+# --- ПОЧАТОК ЗМІН: Прибираємо кастомну кнопку WebApp, залишаємо тільки "МЕНЮ" ---
 def get_reply_keyboard() -> ReplyKeyboardMarkup:
-    app_name = get_fly_app_name()
-    if not app_name:
-        logger.error("FLY_APP_NAME не встановлено! WebApp недоступний.")
-        return ReplyKeyboardMarkup([["МЕНЮ"]], resize_keyboard=True)
-    
-    # КЛЮЧОВЕ ВИПРАВЛЕННЯ: URL має вказувати на корінь сайту "/"
-    webapp_info = WebAppInfo(url=f"https://{app_name}.fly.dev/")
-    
-    keyboard = [[KeyboardButton("МЕНЮ"), KeyboardButton("WebApp", web_app=webapp_info)]]
+    """
+    Повертає просту клавіатуру. Кнопка WebApp більше не потрібна,
+    оскільки користувач буде використовувати головну кнопку "Menu",
+    налаштовану через BotFather.
+    """
+    keyboard = [[KeyboardButton("МЕНЮ")]]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 # --- КІНЕЦЬ ЗМІН ---
 
@@ -47,7 +44,7 @@ def get_pairs_kb(session: str) -> InlineKeyboardMarkup:
 
 def start(update: Update, context: CallbackContext) -> None:
     update.message.reply_text(
-        "👋 Вітаю! Натисніть «МЕНЮ» для вибору активів або «WebApp» для відкриття терміналу.",
+        "👋 Вітаю! Натисніть «МЕНЮ» для вибору активів.",
         reply_markup=get_reply_keyboard()
     )
 
