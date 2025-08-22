@@ -1,7 +1,16 @@
-# run.py
-from twisted.internet import reactor
-from main import app # Імпортуємо наш Klein-додаток з main.py
+"""
+Головна точка входу для Fly.io.
+Запускає Twisted reactor та Klein-сервер із main.py
+"""
 
-# --- КЛЮЧОВА ЗМІНА: ЗАПУСКАЄМО WEBSERVER ---
-if __name__ == '__main__':
-    app.run(host="0.0.0.0", port=8080)
+import logging
+from twisted.internet import reactor
+import main  # Імпортує Klein app та setup_and_run
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
+
+if __name__ == "__main__":
+    logger.info("🚀 Запуск Twisted reactor...")
+    # reactor.run блокує виконання та тримає процес живим
+    reactor.run()
