@@ -1,4 +1,7 @@
-const API_BASE_URL = "https://zigzag-bot-package.fly.dev";
+// --- ПОЧАТОК ЗМІН: Прибираємо жорстко закодовану адресу ---
+// Тепер API_BASE_URL береться з window, куди його вставляє main.py
+const API_BASE_URL = window.API_BASE_URL || "https://fallback.example.com";
+// --- КІНЕЦЬ ЗМІН ---
 
 const loader = document.getElementById("loader");
 const listsContainer = document.getElementById("listsContainer");
@@ -32,7 +35,6 @@ document.addEventListener('DOMContentLoaded', function() {
     fetch(staticPairsUrl)
         .then(res => {
             if (!res.ok) {
-                // Якщо статус не 200-299, кидаємо помилку з текстом статусу
                 throw new Error(`HTTP status ${res.status}: ${res.statusText}`);
             }
             return res.json();
@@ -43,13 +45,12 @@ document.addEventListener('DOMContentLoaded', function() {
             populateLists(staticData);
             showLoader(false);
         })
-        // --- ПОЧАТОК ЗМІН: Розширена обробка помилок ---
         .catch(err => {
             console.error("Error fetching pair lists:", err);
-            // Виводимо детальну інформацію про помилку на екран
             signalOutput.innerHTML = `
                 <div style="text-align: left; font-family: monospace; word-wrap: break-word;">
                     <h3 style="color: #ef5350;">❌ Не вдалося завантажити списки пар.</h3>
+                    <p><strong>URL запиту:</strong><br>${staticPairsUrl}</p>
                     <p><strong>Тип помилки:</strong><br>${err.name || 'N/A'}</p>
                     <p><strong>Повідомлення:</strong><br>${err.message || 'N/A'}</p>
                     <p><strong>Стек виклику:</strong><br>${err.stack ? err.stack.replace(/\n/g, '<br>') : 'N/A'}</p>
@@ -57,9 +58,9 @@ document.addEventListener('DOMContentLoaded', function() {
             `;
             showLoader(false);
         });
-        // --- КІНЕЦЬ ЗМІН ---
 });
 
+// ... (решта файлу script.js залишається без змін) ...
 function renderFavoriteButton(pair) {
     const isFavorite = currentWatchlist.includes(pair);
     const icon = isFavorite ? '✅' : '⭐';

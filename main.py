@@ -7,7 +7,8 @@ from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, Callb
 
 from spotware_connect import SpotwareConnect
 import state
-from config import TELEGRAM_BOT_TOKEN, get_ct_client_id, get_ct_client_secret, FOREX_SESSIONS
+# --- ЗМІНА: Додаємо get_fly_app_name ---
+from config import TELEGRAM_BOT_TOKEN, get_ct_client_id, get_ct_client_secret, FOREX_SESSIONS, get_fly_app_name
 from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOASymbolsListRes
 
 logging.basicConfig(level=logging.INFO,
@@ -20,22 +21,37 @@ app = Klein()
 WEB_DIR = os.path.join(os.path.dirname(__file__), "webapp")
 INDEX_FILE = os.path.join(WEB_DIR, "index.html")
 
+# --- ПОЧАТОК ЗМІН: Вставляємо API_BASE_URL динамічно ---
 @app.route("/")
 def home(request):
-    logger.info("Dynamic index.html page requested. Applying cache busting...")
+    logger.info("Dynamic index.html page requested...")
     request.setHeader(b"content-type", b"text/html; charset=utf-8")
     request.setHeader(b"Cache-Control", b"no-cache, no-store, must-revalidate")
     try:
         with open(INDEX_FILE, "r", encoding="utf-8") as f:
             content = f.read()
+        
+        # Готуємо змінні для вставки в HTML
+        app_name = get_fly_app_name()
+        if not app_name:
+            logger.error("FLY_APP_NAME is not set!")
+            app_name = "zigzag-bot-package" # Fallback, але має бути встановлено
+            
+        api_base_url = f"https://{app_name}.fly.dev"
         cache_buster = int(time.time())
+
+        # Вставляємо змінні в HTML
+        content = content.replace("{{API_BASE_URL}}", api_base_url)
         content = content.replace("script.js", f"script.js?v={cache_buster}")
         content = content.replace("style.css", f"style.css?v={cache_buster}")
+
+        logger.info(f"Injecting API_BASE_URL: {api_base_url}")
         return content.encode("utf-8")
     except Exception as e:
         logger.error(f"Error serving index.html: {e}", exc_info=True)
         request.setResponseCode(500)
         return b"Internal Server Error"
+# --- КІНЕЦЬ ЗМІН ---
 
 @app.route("/<path:filename>")
 def static_files(request, filename):
