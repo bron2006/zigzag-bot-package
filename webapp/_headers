@@ -1,0 +1,2 @@
+/*
+  Content-Security-Policy: script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.plot.ly https://telegram.org; connect-src 'self' https://zigzag-bot-package.fly.dev;

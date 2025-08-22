@@ -1,50 +1,56 @@
 # config.py
 import os
+import logging
+from cachetools import TTLCache
+import ccxt
+from twelvedata import TDClient
 from dotenv import load_dotenv
+from telegram import Bot
+from telegram.ext import Updater
+from flask import Flask
 
+# --- Завантаження змінних середовища ---
 load_dotenv()
+TOKEN = os.getenv("TOKEN")
+WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
+TWELVEDATA_API_KEY = os.getenv("TWELVEDATA_API_KEY")
 
-def _get_required_env(var_name: str) -> str:
-    value = os.getenv(var_name)
-    if value is None:
-        raise ValueError(f"Помилка: обов'язкова змінна оточення '{var_name}' не встановлена.")
-    return value
+# --- Логування ---
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
-# --- Telegram ---
-def get_telegram_token() -> str:
-    return _get_required_env("TELEGRAM_BOT_TOKEN")
+# --- Кеш та клієнти API ---
+CACHE = TTLCache(maxsize=5000, ttl=300)
+binance = ccxt.binance({'enableRateLimit': True})
+td = TDClient(apikey=TWELVEDATA_API_KEY)
 
-def get_webhook_secret() -> str:
-    return _get_required_env("WEBHOOK_SECRET")
+# --- Глобальні об'єкти бота ---
+bot = Bot(token=TOKEN)
+updater = Updater(bot=bot, use_context=True)
+dp = updater.dispatcher
+app = Flask(__name__)
 
-# --- cTrader ---
-def get_ct_client_id() -> str:
-    return _get_required_env("CT_CLIENT_ID")
+# --- Константи ---
+CRYPTO_PAIRS_FULL = [
+    "BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "DOGE/USDT", 
+    "ADA/USDT", "SHIB/USDT", "AVAX/USDT", "LINK/USDT", "DOT/USDT", "TRX/USDT",
+    "MATIC/USDT", "LTC/USDT", "BCH/USDT", "XLM/USDT", "ATOM/USDT", "ETC/USDT",
+    "FIL/USDT", "NEAR/USDT", "ALGO/USDT", "VET/USDT", "ICP/USDT", "EOS/USDT"
+]
+CRYPTO_CHUNK_SIZE = 12
 
-def get_ct_client_secret() -> str:
-    return _get_required_env("CT_CLIENT_SECRET")
+STOCK_TICKERS = ["AAPL", "GOOGL", "MSFT", "AMZN", "NVDA", "TSLA", "META", "JPM", "V", "JNJ"]
 
-def get_ctrader_access_token() -> str:
-    return _get_required_env("CTRADER_ACCESS_TOKEN")
-
-def get_demo_account_id() -> int:
-    return int(_get_required_env("DEMO_ACCOUNT_ID"))
-
-# --- Fly.io ---
-def get_fly_app_name() -> str | None:
-    return os.getenv("FLY_APP_NAME")
-
-# --- Database ---
-DB_NAME = "bot_data.db"
-
-# --- Списки активів (тільки Forex) ---
-# ВИДАЛЕНО CRYPTO_PAIRS_FULL та STOCKS_US_SYMBOLS
-CRYPTO_PAIRS_FULL = [] 
-STOCKS_US_SYMBOLS = []
-
-# ОНОВЛЕНО: Назви пар відповідають даним з логів (без "/")
-FOREX_SESSIONS = {
-    "Азіатська": ["USDJPY", "AUDUSD", "NZDUSD", "EURJPY", "CHFJPY"],
-    "Європейська": ["EURUSD", "GBPUSD", "USDCHF", "EURGBP", "EURCHF", "GBPCHF"],
-    "Американська": ["USDCAD", "USDMXN", "USDRUB", "USDZAR"] # Замінено BRL на RUB, оскільки BRL немає у списку
+FOREX_PAIRS_MAP = {
+    "EUR/USD": "EUR/USD", "GBP/USD": "GBP/USD", "USD/JPY": "USD/JPY", "USD/CAD": "USD/CAD",
+    "AUD/USD": "AUD/USD", "USD/CHF": "USD/CHF", "NZD/USD": "NZD/USD", "EUR/GBP": "EUR/GBP",
+    "EUR/JPY": "EUR/JPY", "CHF/JPY": "CHF/JPY", "EUR/CHF": "EUR/CHF", "GBP/CHF": "GBP/CHF",
+    "USD/MXN": "USD/MXN", "USD/BRL": "USD/BRL", "USD/ZAR": "USD/ZAR"
 }
+FOREX_SESSIONS = {
+    "Азіатська": ["USD/JPY", "AUD/USD", "NZD/USD", "EUR/JPY", "CHF/JPY"],
+    "Європейська": ["EUR/USD", "GBP/USD", "USD/CHF", "EUR/GBP", "EUR/CHF", "GBP/CHF"],
+    "Американська": ["USD/CAD", "USD/MXN", "USD/BRL", "USD/ZAR"]
+}
+ANALYSIS_TIMEFRAMES = ['15min', '1h', '4h', '1day']
+DB_NAME = "zigzag.db"

@@ -1,20 +1,18 @@
-// webapp/script.js
+// script.js
 
-const API_BASE_URL = "https://zigzag-bot-package.fly.dev"; // ВИПРАВЛЕНО: Повернено абсолютну URL-адресу
+const API_BASE_URL = "https://zigzag-bot-package.fly.dev";
 
 const loader = document.getElementById("loader");
 const listsContainer = document.getElementById("listsContainer");
 const signalOutput = document.getElementById("signalOutput");
 const historyContainer = document.getElementById("historyContainer");
-const chartContainer = document.getElementById("chart");
 
 let tg;
-// Mock Telegram WebApp object for browser-based testing
-if (!window.Telegram || !window.Telegram.WebApp || !window.Telegram.WebApp.initData) {
+if (!window.Telegram || !window.Telegram.WebApp) {
     console.warn("Telegram WebApp object not found. Running in browser mode with mock data.");
     tg = { 
         themeParams: { bg_color: '#1a1a1a', text_color: '#ffffff' }, 
-        initData: '', // Mock initData can be placed here for testing
+        initData: '',
         ready: function() {},
         expand: function() {}
     };
@@ -22,44 +20,31 @@ if (!window.Telegram || !window.Telegram.WebApp || !window.Telegram.WebApp.initD
     tg = window.Telegram.WebApp;
     tg.ready();
     tg.expand();
+    console.log("Telegram WebApp object is ready.");
 }
 
 let currentWatchlist = [];
 let initData = tg.initData || '';
 
-function fetchInitialData() {
+document.addEventListener('DOMContentLoaded', function() {
     showLoader(true);
-    const cacheBuster = `&_=${new Date().getTime()}`;
-    const initDataString = initData ? `?initData=${encodeURIComponent(initData)}` : '?';
-    const rankedPairsUrl = `${API_BASE_URL}/api/get_ranked_pairs${initDataString}${cacheBuster}`;
+    const initDataString = initData ? `?initData=${encodeURIComponent(initData)}` : '';
+    const staticPairsUrl = `${API_BASE_URL}/api/get_pairs${initDataString}`;
 
-    fetch(rankedPairsUrl)
+    fetch(staticPairsUrl)
         .then(res => res.json())
-        .then(response => {
-            if (response.status === "initializing") {
-                console.log("Backend is initializing, retrying in 2 seconds...");
-                signalOutput.innerHTML = "⏳ Ініціалізація з'єднання з торговим сервером...";
-                signalOutput.style.textAlign = 'center';
-                setTimeout(fetchInitialData, 2000); // Poll again
-            } else if (response.status === "ready") {
-                console.log("Received static pairs:", response.data);
-                signalOutput.innerHTML = ""; // Clear initializing message
-                currentWatchlist = response.data.watchlist || [];
-                populateLists(response.data);
-                showLoader(false);
-            } else {
-                throw new Error(response.error || "Невідома помилка формату відповіді.");
-            }
+        .then(staticData => {
+            console.log("Received static pairs:", staticData);
+            currentWatchlist = staticData.watchlist || [];
+            populateLists(staticData);
+            showLoader(false);
         })
         .catch(err => {
             console.error("Error fetching pair lists:", err);
-            signalOutput.innerHTML = "❌ Не вдалося завантажити списки пар. Спробуйте оновити сторінку.";
-            signalOutput.style.textAlign = 'center';
+            signalOutput.innerHTML = "❌ Не вдалося завантажити списки пар.";
             showLoader(false);
         });
-}
-
-document.addEventListener('DOMContentLoaded', fetchInitialData);
+});
 
 function renderFavoriteButton(pair) {
     const isFavorite = currentWatchlist.includes(pair);
@@ -71,8 +56,7 @@ function toggleFavorite(event, pair) {
     event.stopPropagation();
     const button = event.currentTarget;
     const isCurrentlyFavorite = currentWatchlist.includes(pair);
-    button.disabled = true;
-
+    button.innerHTML = isCurrentlyFavorite ? '⭐' : '✅';
     const url = `${API_BASE_URL}/api/toggle_watchlist?pair=${pair}&initData=${encodeURIComponent(initData)}`;
     fetch(url)
         .then(res => res.json())
@@ -80,136 +64,123 @@ function toggleFavorite(event, pair) {
             if (data.success) {
                 if (isCurrentlyFavorite) {
                     currentWatchlist = currentWatchlist.filter(p => p !== pair);
-                    button.innerHTML = '⭐';
                 } else {
                     currentWatchlist.push(pair);
-                    button.innerHTML = '✅';
                 }
+            } else {
+                button.innerHTML = isCurrentlyFavorite ? '✅' : '⭐';
+                alert("Не вдалося оновити список обраного.");
             }
         })
-        .catch(err => console.error(err))
-        .finally(() => button.disabled = false);
+        .catch(err => {
+            button.innerHTML = isCurrentlyFavorite ? '✅' : '⭐';
+            alert("Помилка мережі при оновленні списку обраного.");
+            console.error(err);
+        });
 }
 
-function createPairButton(pairData) {
-    const pair = pairData.ticker;
-    const isActive = pairData.active;
-    const inactiveClass = isActive ? '' : 'inactive';
-    
-    return `<div class="pair-item ${inactiveClass}">
-        <button class="pair-button" onclick="fetchSignal('${pair}')" ${!isActive ? 'disabled' : ''}>${pair}</button>
+function createPairButton(pair, assetType) {
+    return `<div class="pair-item">
+        <button class="pair-button" onclick="fetchSignal('${pair}', '${assetType}')">${pair}</button>
         ${renderFavoriteButton(pair)}
     </div>`;
 }
 
 function populateLists(staticData) {
     let html = '';
-    const createSection = (title, pairs) => {
-        if (!pairs || pairs.length === 0) return '';
+    function createSection(title, pairs, assetTypeResolver) {
+        if (!Array.isArray(pairs) || pairs.length === 0) return '';
         let sectionHtml = `<div class="category"><div class="category-title">${title}</div><div class="pair-list">`;
-        pairs.forEach(pairData => {
-            sectionHtml += createPairButton(pairData);
+        pairs.forEach(pair => {
+            const assetType = typeof assetTypeResolver === 'function' ? assetTypeResolver(pair) : assetTypeResolver;
+            sectionHtml += createPairButton(pair, assetType);
         });
         sectionHtml += '</div></div>';
         return sectionHtml;
-    };
+    }
 
-    const allPairs = [
-        ...(staticData.forex ? Object.values(staticData.forex).flat() : []),
-        ...(staticData.crypto || []),
-        ...(staticData.stocks || [])
-    ];
-    
-    const watchlistData = staticData.watchlist
-        .map(ticker => allPairs.find(p => p.ticker === ticker))
-        .filter(Boolean); // Filter out any tickers not found in allPairs
+    html += createSection('⭐ Обране', staticData.watchlist, getAssetType);
+    // --- ПОЧАТОК ЗМІН: Прибираємо .slice(0, 12), щоб показати всі пари ---
+    html += createSection('📈 Уся криптовалюта', staticData.crypto || [], 'crypto');
+    // --- КІНЕЦЬ ЗМІН ---
 
-    html += createSection('⭐ Обране', watchlistData);
-
-    if (staticData.forex) {
+    if (staticData.forex && typeof staticData.forex === 'object') {
         Object.keys(staticData.forex).forEach(sessionName => {
-            html += createSection(`🌍 Валюти (${sessionName})`, staticData.forex[sessionName]);
+            html += createSection(`🌍 Усі валюти (${sessionName})`, staticData.forex[sessionName], 'forex');
         });
     }
-    html += createSection('📈 Криптовалюта', staticData.crypto || []);
-    html += createSection('🏢 Акції', staticData.stocks || []);
+
+    html += createSection('🏢 Усі акції', staticData.stocks, 'stocks');
 
     listsContainer.innerHTML = html;
 }
 
-function fetchSignal(pair) {
+function fetchSignal(pair, assetType) {
+    console.log(`fetchSignal called for pair: ${pair}`);
     showLoader(true);
-    signalOutput.innerHTML = `⏳ Отримую аналіз для ${pair}...`;
-    signalOutput.style.textAlign = 'center';
+    signalOutput.innerHTML = `⏳ Отримую детальний аналіз для ${pair}...`;
+    signalOutput.style.textAlign = 'left';
     historyContainer.innerHTML = ''; 
     Plotly.purge('chart');
 
-    const cacheBuster = `&_=${new Date().getTime()}`;
-    const signalApiUrl = `${API_BASE_URL}/api/signal?pair=${pair}&initData=${encodeURIComponent(initData)}${cacheBuster}`;
-    const mtaApiUrl = `${API_BASE_URL}/api/get_mta?pair=${pair}${cacheBuster}`;
+    const signalApiUrl = `${API_BASE_URL}/api/signal?pair=${pair}`;
+    const mtaApiUrl = `${API_BASE_URL}/api/get_mta?pair=${pair}`;
 
     Promise.all([
         fetch(signalApiUrl).then(res => res.json()),
         fetch(mtaApiUrl).then(res => res.json())
     ])
     .then(([signalData, mtaData]) => {
-        signalOutput.style.textAlign = 'left';
         if (signalData.error) {
-            throw new Error(signalData.error);
-        }
-        
-        const priceStr = (signalData.price || 0).toFixed(5);
-        const supportStr = signalData.support ? signalData.support.toFixed(5) : null;
-        const resistanceStr = signalData.resistance ? signalData.resistance.toFixed(5) : null;
-
-        let html = `
-            <div class="verdict-box ${signalData.verdict_level || 'neutral'}">
-                ${signalData.verdict_text || 'Н/Д'}
-            </div>
-            <div class="pair-title">${signalData.pair} | Ціна: ${priceStr}</div>
-        `;
-        
-        if (supportStr || resistanceStr) {
-            html += `<div class="sr-levels">`;
-            if (supportStr) html += `Підтримка: <strong>${supportStr}</strong>`;
-            if (supportStr && resistanceStr) html += ` | `;
-            if (resistanceStr) html += `Опір: <strong>${resistanceStr}</strong>`;
-            html += `</div>`;
+            signalOutput.innerHTML = `❌ Помилка: ${signalData.error}`;
+            signalOutput.style.textAlign = 'center';
+            showLoader(false);
+            return;
         }
 
-        if (signalData.reasons && signalData.reasons.length) {
-            html += `<h4>Ключові фактори:</h4><ul class="reason-list">${signalData.reasons.map(r => `<li>${r}</li>`).join('')}</ul>`;
-        }
-        
+        const arrow = signalData.bull_percentage >= 50 ? '⬆️' : '⬇️';
+        const supportText = signalData.support ? signalData.support.toFixed(4) : 'N/A';
+        const resistanceText = signalData.resistance ? signalData.resistance.toFixed(4) : 'N/A';
+        const reasonsList = signalData.reasons.map(r => `<li>${r}</li>`).join('');
+        let candleHtml = signalData.candle_pattern?.text ? `<div style="margin-bottom:10px"><strong>Свічковий патерн:</strong><br>${signalData.candle_pattern.text}</div>` : '';
+        let volumeHtml = signalData.volume_analysis ? `<div style="margin-bottom:10px"><strong>Аналіз об'єму:</strong><br>${signalData.volume_analysis}</div>` : '';
+        let mtaHtml = '';
         if (Array.isArray(mtaData) && mtaData.length > 0) {
-            html += '<h4>Мульти-таймфрейм аналіз (MTA):</h4><table class="mta-table"><tr>';
-            mtaData.forEach(item => { html += `<th>${item.tf}</th>`; });
-            html += '</tr><tr>';
+            mtaHtml += '<div class="mta-container"><strong>Мульти-таймфрейм аналіз (MTA):</strong><table class="mta-table"><tr>';
+            mtaData.forEach(item => { mtaHtml += `<th>${item.tf}</th>`; });
+            mtaHtml += '</tr><tr>';
             mtaData.forEach(item => {
                 const signalClass = item.signal.toLowerCase();
-                html += `<td class="${signalClass}">${item.signal}</td>`;
+                mtaHtml += `<td class="${signalClass}">${item.signal}</td>`;
             });
-            html += '</tr></table>';
+            mtaHtml += '</tr></table></div>';
         }
 
-        signalOutput.innerHTML = html;
+        signalOutput.innerHTML = `
+            <div style="font-size: 32px; text-align: center; margin-bottom: 15px;">${arrow}</div>
+            <div style="margin-bottom: 10px;"><strong>${signalData.pair}</strong> | Ціна: ${signalData.price.toFixed(4)}</div>
+            <div style="margin-bottom: 10px;"><strong>Баланс сил:</strong><br>🐂 Бики: ${signalData.bull_percentage}% ⬆️ | 🐃 Ведмеді: ${signalData.bear_percentage}% ⬇️</div>
+            ${candleHtml}
+            <div style="margin-bottom: 10px;"><strong>Рівні S/R:</strong><br>Підтримка: ${supportText} | Опір: ${resistanceText}</div>
+            ${volumeHtml}
+            <div><strong>Ключові фактори:</strong><ul style="margin: 5px 0 0 20px; padding: 0;">${reasonsList}</ul></div>
+            ${mtaHtml}
+        `;
 
-        if (signalData.history && signalData.history.dates && signalData.history.dates.length > 0) {
+        if (signalData.history && signalData.history.dates) {
             drawChart(pair, signalData.history);
-        } else {
-            chartContainer.innerHTML = `<div class="no-chart">Графік недоступний</div>`;
         }
         
         if (initData) {
             fetchHistory(pair);
         }
+
+        showLoader(false);
     })
     .catch(err => {
         console.error(`Error fetching signal for ${pair}:`, err);
-        signalOutput.innerHTML = `❌ Помилка: ${err.message || "Перевірте з'єднання."}`;
+        signalOutput.innerHTML = `❌ Помилка: ${err.message}`;
         signalOutput.style.textAlign = 'center';
-    })
-    .finally(() => {
         showLoader(false);
     });
 }
@@ -227,13 +198,15 @@ function fetchHistory(pair) {
 }
 
 function displaySignalHistory(history) {
-    let html = '<h4>Історія сигналів</h4>';
-    html += '<table class="history-table"><thead><tr><th>Час</th><th>Ціна</th><th>Сигнал</th><th>Сила</th></tr></thead><tbody>';
+    let html = '<div class="history-title">Історія сигналів</div>';
+    html += '<table class="history-table"><thead><tr><th>Час</th><th>Ціна</th><th>Сигнал</th><th>Сила (Бики)</th></tr></thead><tbody>';
+
     history.forEach(item => {
         const date = new Date(item.timestamp.replace(' ', 'T') + 'Z');
         const formattedDate = `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')} ${date.getDate().toString().padStart(2, '0')}.${(date.getMonth() + 1).toString().padStart(2, '0')}`;
         const signalClass = `signal-${item.signal_type.toLowerCase()}`;
-        const price = item.price ? item.price.toFixed(5) : 'N/A';
+        const price = item.price ? item.price.toFixed(4) : 'N/A';
+
         html += `
             <tr>
                 <td>${formattedDate}</td>
@@ -243,6 +216,7 @@ function displaySignalHistory(history) {
             </tr>
         `;
     });
+
     html += '</tbody></table>';
     historyContainer.innerHTML = html;
 }
@@ -264,11 +238,16 @@ function drawChart(pair, history) {
         font: { color: tg.themeParams.text_color || '#fff' },
         xaxis: { rangeslider: { visible: false }, showgrid: false },
         yaxis: { showgrid: false },
-        margin: { l: 40, r: 10, b: 35, t: 10 }
+        margin: { l: 35, r: 35, b: 35, t: 35 }
     };
-    Plotly.newPlot('chart', [trace], layout, {responsive: true});
+    Plotly.newPlot('chart', [trace], layout);
 }
 
 function showLoader(visible) {
     loader.className = visible ? '' : 'hidden';
+}
+
+function getAssetType(pair) {
+    if (pair.includes('/')) return pair.includes('USDT') ? 'crypto' : 'forex';
+    return 'stocks';
 }
