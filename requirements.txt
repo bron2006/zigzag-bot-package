@@ -9,3 +9,4 @@ Flask-Cors
 requests
 protobuf==3.20.3
 websockets==12.0
+ctrader-open-api # <-- ДОДАНО ОФІЦІЙНУ БІБЛІОТЕКУ
