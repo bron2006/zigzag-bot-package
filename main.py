@@ -20,19 +20,24 @@ app = Klein()
 WEB_DIR = os.path.join(os.path.dirname(__file__), "webapp")
 INDEX_FILE = os.path.join(WEB_DIR, "index.html")
 
-# --- ПОЧАТОК ЗМІН: Динамічна віддача index.html з cache busting ---
+# --- ПОЧАТОК ЗМІН: Додано заголовок для заборони кешування ---
 @app.route("/")
 def home(request):
     """
-    Читає index.html, додає до script.js версію для скидання кешу (cache busting)
-    і віддає його клієнту.
+    Читає index.html, додає cache busting і віддає його клієнту,
+    забороняючи кешування самої сторінки.
     """
+    # ДІАГНОСТИЧНЕ ЛОГУВАННЯ: перевіряємо, чи виконується цей код
+    logger.info("Dynamic index.html page requested. Applying cache busting...")
+
     request.setHeader(b"content-type", b"text/html; charset=utf-8")
+    # КЛЮЧОВА ЗМІНА: Забороняємо CDN та браузеру кешувати цю HTML-сторінку
+    request.setHeader(b"Cache-Control", b"no-cache, no-store, must-revalidate")
+    
     try:
         with open(INDEX_FILE, "r", encoding="utf-8") as f:
             content = f.read()
         
-        # Додаємо timestamp до script.js для cache busting
         cache_buster = int(time.time())
         content = content.replace("script.js", f"script.js?v={cache_buster}")
         content = content.replace("style.css", f"style.css?v={cache_buster}")
