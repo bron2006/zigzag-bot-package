@@ -1,7 +1,11 @@
+# fly.toml
 app = "zigzag-bot-package"
 primary_region = "fra"
 
 [build]
+
+[processes]
+  app = "gunicorn --bind 0.0.0.0:8080 --workers 1 app:app"
 
 [[mounts]]
   source = "signals_data"
@@ -10,6 +14,7 @@ primary_region = "fra"
 [[services]]
   internal_port = 8080
   protocol = "tcp"
+  processes = ["app"]
 
   [[services.ports]]
     handlers = ["http"]
