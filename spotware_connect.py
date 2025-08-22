@@ -34,6 +34,7 @@ class EventEmitter:
 class SpotwareClient(EventEmitter):
     def __init__(self, client_id, client_secret):
         super().__init__()
+        logger.info(f"SpotwareClient __init__: Створено екземпляр з ID -> {id(self)}")
         self.host = "demo.ctraderapi.com"
         self.port = 5035
         self._client_id = client_id
@@ -49,20 +50,31 @@ class SpotwareClient(EventEmitter):
     def isConnected(self):
         return self._is_connected
 
+    def _set_connection_state(self, new_state: bool):
+        if self._is_connected != new_state:
+            logger.info(f"SpotwareClient State Change: isConnected -> {new_state} (ID: {id(self)})")
+            self._is_connected = new_state
+
     def connect(self):
         self._client.startService()
 
+    # --- ФІНАЛЬНЕ ВИПРАВЛЕННЯ ---
     def send(self, message, client_msg_id=None):
-        # Збільшуємо таймаут для надійності
-        return self._client.send(message, clientMsgId=client_msg_id, responseTimeoutInSeconds=15)
+        """
+        Публічний метод для надсилання повідомлень, який делегує запит
+        внутрішньому приватному методу.
+        """
+        return self._send_message(message, client_msg_id)
+    # --- КІНЕЦЬ ВИПРАВЛЕННЯ ---
 
     def _on_connected(self, client):
         logger.info("Встановлено з'єднання з cTrader API. Авторизація додатку...")
         request = ProtoOAApplicationAuthReq(clientId=self._client_id, clientSecret=self._client_secret)
-        self.send(request)
+        self._send_message(request)
 
     def _on_disconnected(self, client, reason):
-        self._is_connected = False
+        logger.warning(f"!!! SpotwareClient _on_disconnected: Спрацював колбек роз'єднання! (ID: {id(self)})")
+        self._set_connection_state(False)
         error_msg = reason.getErrorMessage()
         logger.warning(f"Відключено від cTrader API. Причина: {error_msg}")
         self.emit("error", f"Відключено: {error_msg}")
@@ -78,13 +90,21 @@ class SpotwareClient(EventEmitter):
             response = ProtoOAAccountAuthRes()
             response.ParseFromString(message.payload)
             logger.info(f"Торговий рахунок {response.ctidTraderAccountId} успішно авторизовано.")
-            self._is_connected = True
+            self._set_connection_state(True)
             self._request_symbols()
         elif payload_type == ProtoOAPayloadType.PROTO_OA_SYMBOLS_LIST_RES:
             response = ProtoOASymbolsListRes()
             response.ParseFromString(message.payload)
-            # У цій версії ми генерували подію з повним списком символів
-            self.emit("fullSymbolsLoaded", response.symbol)
+            logger.info("Отримано список символів.")
+            # Передаємо повні дані про символи, а не тільки ID та ім'я
+            symbols_data = [
+                {
+                    "symbolId": s.symbolId, 
+                    "symbolName": s.symbolName,
+                    # Додаємо pipPosition та інші корисні дані, якщо вони є в LightSymbol
+                } for s in response.symbol
+            ]
+            self.emit("symbolsLoaded", symbols_data)
         elif payload_type == ProtoOAPayloadType.PROTO_OA_ERROR_RES:
             response = ProtoOAErrorRes()
             response.ParseFromString(message.payload)
@@ -97,9 +117,19 @@ class SpotwareClient(EventEmitter):
             ctidTraderAccountId=get_demo_account_id(), 
             accessToken=get_ctrader_access_token()
         )
-        self.send(request)
+        self._send_message(request)
 
     def _request_symbols(self):
-        logger.info("Надсилаю запит на отримання ПОВНОГО списку символів...")
+        logger.info("Надсилаю запит на отримання списку символів...")
         request = ProtoOASymbolsListReq(ctidTraderAccountId=get_demo_account_id())
-        self.send(request)
+        self._send_message(request)
+
+    def _send_message(self, message, client_msg_id=None):
+        deferred = self._client.send(message, clientMsgId=client_msg_id)
+        deferred.addErrback(self._on_send_error)
+        return deferred # Повертаємо Deferred, щоб його можна було обробляти далі
+
+    def _on_send_error(self, failure):
+        error_message = f"Не вдалося надіслати повідомлення: {failure.getErrorMessage()}"
+        logger.error(error_message)
+        self.emit("error", error_message)

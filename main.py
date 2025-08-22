@@ -1,3 +1,4 @@
+# main.py
 import logging
 import os
 import json
@@ -11,7 +12,7 @@ from telegram import Update
 from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, MessageHandler, Filters
 
 import state
-from telegram_ui import start, menu, button_handler
+from telegram_ui import start, menu, button_handler, reset_ui
 from spotware_connect import SpotwareClient
 from config import (
     get_telegram_token, get_ct_client_id, get_ct_client_secret, 
@@ -21,16 +22,19 @@ from db import get_watchlist, toggle_watch, get_signal_history, init_db
 from analysis import get_api_detailed_signal_data
 from mta_analysis import get_mta_signal
 
+# --- Налаштування логування ---
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
+# --- Ініціалізація ---
 app = Klein()
 TOKEN = get_telegram_token()
 updates_queue = queue.Queue(maxsize=1000)
 
+# --- Воркер для обробки оновлень ---
 def dispatcher_worker():
     while True:
         try:
@@ -42,11 +46,13 @@ def dispatcher_worker():
         except Exception as e:
             logger.exception(f"Помилка в воркері диспетчера: {e}")
 
+# --- Ініціалізація Telegram ---
 def init_telegram_bot():
     state.updater = Updater(TOKEN, use_context=True)
     dispatcher = state.updater.dispatcher
     dispatcher.add_handler(CommandHandler("start", start))
     dispatcher.add_handler(MessageHandler(Filters.text("МЕНЮ"), menu))
+    dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, reset_ui))
     dispatcher.add_handler(CallbackQueryHandler(button_handler))
     logger.info("✅ Обробники Telegram зареєстровані.")
     
@@ -54,27 +60,54 @@ def init_telegram_bot():
         threading.Thread(target=dispatcher_worker, daemon=True).start()
     logger.info("✅ Воркери для обробки черги Telegram запущені.")
 
-def on_symbols_loaded(symbols):
+# --- Ініціалізація cTrader ---
+def on_symbols_loaded(full_symbols):
+    """Обробляє ПОВНИЙ список символів та коректно заповнює кеш."""
     temp_cache = {}
-    for s in symbols:
-        if "symbolName" in s and s.get("symbolId"):
-            normalized_name = s["symbolName"].replace("/", "").strip()
+    available_symbols_names = []
+
+    for symbol_data in full_symbols:
+        symbol_name = getattr(symbol_data, 'symbolName', None)
+        
+        if not symbol_name:
+            continue
+        
+        available_symbols_names.append(symbol_name)
+        
+        # ВИПРАВЛЕНО: Ключем для кешу є ім'я без слеша
+        normalized_name = symbol_name.replace("/", "").strip()
+        
+        # ВИПРАВЛЕНО: Перевіряємо, чи є всі необхідні дані перед додаванням у кеш
+        if hasattr(symbol_data, 'symbolId') and hasattr(symbol_data, 'digits'):
             temp_cache[normalized_name] = {
-                "symbolId": s.get("symbolId"),
-                "digits": s.get("digits", 5) 
+                "symbolId": symbol_data.symbolId,
+                "digits": symbol_data.digits
             }
+        else:
+            logger.warning(f"Символ {symbol_name} не має полів symbolId або digits, пропущено.")
+
+    # Діагностичний лог
+    logger.info("="*50)
+    logger.info(f"СПИСОК СИМВОЛІВ, ОТРИМАНИХ ВІД CTRADER ({len(available_symbols_names)} шт.):")
+    logger.info(", ".join(sorted(available_symbols_names)))
+    logger.info("="*50)
+
     state.symbol_cache.update(temp_cache)
-    logger.info("✅ Кеш символів заповнено (%s символів)", len(state.symbol_cache))
+    state.SYMBOLS_LOADED = True
+    # ВИПРАВЛЕНО: Лог тепер показує реальну кількість закешованих символів
+    logger.info(f"✅ Кеш символів заповнено. Завантажено дані для {len(state.symbol_cache)} символів. Сервіс готовий.")
+
 
 def init_ctrader_client():
     api_key = get_ct_client_id()
     api_secret = get_ct_client_secret()
     state.client = SpotwareClient(api_key, api_secret)
-    state.client.on("symbolsLoaded")(on_symbols_loaded)
+    state.client.on("fullSymbolsLoaded")(on_symbols_loaded)
     state.client.on("error")(lambda err: logger.error(f"Помилка cTrader: {err}"))
     state.client.connect()
     logger.info("Запущено підключення до cTrader API...")
 
+# --- Допоміжна функція для WebApp ---
 def parse_tg_init_data(init_data_str: str) -> dict | None:
     try:
         params = parse_qs(unquote(init_data_str))
@@ -85,42 +118,39 @@ def parse_tg_init_data(init_data_str: str) -> dict | None:
         logger.error(f"Помилка парсингу initData: {e}")
     return None
 
-def _deferred_to_request(d, request):
-    def on_success(result):
-        request.setHeader('Content-Type', 'application/json')
-        return json.dumps(result).encode('utf-8')
-    def on_error(failure):
-        logger.error(f"Помилка обробки API запиту {request.path.decode()}: {failure.getTraceback()}")
-        request.setResponseCode(500)
-        request.setHeader('Content-Type', 'application/json')
-        return json.dumps({"error": "Internal Server Error"}).encode('utf-8')
-    d.addCallbacks(on_success, on_error)
-    return d
-
+# --- API ендпоінти для WebApp ---
 @app.route('/api/get_ranked_pairs', methods=['GET'])
 def get_ranked_pairs(request):
+    request.setHeader('Content-Type', 'application/json')
+    request.setHeader('Access-Control-Allow-Origin', '*')
+
+    if not state.SYMBOLS_LOADED:
+        return json.dumps({"status": "initializing"}).encode('utf-8')
+
     try:
         init_data = request.args.get(b'initData', [b''])[0].decode()
         user = parse_tg_init_data(init_data)
         watchlist = []
         if user and user.get('id'):
             watchlist = get_watchlist(user['id'])
+
         def format_pair(ticker):
+            # ВИПРАВЛЕНО: Нормалізація тепер відбувається так само, як при заповненні кешу
             norm_ticker = ticker.replace("/", "").strip()
             return {"ticker": ticker, "active": norm_ticker in state.symbol_cache}
+
         response_data = {
             "watchlist": watchlist,
             "forex": {session: [format_pair(p) for p in pairs] for session, pairs in FOREX_SESSIONS.items()},
             "crypto": [format_pair(p) for p in CRYPTO_PAIRS_FULL],
             "stocks": [format_pair(p) for p in STOCKS_US_SYMBOLS]
         }
-        request.setHeader('Content-Type', 'application/json')
-        request.setHeader('Access-Control-Allow-Origin', '*')
-        return json.dumps(response_data).encode('utf-8')
+        
+        return json.dumps({"status": "ready", "data": response_data}).encode('utf-8')
     except Exception:
         logger.exception("!!! ПОМИЛКА в /api/get_ranked_pairs")
         request.setResponseCode(500)
-        return json.dumps({"error": "Internal Server Error"}).encode('utf-8')
+        return json.dumps({"status": "error", "error": "Internal Server Error"}).encode('utf-8')
 
 @app.route('/api/toggle_watchlist', methods=['GET'])
 def toggle_watchlist_api(request):
@@ -146,24 +176,44 @@ def get_signal_api(request):
     init_data = request.args.get(b'initData', [b''])[0].decode()
     user = parse_tg_init_data(init_data)
     user_id = user.get('id') if user else None
+    request.setHeader('Content-Type', 'application/json')
     request.setHeader('Access-Control-Allow-Origin', '*')
     if not pair:
         request.setResponseCode(400)
-        request.setHeader('Content-Type', 'application/json')
         return json.dumps({"error": "Pair parameter is required"}).encode('utf-8')
     d = get_api_detailed_signal_data(state.client, pair, user_id)
-    return _deferred_to_request(d, request)
+    def on_success(result):
+        request.write(json.dumps(result).encode('utf-8'))
+        request.finish()
+    def on_error(failure):
+        logger.error(f"API /api/signal: Помилка: {failure.getErrorMessage()}")
+        request.setResponseCode(500)
+        error_response = {"error": f"Внутрішня помилка сервера."}
+        request.write(json.dumps(error_response).encode('utf-8'))
+        request.finish()
+    d.addCallbacks(on_success, on_error)
+    return defer.SUCCESS
 
 @app.route('/api/get_mta', methods=['GET'])
 def get_mta_api(request):
     pair = request.args.get(b'pair', [b''])[0].decode()
+    request.setHeader('Content-Type', 'application/json')
     request.setHeader('Access-Control-Allow-Origin', '*')
     if not pair:
         request.setResponseCode(400)
-        request.setHeader('Content-Type', 'application/json')
         return json.dumps({"error": "Pair parameter is required"}).encode('utf-8')
     d = get_mta_signal(state.client, pair)
-    return _deferred_to_request(d, request)
+    def on_success(result):
+        request.write(json.dumps(result).encode('utf-8'))
+        request.finish()
+    def on_error(failure):
+        logger.error(f"API /api/get_mta: Помилка: {failure.getErrorMessage()}")
+        request.setResponseCode(500)
+        error_response = {"error": f"Внутрішня помилка сервера."}
+        request.write(json.dumps(error_response).encode('utf-8'))
+        request.finish()
+    d.addCallbacks(on_success, on_error)
+    return defer.SUCCESS
 
 @app.route('/api/signal_history', methods=['GET'])
 def get_signal_history_api(request):
@@ -178,6 +228,7 @@ def get_signal_history_api(request):
     history = get_signal_history(user['id'], pair)
     return json.dumps(history).encode('utf-8')
 
+# --- Веб-ручки ---
 @app.route(f"/{TOKEN}", methods=['POST'])
 def webhook_handler(request):
     try:
@@ -207,9 +258,10 @@ def home(request):
     if app_name:
         webapp_url = f"https://{app_name}.fly.dev/webapp/index.html"
         request.redirect(webapp_url.encode('utf-8'))
+        request.finish()
         return b""
     else:
-        return b"WebApp URL is not configured."
+        return b"Telegram Bot and Web Service is running"
 
 @app.route('/webapp/', branch=True)
 def webapp_static(request):
@@ -224,6 +276,7 @@ def setup_webhook():
     else:
         logger.warning("Не вдалося встановити вебхук.")
 
+# --- Запуск сервісів ---
 init_db()
 logger.info("✅ Базу даних ініціалізовано.")
 init_telegram_bot()

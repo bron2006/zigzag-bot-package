@@ -1,258 +1,79 @@
-// script.js
-
-const API_BASE_URL = "https://zigzag-bot-package.fly.dev";
-
-const loader = document.getElementById("loader");
-const listsContainer = document.getElementById("listsContainer");
-const signalOutput = document.getElementById("signalOutput");
-const historyContainer = document.getElementById("historyContainer");
-const chartContainer = document.getElementById("chart");
-
-let tg;
-if (!window.Telegram || !window.Telegram.WebApp) {
-    console.warn("Telegram WebApp object not found. Running in browser mode.");
-    tg = { 
-        themeParams: { bg_color: '#1a1a1a', text_color: '#ffffff' }, 
-        initData: '',
-        ready: function() {},
-        expand: function() {}
-    };
-} else {
-    tg = window.Telegram.WebApp;
-    tg.ready();
-    tg.expand();
+/* style.css */
+:root {
+    --bg-color: var(--tg-theme-bg-color, #1a1a1a);
+    --text-color: var(--tg-theme-text-color, #ffffff);
+    --hint-color: var(--tg-theme-hint-color, #aaaaaa);
+    --button-color: var(--tg-theme-button-color, #3390ec);
+    --button-text-color: var(--tg-theme-button-text-color, #ffffff);
+    --secondary-bg-color: var(--tg-theme-secondary-bg-color, #272727);
+    --buy-color: #26a69a;
+    --sell-color: #ef5350;
+    --strong-confidence-bg: rgba(38, 166, 154, 0.2);
+    --weak-confidence-bg: rgba(239, 83, 80, 0.2);
+    --neutral-confidence-bg: rgba(170, 170, 170, 0.15);
 }
 
-let currentWatchlist = [];
-let initData = tg.initData || '';
-
-document.addEventListener('DOMContentLoaded', function() {
-    showLoader(true);
-    const cacheBuster = `&_=${new Date().getTime()}`;
-    const initDataString = initData ? `?initData=${encodeURIComponent(initData)}` : '?';
-    const rankedPairsUrl = `${API_BASE_URL}/api/get_ranked_pairs${initDataString}${cacheBuster}`;
-
-    fetch(rankedPairsUrl)
-        .then(res => res.json())
-        .then(staticData => {
-            if(staticData.error) {
-                signalOutput.innerHTML = `❌ Помилка завантаження: ${staticData.message}`;
-                return;
-            }
-            currentWatchlist = staticData.watchlist || [];
-            populateLists(staticData);
-        })
-        .catch(err => {
-            console.error("Error fetching pair lists:", err);
-            signalOutput.innerHTML = "❌ Не вдалося завантажити списки пар. Перевірте з'єднання.";
-        })
-        .finally(() => {
-            showLoader(false);
-        });
-});
-
-function renderFavoriteButton(pair) {
-    const isFavorite = currentWatchlist.includes(pair);
-    const icon = isFavorite ? '✅' : '⭐';
-    return `<button class="fav-btn" onclick="toggleFavorite(event, '${pair}')">${icon}</button>`;
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg-color);
+    color: var(--text-color);
+    margin: 0;
+    padding: 15px;
+    box-sizing: border-box;
 }
 
-function toggleFavorite(event, pair) {
-    event.stopPropagation();
-    const button = event.currentTarget;
-    const isCurrentlyFavorite = currentWatchlist.includes(pair);
-    button.disabled = true;
+.container { max-width: 100%; margin: auto; }
+h1 { text-align: center; color: var(--text-color); font-size: 24px; margin-top: 0; }
+h4 { font-size: 16px; font-weight: 600; margin: 15px 0 8px 0; padding-bottom: 5px; border-bottom: 1px solid var(--secondary-bg-color); }
 
-    const url = `${API_BASE_URL}/api/toggle_watchlist?pair=${pair}&initData=${encodeURIComponent(initData)}`;
-    fetch(url)
-        .then(res => res.json())
-        .then(data => {
-            if (data.success) {
-                if (isCurrentlyFavorite) {
-                    currentWatchlist = currentWatchlist.filter(p => p !== pair);
-                    button.innerHTML = '⭐';
-                } else {
-                    currentWatchlist.push(pair);
-                    button.innerHTML = '✅';
-                }
-            }
-        })
-        .catch(err => console.error(err))
-        .finally(() => button.disabled = false);
+.category { margin-bottom: 15px; }
+.category-title { font-size: 18px; font-weight: bold; margin-bottom: 10px; padding-bottom: 5px; border-bottom: 1px solid var(--secondary-bg-color); }
+.pair-list { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.pair-item { display: flex; flex-grow: 1; min-width: 120px; }
+.pair-button { flex-grow: 1; padding: 10px 15px; background: var(--secondary-bg-color); color: var(--text-color); border: none; border-top-left-radius: 8px; border-bottom-left-radius: 8px; cursor: pointer; font-size: 14px; transition: background-color 0.2s; text-align: center; }
+.fav-btn { padding: 10px 12px; background: var(--secondary-bg-color); color: var(--text-color); border: none; border-top-right-radius: 8px; border-bottom-right-radius: 8px; cursor: pointer; font-size: 14px; border-left: 1px solid var(--bg-color); transition: background-color 0.2s; }
+.pair-button:hover, .fav-btn:hover { background-color: var(--button-color); color: var(--button-text-color); }
+
+.pair-item.inactive .pair-button {
+    color: var(--hint-color);
+    opacity: 0.6;
 }
 
-function createPairButton(pairData) {
-    const pair = pairData.ticker;
-    const isActive = pairData.active;
-    const inactiveClass = isActive ? '' : 'inactive';
-    
-    return `<div class="pair-item ${inactiveClass}">
-        <button class="pair-button" onclick="fetchSignal('${pair}')" ${!isActive ? 'disabled' : ''}>${pair}</button>
-        ${renderFavoriteButton(pair)}
-    </div>`;
-}
+#signalContainer { text-align: left; }
+#signalOutput { padding: 15px; background: var(--secondary-bg-color); border-radius: 8px; line-height: 1.6; min-height: 50px; }
 
-function populateLists(staticData) {
-    let html = '';
-    const createSection = (title, pairs) => {
-        if (!pairs || pairs.length === 0) return '';
-        let sectionHtml = `<div class="category"><div class="category-title">${title}</div><div class="pair-list">`;
-        pairs.forEach(pairData => {
-            sectionHtml += createPairButton(pairData);
-        });
-        sectionHtml += '</div></div>';
-        return sectionHtml;
-    };
+.verdict-box { padding: 15px; border-radius: 8px; margin-bottom: 15px; font-size: 18px; font-weight: 600; text-align: center; }
+.verdict-box.strong_buy { background-color: #26a69a; color: #fff; }
+.verdict-box.moderate_buy { background-color: rgba(38, 166, 154, 0.5); }
+.verdict-box.weak_buy { background-color: rgba(255, 193, 7, 0.3); color: #fff; }
+.verdict-box.strong_sell { background-color: #ef5350; color: #fff; }
+.verdict-box.moderate_sell { background-color: rgba(239, 83, 80, 0.5); }
+.verdict-box.weak_sell { background-color: rgba(255, 193, 7, 0.3); color: #fff; }
+.verdict-box.neutral, .verdict-box.unpredictable { background-color: rgba(170, 170, 170, 0.2); }
 
-    const watchlistData = staticData.watchlist.map(ticker => {
-        const allPairs = [
-            ...(staticData.forex ? Object.values(staticData.forex).flat() : []),
-            ...(staticData.crypto || []),
-            ...(staticData.stocks || [])
-        ];
-        return allPairs.find(p => p.ticker === ticker) || { ticker, active: false };
-    });
+.pair-title { text-align: center; font-weight: bold; margin-bottom: 8px; color: var(--hint-color); }
+.reason-list { list-style-type: '– '; margin: 0 0 15px 20px; padding: 0; }
+.reason-list li { margin-bottom: 5px; }
+.sr-levels { text-align: center; margin-bottom: 15px; color: var(--hint-color); font-size: 14px; }
 
-    html += createSection('⭐ Обране', watchlistData);
+#chart { width: 100%; height: 350px; margin-top: 15px; }
+.no-chart { text-align: center; padding: 50px 0; color: var(--hint-color); }
 
-    if (staticData.forex) {
-        Object.keys(staticData.forex).forEach(sessionName => {
-            html += createSection(`🌍 Валюти (${sessionName})`, staticData.forex[sessionName]);
-        });
-    }
-    html += createSection('📈 Криптовалюта', staticData.crypto || []);
-    html += createSection('🏢 Акції', staticData.stocks || []);
+#loader { position: fixed; left: 50%; top: 50%; width: 50px; height: 50px; border: 5px solid var(--secondary-bg-color); border-top: 5px solid var(--button-color); border-radius: 50%; transform: translate(-50%, -50%); animation: spin 1s linear infinite; }
+.hidden { display: none; }
+@keyframes spin { 0% { transform: translate(-50%, -50%) rotate(0deg); } 100% { transform: translate(-50%, -50%) rotate(360deg); } }
 
-    listsContainer.innerHTML = html;
-}
+.mta-table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+.mta-table th, .mta-table td { border: 1px solid var(--secondary-bg-color); padding: 8px; text-align: center; font-size: 14px; }
+.mta-table th { font-weight: normal; color: var(--hint-color); }
+.mta-table .buy { color: var(--buy-color); font-weight: bold; }
+.mta-table .sell { color: var(--sell-color); font-weight: bold; }
 
-function fetchSignal(pair) {
-    showLoader(true);
-    signalOutput.innerHTML = `⏳ Отримую аналіз для ${pair}...`;
-    historyContainer.innerHTML = ''; 
-    Plotly.purge('chart');
-
-    const cacheBuster = `&_=${new Date().getTime()}`;
-    const signalApiUrl = `${API_BASE_URL}/api/signal?pair=${pair}&initData=${encodeURIComponent(initData)}${cacheBuster}`;
-    const mtaApiUrl = `${API_BASE_URL}/api/get_mta?pair=${pair}${cacheBuster}`;
-
-    Promise.all([
-        fetch(signalApiUrl).then(res => res.json()),
-        fetch(mtaApiUrl).then(res => res.json())
-    ])
-    .then(([signalResponse, mtaResponse]) => {
-        if (signalResponse.status === 'error') {
-            throw new Error(signalResponse.message || 'Невідома помилка сигналу');
-        }
-        
-        const signalData = signalResponse.signal;
-        
-        let html = `
-            <div class="verdict-box ${signalData.verdict_level}">
-                ${signalData.verdict_text}
-            </div>
-            <div class="pair-title">${signalData.pair} | Ціна: ${signalData.price.toFixed(5)}</div>
-        `;
-        
-        if (signalData.support || signalData.resistance) {
-            const supportText = signalData.support ? `Підтримка: <strong>${signalData.support.toFixed(5)}</strong>` : '';
-            const resistanceText = signalData.resistance ? `Опір: <strong>${signalData.resistance.toFixed(5)}</strong>` : '';
-            html += `<div class="sr-levels">${supportText} | ${resistanceText}</div>`;
-        }
-
-        if (signalData.reasons && signalData.reasons.length) {
-            html += `<h4>Ключові фактори:</h4><ul class="reason-list">${signalData.reasons.map(r => `<li>${r}</li>`).join('')}</ul>`;
-        }
-        
-        if (mtaResponse.status === 'success' && mtaResponse.mta.length > 0) {
-            const mtaData = mtaResponse.mta;
-            html += '<h4>Мульти-таймфрейм аналіз (MTA):</h4><table class="mta-table"><tr>';
-            mtaData.forEach(item => { html += `<th>${item.tf}</th>`; });
-            html += '</tr><tr>';
-            mtaData.forEach(item => {
-                const signalClass = item.signal.toLowerCase();
-                html += `<td class="${signalClass}">${item.signal}</td>`;
-            });
-            html += '</tr></table>';
-        }
-
-        signalOutput.innerHTML = html;
-
-        if (signalData.history && signalData.history.dates && signalData.history.dates.length > 0) {
-            drawChart(pair, signalData.history);
-        } else {
-            chartContainer.innerHTML = `<div class="no-chart">Графік недоступний</div>`;
-        }
-        
-        if (initData) {
-            fetchHistory(pair);
-        }
-    })
-    .catch(err => {
-        console.error(`Error fetching signal for ${pair}:`, err);
-        // Показуємо користувачу конкретну помилку з сервера
-        signalOutput.innerHTML = `❌ Помилка: ${err.message || "Перевірте з'єднання."}`;
-    })
-    .finally(() => {
-        showLoader(false);
-    });
-}
-
-function fetchHistory(pair) {
-    const historyApiUrl = `${API_BASE_URL}/api/signal_history?pair=${pair}&initData=${encodeURIComponent(initData)}`;
-    fetch(historyApiUrl)
-        .then(res => res.json())
-        .then(historyData => {
-            if (historyData && historyData.length > 0) {
-                displaySignalHistory(historyData);
-            }
-        })
-        .catch(err => console.error("Error fetching signal history:", err));
-}
-
-function displaySignalHistory(history) {
-    let html = '<h4>Історія сигналів</h4>';
-    html += '<table class="history-table"><thead><tr><th>Час</th><th>Ціна</th><th>Сигнал</th><th>Сила</th></tr></thead><tbody>';
-    history.forEach(item => {
-        const date = new Date(item.timestamp.replace(' ', 'T') + 'Z');
-        const formattedDate = `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')} ${date.getDate().toString().padStart(2, '0')}.${(date.getMonth() + 1).toString().padStart(2, '0')}`;
-        const signalClass = `signal-${item.signal_type.toLowerCase()}`;
-        const price = item.price ? item.price.toFixed(5) : 'N/A';
-        html += `
-            <tr>
-                <td>${formattedDate}</td>
-                <td>${price}</td>
-                <td class="${signalClass}">${item.signal_type}</td>
-                <td>${item.bull_percentage}%</td>
-            </tr>
-        `;
-    });
-    html += '</tbody></table>';
-    historyContainer.innerHTML = html;
-}
-
-function drawChart(pair, history) {
-    const trace = {
-        x: history.dates,
-        close: history.close,
-        high: history.high,
-        low: history.low,
-        open: history.open,
-        type: 'candlestick',
-        increasing: { line: { color: '#26a69a' } },
-        decreasing: { line: { color: '#ef5350' } }
-    };
-    const layout = {
-        paper_bgcolor: 'rgba(0,0,0,0)',
-        plot_bgcolor: 'rgba(0,0,0,0)',
-        font: { color: tg.themeParams.text_color || '#fff' },
-        xaxis: { rangeslider: { visible: false }, showgrid: false },
-        yaxis: { showgrid: false },
-        margin: { l: 40, r: 10, b: 35, t: 10 }
-    };
-    Plotly.newPlot('chart', [trace], layout, {responsive: true});
-}
-
-function showLoader(visible) {
-    loader.className = visible ? '' : 'hidden';
-}
+#historyContainer { margin-top: 20px; text-align: left; }
+.history-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.history-table th, .history-table td { border-bottom: 1px solid var(--secondary-bg-color); padding: 10px 8px; }
+.history-table th { color: var(--hint-color); font-weight: normal; text-align: left; }
+.history-table .signal-buy { color: var(--buy-color); }
+.history-table .signal-sell { color: var(--sell-color); }
+.history-table .signal-neutral { color: var(--hint-color); }
