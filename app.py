@@ -3,7 +3,7 @@ import os
 import json
 import time
 import threading
-import traceback # <-- НОВИЙ ІМПОРТ
+import traceback
 from flask import Flask, jsonify, send_from_directory, Response, request
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackQueryHandler
 
@@ -126,12 +126,13 @@ def api_signal():
         return deferred
 
     try:
-        result = do_analysis_and_get_result(timeout=30)
+        # --- ПОЧАТОК ЗМІН: Правильний синтаксис виклику crochet ---
+        result = do_analysis_and_get_result().wait(timeout=30)
         return jsonify(result)
+        # --- КІНЕЦЬ ЗМІН ---
     except crochet.TimeoutError:
         logger.error(f"Request timed out for pair: {pair}")
         return jsonify({"error": "Request timed out"}), 504
-    # --- ПОЧАТОК ЗМІН: Повертаємо детальну помилку ---
     except Exception as e:
         tb_str = traceback.format_exc()
         logger.error(f"Error in signal API for {pair}: {e}\n{tb_str}")
@@ -140,7 +141,6 @@ def api_signal():
             "details": str(e),
             "traceback": tb_str
         }), 500
-    # --- КІНЕЦЬ ЗМІН ---
 
 @app.route("/api/get_mta")
 def api_get_mta():
@@ -156,8 +156,10 @@ def api_get_mta():
         return deferred
 
     try:
-        result = do_mta_and_get_result(timeout=5)
+        # --- ПОЧАТОК ЗМІН: Правильний синтаксис виклику crochet ---
+        result = do_mta_and_get_result().wait(timeout=5)
         return jsonify(result)
+        # --- КІНЕЦЬ ЗМІН ---
     except Exception:
         return jsonify([]), 200
 
