@@ -6,7 +6,7 @@ load_dotenv()
 
 # --- Налаштування бази даних ---
 # ПОВЕРТАЄМОСЬ ДО ПРОСТОЇ НАЗВИ ФАЙЛУ
-DB_NAME = os.getenv("DB_NAME", "signals.db")
+DB_NAME = os.getenv("DB_NAME", "/data/signals.db")
 
 # --- Telegram ---
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
