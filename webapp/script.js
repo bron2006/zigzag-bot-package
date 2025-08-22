@@ -1,5 +1,3 @@
-// script.js
-
 const API_BASE_URL = "https://zigzag-bot-package.fly.dev";
 
 const loader = document.getElementById("loader");
@@ -32,18 +30,34 @@ document.addEventListener('DOMContentLoaded', function() {
     const staticPairsUrl = `${API_BASE_URL}/api/get_pairs${initDataString}`;
 
     fetch(staticPairsUrl)
-        .then(res => res.json())
+        .then(res => {
+            if (!res.ok) {
+                // Якщо статус не 200-299, кидаємо помилку з текстом статусу
+                throw new Error(`HTTP status ${res.status}: ${res.statusText}`);
+            }
+            return res.json();
+        })
         .then(staticData => {
             console.log("Received static pairs:", staticData);
             currentWatchlist = staticData.watchlist || [];
             populateLists(staticData);
             showLoader(false);
         })
+        // --- ПОЧАТОК ЗМІН: Розширена обробка помилок ---
         .catch(err => {
             console.error("Error fetching pair lists:", err);
-            signalOutput.innerHTML = "❌ Не вдалося завантажити списки пар.";
+            // Виводимо детальну інформацію про помилку на екран
+            signalOutput.innerHTML = `
+                <div style="text-align: left; font-family: monospace; word-wrap: break-word;">
+                    <h3 style="color: #ef5350;">❌ Не вдалося завантажити списки пар.</h3>
+                    <p><strong>Тип помилки:</strong><br>${err.name || 'N/A'}</p>
+                    <p><strong>Повідомлення:</strong><br>${err.message || 'N/A'}</p>
+                    <p><strong>Стек виклику:</strong><br>${err.stack ? err.stack.replace(/\n/g, '<br>') : 'N/A'}</p>
+                </div>
+            `;
             showLoader(false);
         });
+        // --- КІНЕЦЬ ЗМІН ---
 });
 
 function renderFavoriteButton(pair) {
@@ -100,10 +114,8 @@ function populateLists(staticData) {
     }
 
     html += createSection('⭐ Обране', staticData.watchlist, getAssetType);
-    // --- ПОЧАТОК ЗМІН: Прибираємо .slice(0, 12), щоб показати всі пари ---
     html += createSection('📈 Уся криптовалюта', staticData.crypto || [], 'crypto');
-    // --- КІНЕЦЬ ЗМІН ---
-
+    
     if (staticData.forex && typeof staticData.forex === 'object') {
         Object.keys(staticData.forex).forEach(sessionName => {
             html += createSection(`🌍 Усі валюти (${sessionName})`, staticData.forex[sessionName], 'forex');
