@@ -1,28 +1,32 @@
+# telegram_ui.py
 import logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, WebAppInfo
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import CallbackContext
 from twisted.internet import reactor
 from telegram.error import BadRequest
 
 import state
-from config import FOREX_SESSIONS, get_fly_app_name
+# --- ПОЧАТОК ЗМІН: Імпортуємо новий список ---
+from config import FOREX_SESSIONS, CRYPTO_PAIRS, STOCK_TICKERS, COMMODITIES
+# --- КІНЕЦЬ ЗМІН ---
 from analysis import get_api_detailed_signal_data
 
 logger = logging.getLogger(__name__)
 
-# --- ПОЧАТОК ЗМІН: Прибираємо кастомну кнопку WebApp, залишаємо тільки "МЕНЮ" ---
 def get_reply_keyboard() -> ReplyKeyboardMarkup:
-    """
-    Повертає просту клавіатуру. Кнопка WebApp більше не потрібна,
-    оскільки користувач буде використовувати головну кнопку "Menu",
-    налаштовану через BotFather.
-    """
     keyboard = [[KeyboardButton("МЕНЮ")]]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-# --- КІНЕЦЬ ЗМІН ---
 
+# --- ПОЧАТОК ЗМІН: Додаємо нові кнопки в меню ---
 def get_main_menu_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([[InlineKeyboardButton("💹 Валютні пари (Forex)", callback_data="menu_forex")]])
+    keyboard = [
+        [InlineKeyboardButton("💹 Валютні пари (Forex)", callback_data="menu_forex")],
+        [InlineKeyboardButton("💎 Криптовалюти", callback_data="menu_crypto")],
+        [InlineKeyboardButton("📈 Акції", callback_data="menu_stocks")],
+        [InlineKeyboardButton("🥇 Сировина", callback_data="menu_commodities")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+# --- КІНЕЦЬ ЗМІН ---
 
 def get_forex_sessions_kb() -> InlineKeyboardMarkup:
     keyboard = []
@@ -31,16 +35,23 @@ def get_forex_sessions_kb() -> InlineKeyboardMarkup:
     keyboard.append([InlineKeyboardButton("⬅️ Назад до меню", callback_data="main_menu")])
     return InlineKeyboardMarkup(keyboard)
 
-def get_pairs_kb(session: str) -> InlineKeyboardMarkup:
-    pairs = FOREX_SESSIONS.get(session, [])
+# --- ПОЧАТОК ЗМІН: Універсальна функція для побудови клавіатури ---
+def get_assets_kb(asset_list: list, back_callback: str) -> InlineKeyboardMarkup:
+    """Універсальна функція для створення клавіатури зі списку активів."""
     keyboard = []
     row = []
-    for pair in pairs:
-        row.append(InlineKeyboardButton(pair, callback_data=pair.replace("/", "")))
-        if len(row) == 3: keyboard.append(row); row = []
-    if row: keyboard.append(row)
-    keyboard.append([InlineKeyboardButton("⬅️ Назад до сесій", callback_data="menu_forex")])
+    for asset in asset_list:
+        # Нормалізуємо назву для callback_data
+        callback_data = asset.replace("/", "")
+        row.append(InlineKeyboardButton(asset, callback_data=callback_data))
+        if len(row) == 2:  # Робимо по 2 кнопки в ряд для кращого вигляду
+            keyboard.append(row)
+            row = []
+    if row:
+        keyboard.append(row)
+    keyboard.append([InlineKeyboardButton("⬅️ Назад до меню", callback_data=back_callback)])
     return InlineKeyboardMarkup(keyboard)
+# --- КІНЕЦЬ ЗМІН ---
 
 def start(update: Update, context: CallbackContext) -> None:
     update.message.reply_text(
@@ -59,6 +70,7 @@ def reset_ui(update: Update, context: CallbackContext) -> None:
     update.message.reply_text(f"Невідома команда: '{update.message.text}'. Використовуйте кнопки.", reply_markup=get_reply_keyboard())
 
 def _format_signal_message(result: dict) -> str:
+    # ... (код без змін) ...
     if result.get("error"): return f"❌ Помилка аналізу: {result['error']}"
     pair = result.get('pair', 'N/A')
     price = result.get('price', 0)
@@ -80,6 +92,7 @@ def _format_signal_message(result: dict) -> str:
         for reason in reasons: message += f"    - {reason}\n"
     return message
 
+# --- ПОЧАТОК ЗМІН: Додаємо обробку нових меню ---
 def button_handler(update: Update, context: CallbackContext) -> None:
     query = update.callback_query
     query.answer()
@@ -92,9 +105,17 @@ def button_handler(update: Update, context: CallbackContext) -> None:
         query.edit_message_text("💹 Виберіть торгову сесію:", reply_markup=get_forex_sessions_kb())
     elif data.startswith("session_"):
         session_name = data.split("_")[1]
-        query.edit_message_text(f"Виберіть пару для сесії '{session_name}':", reply_markup=get_pairs_kb(session_name))
+        pairs = FOREX_SESSIONS.get(session_name, [])
+        query.edit_message_text(f"Виберіть пару для сесії '{session_name}':", reply_markup=get_assets_kb(pairs, 'main_menu'))
+    elif data == "menu_crypto":
+        query.edit_message_text("💎 Виберіть криптовалюту:", reply_markup=get_assets_kb(CRYPTO_PAIRS, 'main_menu'))
+    elif data == "menu_stocks":
+        query.edit_message_text("📈 Виберіть акцію:", reply_markup=get_assets_kb(STOCK_TICKERS, 'main_menu'))
+    elif data == "menu_commodities":
+        query.edit_message_text("🥇 Виберіть сировину:", reply_markup=get_assets_kb(COMMODITIES, 'main_menu'))
     else:
         symbol = data
+        # ... (решта логіки аналізу без змін) ...
         if not state.client or not state.client.is_authorized:
             query.answer(text="❌ З'єднання з cTrader ще не встановлено.", show_alert=True); return
         if not state.SYMBOLS_LOADED or symbol not in state.symbol_cache:
@@ -116,3 +137,4 @@ def button_handler(update: Update, context: CallbackContext) -> None:
             deferred.addCallbacks(on_success, on_error)
             
         reactor.callFromThread(do_analysis)
+# --- КІНЕЦЬ ЗМІН ---
