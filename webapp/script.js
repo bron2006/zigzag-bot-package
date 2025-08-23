@@ -1,30 +1,9 @@
-// --- ПОЧАТОК ЗМІН: Прибираємо жорстко закодовану адресу ---
-// Тепер API_BASE_URL береться з window, куди його вставляє main.py
+// ... (початок файлу без змін) ...
 const API_BASE_URL = window.API_BASE_URL || "https://fallback.example.com";
-// --- КІНЕЦЬ ЗМІН ---
 
 const loader = document.getElementById("loader");
 const listsContainer = document.getElementById("listsContainer");
-const signalOutput = document.getElementById("signalOutput");
-const historyContainer = document.getElementById("historyContainer");
-
-let tg;
-if (!window.Telegram || !window.Telegram.WebApp) {
-    console.warn("Telegram WebApp object not found. Running in browser mode with mock data.");
-    tg = { 
-        themeParams: { bg_color: '#1a1a1a', text_color: '#ffffff' }, 
-        initData: '',
-        ready: function() {},
-        expand: function() {}
-    };
-} else {
-    tg = window.Telegram.WebApp;
-    tg.ready();
-    tg.expand();
-    console.log("Telegram WebApp object is ready.");
-}
-
-let currentWatchlist = [];
+// ... (решта коду до populateLists без змін) ...
 let initData = tg.initData || '';
 
 document.addEventListener('DOMContentLoaded', function() {
@@ -60,7 +39,6 @@ document.addEventListener('DOMContentLoaded', function() {
         });
 });
 
-// ... (решта файлу script.js залишається без змін) ...
 function renderFavoriteButton(pair) {
     const isFavorite = currentWatchlist.includes(pair);
     const icon = isFavorite ? '✅' : '⭐';
@@ -115,19 +93,24 @@ function populateLists(staticData) {
     }
 
     html += createSection('⭐ Обране', staticData.watchlist, getAssetType);
-    html += createSection('📈 Уся криптовалюта', staticData.crypto || [], 'crypto');
+    html += createSection('💎 Уся криптовалюта', staticData.crypto || [], 'crypto');
     
     if (staticData.forex && typeof staticData.forex === 'object') {
         Object.keys(staticData.forex).forEach(sessionName => {
-            html += createSection(`🌍 Усі валюти (${sessionName})`, staticData.forex[sessionName], 'forex');
+            html += createSection(`💹 Усі валюти (${sessionName})`, staticData.forex[sessionName], 'forex');
         });
     }
 
-    html += createSection('🏢 Усі акції', staticData.stocks, 'stocks');
+    html += createSection('📈 Усі акції', staticData.stocks, 'stocks');
+    
+    // --- ПОЧАТОК ЗМІН: Додаємо відображення сировини ---
+    html += createSection('🥇 Уся сировина', staticData.commodities, 'commodities');
+    // --- КІНЕЦЬ ЗМІН ---
 
     listsContainer.innerHTML = html;
 }
 
+// ... (решта файлу script.js без змін) ...
 function fetchSignal(pair, assetType) {
     console.log(`fetchSignal called for pair: ${pair}`);
     showLoader(true);
@@ -261,6 +244,9 @@ function showLoader(visible) {
 }
 
 function getAssetType(pair) {
-    if (pair.includes('/')) return pair.includes('USDT') ? 'crypto' : 'forex';
+    // --- ПОЧАТОК ЗМІН: Додаємо логіку для сировини ---
+    if (pair.includes('XAU')) return 'commodities';
+    // --- КІНЕЦЬ ЗМІН ---
+    if (pair.includes('/')) return pair.includes('USD') ? 'crypto' : 'forex';
     return 'stocks';
 }

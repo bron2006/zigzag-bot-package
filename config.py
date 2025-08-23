@@ -40,17 +40,17 @@ FOREX_SESSIONS = {
     "Тихоокеанська": ["AUD/CAD", "AUD/CHF", "CAD/CHF", "GBP/AUD", "EUR/AUD"]
 }
 
-# --- ПОЧАТОК ЗМІН: Повертаємо USD і додаємо золото ---
+# --- ПОЧАТОК ЗМІН: Виправляємо DOG на DOGE ---
 CRYPTO_PAIRS = [
-    "BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD", "DOG/USD", 
+    "BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD", "DOGE/USD", # <-- Виправлено
     "LTC/USD", "BNB/USD", "ADA/USD", "AVAX/USD", "DOT/USD"
 ]
+# --- КІНЕЦЬ ЗМІН ---
 
 STOCK_TICKERS = [
     "AAPL", "GOOGL", "MSFT", "AMZN", "NVDA", "TSLA", "META", "JPM", "V", "JNJ"
 ]
 
 COMMODITIES = [
-    "XAU/USD"  # Золото
+    "XAU/USD"
 ]
-# --- КІНЕЦЬ ЗМІН ---

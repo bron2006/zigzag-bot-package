@@ -13,12 +13,11 @@ crochet.setup()
 
 import state
 from spotware_connect import SpotwareConnect
-# --- ПОЧАТОК ЗМІН: Імпортуємо нові списки ---
 from config import (
     TELEGRAM_BOT_TOKEN, get_ct_client_id, get_ct_client_secret, 
-    FOREX_SESSIONS, get_fly_app_name, CRYPTO_PAIRS, STOCK_TICKERS
+    FOREX_SESSIONS, get_fly_app_name, CRYPTO_PAIRS, STOCK_TICKERS,
+    COMMODITIES
 )
-# --- КІНЕЦЬ ЗМІН ---
 from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOASymbolsListRes
 
 from twisted.internet import reactor
@@ -39,6 +38,7 @@ def on_ctrader_ready():
     deferred = state.client.get_all_symbols()
     deferred.addCallbacks(on_symbols_loaded, on_symbols_error)
 
+# --- ПОЧАТОК ЗМІН: Додаємо діагностичне логування ---
 def on_symbols_loaded(raw_message):
     try:
         symbols_response = ProtoOASymbolsListRes()
@@ -46,15 +46,24 @@ def on_symbols_loaded(raw_message):
         state.symbol_cache = {s.symbolName.replace("/", ""): s for s in symbols_response.symbol}
         state.SYMBOLS_LOADED = True
         logger.info(f"✅ Successfully loaded {len(state.symbol_cache)} light symbols.")
+
+        # --- ДІАГНОСТИЧНИЙ КОД: Виводимо всі доступні крипто-символи ---
+        available_crypto = [
+            s.symbolName for s in symbols_response.symbol 
+            if "USD" in s.symbolName and "/" in s.symbolName and len(s.symbolName) < 10
+        ]
+        logger.info(f"AVAILABLE CRYPTO SYMBOLS FROM BROKER: {available_crypto}")
+        # --- КІНЕЦЬ ДІАГНОСТИЧНОГО КОДУ ---
+
     except Exception as e:
         logger.error(f"Symbol processing error: {e}", exc_info=True)
+# --- КІНЕЦЬ ЗМІН ---
 
 def on_symbols_error(failure):
     logger.error(f"Failed to load symbols: {failure.getErrorMessage()}")
 
 def start_background_services():
     logger.info("Initializing background services (Telegram, cTrader)...")
-    # ... (код ініціалізації без змін) ...
     if not TELEGRAM_BOT_TOKEN:
         logger.error("TELEGRAM_BOT_TOKEN not found!")
         return
@@ -106,14 +115,13 @@ def static_files(filename):
 
 @app.route("/api/get_pairs")
 def get_pairs():
-    # --- ПОЧАТОК ЗМІН: Додаємо крипту та акції у відповідь ---
     return jsonify({
         "forex": FOREX_SESSIONS,
         "crypto": CRYPTO_PAIRS,
         "stocks": STOCK_TICKERS,
+        "commodities": COMMODITIES,
         "watchlist": [] 
     })
-    # --- КІНЕЦЬ ЗМІН ---
 
 @app.route("/api/signal")
 def api_signal():
