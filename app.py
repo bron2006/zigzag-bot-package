@@ -1,3 +1,4 @@
+# app.py
 import logging
 import os
 import json
@@ -12,7 +13,12 @@ crochet.setup()
 
 import state
 from spotware_connect import SpotwareConnect
-from config import TELEGRAM_BOT_TOKEN, get_ct_client_id, get_ct_client_secret, FOREX_SESSIONS, get_fly_app_name
+# --- ПОЧАТОК ЗМІН: Імпортуємо нові списки ---
+from config import (
+    TELEGRAM_BOT_TOKEN, get_ct_client_id, get_ct_client_secret, 
+    FOREX_SESSIONS, get_fly_app_name, CRYPTO_PAIRS, STOCK_TICKERS
+)
+# --- КІНЕЦЬ ЗМІН ---
 from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOASymbolsListRes
 
 from twisted.internet import reactor
@@ -48,6 +54,7 @@ def on_symbols_error(failure):
 
 def start_background_services():
     logger.info("Initializing background services (Telegram, cTrader)...")
+    # ... (код ініціалізації без змін) ...
     if not TELEGRAM_BOT_TOKEN:
         logger.error("TELEGRAM_BOT_TOKEN not found!")
         return
@@ -99,10 +106,14 @@ def static_files(filename):
 
 @app.route("/api/get_pairs")
 def get_pairs():
+    # --- ПОЧАТОК ЗМІН: Додаємо крипту та акції у відповідь ---
     return jsonify({
         "forex": FOREX_SESSIONS,
-        "watchlist": [], "crypto": [], "stocks": []
+        "crypto": CRYPTO_PAIRS,
+        "stocks": STOCK_TICKERS,
+        "watchlist": [] 
     })
+    # --- КІНЕЦЬ ЗМІН ---
 
 @app.route("/api/signal")
 def api_signal():
@@ -126,10 +137,8 @@ def api_signal():
         return deferred
 
     try:
-        # --- ПОЧАТОК ЗМІН: Правильний синтаксис виклику crochet ---
         result = do_analysis_and_get_result().wait(timeout=30)
         return jsonify(result)
-        # --- КІНЕЦЬ ЗМІН ---
     except crochet.TimeoutError:
         logger.error(f"Request timed out for pair: {pair}")
         return jsonify({"error": "Request timed out"}), 504
@@ -137,9 +146,7 @@ def api_signal():
         tb_str = traceback.format_exc()
         logger.error(f"Error in signal API for {pair}: {e}\n{tb_str}")
         return jsonify({
-            "error": "Internal server error",
-            "details": str(e),
-            "traceback": tb_str
+            "error": "Internal server error", "details": str(e), "traceback": tb_str
         }), 500
 
 @app.route("/api/get_mta")
@@ -156,10 +163,8 @@ def api_get_mta():
         return deferred
 
     try:
-        # --- ПОЧАТОК ЗМІН: Правильний синтаксис виклику crochet ---
         result = do_mta_and_get_result().wait(timeout=5)
         return jsonify(result)
-        # --- КІНЕЦЬ ЗМІН ---
     except Exception:
         return jsonify([]), 200
 
