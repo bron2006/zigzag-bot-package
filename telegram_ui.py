@@ -6,9 +6,7 @@ from twisted.internet import reactor
 from telegram.error import BadRequest
 
 import state
-# --- ПОЧАТОК ЗМІН: Імпортуємо новий список ---
 from config import FOREX_SESSIONS, CRYPTO_PAIRS, STOCK_TICKERS, COMMODITIES
-# --- КІНЕЦЬ ЗМІН ---
 from analysis import get_api_detailed_signal_data
 
 logger = logging.getLogger(__name__)
@@ -17,7 +15,6 @@ def get_reply_keyboard() -> ReplyKeyboardMarkup:
     keyboard = [[KeyboardButton("МЕНЮ")]]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-# --- ПОЧАТОК ЗМІН: Додаємо нові кнопки в меню ---
 def get_main_menu_kb() -> InlineKeyboardMarkup:
     keyboard = [
         [InlineKeyboardButton("💹 Валютні пари (Forex)", callback_data="menu_forex")],
@@ -26,8 +23,8 @@ def get_main_menu_kb() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("🥇 Сировина", callback_data="menu_commodities")]
     ]
     return InlineKeyboardMarkup(keyboard)
-# --- КІНЕЦЬ ЗМІН ---
 
+# ... (решта файлу без змін) ...
 def get_forex_sessions_kb() -> InlineKeyboardMarkup:
     keyboard = []
     for session in FOREX_SESSIONS:
@@ -35,23 +32,19 @@ def get_forex_sessions_kb() -> InlineKeyboardMarkup:
     keyboard.append([InlineKeyboardButton("⬅️ Назад до меню", callback_data="main_menu")])
     return InlineKeyboardMarkup(keyboard)
 
-# --- ПОЧАТОК ЗМІН: Універсальна функція для побудови клавіатури ---
 def get_assets_kb(asset_list: list, back_callback: str) -> InlineKeyboardMarkup:
-    """Універсальна функція для створення клавіатури зі списку активів."""
     keyboard = []
     row = []
     for asset in asset_list:
-        # Нормалізуємо назву для callback_data
         callback_data = asset.replace("/", "")
         row.append(InlineKeyboardButton(asset, callback_data=callback_data))
-        if len(row) == 2:  # Робимо по 2 кнопки в ряд для кращого вигляду
+        if len(row) == 2:
             keyboard.append(row)
             row = []
     if row:
         keyboard.append(row)
     keyboard.append([InlineKeyboardButton("⬅️ Назад до меню", callback_data=back_callback)])
     return InlineKeyboardMarkup(keyboard)
-# --- КІНЕЦЬ ЗМІН ---
 
 def start(update: Update, context: CallbackContext) -> None:
     update.message.reply_text(
@@ -70,7 +63,6 @@ def reset_ui(update: Update, context: CallbackContext) -> None:
     update.message.reply_text(f"Невідома команда: '{update.message.text}'. Використовуйте кнопки.", reply_markup=get_reply_keyboard())
 
 def _format_signal_message(result: dict) -> str:
-    # ... (код без змін) ...
     if result.get("error"): return f"❌ Помилка аналізу: {result['error']}"
     pair = result.get('pair', 'N/A')
     price = result.get('price', 0)
@@ -92,7 +84,6 @@ def _format_signal_message(result: dict) -> str:
         for reason in reasons: message += f"    - {reason}\n"
     return message
 
-# --- ПОЧАТОК ЗМІН: Додаємо обробку нових меню ---
 def button_handler(update: Update, context: CallbackContext) -> None:
     query = update.callback_query
     query.answer()
@@ -115,7 +106,6 @@ def button_handler(update: Update, context: CallbackContext) -> None:
         query.edit_message_text("🥇 Виберіть сировину:", reply_markup=get_assets_kb(COMMODITIES, 'main_menu'))
     else:
         symbol = data
-        # ... (решта логіки аналізу без змін) ...
         if not state.client or not state.client.is_authorized:
             query.answer(text="❌ З'єднання з cTrader ще не встановлено.", show_alert=True); return
         if not state.SYMBOLS_LOADED or symbol not in state.symbol_cache:
@@ -137,4 +127,3 @@ def button_handler(update: Update, context: CallbackContext) -> None:
             deferred.addCallbacks(on_success, on_error)
             
         reactor.callFromThread(do_analysis)
-# --- КІНЕЦЬ ЗМІН ---

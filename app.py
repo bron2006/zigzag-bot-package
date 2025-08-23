@@ -6,7 +6,8 @@ import time
 import threading
 import traceback
 from flask import Flask, jsonify, send_from_directory, Response, request
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackQueryHandler
+from telegram import Update
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackQueryHandler, CallbackContext
 
 import crochet
 crochet.setup()
@@ -38,29 +39,40 @@ def on_ctrader_ready():
     deferred = state.client.get_all_symbols()
     deferred.addCallbacks(on_symbols_loaded, on_symbols_error)
 
-# --- ПОЧАТОК ЗМІН: Додаємо діагностичне логування ---
 def on_symbols_loaded(raw_message):
     try:
         symbols_response = ProtoOASymbolsListRes()
         symbols_response.ParseFromString(raw_message.payload)
         state.symbol_cache = {s.symbolName.replace("/", ""): s for s in symbols_response.symbol}
+        state.all_symbol_names = [s.symbolName for s in symbols_response.symbol]
         state.SYMBOLS_LOADED = True
         logger.info(f"✅ Successfully loaded {len(state.symbol_cache)} light symbols.")
-
-        # --- ДІАГНОСТИЧНИЙ КОД: Виводимо всі доступні крипто-символи ---
-        available_crypto = [
-            s.symbolName for s in symbols_response.symbol 
-            if "USD" in s.symbolName and "/" in s.symbolName and len(s.symbolName) < 10
-        ]
-        logger.info(f"AVAILABLE CRYPTO SYMBOLS FROM BROKER: {available_crypto}")
-        # --- КІНЕЦЬ ДІАГНОСТИЧНОГО КОДУ ---
-
     except Exception as e:
         logger.error(f"Symbol processing error: {e}", exc_info=True)
-# --- КІНЕЦЬ ЗМІН ---
 
 def on_symbols_error(failure):
     logger.error(f"Failed to load symbols: {failure.getErrorMessage()}")
+
+def symbols_command(update: Update, context: CallbackContext):
+    if not state.SYMBOLS_LOADED or not hasattr(state, 'all_symbol_names'):
+        update.message.reply_text("Список символів ще не завантажено. Спробуйте за хвилину.")
+        return
+    
+    # Фільтруємо імена для читабельності
+    forex = sorted([s for s in state.all_symbol_names if "/" in s and len(s) < 8 and "USD" not in s.upper()])
+    crypto_usd = sorted([s for s in state.all_symbol_names if "/USD" in s.upper()])
+    crypto_usdt = sorted([s for s in state.all_symbol_names if "/USDT" in s.upper()])
+    others = sorted([s for s in state.all_symbol_names if "/" not in s])
+
+    message = "**Доступні символи від брокера:**\n\n"
+    if forex: message += f"**Forex:**\n`{', '.join(forex)}`\n\n"
+    if crypto_usd: message += f"**Crypto (USD):**\n`{', '.join(crypto_usd)}`\n\n"
+    if crypto_usdt: message += f"**Crypto (USDT):**\n`{', '.join(crypto_usdt)}`\n\n"
+    if others: message += f"**Indices/Stocks/Commodities:**\n`{', '.join(others)}`"
+    
+    # Розбиваємо повідомлення, якщо воно занадто довге
+    for i in range(0, len(message), 4096):
+        update.message.reply_text(message[i:i + 4096], parse_mode='Markdown')
 
 def start_background_services():
     logger.info("Initializing background services (Telegram, cTrader)...")
@@ -76,6 +88,7 @@ def start_background_services():
     import telegram_ui
     dp = updater.dispatcher
     dp.add_handler(CommandHandler("start", telegram_ui.start))
+    dp.add_handler(CommandHandler("symbols", symbols_command))
     dp.add_handler(MessageHandler(Filters.text("МЕНЮ"), telegram_ui.menu))
     dp.add_handler(MessageHandler(Filters.text & ~Filters.command, telegram_ui.reset_ui))
     dp.add_handler(CallbackQueryHandler(telegram_ui.button_handler))
@@ -92,18 +105,14 @@ def home():
     try:
         with open(os.path.join(WEBAPP_DIR, "index.html"), "r", encoding="utf-8") as f:
             content = f.read()
-
         app_name = get_fly_app_name()
         if not app_name:
             app_name = "zigzag-bot-package"
-
         api_base_url = f"https://{app_name}.fly.dev"
         cache_buster = int(time.time())
-
         content = content.replace("{{API_BASE_URL}}", api_base_url)
         content = content.replace("script.js", f"script.js?v={cache_buster}")
         content = content.replace("style.css", f"style.css?v={cache_buster}")
-        
         return Response(content, mimetype='text/html')
     except Exception as e:
         logger.error(f"Error serving index.html: {e}", exc_info=True)
@@ -116,11 +125,8 @@ def static_files(filename):
 @app.route("/api/get_pairs")
 def get_pairs():
     return jsonify({
-        "forex": FOREX_SESSIONS,
-        "crypto": CRYPTO_PAIRS,
-        "stocks": STOCK_TICKERS,
-        "commodities": COMMODITIES,
-        "watchlist": [] 
+        "forex": FOREX_SESSIONS, "crypto": CRYPTO_PAIRS, "stocks": STOCK_TICKERS,
+        "commodities": COMMODITIES, "watchlist": [] 
     })
 
 @app.route("/api/signal")
@@ -128,22 +134,16 @@ def api_signal():
     pair = request.args.get("pair")
     if not pair:
         return jsonify({"error": "pair is required"}), 400
-    
     pair_normalized = pair.replace("/", "")
-
     if not state.client or not state.client.is_authorized:
-        return jsonify({"error": "cTrader client is not connected or authorized yet. Please try again in a moment."}), 503
-        
+        return jsonify({"error": "cTrader client is not connected..."}), 503
     if not state.SYMBOLS_LOADED or pair_normalized not in state.symbol_cache:
-        return jsonify({"error": f"Symbol data is not loaded yet or '{pair}' not found. Please try again in a moment."}), 503
-
+        return jsonify({"error": f"Symbol data not loaded or '{pair}' not found..."}), 503
     logger.info(f"Received signal request for pair: {pair} (normalized: {pair_normalized})")
-
     @crochet.run_in_reactor
     def do_analysis_and_get_result():
         deferred = get_api_detailed_signal_data(state.client, state.symbol_cache, pair_normalized, 0)
         return deferred
-
     try:
         result = do_analysis_and_get_result().wait(timeout=30)
         return jsonify(result)
@@ -162,14 +162,11 @@ def api_get_mta():
     pair = request.args.get("pair")
     if not pair:
         return jsonify({"error": "pair is required"}), 400
-
     pair_normalized = pair.replace("/", "")
-
     @crochet.run_in_reactor
     def do_mta_and_get_result():
         deferred = get_mta_signal(state.client, pair_normalized)
         return deferred
-
     try:
         result = do_mta_and_get_result().wait(timeout=5)
         return jsonify(result)
