@@ -6,7 +6,6 @@ const listsContainer = document.getElementById("listsContainer");
 const signalOutput = document.getElementById("signalOutput");
 const historyContainer = document.getElementById("historyContainer");
 
-// --- ВИПРАВЛЕННЯ: 'let tg' винесено в глобальну область видимості ---
 let tg;
 if (!window.Telegram || !window.Telegram.WebApp) {
     console.warn("Telegram WebApp object not found. Running in browser mode with mock data.");
@@ -182,7 +181,15 @@ function fetchSignal(pair) {
             ${mtaHtml}
         `;
 
-        // ... (решта коду без змін) ...
+        if (signalData.history && signalData.history.dates) {
+            drawChart(pair, signalData.history);
+        }
+        
+        if (initData) {
+            fetchHistory(pair);
+        }
+
+        showLoader(false);
     })
     .catch(err => {
         console.error(`Error fetching signal for ${pair}:`, err);
@@ -190,4 +197,72 @@ function fetchSignal(pair) {
         signalOutput.style.textAlign = 'center';
         showLoader(false);
     });
+}
+
+function fetchHistory(pair) {
+    const historyApiUrl = `${API_BASE_URL}/api/signal_history?pair=${pair}&initData=${encodeURIComponent(initData)}`;
+    fetch(historyApiUrl)
+        .then(res => res.json())
+        .then(historyData => {
+            if (historyData && historyData.length > 0) {
+                displaySignalHistory(historyData);
+            }
+        })
+        .catch(err => console.error("Error fetching signal history:", err));
+}
+
+function displaySignalHistory(history) {
+    let html = '<div class="history-title">Історія сигналів</div>';
+    html += '<table class="history-table"><thead><tr><th>Час</th><th>Ціна</th><th>Сигнал</th><th>Сила (Бики)</th></tr></thead><tbody>';
+
+    history.forEach(item => {
+        const date = new Date(item.timestamp.replace(' ', 'T') + 'Z');
+        const formattedDate = `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')} ${date.getDate().toString().padStart(2, '0')}.${(date.getMonth() + 1).toString().padStart(2, '0')}`;
+        const signalClass = `signal-${item.signal_type.toLowerCase()}`;
+        const price = item.price ? item.price.toFixed(4) : 'N/A';
+
+        html += `
+            <tr>
+                <td>${formattedDate}</td>
+                <td>${price}</td>
+                <td class="${signalClass}">${item.signal_type}</td>
+                <td>${item.bull_percentage}%</td>
+            </tr>
+        `;
+    });
+
+    html += '</tbody></table>';
+    historyContainer.innerHTML = html;
+}
+
+function drawChart(pair, history) {
+    const trace = {
+        x: history.dates,
+        close: history.close,
+        high: history.high,
+        low: history.low,
+        open: history.open,
+        type: 'candlestick',
+        increasing: { line: { color: '#26a69a' } },
+        decreasing: { line: { color: '#ef5350' } }
+    };
+    const layout = {
+        paper_bgcolor: 'rgba(0,0,0,0)',
+        plot_bgcolor: 'rgba(0,0,0,0)',
+        font: { color: tg.themeParams.text_color || '#fff' },
+        xaxis: { rangeslider: { visible: false }, showgrid: false },
+        yaxis: { showgrid: false },
+        margin: { l: 35, r: 35, b: 35, t: 35 }
+    };
+    Plotly.newPlot('chart', [trace], layout);
+}
+
+function showLoader(visible) {
+    loader.className = visible ? '' : 'hidden';
+}
+
+function getAssetType(pair) {
+    if (pair.includes('XAU')) return 'commodities';
+    if (pair.includes('/')) return pair.includes('USD') ? 'crypto' : 'forex';
+    return 'stocks';
 }
