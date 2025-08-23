@@ -25,10 +25,12 @@ RUN wget 'http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz' && 
 
 # Встановлюємо Python-залежності
 COPY requirements.txt .
-# Додаємо Python-обгортку для TA-Lib в наш список
-RUN echo "TA-Lib" >> requirements.txt && \
+# --- ПОЧАТОК ЗМІН: Виправляємо додавання TA-Lib ---
+# Використовуємо echo -e "\nTA-Lib", щоб гарантовано додати бібліотеку з нового рядка
+RUN echo -e "\nTA-Lib" >> requirements.txt && \
     pip install --no-cache-dir -r requirements.txt
+# --- КІНЕЦЬ ЗМІН ---
 
 COPY . .
 EXPOSE 8080
-CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "1", "app:app"]
+CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "1", "app:app"]e
