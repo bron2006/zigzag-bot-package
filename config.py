@@ -40,13 +40,13 @@ FOREX_SESSIONS = {
     "Тихоокеанська": ["AUD/CAD", "AUD/CHF", "CAD/CHF", "GBP/AUD", "EUR/AUD"]
 }
 
-# --- ПОЧАТОК ЗМІН: Додаємо списки криптовалют та акцій ---
+# --- ПОЧАТОК ЗМІН: Замінюємо USD на USDT ---
 CRYPTO_PAIRS = [
-    "BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD", "DOG/USD", 
-    "LTC/USD", "BNB/USD", "ADA/USD", "AVAX/USD", "DOT/USD"
+    "BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT", "DOG/USDT", 
+    "LTC/USDT", "BNB/USDT", "ADA/USDT", "AVAX/USDT", "DOT/USDT"
 ]
+# --- КІНЕЦЬ ЗМІН ---
 
 STOCK_TICKERS = [
     "AAPL", "GOOGL", "MSFT", "AMZN", "NVDA", "TSLA", "META", "JPM", "V", "JNJ"
 ]
-# --- КІНЕЦЬ ЗМІН ---
