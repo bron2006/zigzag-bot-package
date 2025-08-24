@@ -1,4 +1,6 @@
+# config.py
 import os
+import json # <-- НОВИЙ ІМПОРТ
 from dotenv import load_dotenv
 from pathlib import Path
 
@@ -31,33 +33,26 @@ def get_demo_account_id() -> int:
 # --- Fly.io ---
 def get_fly_app_name() -> str: return os.getenv("FLY_APP_NAME")
 
-# --- Словники з активами для меню ---
-FOREX_SESSIONS = {
-    "Європейська": ["EUR/USD", "GBP/USD", "USD/CHF", "EUR/GBP", "EUR/CHF"],
-    "Американська": ["USD/CAD", "USD/JPY", "GBP/JPY", "EUR/JPY", "CAD/JPY"],
-    "Азіатська": ["AUD/USD", "NZD/USD", "AUD/JPY", "NZD/JPY", "AUD/NZD"],
-    "Тихоокеанська": ["AUD/CAD", "AUD/CHF", "CAD/CHF", "GBP/AUD", "EUR/AUD"]
-}
+# --- ПОЧАТОК ЗМІН: Завантажуємо активи з assets.json ---
+def load_assets_from_json():
+    """Завантажує списки активів із файлу assets.json."""
+    try:
+        assets_path = Path(__file__).parent / "assets.json"
+        with open(assets_path, "r", encoding="utf-8") as f:
+            assets = json.load(f)
+            return {
+                "forex": assets.get("forex_sessions", {}),
+                "crypto": assets.get("crypto_pairs", []),
+                "stocks": assets.get("stock_tickers", []),
+                "commodities": assets.get("commodities", [])
+            }
+    except Exception as e:
+        print(f"CRITICAL: Could not load assets.json. Error: {e}")
+        return {"forex": {}, "crypto": [], "stocks": [], "commodities": []}
 
-# --- ПОЧАТОК ЗМІН: Оновлюємо списки згідно з даними брокера ---
-CRYPTO_PAIRS = [
-    "BTCUSD", 
-    "ETHUSD", 
-    "LTCUSD", 
-    "BCHUSD",
-    "PEPEUSD",
-    "CROUSD"
-]
-
-# Замінюємо акції на фондові індекси
-STOCK_TICKERS = [
-    "US30", "US500", "USTEC", "UK100", "DE40", "F40", "JP225"
-]
-
-# Розширюємо список сировини
-COMMODITIES = [
-    "XAUUSD", # Золото
-    "XAGUSD", # Срібло
-    "WTI"     # Нафта
-]
+_assets = load_assets_from_json()
+FOREX_SESSIONS = _assets["forex"]
+CRYPTO_PAIRS = _assets["crypto"]
+STOCK_TICKERS = _assets["stocks"]
+COMMODITIES = _assets["commodities"]
 # --- КІНЕЦЬ ЗМІН ---
