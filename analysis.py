@@ -172,13 +172,17 @@ def analyze_volume(df):
     return "Об'єм нейтральний"
 
 def _calculate_core_signal(df, daily_df, current_price):
+    # --- ПОЧАТОК ЗМІН: Додаємо розрахунок MACD ---
     df.ta.rsi(length=14, append=True, col_names=('RSI',))
     df.ta.kama(length=14, append=True, col_names=('KAMA',))
     df.ta.bbands(length=20, std=2, append=True)
     df.ta.ichimoku(append=True)
+    df.ta.macd(append=True) # Розраховуємо MACD
+    # --- КІНЕЦЬ ЗМІН ---
 
     last = df.iloc[-1]
-    if pd.isna(last['RSI']) or pd.isna(last['KAMA']):
+    # Перевіряємо, чи є достатньо даних для MACD
+    if pd.isna(last['RSI']) or pd.isna(last['KAMA']) or pd.isna(last.get('MACDh_12_26_9')):
         raise ValueError("Помилка розрахунку базових індикаторів")
 
     support_levels, resistance_levels = identify_support_resistance_levels(daily_df)
@@ -188,25 +192,25 @@ def _calculate_core_signal(df, daily_df, current_price):
     score = 50
     reasons = []
     
+    # Фактор 1: KAMA
     if current_price > last['KAMA']: score += 10; reasons.append("Ціна вище KAMA(14)")
     else: score -= 10; reasons.append("Ціна нижче KAMA(14)")
     
+    # Фактор 2: RSI
     rsi = float(last['RSI'])
     if rsi < 30: score += 15; reasons.append("RSI в зоні перепроданості (<30)")
     elif rsi > 70: score -= 15; reasons.append("RSI в зоні перекупленості (>70)")
 
-    # --- ПОЧАТОК ЗМІН: Безпечна перевірка Смуг Боллінджера ---
+    # Фактор 3: Смуги Боллінджера
     bbl = last.get('BBL_20_2.0')
     bbu = last.get('BBU_20_2.0')
     if pd.notna(bbl) and pd.notna(bbu):
         if current_price <= bbl:
-            score += 15
-            reasons.append("Ціна на нижній смузі Боллінджера")
+            score += 15; reasons.append("Ціна на нижній смузі Боллінджера")
         elif current_price >= bbu:
-            score -= 15
-            reasons.append("Ціна на верхній смузі Боллінджера")
-    # --- КІНЕЦЬ ЗМІН ---
+            score -= 15; reasons.append("Ціна на верхній смузі Боллінджера")
 
+    # Фактор 4: Хмара Ішимоку
     tenkan = last.get('ITS_9')
     kijun = last.get('IKS_26')
     senkou_a = last.get('ISA_9')
@@ -215,12 +219,10 @@ def _calculate_core_signal(df, daily_df, current_price):
     if pd.notna(senkou_a) and pd.notna(senkou_b):
         cloud_top = max(senkou_a, senkou_b)
         cloud_bottom = min(senkou_a, senkou_b)
-
         if current_price > cloud_top:
             score += 20; reasons.append("Ціна над Хмарою Ішимоку (сильний тренд вгору)")
         elif current_price < cloud_bottom:
             score -= 20; reasons.append("Ціна під Хмарою Ішимоку (сильний тренд вниз)")
-        
         if senkou_a > senkou_b:
             score += 5; reasons.append("Висхідна Хмара (бичачий прогноз)")
         else:
@@ -231,7 +233,20 @@ def _calculate_core_signal(df, daily_df, current_price):
             score += 10; reasons.append("Золотий хрест Ішимоку (Tenkan > Kijun)")
         else:
             score -= 10; reasons.append("Мертвий хрест Ішимоку (Tenkan < Kijun)")
+    
+    # --- ПОЧАТОК ЗМІН: Додаємо новий Фактор 5: MACD ---
+    macd_hist = df['MACDh_12_26_9']
+    if len(macd_hist) >= 2:
+        # Порівнюємо дві останні колонки гістограми, щоб знайти напрямок
+        if macd_hist.iloc[-1] > macd_hist.iloc[-2]:
+            score += 15
+            reasons.append("Гістограма MACD росте (імпульс вгору)")
+        elif macd_hist.iloc[-1] < macd_hist.iloc[-2]:
+            score -= 15
+            reasons.append("Гістограма MACD падає (імпульс вниз)")
+    # --- КІНЕЦЬ ЗМІН ---
             
+    # Фактор 6: Рівні підтримки/опору
     if support_levels:
         dist_to_support = min(abs(current_price - sl) for sl in support_levels)
         if dist_to_support / current_price < 0.003:
@@ -242,6 +257,7 @@ def _calculate_core_signal(df, daily_df, current_price):
         if dist_to_resistance / current_price < 0.003:
             score -= 15; reasons.append("Ціна ДУЖЕ близько до опору")
             
+    # Фактор 7: Об'єм
     if "Аномально низький" in volume_info:
         score = np.clip(score, 25, 75); reasons.append("Низький об'єм!")
         
