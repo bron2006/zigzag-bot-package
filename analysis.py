@@ -171,19 +171,17 @@ def analyze_volume(df):
         return "🧊 Аномально низький об'єм"
     return "Об'єм нейтральний"
 
-# --- ПОЧАТОК ЗМІН: Додаємо аналіз Bollinger Bands ---
+# --- ПОЧАТОК ЗМІН: Інтегруємо аналіз Хмари Ішимоку ---
 def _calculate_core_signal(df, daily_df, current_price):
-    # Розрахунок основних індикаторів
+    # Розрахунок індикаторів
     df.ta.rsi(length=14, append=True, col_names=('RSI',))
     df.ta.kama(length=14, append=True, col_names=('KAMA',))
-    # Додаємо розрахунок Смуг Боллінджера
-    bbands = df.ta.bbands(length=20, std=2)
-    if bbands is not None and not bbands.empty:
-        df = pd.concat([df, bbands], axis=1)
+    bbands = df.ta.bbands(length=20, std=2, append=True)
+    df.ta.ichimoku(append=True) # Розраховуємо Ішимоку
 
     last = df.iloc[-1]
     if pd.isna(last['RSI']) or pd.isna(last['KAMA']):
-        raise ValueError("Помилка розрахунку індикаторів")
+        raise ValueError("Помилка розрахунку базових індикаторів")
 
     support_levels, resistance_levels = identify_support_resistance_levels(daily_df)
     candle_pattern = analyze_candle_patterns(df)
@@ -198,19 +196,43 @@ def _calculate_core_signal(df, daily_df, current_price):
     
     # Фактор 2: RSI
     rsi = float(last['RSI'])
-    if rsi < 30: score += 15; reasons.append("RSI в зоні перепроданості")
-    elif rsi > 70: score -= 15; reasons.append("RSI в зоні перекупленості")
+    if rsi < 30: score += 15; reasons.append("RSI в зоні перепроданості (<30)")
+    elif rsi > 70: score -= 15; reasons.append("RSI в зоні перекупленості (>70)")
 
-    # Фактор 3: Смуги Боллінджера (якщо розраховані)
-    if 'BBL_20_2.0' in last and 'BBU_20_2.0' in last and pd.notna(last['BBL_20_2.0']):
+    # Фактор 3: Смуги Боллінджера
+    if 'BBL_20_2.0' in last and pd.notna(last['BBL_20_2.0']):
         if current_price <= last['BBL_20_2.0']:
-            score += 15
-            reasons.append("Ціна торкнулась нижньої смуги Боллінджера")
+            score += 15; reasons.append("Ціна на нижній смузі Боллінджера")
         elif current_price >= last['BBU_20_2.0']:
-            score -= 15
-            reasons.append("Ціна торкнулась верхньої смуги Боллінджера")
+            score -= 15; reasons.append("Ціна на верхній смузі Боллінджера")
 
-    # Фактор 4: Рівні підтримки/опору
+    # Фактор 4: Хмара Ішимоку
+    tenkan = last.get('ITS_9')
+    kijun = last.get('IKS_26')
+    senkou_a = last.get('ISA_9')
+    senkou_b = last.get('ISB_26')
+
+    if pd.notna(senkou_a) and pd.notna(senkou_b):
+        cloud_top = max(senkou_a, senkou_b)
+        cloud_bottom = min(senkou_a, senkou_b)
+
+        if current_price > cloud_top:
+            score += 20; reasons.append("Ціна над Хмарою Ішимоку (сильний тренд вгору)")
+        elif current_price < cloud_bottom:
+            score -= 20; reasons.append("Ціна під Хмарою Ішимоку (сильний тренд вниз)")
+        
+        if senkou_a > senkou_b:
+            score += 5; reasons.append("Висхідна Хмара (бичачий прогноз)")
+        else:
+            score -= 5; reasons.append("Низхідна Хмара (ведмежий прогноз)")
+
+    if pd.notna(tenkan) and pd.notna(kijun):
+        if tenkan > kijun:
+            score += 10; reasons.append("Золотий хрест Ішимоку (Tenkan > Kijun)")
+        else:
+            score -= 10; reasons.append("Мертвий хрест Ішимоку (Tenkan < Kijun)")
+            
+    # Фактор 5: Рівні підтримки/опору
     if support_levels:
         dist_to_support = min(abs(current_price - sl) for sl in support_levels)
         if dist_to_support / current_price < 0.003:
@@ -221,10 +243,9 @@ def _calculate_core_signal(df, daily_df, current_price):
         if dist_to_resistance / current_price < 0.003:
             score -= 15; reasons.append("Ціна ДУЖЕ близько до опору")
             
-    # Фактор 5: Об'єм
+    # Фактор 6: Об'єм
     if "Аномально низький" in volume_info:
-        score = np.clip(score, 25, 75)
-        reasons.append("Низький об'єм!")
+        score = np.clip(score, 25, 75); reasons.append("Низький об'єм!")
         
     score = int(np.clip(score, 0, 100))
     support = min(support_levels, key=lambda x: abs(x - current_price)) if support_levels else None
@@ -250,7 +271,7 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int
             success2, daily_df = results[1]
             success3, live_price = results[2]
 
-            if not (success1 and success2) or df.empty or len(df) < 25 or daily_df.empty:
+            if not (success1 and success2) or df.empty or len(df) < 50: # Збільшуємо вимогу до даних для Ішимоку
                 logger.warning(f"Not enough historical data to analyze {symbol} on {timeframe}.")
                 return {"error": f"Not enough historical data for {timeframe} analysis."}
 
@@ -282,7 +303,7 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int
             logger.exception(f"Critical analysis error for {symbol}: {e}")
             return {"error": "Internal data processing error."}
 
-    d1 = get_market_data(client, symbol_cache, symbol, timeframe, 100)
+    d1 = get_market_data(client, symbol_cache, symbol, timeframe, 200) # Запитуємо більше даних для Ішимоку
     d2 = get_market_data(client, symbol_cache, symbol, '1day', 100)
     d3 = get_live_price(client, symbol_cache, symbol)
     
