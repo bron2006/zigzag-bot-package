@@ -22,7 +22,9 @@ from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOASymbolsListRes
 
 from twisted.internet import reactor
 from analysis import get_api_detailed_signal_data, PERIOD_MAP
-from mta_analysis import get_mta_signal
+# --- ПОЧАТОК ЗМІН: mta_analysis більше не потрібен ---
+# from mta_analysis import get_mta_signal 
+# --- КІНЕЦЬ ЗМІН ---
 
 logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -165,21 +167,11 @@ def api_signal():
             "error": "Internal server error", "details": str(e), "traceback": tb_str
         }), 500
 
-@app.route("/api/get_mta")
-def api_get_mta():
-    pair = request.args.get("pair")
-    if not pair:
-        return jsonify({"error": "pair is required"}), 400
-    pair_normalized = pair.replace("/", "")
-    @crochet.run_in_reactor
-    def do_mta_and_get_result():
-        deferred = get_mta_signal(state.client, pair_normalized)
-        return deferred
-    try:
-        result = do_mta_and_get_result().wait(timeout=5)
-        return jsonify(result)
-    except Exception:
-        return jsonify([]), 200
+# --- ПОЧАТОК ЗМІН: Видаляємо ендпоінт MTA ---
+# @app.route("/api/get_mta")
+# def api_get_mta():
+#     ...
+# --- КІНЕЦЬ ЗМІН ---
 
 if __name__ != "__main__":
     start_background_services()

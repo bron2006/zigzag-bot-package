@@ -133,6 +133,7 @@ function populateLists(staticData) {
     listsContainer.innerHTML = html;
 }
 
+// --- ПОЧАТОК ЗМІН: Прибираємо запит MTA ---
 function fetchSignal(pair) {
     showLoader(true);
     signalOutput.innerHTML = `⏳ Отримую аналіз для ${pair} (${currentTimeframe})...`;
@@ -141,70 +142,57 @@ function fetchSignal(pair) {
     Plotly.purge('chart');
 
     const signalApiUrl = `${API_BASE_URL}/api/signal?pair=${pair}&timeframe=${currentTimeframe}`;
-    const mtaApiUrl = `${API_BASE_URL}/api/get_mta?pair=${pair}`;
 
-    Promise.all([
-        fetch(signalApiUrl).then(res => res.json()),
-        fetch(mtaApiUrl).then(res => res.json())
-    ])
-    .then(([signalData, mtaData]) => {
-        if (signalData.error) {
-            let errorText = `❌ Помилка: ${signalData.error}`;
-            if (signalData.details) {
-                errorText += `<br><br><strong>Деталі:</strong><pre>${signalData.details}</pre>`;
+    fetch(signalApiUrl)
+        .then(res => res.json())
+        .then(signalData => {
+            if (signalData.error) {
+                let errorText = `❌ Помилка: ${signalData.error}`;
+                if (signalData.details) {
+                    errorText += `<br><br><strong>Деталі:</strong><pre>${signalData.details}</pre>`;
+                }
+                signalOutput.innerHTML = errorText;
+                signalOutput.style.textAlign = 'left';
+                showLoader(false);
+                return;
             }
-            signalOutput.innerHTML = errorText;
-            signalOutput.style.textAlign = 'left';
+
+            const arrow = signalData.bull_percentage >= 50 ? '⬆️' : '⬇️';
+            const supportText = signalData.support ? signalData.support.toFixed(5) : 'N/A';
+            const resistanceText = signalData.resistance ? signalData.resistance.toFixed(5) : 'N/A';
+            const reasonsList = signalData.reasons.map(r => `<li>${r}</li>`).join('');
+            let candleHtml = signalData.candle_pattern?.text ? `<div style="margin-bottom:10px"><strong>Свічковий патерн:</strong><br>${signalData.candle_pattern.text}</div>` : '';
+            let volumeHtml = signalData.volume_analysis ? `<div style="margin-bottom:10px"><strong>Аналіз об'єму:</strong><br>${signalData.volume_analysis}</div>` : '';
+            
+            // Видаляємо блок MTA з HTML
+            signalOutput.innerHTML = `
+                <div style="font-size: 32px; text-align: center; margin-bottom: 15px;">${arrow}</div>
+                <div style="margin-bottom: 10px;"><strong>${signalData.pair} (${currentTimeframe})</strong> | Ціна: ${signalData.price.toFixed(5)}</div>
+                <div style="margin-bottom: 10px;"><strong>Баланс сил:</strong><br>🐂 Бики: ${signalData.bull_percentage}% ⬆️ | 🐃 Ведмеді: ${signalData.bear_percentage}% ⬇️</div>
+                ${candleHtml}
+                <div style="margin-bottom: 10px;"><strong>Рівні S/R:</strong><br>Підтримка: ${supportText} | Опір: ${resistanceText}</div>
+                ${volumeHtml}
+                <div><strong>Ключові фактори:</strong><ul style="margin: 5px 0 0 20px; padding: 0;">${reasonsList}</ul></div>
+            `;
+
+            if (signalData.history && signalData.history.dates) {
+                drawChart(pair, signalData.history);
+            }
+            
+            if (initData) {
+                fetchHistory(pair);
+            }
+
             showLoader(false);
-            return;
-        }
-
-        const arrow = signalData.bull_percentage >= 50 ? '⬆️' : '⬇️';
-        const supportText = signalData.support ? signalData.support.toFixed(5) : 'N/A';
-        const resistanceText = signalData.resistance ? signalData.resistance.toFixed(5) : 'N/A';
-        const reasonsList = signalData.reasons.map(r => `<li>${r}</li>`).join('');
-        let candleHtml = signalData.candle_pattern?.text ? `<div style="margin-bottom:10px"><strong>Свічковий патерн:</strong><br>${signalData.candle_pattern.text}</div>` : '';
-        let volumeHtml = signalData.volume_analysis ? `<div style="margin-bottom:10px"><strong>Аналіз об'єму:</strong><br>${signalData.volume_analysis}</div>` : '';
-        let mtaHtml = '';
-        if (Array.isArray(mtaData) && mtaData.length > 0) {
-            mtaHtml += '<div class="mta-container"><strong>Мульти-таймфрейм аналіз (MTA):</strong><table class="mta-table"><tr>';
-            mtaData.forEach(item => { mtaHtml += `<th>${item.tf}</th>`; });
-            mtaHtml += '</tr><tr>';
-            mtaData.forEach(item => {
-                const signalClass = item.signal.toLowerCase();
-                mtaHtml += `<td class="${signalClass}">${item.signal}</td>`;
-            });
-            mtaHtml += '</tr></table></div>';
-        }
-
-        signalOutput.innerHTML = `
-            <div style="font-size: 32px; text-align: center; margin-bottom: 15px;">${arrow}</div>
-            <div style="margin-bottom: 10px;"><strong>${signalData.pair} (${currentTimeframe})</strong> | Ціна: ${signalData.price.toFixed(5)}</div>
-            <div style="margin-bottom: 10px;"><strong>Баланс сил:</strong><br>🐂 Бики: ${signalData.bull_percentage}% ⬆️ | 🐃 Ведмеді: ${signalData.bear_percentage}% ⬇️</div>
-            ${candleHtml}
-            <div style="margin-bottom: 10px;"><strong>Рівні S/R:</strong><br>Підтримка: ${supportText} | Опір: ${resistanceText}</div>
-            ${volumeHtml}
-            <div><strong>Ключові фактори:</strong><ul style="margin: 5px 0 0 20px; padding: 0;">${reasonsList}</ul></div>
-            ${mtaHtml}
-        `;
-
-        if (signalData.history && signalData.history.dates) {
-            drawChart(pair, signalData.history);
-        }
-        
-        if (initData) {
-            fetchHistory(pair);
-        }
-
-        showLoader(false);
-    })
-    .catch(err => {
-        console.error(`Error fetching signal for ${pair}:`, err);
-        signalOutput.innerHTML = `❌ Помилка: ${err.message}`;
-        signalOutput.style.textAlign = 'center';
-        showLoader(false);
-    });
+        })
+        .catch(err => {
+            console.error(`Error fetching signal for ${pair}:`, err);
+            signalOutput.innerHTML = `❌ Помилка: ${err.message}`;
+            signalOutput.style.textAlign = 'center';
+            showLoader(false);
+        });
 }
+// --- КІНЕЦЬ ЗМІН ---
 
 function fetchHistory(pair) {
     const historyApiUrl = `${API_BASE_URL}/api/signal_history?pair=${pair}&initData=${encodeURIComponent(initData)}`;

@@ -117,36 +117,25 @@ def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: in
     deferred.addCallbacks(process_response, on_error)
     return d
 
-# --- ПОЧАТОК ЗМІН: Векторизована функція групування ---
 def group_close_values(values, threshold=0.01):
-    """Групує близькі значення, використовуючи векторизовані операції pandas."""
     if not len(values):
         return []
     
-    # Використовуємо pandas Series для зручності та швидкості
     s = pd.Series(sorted(values)).dropna()
     if s.empty:
         return []
         
-    # Розраховуємо відсоткову зміну і знаходимо точки, де починається нова група
     group_starts = s.pct_change() > threshold
-    
-    # Присвоюємо унікальний ID кожній групі
     group_ids = group_starts.cumsum()
     
-    # Розраховуємо середнє значення для кожної групи і повертаємо як список
     return s.groupby(group_ids).mean().tolist()
-# --- КІНЕЦЬ ЗМІН ---
 
 def identify_support_resistance_levels(df, window=20, threshold=0.01):
     try:
         lows = df['Low'].rolling(window=window, center=True, min_periods=3).min()
         highs = df['High'].rolling(window=window, center=True, min_periods=3).max()
-        
-        # Використовуємо нову, швидку функцію групування
         support_levels = group_close_values(df.loc[df['Low'] == lows, 'Low'].tolist(), threshold)
         resistance_levels = group_close_values(df.loc[df['High'] == highs, 'High'].tolist(), threshold)
-        
         return sorted(support_levels), sorted(resistance_levels, reverse=True)
     except Exception as e:
         logger.error(f"Помилка в identify_support_resistance_levels: {e}")
@@ -182,9 +171,16 @@ def analyze_volume(df):
         return "🧊 Аномально низький об'єм"
     return "Об'єм нейтральний"
 
+# --- ПОЧАТОК ЗМІН: Додаємо аналіз Bollinger Bands ---
 def _calculate_core_signal(df, daily_df, current_price):
+    # Розрахунок основних індикаторів
     df.ta.rsi(length=14, append=True, col_names=('RSI',))
     df.ta.kama(length=14, append=True, col_names=('KAMA',))
+    # Додаємо розрахунок Смуг Боллінджера
+    bbands = df.ta.bbands(length=20, std=2)
+    if bbands is not None and not bbands.empty:
+        df = pd.concat([df, bbands], axis=1)
+
     last = df.iloc[-1]
     if pd.isna(last['RSI']) or pd.isna(last['KAMA']):
         raise ValueError("Помилка розрахунку індикаторів")
@@ -195,13 +191,26 @@ def _calculate_core_signal(df, daily_df, current_price):
     
     score = 50
     reasons = []
+    
+    # Фактор 1: KAMA
     if current_price > last['KAMA']: score += 10; reasons.append("Ціна вище KAMA(14)")
     else: score -= 10; reasons.append("Ціна нижче KAMA(14)")
     
+    # Фактор 2: RSI
     rsi = float(last['RSI'])
     if rsi < 30: score += 15; reasons.append("RSI в зоні перепроданості")
     elif rsi > 70: score -= 15; reasons.append("RSI в зоні перекупленості")
-    
+
+    # Фактор 3: Смуги Боллінджера (якщо розраховані)
+    if 'BBL_20_2.0' in last and 'BBU_20_2.0' in last and pd.notna(last['BBL_20_2.0']):
+        if current_price <= last['BBL_20_2.0']:
+            score += 15
+            reasons.append("Ціна торкнулась нижньої смуги Боллінджера")
+        elif current_price >= last['BBU_20_2.0']:
+            score -= 15
+            reasons.append("Ціна торкнулась верхньої смуги Боллінджера")
+
+    # Фактор 4: Рівні підтримки/опору
     if support_levels:
         dist_to_support = min(abs(current_price - sl) for sl in support_levels)
         if dist_to_support / current_price < 0.003:
@@ -212,6 +221,7 @@ def _calculate_core_signal(df, daily_df, current_price):
         if dist_to_resistance / current_price < 0.003:
             score -= 15; reasons.append("Ціна ДУЖЕ близько до опору")
             
+    # Фактор 5: Об'єм
     if "Аномально низький" in volume_info:
         score = np.clip(score, 25, 75)
         reasons.append("Низький об'єм!")
@@ -224,6 +234,7 @@ def _calculate_core_signal(df, daily_df, current_price):
         "score": score, "reasons": reasons, "support": support, "resistance": resistance,
         "candle_pattern": candle_pattern, "volume_info": volume_info
     }
+# --- КІНЕЦЬ ЗМІН ---
 
 def _generate_verdict(score):
     if score > 65: return "⬆️ Strong BUY"
