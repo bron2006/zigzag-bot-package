@@ -1,9 +1,11 @@
+# app.py
 import logging
 import os
 import json
 import time
 import threading
 import traceback
+from functools import wraps # <-- НОВИЙ ІМПОРТ
 from flask import Flask, jsonify, send_from_directory, Response, request
 from telegram import Update
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackQueryHandler, CallbackContext
@@ -12,6 +14,7 @@ import crochet
 crochet.setup()
 
 import state
+from auth import is_valid_init_data # <-- НОВИЙ ІМПОРТ
 from spotware_connect import SpotwareConnect
 from config import (
     TELEGRAM_BOT_TOKEN, get_ct_client_id, get_ct_client_secret, 
@@ -22,9 +25,6 @@ from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOASymbolsListRes
 
 from twisted.internet import reactor
 from analysis import get_api_detailed_signal_data, PERIOD_MAP
-# --- ПОЧАТОК ЗМІН: mta_analysis більше не потрібен ---
-# from mta_analysis import get_mta_signal 
-# --- КІНЕЦЬ ЗМІН ---
 
 logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -34,6 +34,19 @@ app = Flask(__name__)
 app.config['JSON_AS_ASCII'] = False
 
 WEBAPP_DIR = os.path.join(os.path.dirname(__file__), "webapp")
+
+# --- ПОЧАТОК ЗМІН: Створюємо "охоронця" API ---
+def protected_route(f):
+    """Декоратор для захисту API-маршрутів."""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        init_data = request.args.get("initData")
+        if not is_valid_init_data(init_data):
+            logger.warning(f"Unauthorized API access attempt. Path: {request.path}")
+            return jsonify({"error": "Unauthorized"}), 401
+        return f(*args, **kwargs)
+    return decorated_function
+# --- КІНЕЦЬ ЗМІН ---
 
 def on_ctrader_ready():
     logger.info("cTrader client is ready. Loading symbols...")
@@ -122,6 +135,7 @@ def static_files(filename):
     return send_from_directory(WEBAPP_DIR, filename)
 
 @app.route("/api/get_pairs")
+@protected_route # <-- ЗАСТОСОВУЄМО ЗАХИСТ
 def get_pairs():
     return jsonify({
         "forex": FOREX_SESSIONS, "crypto": CRYPTO_PAIRS, "stocks": STOCK_TICKERS,
@@ -129,6 +143,7 @@ def get_pairs():
     })
 
 @app.route("/api/signal")
+@protected_route # <-- ЗАСТОСОВУЄМО ЗАХИСТ
 def api_signal():
     pair = request.args.get("pair")
     timeframe = request.args.get("timeframe", "15m")
@@ -166,12 +181,6 @@ def api_signal():
         return jsonify({
             "error": "Internal server error", "details": str(e), "traceback": tb_str
         }), 500
-
-# --- ПОЧАТОК ЗМІН: Видаляємо ендпоінт MTA ---
-# @app.route("/api/get_mta")
-# def api_get_mta():
-#     ...
-# --- КІНЕЦЬ ЗМІН ---
 
 if __name__ != "__main__":
     start_background_services()

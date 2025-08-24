@@ -27,8 +27,8 @@ let currentTimeframe = '1m';
 
 document.addEventListener('DOMContentLoaded', function() {
     showLoader(true);
-    const initDataString = initData ? `?initData=${encodeURIComponent(initData)}` : '';
-    const staticPairsUrl = `${API_BASE_URL}/api/get_pairs${initDataString}`;
+    const initDataString = initData ? `&initData=${encodeURIComponent(initData)}` : '';
+    const staticPairsUrl = `${API_BASE_URL}/api/get_pairs?v=1${initDataString}`;
 
     const timeframeButtons = document.querySelectorAll('.tf-button');
     timeframeButtons.forEach(button => {
@@ -55,11 +55,9 @@ document.addEventListener('DOMContentLoaded', function() {
             console.error("Error fetching pair lists:", err);
             signalOutput.innerHTML = `
                 <div style="text-align: left; font-family: monospace; word-wrap: break-word;">
-                    <h3 style="color: #ef5350;">❌ Не вдалося завантажити списки пар.</h3>
-                    <p><strong>URL запиту:</strong><br>${staticPairsUrl}</p>
-                    <p><strong>Тип помилки:</strong><br>${err.name || 'N/A'}</p>
-                    <p><strong>Повідомлення:</strong><br>${err.message || 'N/A'}</p>
-                    <p><strong>Стек виклику:</strong><br>${err.stack ? err.stack.replace(/\n/g, '<br>') : 'N/A'}</p>
+                    <h3 style="color: #ef5350;">❌ Помилка завантаження списків пар.</h3>
+                    <p><strong>URL:</strong><br>${staticPairsUrl}</p>
+                    <p><strong>Помилка:</strong><br>${err.name}: ${err.message}</p>
                 </div>
             `;
             showLoader(false);
@@ -133,7 +131,6 @@ function populateLists(staticData) {
     listsContainer.innerHTML = html;
 }
 
-// --- ПОЧАТОК ЗМІН: Прибираємо запит MTA ---
 function fetchSignal(pair) {
     showLoader(true);
     signalOutput.innerHTML = `⏳ Отримую аналіз для ${pair} (${currentTimeframe})...`;
@@ -141,8 +138,11 @@ function fetchSignal(pair) {
     historyContainer.innerHTML = ''; 
     Plotly.purge('chart');
 
-    const signalApiUrl = `${API_BASE_URL}/api/signal?pair=${pair}&timeframe=${currentTimeframe}`;
-
+    // --- ПОЧАТОК ЗМІН: Додаємо initData в усі запити ---
+    const initDataString = initData ? `&initData=${encodeURIComponent(initData)}` : '';
+    const signalApiUrl = `${API_BASE_URL}/api/signal?pair=${pair}&timeframe=${currentTimeframe}${initDataString}`;
+    // --- КІНЕЦЬ ЗМІН ---
+    
     fetch(signalApiUrl)
         .then(res => res.json())
         .then(signalData => {
@@ -164,7 +164,6 @@ function fetchSignal(pair) {
             let candleHtml = signalData.candle_pattern?.text ? `<div style="margin-bottom:10px"><strong>Свічковий патерн:</strong><br>${signalData.candle_pattern.text}</div>` : '';
             let volumeHtml = signalData.volume_analysis ? `<div style="margin-bottom:10px"><strong>Аналіз об'єму:</strong><br>${signalData.volume_analysis}</div>` : '';
             
-            // Видаляємо блок MTA з HTML
             signalOutput.innerHTML = `
                 <div style="font-size: 32px; text-align: center; margin-bottom: 15px;">${arrow}</div>
                 <div style="margin-bottom: 10px;"><strong>${signalData.pair} (${currentTimeframe})</strong> | Ціна: ${signalData.price.toFixed(5)}</div>
@@ -179,10 +178,6 @@ function fetchSignal(pair) {
                 drawChart(pair, signalData.history);
             }
             
-            if (initData) {
-                fetchHistory(pair);
-            }
-
             showLoader(false);
         })
         .catch(err => {
@@ -191,43 +186,6 @@ function fetchSignal(pair) {
             signalOutput.style.textAlign = 'center';
             showLoader(false);
         });
-}
-// --- КІНЕЦЬ ЗМІН ---
-
-function fetchHistory(pair) {
-    const historyApiUrl = `${API_BASE_URL}/api/signal_history?pair=${pair}&initData=${encodeURIComponent(initData)}`;
-    fetch(historyApiUrl)
-        .then(res => res.json())
-        .then(historyData => {
-            if (historyData && historyData.length > 0) {
-                displaySignalHistory(historyData);
-            }
-        })
-        .catch(err => console.error("Error fetching signal history:", err));
-}
-
-function displaySignalHistory(history) {
-    let html = '<div class="history-title">Історія сигналів</div>';
-    html += '<table class="history-table"><thead><tr><th>Час</th><th>Ціна</th><th>Сигнал</th><th>Сила (Бики)</th></tr></thead><tbody>';
-
-    history.forEach(item => {
-        const date = new Date(item.timestamp.replace(' ', 'T') + 'Z');
-        const formattedDate = `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')} ${date.getDate().toString().padStart(2, '0')}.${(date.getMonth() + 1).toString().padStart(2, '0')}`;
-        const signalClass = `signal-${item.signal_type.toLowerCase()}`;
-        const price = item.price ? item.price.toFixed(4) : 'N/A';
-
-        html += `
-            <tr>
-                <td>${formattedDate}</td>
-                <td>${price}</td>
-                <td class="${signalClass}">${item.signal_type}</td>
-                <td>${item.bull_percentage}%</td>
-            </tr>
-        `;
-    });
-
-    html += '</tbody></table>';
-    historyContainer.innerHTML = html;
 }
 
 function drawChart(pair, history) {
