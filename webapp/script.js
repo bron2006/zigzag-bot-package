@@ -1,5 +1,15 @@
 const API_BASE_URL = window.API_BASE_URL || "https://fallback.example.com";
 
+// --- ПОЧАТОК ЗМІН: Додаємо функцію debounce ---
+function debounce(func, delay) {
+    let timeout;
+    return function(...args) {
+        clearTimeout(timeout);
+        timeout = setTimeout(() => func.apply(this, args), delay);
+    };
+}
+// --- КІНЕЦЬ ЗМІН ---
+
 const loader = document.getElementById("loader");
 const listsContainer = document.getElementById("listsContainer");
 const signalOutput = document.getElementById("signalOutput");
@@ -97,9 +107,10 @@ function toggleFavorite(event, pair) {
         });
 }
 
+// --- ПОЧАТОК ЗМІН: Прибираємо onclick, додаємо data-pair ---
 function createPairButton(pair) {
     return `<div class="pair-item">
-        <button class="pair-button" onclick="fetchSignal('${pair}')">${pair}</button>
+        <button class="pair-button" data-pair="${pair}">${pair}</button>
         ${renderFavoriteButton(pair)}
     </div>`;
 }
@@ -129,7 +140,17 @@ function populateLists(staticData) {
     html += createSection('🥇 Уся сировина', staticData.commodities);
 
     listsContainer.innerHTML = html;
+
+    // --- Додаємо обробники подій до нових кнопок ---
+    const debouncedFetch = debounce(fetchSignal, 300);
+    listsContainer.querySelectorAll('.pair-button').forEach(button => {
+        button.addEventListener('click', (event) => {
+            const pair = event.target.dataset.pair;
+            debouncedFetch(pair);
+        });
+    });
 }
+// --- КІНЕЦЬ ЗМІН ---
 
 function fetchSignal(pair) {
     showLoader(true);
@@ -138,10 +159,8 @@ function fetchSignal(pair) {
     historyContainer.innerHTML = ''; 
     Plotly.purge('chart');
 
-    // --- ПОЧАТОК ЗМІН: Додаємо initData в усі запити ---
     const initDataString = initData ? `&initData=${encodeURIComponent(initData)}` : '';
     const signalApiUrl = `${API_BASE_URL}/api/signal?pair=${pair}&timeframe=${currentTimeframe}${initDataString}`;
-    // --- КІНЕЦЬ ЗМІН ---
     
     fetch(signalApiUrl)
         .then(res => res.json())
