@@ -4,7 +4,7 @@ import pandas_ta as ta
 import numpy as np
 import time
 from twisted.internet.defer import Deferred, DeferredList
-from twisted.internet import reactor # <-- НОВИЙ ІМПОРТ
+from twisted.internet import reactor
 
 from ctrader_open_api.messages.OpenApiMessages_pb2 import (
     ProtoOAGetTrendbarsReq, ProtoOAGetTrendbarsRes,
@@ -20,9 +20,7 @@ PERIOD_MAP = {
     "1h": TrendbarPeriod.H1, "4h": TrendbarPeriod.H4, "1day": TrendbarPeriod.D1
 }
 
-# --- ПОЧАТОК ЗМІН: Додаємо локальний тайм-аут ---
 def get_live_price(client, symbol_cache, norm_pair: str) -> Deferred:
-    """Робить короткочасну підписку для отримання актуальної ціни Bid/Ask."""
     d = Deferred()
     symbol_details = symbol_cache.get(norm_pair)
     if not symbol_details:
@@ -32,15 +30,12 @@ def get_live_price(client, symbol_cache, norm_pair: str) -> Deferred:
     account_id = client._client.account_id
     event_name = f"spot_event_{symbol_id}"
     
-    # Створюємо змінну для таймера, щоб ми могли його скасувати
     timeout_call = None
 
     def cleanup():
-        """Функція для безпечного відписування і видалення слухачів."""
         unsubscribe_req = ProtoOAUnsubscribeSpotsReq(ctidTraderAccountId=account_id, symbolId=[symbol_id])
         client.send(unsubscribe_req)
         client.remove_listener(event_name, on_spot_event)
-        # Скасовуємо таймер, якщо він ще не спрацював
         if timeout_call and not timeout_call.called:
             timeout_call.cancel()
 
@@ -55,15 +50,11 @@ def get_live_price(client, symbol_cache, norm_pair: str) -> Deferred:
             if not d.called: d.callback(None)
 
     def on_timeout():
-        """Спрацьовує, якщо ми не отримали ціну за 5 секунд."""
         logger.warning(f"Live price request for {norm_pair} timed out. Market might be closed.")
         cleanup()
-        if not d.called: d.callback(None) # Повертаємо None замість помилки
+        if not d.called: d.callback(None)
 
-    # Підписуємося на подію
     client.on(event_name, on_spot_event)
-
-    # Встановлюємо таймер
     timeout_call = reactor.callLater(5, on_timeout)
 
     logger.info(f"Subscribing to live price for {norm_pair} (symbolId: {symbol_id})")
@@ -71,7 +62,6 @@ def get_live_price(client, symbol_cache, norm_pair: str) -> Deferred:
     client.send(subscribe_req)
 
     return d
-# --- КІНЕЦЬ ЗМІН ---
 
 def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: int) -> Deferred:
     d = Deferred()
@@ -127,25 +117,36 @@ def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: in
     deferred.addCallbacks(process_response, on_error)
     return d
 
+# --- ПОЧАТОК ЗМІН: Векторизована функція групування ---
 def group_close_values(values, threshold=0.01):
-    if not len(values): return []
-    values = sorted(values)
-    groups, current_group = [], [values[0]]
-    for value in values[1:]:
-        if value - current_group[-1] <= threshold * value:
-            current_group.append(value)
-        else:
-            groups.append(np.mean(current_group))
-            current_group = [value]
-    groups.append(np.mean(current_group))
-    return groups
+    """Групує близькі значення, використовуючи векторизовані операції pandas."""
+    if not len(values):
+        return []
+    
+    # Використовуємо pandas Series для зручності та швидкості
+    s = pd.Series(sorted(values)).dropna()
+    if s.empty:
+        return []
+        
+    # Розраховуємо відсоткову зміну і знаходимо точки, де починається нова група
+    group_starts = s.pct_change() > threshold
+    
+    # Присвоюємо унікальний ID кожній групі
+    group_ids = group_starts.cumsum()
+    
+    # Розраховуємо середнє значення для кожної групи і повертаємо як список
+    return s.groupby(group_ids).mean().tolist()
+# --- КІНЕЦЬ ЗМІН ---
 
 def identify_support_resistance_levels(df, window=20, threshold=0.01):
     try:
         lows = df['Low'].rolling(window=window, center=True, min_periods=3).min()
         highs = df['High'].rolling(window=window, center=True, min_periods=3).max()
+        
+        # Використовуємо нову, швидку функцію групування
         support_levels = group_close_values(df.loc[df['Low'] == lows, 'Low'].tolist(), threshold)
         resistance_levels = group_close_values(df.loc[df['High'] == highs, 'High'].tolist(), threshold)
+        
         return sorted(support_levels), sorted(resistance_levels, reverse=True)
     except Exception as e:
         logger.error(f"Помилка в identify_support_resistance_levels: {e}")
