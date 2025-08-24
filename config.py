@@ -1,4 +1,3 @@
-# config.py
 import os
 import json
 from dotenv import load_dotenv
@@ -15,11 +14,12 @@ except Exception:
     pass
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-
-# --- ПОЧАТОК ЗМІН: Додаємо перевірку вашого секретного ключа NORD ---
-# Якщо на сервері буде змінна NORD=on, режим розробника буде увімкнено.
-IS_DEV_MODE = os.getenv("NORD", "off").lower() == "on"
+# --- ПОЧАТОК ЗМІН: Додаємо перевірку наявності токена ---
+if not TELEGRAM_BOT_TOKEN:
+    raise RuntimeError("CRITICAL: TELEGRAM_BOT_TOKEN is not set in the environment!")
 # --- КІНЕЦЬ ЗМІН ---
+
+IS_DEV_MODE = os.getenv("NORD", "off").lower() == "on"
 
 def get_chat_id() -> int:
     chat_id_str = os.getenv("TELEGRAM_CHAT_ID")

@@ -1,15 +1,5 @@
 const API_BASE_URL = window.API_BASE_URL || "https://fallback.example.com";
 
-// --- ПОЧАТОК ЗМІН: Додаємо функцію debounce ---
-function debounce(func, delay) {
-    let timeout;
-    return function(...args) {
-        clearTimeout(timeout);
-        timeout = setTimeout(() => func.apply(this, args), delay);
-    };
-}
-// --- КІНЕЦЬ ЗМІН ---
-
 const loader = document.getElementById("loader");
 const listsContainer = document.getElementById("listsContainer");
 const signalOutput = document.getElementById("signalOutput");
@@ -52,6 +42,11 @@ document.addEventListener('DOMContentLoaded', function() {
 
     fetch(staticPairsUrl)
         .then(res => {
+            // --- ПОЧАТОК ЗМІН: Обробка 401 Unauthorized ---
+            if (res.status === 401) {
+                throw new Error("⛔ Немає доступу. Будь ласка, перезапустіть Web App через Telegram.");
+            }
+            // --- КІНЕЦЬ ЗМІН ---
             if (!res.ok) { throw new Error(`HTTP status ${res.status}: ${res.statusText}`); }
             return res.json();
         })
@@ -107,7 +102,6 @@ function toggleFavorite(event, pair) {
         });
 }
 
-// --- ПОЧАТОК ЗМІН: Прибираємо onclick, додаємо data-pair ---
 function createPairButton(pair) {
     return `<div class="pair-item">
         <button class="pair-button" data-pair="${pair}">${pair}</button>
@@ -141,7 +135,6 @@ function populateLists(staticData) {
 
     listsContainer.innerHTML = html;
 
-    // --- Додаємо обробники подій до нових кнопок ---
     const debouncedFetch = debounce(fetchSignal, 300);
     listsContainer.querySelectorAll('.pair-button').forEach(button => {
         button.addEventListener('click', (event) => {
@@ -150,7 +143,6 @@ function populateLists(staticData) {
         });
     });
 }
-// --- КІНЕЦЬ ЗМІН ---
 
 function fetchSignal(pair) {
     showLoader(true);
@@ -163,7 +155,14 @@ function fetchSignal(pair) {
     const signalApiUrl = `${API_BASE_URL}/api/signal?pair=${pair}&timeframe=${currentTimeframe}${initDataString}`;
     
     fetch(signalApiUrl)
-        .then(res => res.json())
+        .then(res => {
+            // --- ПОЧАТОК ЗМІН: Обробка 401 Unauthorized ---
+            if (res.status === 401) {
+                throw new Error("⛔ Немає доступу. Будь ласка, перезапустіть Web App через Telegram.");
+            }
+            // --- КІНЕЦЬ ЗМІН ---
+            return res.json(); // Повертаємо res.json() навіть якщо !res.ok, щоб прочитати тіло помилки
+        })
         .then(signalData => {
             if (signalData.error) {
                 let errorText = `❌ Помилка: ${signalData.error}`;
@@ -179,7 +178,12 @@ function fetchSignal(pair) {
             const arrow = signalData.bull_percentage >= 50 ? '⬆️' : '⬇️';
             const supportText = signalData.support ? signalData.support.toFixed(5) : 'N/A';
             const resistanceText = signalData.resistance ? signalData.resistance.toFixed(5) : 'N/A';
-            const reasonsList = signalData.reasons.map(r => `<li>${r}</li>`).join('');
+            
+            // --- ПОЧАТОК ЗМІН: Безпечна обробка reasons ---
+            const reasons = Array.isArray(signalData.reasons) ? signalData.reasons : [];
+            const reasonsList = reasons.map(r => `<li>${r}</li>`).join('');
+            // --- КІНЕЦЬ ЗМІН ---
+
             let candleHtml = signalData.candle_pattern?.text ? `<div style="margin-bottom:10px"><strong>Свічковий патерн:</strong><br>${signalData.candle_pattern.text}</div>` : '';
             let volumeHtml = signalData.volume_analysis ? `<div style="margin-bottom:10px"><strong>Аналіз об'єму:</strong><br>${signalData.volume_analysis}</div>` : '';
             
@@ -208,19 +212,15 @@ function fetchSignal(pair) {
 }
 
 function drawChart(pair, history) {
+    if (!window.Plotly) return;
     const trace = {
-        x: history.dates,
-        close: history.close,
-        high: history.high,
-        low: history.low,
-        open: history.open,
-        type: 'candlestick',
+        x: history.dates, close: history.close, high: history.high,
+        low: history.low, open: history.open, type: 'candlestick',
         increasing: { line: { color: '#26a69a' } },
         decreasing: { line: { color: '#ef5350' } }
     };
     const layout = {
-        paper_bgcolor: 'rgba(0,0,0,0)',
-        plot_bgcolor: 'rgba(0,0,0,0)',
+        paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
         font: { color: tg.themeParams.text_color || '#fff' },
         xaxis: { rangeslider: { visible: false }, showgrid: false },
         yaxis: { showgrid: false },
@@ -238,3 +238,13 @@ function getAssetType(pair) {
     if (pair.includes('/')) return pair.includes('USD') ? 'crypto' : 'forex';
     return 'stocks';
 }
+
+// --- ПОЧАТОК ЗМІН: Додаємо debounce ---
+function debounce(func, delay) {
+    let timeout;
+    return function(...args) {
+        clearTimeout(timeout);
+        timeout = setTimeout(() => func.apply(this, args), delay);
+    };
+}
+// --- КІНЕЦЬ ЗМІН ---

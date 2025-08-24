@@ -171,13 +171,11 @@ def analyze_volume(df):
         return "🧊 Аномально низький об'єм"
     return "Об'єм нейтральний"
 
-# --- ПОЧАТОК ЗМІН: Інтегруємо аналіз Хмари Ішимоку ---
 def _calculate_core_signal(df, daily_df, current_price):
-    # Розрахунок індикаторів
     df.ta.rsi(length=14, append=True, col_names=('RSI',))
     df.ta.kama(length=14, append=True, col_names=('KAMA',))
-    bbands = df.ta.bbands(length=20, std=2, append=True)
-    df.ta.ichimoku(append=True) # Розраховуємо Ішимоку
+    df.ta.bbands(length=20, std=2, append=True)
+    df.ta.ichimoku(append=True)
 
     last = df.iloc[-1]
     if pd.isna(last['RSI']) or pd.isna(last['KAMA']):
@@ -190,23 +188,25 @@ def _calculate_core_signal(df, daily_df, current_price):
     score = 50
     reasons = []
     
-    # Фактор 1: KAMA
     if current_price > last['KAMA']: score += 10; reasons.append("Ціна вище KAMA(14)")
     else: score -= 10; reasons.append("Ціна нижче KAMA(14)")
     
-    # Фактор 2: RSI
     rsi = float(last['RSI'])
     if rsi < 30: score += 15; reasons.append("RSI в зоні перепроданості (<30)")
     elif rsi > 70: score -= 15; reasons.append("RSI в зоні перекупленості (>70)")
 
-    # Фактор 3: Смуги Боллінджера
-    if 'BBL_20_2.0' in last and pd.notna(last['BBL_20_2.0']):
-        if current_price <= last['BBL_20_2.0']:
-            score += 15; reasons.append("Ціна на нижній смузі Боллінджера")
-        elif current_price >= last['BBU_20_2.0']:
-            score -= 15; reasons.append("Ціна на верхній смузі Боллінджера")
+    # --- ПОЧАТОК ЗМІН: Безпечна перевірка Смуг Боллінджера ---
+    bbl = last.get('BBL_20_2.0')
+    bbu = last.get('BBU_20_2.0')
+    if pd.notna(bbl) and pd.notna(bbu):
+        if current_price <= bbl:
+            score += 15
+            reasons.append("Ціна на нижній смузі Боллінджера")
+        elif current_price >= bbu:
+            score -= 15
+            reasons.append("Ціна на верхній смузі Боллінджера")
+    # --- КІНЕЦЬ ЗМІН ---
 
-    # Фактор 4: Хмара Ішимоку
     tenkan = last.get('ITS_9')
     kijun = last.get('IKS_26')
     senkou_a = last.get('ISA_9')
@@ -232,7 +232,6 @@ def _calculate_core_signal(df, daily_df, current_price):
         else:
             score -= 10; reasons.append("Мертвий хрест Ішимоку (Tenkan < Kijun)")
             
-    # Фактор 5: Рівні підтримки/опору
     if support_levels:
         dist_to_support = min(abs(current_price - sl) for sl in support_levels)
         if dist_to_support / current_price < 0.003:
@@ -243,7 +242,6 @@ def _calculate_core_signal(df, daily_df, current_price):
         if dist_to_resistance / current_price < 0.003:
             score -= 15; reasons.append("Ціна ДУЖЕ близько до опору")
             
-    # Фактор 6: Об'єм
     if "Аномально низький" in volume_info:
         score = np.clip(score, 25, 75); reasons.append("Низький об'єм!")
         
@@ -255,7 +253,6 @@ def _calculate_core_signal(df, daily_df, current_price):
         "score": score, "reasons": reasons, "support": support, "resistance": resistance,
         "candle_pattern": candle_pattern, "volume_info": volume_info
     }
-# --- КІНЕЦЬ ЗМІН ---
 
 def _generate_verdict(score):
     if score > 65: return "⬆️ Strong BUY"
@@ -271,7 +268,7 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int
             success2, daily_df = results[1]
             success3, live_price = results[2]
 
-            if not (success1 and success2) or df.empty or len(df) < 50: # Збільшуємо вимогу до даних для Ішимоку
+            if not (success1 and success2) or df.empty or len(df) < 50:
                 logger.warning(f"Not enough historical data to analyze {symbol} on {timeframe}.")
                 return {"error": f"Not enough historical data for {timeframe} analysis."}
 
@@ -303,7 +300,7 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int
             logger.exception(f"Critical analysis error for {symbol}: {e}")
             return {"error": "Internal data processing error."}
 
-    d1 = get_market_data(client, symbol_cache, symbol, timeframe, 200) # Запитуємо більше даних для Ішимоку
+    d1 = get_market_data(client, symbol_cache, symbol, timeframe, 200)
     d2 = get_market_data(client, symbol_cache, symbol, '1day', 100)
     d3 = get_live_price(client, symbol_cache, symbol)
     
