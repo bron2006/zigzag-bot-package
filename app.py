@@ -1,4 +1,3 @@
-# app.py
 import logging
 import os
 import json
@@ -22,7 +21,7 @@ from config import (
 from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOASymbolsListRes
 
 from twisted.internet import reactor
-from analysis import get_api_detailed_signal_data
+from analysis import get_api_detailed_signal_data, PERIOD_MAP
 from mta_analysis import get_mta_signal
 
 logging.basicConfig(level=logging.INFO,
@@ -58,7 +57,6 @@ def symbols_command(update: Update, context: CallbackContext):
         update.message.reply_text("Список символів ще не завантажено. Спробуйте за хвилину.")
         return
     
-    # Фільтруємо імена для читабельності
     forex = sorted([s for s in state.all_symbol_names if "/" in s and len(s) < 8 and "USD" not in s.upper()])
     crypto_usd = sorted([s for s in state.all_symbol_names if "/USD" in s.upper()])
     crypto_usdt = sorted([s for s in state.all_symbol_names if "/USDT" in s.upper()])
@@ -70,7 +68,6 @@ def symbols_command(update: Update, context: CallbackContext):
     if crypto_usdt: message += f"**Crypto (USDT):**\n`{', '.join(crypto_usdt)}`\n\n"
     if others: message += f"**Indices/Stocks/Commodities:**\n`{', '.join(others)}`"
     
-    # Розбиваємо повідомлення, якщо воно занадто довге
     for i in range(0, len(message), 4096):
         update.message.reply_text(message[i:i + 4096], parse_mode='Markdown')
 
@@ -132,18 +129,29 @@ def get_pairs():
 @app.route("/api/signal")
 def api_signal():
     pair = request.args.get("pair")
+    timeframe = request.args.get("timeframe", "15m")
+    
+    if timeframe not in PERIOD_MAP:
+        return jsonify({"error": "Invalid timeframe"}), 400
+
     if not pair:
         return jsonify({"error": "pair is required"}), 400
+    
     pair_normalized = pair.replace("/", "")
+
     if not state.client or not state.client.is_authorized:
         return jsonify({"error": "cTrader client is not connected..."}), 503
+        
     if not state.SYMBOLS_LOADED or pair_normalized not in state.symbol_cache:
         return jsonify({"error": f"Symbol data not loaded or '{pair}' not found..."}), 503
-    logger.info(f"Received signal request for pair: {pair} (normalized: {pair_normalized})")
+
+    logger.info(f"Received signal request for pair: {pair}, timeframe: {timeframe}")
+
     @crochet.run_in_reactor
     def do_analysis_and_get_result():
-        deferred = get_api_detailed_signal_data(state.client, state.symbol_cache, pair_normalized, 0)
+        deferred = get_api_detailed_signal_data(state.client, state.symbol_cache, pair_normalized, 0, timeframe)
         return deferred
+
     try:
         result = do_analysis_and_get_result().wait(timeout=30)
         return jsonify(result)

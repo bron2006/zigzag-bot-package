@@ -1,4 +1,3 @@
-# analysis.py
 import logging
 import pandas as pd
 import pandas_ta as ta
@@ -16,8 +15,8 @@ from db import add_signal_to_history
 logger = logging.getLogger(__name__)
 
 PERIOD_MAP = {
-    "15min": TrendbarPeriod.M15, "1h": TrendbarPeriod.H1,
-    "4h": TrendbarPeriod.H4, "1day": TrendbarPeriod.D1
+    "1m": TrendbarPeriod.M1, "5m": TrendbarPeriod.M5, "15m": TrendbarPeriod.M15,
+    "1h": TrendbarPeriod.H1, "4h": TrendbarPeriod.H4, "1day": TrendbarPeriod.D1
 }
 
 def get_live_price(client, symbol_cache, norm_pair: str) -> Deferred:
@@ -63,7 +62,7 @@ def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: in
         return Deferred.fail(Exception(f"Непідтримуваний таймфрейм: {period}"))
 
     now = int(time.time() * 1000)
-    seconds_per_bar = {'15min': 900, '1h': 3600, '4h': 14400, '1day': 86400}
+    seconds_per_bar = {'1m': 60, '5m': 300, '15m': 900, '1h': 3600, '4h': 14400, '1day': 86400}
     from_ts = now - (count * seconds_per_bar[period] * 1000)
 
     request = ProtoOAGetTrendbarsReq(
@@ -87,10 +86,10 @@ def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: in
         divisor = 10**5
         bars = [{
             'ts': pd.to_datetime(bar.utcTimestampInMinutes * 60, unit='s', utc=True),
-            'Open': (bar.low + bar.deltaOpen) / divisor, # <-- Змінено на велику літеру
-            'High': (bar.low + bar.deltaHigh) / divisor, # <-- Змінено на велику літеру
-            'Low': bar.low / divisor, # <-- Змінено на велику літеру
-            'Close': (bar.low + bar.deltaClose) / divisor, # <-- Змінено на велику літеру
+            'Open': (bar.low + bar.deltaOpen) / divisor,
+            'High': (bar.low + bar.deltaHigh) / divisor,
+            'Low': bar.low / divisor,
+            'Close': (bar.low + bar.deltaClose) / divisor,
             'Volume': bar.volume
         } for bar in response.trendbar]
         
@@ -105,7 +104,6 @@ def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: in
     deferred.addCallbacks(process_response, on_error)
     return d
 
-# --- ПОЧАТОК ЗМІН: Повертаємо логіку зі старого проекту ---
 def group_close_values(values, threshold=0.01):
     if not len(values): return []
     values = sorted(values)
@@ -202,7 +200,6 @@ def _calculate_core_signal(df, daily_df, current_price):
         "score": score, "reasons": reasons, "support": support, "resistance": resistance,
         "candle_pattern": candle_pattern, "volume_info": volume_info
     }
-# --- КІНЕЦЬ ЗМІН ---
 
 def _generate_verdict(score):
     if score > 65: return "⬆️ Strong BUY"
@@ -211,8 +208,7 @@ def _generate_verdict(score):
     if score < 45: return "↘️ Moderate SELL"
     return "🟡 NEUTRAL"
 
-# --- ПОЧАТОК ЗМІН: Інтегруємо новий аналіз в основну функцію ---
-def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int) -> Deferred:
+def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int, timeframe: str = "15m") -> Deferred:
     def on_data_ready(results):
         try:
             success1, df = results[0]
@@ -220,12 +216,11 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int
             success3, live_price = results[2]
 
             if not (success1 and success2) or df.empty or len(df) < 25 or daily_df.empty:
-                logger.warning(f"Not enough historical data to analyze {symbol}.")
-                return {"error": "Not enough historical data for analysis."}
+                logger.warning(f"Not enough historical data to analyze {symbol} on {timeframe}.")
+                return {"error": f"Not enough historical data for {timeframe} analysis."}
 
             current_price = live_price if success3 and live_price is not None else df.iloc[-1]['Close']
             
-            # Викликаємо розширений аналіз
             analysis = _calculate_core_signal(df, daily_df, current_price)
             
             verdict = _generate_verdict(analysis['score'])
@@ -234,7 +229,6 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int
                 'price': current_price, 'bull_percentage': analysis['score']
             })
             
-            # Готуємо відповідь для API, включаючи нові дані
             response_data = {
                 "pair": symbol, 
                 "price": current_price,
@@ -253,11 +247,10 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int
             logger.exception(f"Critical analysis error for {symbol}: {e}")
             return {"error": "Internal data processing error."}
 
-    d1 = get_market_data(client, symbol_cache, symbol, '15min', 100)
+    d1 = get_market_data(client, symbol_cache, symbol, timeframe, 100)
     d2 = get_market_data(client, symbol_cache, symbol, '1day', 100)
     d3 = get_live_price(client, symbol_cache, symbol)
     
     d_list = DeferredList([d1, d2, d3], consumeErrors=True)
     d_list.addCallback(on_data_ready)
     return d_list
-# --- КІНЕЦЬ ЗМІН ---

@@ -1,4 +1,3 @@
-// webapp/script.js
 const API_BASE_URL = window.API_BASE_URL || "https://fallback.example.com";
 
 const loader = document.getElementById("loader");
@@ -24,17 +23,26 @@ if (!window.Telegram || !window.Telegram.WebApp) {
 
 let currentWatchlist = [];
 let initData = tg.initData || '';
+let currentTimeframe = '1m';
 
 document.addEventListener('DOMContentLoaded', function() {
     showLoader(true);
     const initDataString = initData ? `?initData=${encodeURIComponent(initData)}` : '';
     const staticPairsUrl = `${API_BASE_URL}/api/get_pairs${initDataString}`;
 
+    const timeframeButtons = document.querySelectorAll('.tf-button');
+    timeframeButtons.forEach(button => {
+        button.addEventListener('click', () => {
+            timeframeButtons.forEach(btn => btn.classList.remove('active'));
+            button.classList.add('active');
+            currentTimeframe = button.dataset.tf;
+            console.log(`Timeframe changed to: ${currentTimeframe}`);
+        });
+    });
+
     fetch(staticPairsUrl)
         .then(res => {
-            if (!res.ok) {
-                throw new Error(`HTTP status ${res.status}: ${res.statusText}`);
-            }
+            if (!res.ok) { throw new Error(`HTTP status ${res.status}: ${res.statusText}`); }
             return res.json();
         })
         .then(staticData => {
@@ -91,7 +99,7 @@ function toggleFavorite(event, pair) {
         });
 }
 
-function createPairButton(pair, assetType) {
+function createPairButton(pair) {
     return `<div class="pair-item">
         <button class="pair-button" onclick="fetchSignal('${pair}')">${pair}</button>
         ${renderFavoriteButton(pair)}
@@ -100,40 +108,39 @@ function createPairButton(pair, assetType) {
 
 function populateLists(staticData) {
     let html = '';
-    function createSection(title, pairs, assetTypeResolver) {
+    function createSection(title, pairs) {
         if (!Array.isArray(pairs) || pairs.length === 0) return '';
         let sectionHtml = `<div class="category"><div class="category-title">${title}</div><div class="pair-list">`;
         pairs.forEach(pair => {
-            const assetType = typeof assetTypeResolver === 'function' ? assetTypeResolver(pair) : assetTypeResolver;
-            sectionHtml += createPairButton(pair, assetType);
+            sectionHtml += createPairButton(pair);
         });
         sectionHtml += '</div></div>';
         return sectionHtml;
     }
 
-    html += createSection('⭐ Обране', staticData.watchlist, getAssetType);
-    html += createSection('💎 Уся криптовалюта', staticData.crypto || [], 'crypto');
+    html += createSection('⭐ Обране', staticData.watchlist);
+    html += createSection('💎 Уся криптовалюта', staticData.crypto || []);
     
     if (staticData.forex && typeof staticData.forex === 'object') {
         Object.keys(staticData.forex).forEach(sessionName => {
-            html += createSection(`💹 Усі валюти (${sessionName})`, staticData.forex[sessionName], 'forex');
+            html += createSection(`💹 Усі валюти (${sessionName})`, staticData.forex[sessionName]);
         });
     }
 
-    html += createSection('📈 Усі акції', staticData.stocks, 'stocks');
-    html += createSection('🥇 Уся сировина', staticData.commodities, 'commodities');
+    html += createSection('📈 Усі акції/індекси', staticData.stocks);
+    html += createSection('🥇 Уся сировина', staticData.commodities);
 
     listsContainer.innerHTML = html;
 }
 
 function fetchSignal(pair) {
     showLoader(true);
-    signalOutput.innerHTML = `⏳ Отримую детальний аналіз для ${pair}...`;
+    signalOutput.innerHTML = `⏳ Отримую аналіз для ${pair} (${currentTimeframe})...`;
     signalOutput.style.textAlign = 'left';
     historyContainer.innerHTML = ''; 
     Plotly.purge('chart');
 
-    const signalApiUrl = `${API_BASE_URL}/api/signal?pair=${pair}`;
+    const signalApiUrl = `${API_BASE_URL}/api/signal?pair=${pair}&timeframe=${currentTimeframe}`;
     const mtaApiUrl = `${API_BASE_URL}/api/get_mta?pair=${pair}`;
 
     Promise.all([
@@ -172,7 +179,7 @@ function fetchSignal(pair) {
 
         signalOutput.innerHTML = `
             <div style="font-size: 32px; text-align: center; margin-bottom: 15px;">${arrow}</div>
-            <div style="margin-bottom: 10px;"><strong>${signalData.pair}</strong> | Ціна: ${signalData.price.toFixed(5)}</div>
+            <div style="margin-bottom: 10px;"><strong>${signalData.pair} (${currentTimeframe})</strong> | Ціна: ${signalData.price.toFixed(5)}</div>
             <div style="margin-bottom: 10px;"><strong>Баланс сил:</strong><br>🐂 Бики: ${signalData.bull_percentage}% ⬆️ | 🐃 Ведмеді: ${signalData.bear_percentage}% ⬇️</div>
             ${candleHtml}
             <div style="margin-bottom: 10px;"><strong>Рівні S/R:</strong><br>Підтримка: ${supportText} | Опір: ${resistanceText}</div>
