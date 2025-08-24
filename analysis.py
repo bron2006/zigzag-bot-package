@@ -4,6 +4,7 @@ import pandas_ta as ta
 import numpy as np
 import time
 from twisted.internet.defer import Deferred, DeferredList
+from twisted.internet import reactor # <-- НОВИЙ ІМПОРТ
 
 from ctrader_open_api.messages.OpenApiMessages_pb2 import (
     ProtoOAGetTrendbarsReq, ProtoOAGetTrendbarsRes,
@@ -19,7 +20,9 @@ PERIOD_MAP = {
     "1h": TrendbarPeriod.H1, "4h": TrendbarPeriod.H4, "1day": TrendbarPeriod.D1
 }
 
+# --- ПОЧАТОК ЗМІН: Додаємо локальний тайм-аут ---
 def get_live_price(client, symbol_cache, norm_pair: str) -> Deferred:
+    """Робить короткочасну підписку для отримання актуальної ціни Bid/Ask."""
     d = Deferred()
     symbol_details = symbol_cache.get(norm_pair)
     if not symbol_details:
@@ -29,26 +32,46 @@ def get_live_price(client, symbol_cache, norm_pair: str) -> Deferred:
     account_id = client._client.account_id
     event_name = f"spot_event_{symbol_id}"
     
-    def on_spot_event(spot_event):
-        logger.info(f"Live price received for {norm_pair}. Unsubscribing...")
+    # Створюємо змінну для таймера, щоб ми могли його скасувати
+    timeout_call = None
+
+    def cleanup():
+        """Функція для безпечного відписування і видалення слухачів."""
         unsubscribe_req = ProtoOAUnsubscribeSpotsReq(ctidTraderAccountId=account_id, symbolId=[symbol_id])
         client.send(unsubscribe_req)
-        
         client.remove_listener(event_name, on_spot_event)
+        # Скасовуємо таймер, якщо він ще не спрацював
+        if timeout_call and not timeout_call.called:
+            timeout_call.cancel()
+
+    def on_spot_event(spot_event):
+        logger.info(f"Live price received for {norm_pair}. Unsubscribing...")
+        cleanup()
         
         if spot_event.HasField('bid') and spot_event.HasField('ask'):
             price = (spot_event.bid + spot_event.ask) / 2
-            d.callback(price / (10**5))
+            if not d.called: d.callback(price / (10**5))
         else:
-            d.callback(None)
+            if not d.called: d.callback(None)
 
+    def on_timeout():
+        """Спрацьовує, якщо ми не отримали ціну за 5 секунд."""
+        logger.warning(f"Live price request for {norm_pair} timed out. Market might be closed.")
+        cleanup()
+        if not d.called: d.callback(None) # Повертаємо None замість помилки
+
+    # Підписуємося на подію
     client.on(event_name, on_spot_event)
+
+    # Встановлюємо таймер
+    timeout_call = reactor.callLater(5, on_timeout)
 
     logger.info(f"Subscribing to live price for {norm_pair} (symbolId: {symbol_id})")
     subscribe_req = ProtoOASubscribeSpotsReq(ctidTraderAccountId=account_id, symbolId=[symbol_id])
     client.send(subscribe_req)
 
     return d
+# --- КІНЕЦЬ ЗМІН ---
 
 def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: int) -> Deferred:
     d = Deferred()
