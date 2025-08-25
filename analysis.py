@@ -209,13 +209,12 @@ def _calculate_core_signal(df, daily_df, current_price):
         dist = min(abs(current_price - r) for r in short_term_resistance if r > current_price) if any(r > current_price for r in short_term_resistance) else float('inf')
         if dist / current_price < 0.002: is_near_short_resistance = True
 
-    # --- ПОЧАТОК ЗМІН: Нове правило "Битва за рівень" ---
     if candle_pattern:
         pattern_type = candle_pattern.get('type')
         if (pattern_type == 'bullish' and is_near_short_resistance) or \
            (pattern_type == 'bearish' and is_near_short_support):
             reasons.append(f"❗️БИТВА ЗА РІВЕНЬ: Розворотний патерн ({candle_pattern['name']}) біля сильного локального рівня S/R.")
-            score = 50 # Нейтралізуємо сигнал у невизначеній ситуації
+            score = 50
         else:
             if pattern_type == 'bullish': score += 30; reasons.append(f"Сильний бичачий патерн: {candle_pattern['name']}")
             elif pattern_type == 'bearish': score -= 30; reasons.append(f"Сильний ведмежий патерн: {candle_pattern['name']}")
@@ -224,12 +223,15 @@ def _calculate_core_signal(df, daily_df, current_price):
         score += 25; reasons.append("Ціна на свіжому локальному рівні підтримки")
     elif is_near_short_resistance and not is_near_short_support:
         score -= 25; reasons.append("Ціна на свіжому локальному рівні опору")
-    # --- КІНЕЦЬ ЗМІН ---
     
+    # --- ПОЧАТОК ЗМІН: Підвищуємо вагу MACD ---
     macd_hist = df['MACDh_12_26_9']
     if pd.notna(macd_hist.iloc[-1]) and len(macd_hist) >= 2 and pd.notna(macd_hist.iloc[-2]):
-        if macd_hist.iloc[-1] > macd_hist.iloc[-2]: score += 15; reasons.append("Гістограма MACD росте (імпульс вгору)")
-        elif macd_hist.iloc[-1] < macd_hist.iloc[-2]: score -= 15; reasons.append("Гістограма MACD падає (імпульс вниз)")
+        if macd_hist.iloc[-1] > macd_hist.iloc[-2]:
+            score += 25; reasons.append("Гістограма MACD росте (сильний імпульс вгору)")
+        elif macd_hist.iloc[-1] < macd_hist.iloc[-2]:
+            score -= 25; reasons.append("Гістограма MACD падає (сильний імпульс вниз)")
+    # --- КІНЕЦЬ ЗМІН ---
 
     tenkan, kijun = last.get('ITS_9'), last.get('IKS_26')
     senkou_a, senkou_b = last.get('ISA_9'), last.get('ISB_26')
