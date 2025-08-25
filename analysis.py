@@ -3,12 +3,8 @@ import pandas as pd
 import pandas_ta as ta
 import numpy as np
 import time
-from twisted.internet.defer import Deferred, DeferredList, succeed
+from twisted.internet.defer import Deferred, DeferredList
 from twisted.internet import reactor
-
-# --- ПОЧАТОК ЗМІН: Імпортуємо новий модуль ---
-from economic_calendar import check_for_imminent_news
-# --- КІНЕЦЬ ЗМІН ---
 
 from ctrader_open_api.messages.OpenApiMessages_pb2 import (
     ProtoOAGetTrendbarsReq, ProtoOAGetTrendbarsRes,
@@ -213,12 +209,6 @@ def _calculate_core_signal(df, daily_df, current_price):
             reasons = ["Дуже малий розмір свічок (флет)"]
 
     if not special_warning:
-        adx_value = last.get('ADX_14')
-        if pd.notna(adx_value) and adx_value < 25:
-            reasons.append(f"⚠️ Слабкий тренд (ADX={adx_value:.1f})")
-            if score > 75: score = 60
-            if score < 25: score = 40
-        
         if candle_pattern:
             pattern_type = candle_pattern.get('type')
             strong_patterns = {"BELTHOLD", "ENGULFING", "HARAMI", "3OUTSIDE"}
@@ -232,10 +222,8 @@ def _calculate_core_signal(df, daily_df, current_price):
         main_trend_direction, impulse_direction = 0, 0
         macd_hist = df['MACDh_12_26_9']
         if pd.notna(macd_hist.iloc[-1]) and len(macd_hist) >= 2 and pd.notna(macd_hist.iloc[-2]):
-            if macd_hist.iloc[-1] > macd_hist.iloc[-2]:
-                score += 20; reasons.append("Імпульс MACD спрямований вгору"); impulse_direction = 1
-            elif macd_hist.iloc[-1] < macd_hist.iloc[-2]:
-                score -= 20; reasons.append("Імпульс MACD спрямований вниз"); impulse_direction = -1
+            if macd_hist.iloc[-1] > macd_hist.iloc[-2]: score += 20; reasons.append("Імпульс MACD спрямований вгору"); impulse_direction = 1
+            elif macd_hist.iloc[-1] < macd_hist.iloc[-2]: score -= 20; reasons.append("Імпульс MACD спрямований вниз"); impulse_direction = -1
 
         senkou_a, senkou_b = last.get('ISA_9'), last.get('ISB_26')
         if pd.notna(senkou_a) and pd.notna(senkou_b):
@@ -260,7 +248,19 @@ def _calculate_core_signal(df, daily_df, current_price):
         if score > 60 and (rsi > 70 or is_on_bbu):
             reasons.append("❗️КОНФЛІКТ: Сигнал на покупку при перекупленості ринку!")
             score = 50
-    
+        
+        # --- ПОЧАТОК ЗМІН: ADX як "Регулятор Впевненості" ---
+        adx_value = last.get('ADX_14')
+        if pd.notna(adx_value):
+            reasons.append(f"Сила тренду (ADX): {adx_value:.1f}")
+            if adx_value < 20: # Дуже слабкий тренд / флет
+                special_warning = "❗️❗️❗️ УВАГА: РИНОК \"БОКОВИЙ\" (ФЛЕТ) ❗️❗️❗️"
+                score = 50
+            elif adx_value < 25: # Слабкий тренд
+                if score > 75: score = 65 # Знижуємо Strong BUY до Moderate
+                if score < 25: score = 35 # Знижуємо Strong SELL до Moderate
+        # --- КІНЕЦЬ ЗМІН ---
+
     score = int(np.clip(score, 0, 100))
     
     all_support = sorted(long_term_support + short_term_support)
@@ -283,18 +283,7 @@ def _generate_verdict(score):
     if score < 45: return "↘️ Moderate SELL"
     return "🟡 NEUTRAL"
 
-# --- ПОЧАТОК ЗМІН: Інтегруємо перевірку новин ---
 def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int, timeframe: str = "15m") -> Deferred:
-    # Обертаємо синхронну перевірку новин в Deferred для сумісності
-    has_news, news_text = check_for_imminent_news(symbol)
-    if has_news:
-        # Якщо є новини, негайно повертаємо попередження, не роблячи інших запитів
-        return succeed({
-            "pair": symbol, "price": 0, "verdict_text": "🟡 NEUTRAL", 
-            "reasons": [], "bull_percentage": 50, "bear_percentage": 50,
-            "special_warning": news_text
-        })
-
     def on_data_ready(results):
         try:
             success1, df = results[0]
@@ -339,4 +328,3 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int
     d_list = DeferredList([d1, d2, d3], consumeErrors=True)
     d_list.addCallback(on_data_ready)
     return d_list
-# --- КІНЕЦЬ ЗМІН ---
