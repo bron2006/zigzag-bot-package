@@ -177,9 +177,10 @@ def _calculate_core_signal(df, daily_df, current_price):
     df.ta.bbands(length=20, std=2, append=True)
     df.ta.ichimoku(append=True)
     df.ta.macd(append=True)
+    df.ta.adx(append=True) # <-- РОЗРАХОВУЄМО ADX
 
     last = df.iloc[-1]
-    if pd.isna(last['RSI']) or pd.isna(last['KAMA']) or pd.isna(last.get('MACDh_12_26_9')):
+    if pd.isna(last['RSI']) or pd.isna(last.get('ADX_14')): # Перевіряємо ADX
         raise ValueError("Помилка розрахунку базових індикаторів")
 
     long_term_support, long_term_resistance = identify_support_resistance_levels(daily_df)
@@ -190,8 +191,16 @@ def _calculate_core_signal(df, daily_df, current_price):
     
     score = 50
     reasons = []
+    
+    # --- ПОЧАТОК ЗМІН: Додаємо фільтр "бокового" ринку ---
+    special_warning = None
+    adx_value = last.get('ADX_14')
+    if pd.notna(adx_value) and adx_value < 20:
+        special_warning = "❗️❗️❗️ УВАГА: РИНОК \"БОКОВИЙ\" (ФЛЕТ) ❗️❗️❗️\nСигнали в такому ринку вкрай ненадійні."
+        score = 50 # Примусово нейтралізуємо сигнал
+        reasons.append("ADX < 20 (слабкий тренд)")
+    # --- КІНЕЦЬ ЗМІН ---
 
-    # --- Нова логіка оцінки з пріоритетами ---
     if candle_pattern:
         if candle_pattern['type'] == 'bullish': score += 30; reasons.append(f"❗️Сильний бичачий патерн: {candle_pattern['name']}")
         elif candle_pattern['type'] == 'bearish': score -= 30; reasons.append(f"❗️Сильний ведмежий патерн: {candle_pattern['name']}")
@@ -243,15 +252,13 @@ def _calculate_core_signal(df, daily_df, current_price):
     if "Аномально низький" in volume_info:
         score = np.clip(score, 30, 70); reasons.append("⚠️ Низький об'єм!")
         
-    # --- ПОЧАТОК ЗМІН: Фінальний "Стоп-кран" / Conflict Resolver ---
     if score < 40 and (rsi < 30 or is_on_bbl):
         reasons.append("❗️КОНФЛІКТ: Сигнал на продаж при перепроданості ринку!")
-        score = 50 # Нейтралізація сигналу
+        score = 50
 
     if score > 60 and (rsi > 70 or is_on_bbu):
         reasons.append("❗️КОНФЛІКТ: Сигнал на покупку при перекупленості ринку!")
-        score = 50 # Нейтралізація сигналу
-    # --- КІНЕЦЬ ЗМІН ---
+        score = 50
         
     score = int(np.clip(score, 0, 100))
     
@@ -264,7 +271,8 @@ def _calculate_core_signal(df, daily_df, current_price):
     
     return {
         "score": score, "reasons": reasons, "support": support, "resistance": resistance,
-        "candle_pattern": candle_pattern, "volume_info": volume_info
+        "candle_pattern": candle_pattern, "volume_info": volume_info,
+        "special_warning": special_warning # <-- Повертаємо попередження
     }
 
 def _generate_verdict(score):
@@ -282,30 +290,31 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int
             success3, live_price = results[2]
 
             if not (success1 and success2) or df.empty or len(df) < 50:
-                logger.warning(f"Not enough historical data to analyze {symbol} on {timeframe}.")
                 return {"error": f"Not enough historical data for {timeframe} analysis."}
 
             current_price = live_price if success3 and live_price is not None else df.iloc[-1]['Close']
             
             analysis = _calculate_core_signal(df, daily_df, current_price)
             
-            verdict = _generate_verdict(analysis['score'])
+            # --- ПОЧАТОК ЗМІН: Якщо є попередження, вердикт = Нейтральний ---
+            if analysis.get("special_warning"):
+                verdict = "🟡 NEUTRAL"
+            else:
+                verdict = _generate_verdict(analysis['score'])
+            # --- КІНЕЦЬ ЗМІН ---
+
             add_signal_to_history({
                 'user_id': user_id, 'pair': symbol, 
                 'price': current_price, 'bull_percentage': analysis['score']
             })
             
             response_data = {
-                "pair": symbol, 
-                "price": current_price,
-                "verdict_text": verdict, 
-                "reasons": analysis['reasons'], 
-                "support": analysis['support'], 
-                "resistance": analysis['resistance'],
-                "bull_percentage": analysis['score'],
-                "bear_percentage": 100 - analysis['score'],
-                "candle_pattern": analysis.get('candle_pattern'),
-                "volume_analysis": analysis.get('volume_info')
+                "pair": symbol, "price": current_price, "verdict_text": verdict, 
+                "reasons": analysis['reasons'], "support": analysis['support'], 
+                "resistance": analysis['resistance'], "bull_percentage": analysis['score'],
+                "bear_percentage": 100 - analysis['score'], "candle_pattern": analysis.get('candle_pattern'),
+                "volume_analysis": analysis.get('volume_info'),
+                "special_warning": analysis.get("special_warning") # <-- Додаємо у відповідь API
             }
             return response_data
             

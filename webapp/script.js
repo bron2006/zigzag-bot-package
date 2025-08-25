@@ -42,11 +42,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     fetch(staticPairsUrl)
         .then(res => {
-            // --- ПОЧАТОК ЗМІН: Обробка 401 Unauthorized ---
-            if (res.status === 401) {
-                throw new Error("⛔ Немає доступу. Будь ласка, перезапустіть Web App через Telegram.");
-            }
-            // --- КІНЕЦЬ ЗМІН ---
+            if (res.status === 401) { throw new Error("⛔ Немає доступу. Будь ласка, перезапустіть Web App через Telegram."); }
             if (!res.ok) { throw new Error(`HTTP status ${res.status}: ${res.statusText}`); }
             return res.json();
         })
@@ -156,12 +152,8 @@ function fetchSignal(pair) {
     
     fetch(signalApiUrl)
         .then(res => {
-            // --- ПОЧАТОК ЗМІН: Обробка 401 Unauthorized ---
-            if (res.status === 401) {
-                throw new Error("⛔ Немає доступу. Будь ласка, перезапустіть Web App через Telegram.");
-            }
-            // --- КІНЕЦЬ ЗМІН ---
-            return res.json(); // Повертаємо res.json() навіть якщо !res.ok, щоб прочитати тіло помилки
+            if (res.status === 401) { throw new Error("⛔ Немає доступу. Будь ласка, перезапустіть Web App через Telegram."); }
+            return res.json();
         })
         .then(signalData => {
             if (signalData.error) {
@@ -175,19 +167,22 @@ function fetchSignal(pair) {
                 return;
             }
 
+            // --- ПОЧАТОК ЗМІН: Додаємо відображення попередження ---
+            let html = '';
+            if (signalData.special_warning) {
+                html += `<div class="special-warning">${signalData.special_warning}</div>`;
+            }
+            // --- КІНЕЦЬ ЗМІН ---
+
             const arrow = signalData.bull_percentage >= 50 ? '⬆️' : '⬇️';
             const supportText = signalData.support ? signalData.support.toFixed(5) : 'N/A';
             const resistanceText = signalData.resistance ? signalData.resistance.toFixed(5) : 'N/A';
-            
-            // --- ПОЧАТОК ЗМІН: Безпечна обробка reasons ---
             const reasons = Array.isArray(signalData.reasons) ? signalData.reasons : [];
             const reasonsList = reasons.map(r => `<li>${r}</li>`).join('');
-            // --- КІНЕЦЬ ЗМІН ---
-
             let candleHtml = signalData.candle_pattern?.text ? `<div style="margin-bottom:10px"><strong>Свічковий патерн:</strong><br>${signalData.candle_pattern.text}</div>` : '';
             let volumeHtml = signalData.volume_analysis ? `<div style="margin-bottom:10px"><strong>Аналіз об'єму:</strong><br>${signalData.volume_analysis}</div>` : '';
             
-            signalOutput.innerHTML = `
+            html += `
                 <div style="font-size: 32px; text-align: center; margin-bottom: 15px;">${arrow}</div>
                 <div style="margin-bottom: 10px;"><strong>${signalData.pair} (${currentTimeframe})</strong> | Ціна: ${signalData.price.toFixed(5)}</div>
                 <div style="margin-bottom: 10px;"><strong>Баланс сил:</strong><br>🐂 Бики: ${signalData.bull_percentage}% ⬆️ | 🐃 Ведмеді: ${signalData.bear_percentage}% ⬇️</div>
@@ -196,6 +191,7 @@ function fetchSignal(pair) {
                 ${volumeHtml}
                 <div><strong>Ключові фактори:</strong><ul style="margin: 5px 0 0 20px; padding: 0;">${reasonsList}</ul></div>
             `;
+            signalOutput.innerHTML = html;
 
             if (signalData.history && signalData.history.dates) {
                 drawChart(pair, signalData.history);
@@ -239,7 +235,6 @@ function getAssetType(pair) {
     return 'stocks';
 }
 
-// --- ПОЧАТОК ЗМІН: Додаємо debounce ---
 function debounce(func, delay) {
     let timeout;
     return function(...args) {
@@ -247,4 +242,3 @@ function debounce(func, delay) {
         timeout = setTimeout(() => func.apply(this, args), delay);
     };
 }
-// --- КІНЕЦЬ ЗМІН ---

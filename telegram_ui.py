@@ -71,8 +71,15 @@ def menu(update: Update, context: CallbackContext) -> None:
 def reset_ui(update: Update, context: CallbackContext) -> None:
     update.message.reply_text(f"Невідома команда: '{update.message.text}'. Використовуйте кнопки.", reply_markup=get_reply_keyboard())
 
+# --- ПОЧАТОК ЗМІН: Додаємо відображення попередження ---
 def _format_signal_message(result: dict, timeframe: str) -> str:
     if result.get("error"): return f"❌ Помилка аналізу: {result['error']}"
+
+    message = ""
+    # Показуємо спеціальне попередження НАЙПЕРШИМ
+    if result.get("special_warning"):
+        message += f"**{result['special_warning']}**\n\n"
+
     pair = result.get('pair', 'N/A')
     price = result.get('price', 0)
     verdict = result.get('verdict_text', 'Не вдалося визначити.')
@@ -83,18 +90,19 @@ def _format_signal_message(result: dict, timeframe: str) -> str:
     volume_analysis = result.get('volume_analysis')
     
     price_str = f"{price:.5f}" if price else "N/A"
-    message = f"📈 **Аналіз для {pair} ({timeframe})**\n\n"
+    message += f"📈 **Аналіз для {pair} ({timeframe})**\n\n"
     message += f"**Сигнал:** {verdict}\n"
     message += f"**Поточна ціна:** `{price_str}`\n\n"
+    message += f"**Баланс сил:**\n🐂 Бики: {result.get('bull_percentage', 0)}% ⬆️ | 🐃 Ведмеді: {result.get('bear_percentage', 100)}% ⬇️\n\n"
+
+    if candle_pattern and candle_pattern.get('text'):
+        message += f"**🕯️ Свічковий патерн:**\n{candle_pattern['text']}\n\n"
     
     if support or resistance:
         message += "🔑 **Ключові рівні:**\n"
         if support: message += f"    - Підтримка: `{support:.5f}`\n"
         if resistance: message += f"    - Опір: `{resistance:.5f}`\n"
         message += "\n"
-        
-    if candle_pattern and candle_pattern.get('text'):
-        message += f"**🕯️ Свічковий патерн:**\n{candle_pattern['text']}\n\n"
 
     if volume_analysis:
         message += f"**📊 Аналіз об'єму:**\n{volume_analysis}\n\n"
@@ -104,6 +112,7 @@ def _format_signal_message(result: dict, timeframe: str) -> str:
         for reason in reasons: message += f"    - {reason}\n"
         
     return message
+# --- КІНЕЦЬ ЗМІН ---
 
 def button_handler(update: Update, context: CallbackContext) -> None:
     query = update.callback_query
@@ -114,7 +123,7 @@ def button_handler(update: Update, context: CallbackContext) -> None:
     parts = data.split('_')
     action = parts[0]
 
-    if action == "main": # main_menu
+    if action == "main":
         query.edit_message_text("🏠 Головне меню:", reply_markup=get_main_menu_kb())
 
     elif action == "category":

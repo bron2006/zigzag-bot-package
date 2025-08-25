@@ -7,6 +7,7 @@
     --secondary-bg-color: var(--tg-theme-secondary-bg-color, #272727);
     --buy-color: #26a69a;
     --sell-color: #ef5350;
+    --warning-color: #ff9800; /* Колір для попередження */
 }
 
 body {
@@ -127,3 +128,16 @@ h1 { text-align: center; color: var(--text-color); font-size: 24px; margin-top: 
     color: var(--button-text-color);
     border-color: var(--button-color);
 }
+
+/* --- ПОЧАТОК ЗМІН: Стилі для попередження --- */
+.special-warning {
+    background-color: rgba(255, 152, 0, 0.1); /* Прозорий фон */
+    border: 1px solid var(--warning-color);
+    color: var(--warning-color);
+    padding: 10px;
+    margin-bottom: 15px;
+    border-radius: 8px;
+    font-weight: bold;
+    text-align: center;
+}
+/* --- КІНЕЦЬ ЗМІН --- */
