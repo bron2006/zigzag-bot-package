@@ -124,8 +124,7 @@ function populateLists(staticData) {
         sectionHtml += '</div></div>';
         return sectionHtml;
     }
-
-    // --- ПОЧАТОК ЗМІН: Виправлена логіка для відображення "Обраного" ---
+    
     const allPairs = [
         ...Object.values(staticData.forex || {}).flat(),
         ...(staticData.crypto || []),
@@ -139,8 +138,6 @@ function populateLists(staticData) {
     });
 
     html += createSection('⭐ Обране', watchlistDisplay);
-    // --- КІНЕЦЬ ЗМІН ---
-
     html += createSection('💎 Уся криптовалюта', staticData.crypto || []);
     
     if (staticData.forex && typeof staticData.forex === 'object') {
@@ -195,7 +192,15 @@ function fetchSignal(pair) {
                 html += `<div class="special-warning">${signalData.special_warning}</div>`;
             }
 
-            const arrow = signalData.bull_percentage >= 50 ? '⬆️' : '⬇️';
+            // --- ПОЧАТОК ЗМІН: Додаємо нейтральний стан для стрілки ---
+            let arrow = '🟡'; // За замовчуванням - нейтральний
+            if (signalData.bull_percentage > 55) {
+                arrow = '⬆️';
+            } else if (signalData.bull_percentage < 45) {
+                arrow = '⬇️';
+            }
+            // --- КІНЕЦЬ ЗМІН ---
+
             const supportText = signalData.support ? signalData.support.toFixed(5) : 'N/A';
             const resistanceText = signalData.resistance ? signalData.resistance.toFixed(5) : 'N/A';
             const reasons = Array.isArray(signalData.reasons) ? signalData.reasons : [];
