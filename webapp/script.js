@@ -65,33 +65,46 @@ document.addEventListener('DOMContentLoaded', function() {
         });
 });
 
+// --- ПОЧАТОК ЗМІН: Виправляємо логіку відображення обраного ---
 function renderFavoriteButton(pair) {
-    const isFavorite = currentWatchlist.includes(pair);
+    // Нормалізуємо пару, щоб порівнювати "EUR/USD" з "EURUSD"
+    const pairNormalized = pair.replace(/\//g, '');
+    const isFavorite = currentWatchlist.includes(pairNormalized);
     const icon = isFavorite ? '✅' : '⭐';
+    // Передаємо в toggleFavorite оригінальну назву пари
     return `<button class="fav-btn" onclick="toggleFavorite(event, '${pair}')">${icon}</button>`;
 }
+// --- КІНЕЦЬ ЗМІН ---
 
 function toggleFavorite(event, pair) {
     event.stopPropagation();
     const button = event.currentTarget;
-    const isCurrentlyFavorite = currentWatchlist.includes(pair);
-    button.innerHTML = isCurrentlyFavorite ? '⭐' : '✅';
+    const isCurrentlyFavorite = button.innerHTML.includes('✅'); // Перевіряємо по іконці
+
     const url = `${API_BASE_URL}/api/toggle_watchlist?pair=${pair}&initData=${encodeURIComponent(initData)}`;
+    
+    // Оптимістичне оновлення UI
+    button.innerHTML = isCurrentlyFavorite ? '⭐' : '✅';
+
     fetch(url)
         .then(res => res.json())
         .then(data => {
-            if (data.success) {
-                if (isCurrentlyFavorite) {
-                    currentWatchlist = currentWatchlist.filter(p => p !== pair);
-                } else {
-                    currentWatchlist.push(pair);
-                }
-            } else {
+            if (!data.success) {
+                // Якщо помилка, повертаємо стару іконку
                 button.innerHTML = isCurrentlyFavorite ? '✅' : '⭐';
                 alert("Не вдалося оновити список обраного.");
+            } else {
+                // Оновлюємо локальний кеш списку
+                const pairNormalized = pair.replace(/\//g, '');
+                if (isCurrentlyFavorite) {
+                    currentWatchlist = currentWatchlist.filter(p => p !== pairNormalized);
+                } else {
+                    currentWatchlist.push(pairNormalized);
+                }
             }
         })
         .catch(err => {
+            // Якщо помилка мережі, повертаємо стару іконку
             button.innerHTML = isCurrentlyFavorite ? '✅' : '⭐';
             alert("Помилка мережі при оновленні списку обраного.");
             console.error(err);
@@ -117,7 +130,11 @@ function populateLists(staticData) {
         return sectionHtml;
     }
 
-    html += createSection('⭐ Обране', staticData.watchlist);
+    html += createSection('⭐ Обране', staticData.watchlist.map(p => {
+        // Конвертуємо EURUSD назад в EUR/USD для відображення, якщо потрібно
+        const forexPair = FOREX_SESSIONS.flat().find(fp => fp.replace('/', '') === p);
+        return forexPair || p;
+    }));
     html += createSection('💎 Уся криптовалюта', staticData.crypto || []);
     
     if (staticData.forex && typeof staticData.forex === 'object') {
@@ -167,12 +184,10 @@ function fetchSignal(pair) {
                 return;
             }
 
-            // --- ПОЧАТОК ЗМІН: Додаємо відображення попередження ---
             let html = '';
             if (signalData.special_warning) {
                 html += `<div class="special-warning">${signalData.special_warning}</div>`;
             }
-            // --- КІНЕЦЬ ЗМІН ---
 
             const arrow = signalData.bull_percentage >= 50 ? '⬆️' : '⬇️';
             const supportText = signalData.support ? signalData.support.toFixed(5) : 'N/A';

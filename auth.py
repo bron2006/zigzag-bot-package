@@ -3,12 +3,11 @@ import hashlib
 import json
 from urllib.parse import unquote, parse_qs
 
-from config import TELEGRAM_BOT_TOKEN, IS_DEV_MODE
+# --- ПОЧАТОК ЗМІН: Імпортуємо DEV_USER_ID ---
+from config import TELEGRAM_BOT_TOKEN, IS_DEV_MODE, DEV_USER_ID
+# --- КІНЕЦЬ ЗМІН ---
 
 def is_valid_init_data(init_data_str: str) -> bool:
-    """
-    Перевіряє, чи є рядок initData, отриманий від Telegram, валідним.
-    """
     if IS_DEV_MODE:
         return True
 
@@ -19,11 +18,9 @@ def is_valid_init_data(init_data_str: str) -> bool:
         params = dict(
             (k, unquote(v)) for k, v in (item.split("=", 1) for item in init_data_str.split("&"))
         )
-        
         received_hash = params.pop("hash", None)
-        if not received_hash:
-            return False
-
+        if not received_hash: return False
+        
         sorted_params = sorted(params.items())
         data_check_string = "\n".join(f"{k}={v}" for k, v in sorted_params)
         
@@ -34,9 +31,12 @@ def is_valid_init_data(init_data_str: str) -> bool:
     except Exception:
         return False
 
-# --- ПОЧАТОК ЗМІН: Нова функція для отримання даних користувача ---
 def get_user_id_from_init_data(init_data_str: str) -> int | None:
-    """Безпечно витягує user_id з рядка initData."""
+    # --- ПОЧАТОК ЗМІН: Підставляємо тестовий ID в режимі розробника ---
+    if IS_DEV_MODE and not init_data_str:
+        return DEV_USER_ID
+    # --- КІНЕЦЬ ЗМІН ---
+
     if not init_data_str:
         return None
     try:
@@ -48,4 +48,3 @@ def get_user_id_from_init_data(init_data_str: str) -> int | None:
     except Exception:
         return None
     return None
-# --- КІНЕЦЬ ЗМІН ---

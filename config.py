@@ -5,6 +5,16 @@ from pathlib import Path
 
 load_dotenv()
 
+# --- ПОЧАТОК ЗМІН: Додаємо тестовий ID для режиму розробника ---
+IS_DEV_MODE = os.getenv("NORD", "off").lower() == "on"
+DEV_USER_ID = 123456789 # Ваш фіксований ID для тестів в браузері
+# --- КІНЕЦЬ ЗМІН ---
+
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+if not TELEGRAM_BOT_TOKEN:
+    raise RuntimeError("CRITICAL: TELEGRAM_BOT_TOKEN is not set in the environment!")
+
+# ... (решта файлу без змін) ...
 DB_NAME = os.getenv("DB_NAME", "/data/signals.db")
 DB_PATH = Path(os.getenv("DB_PATH", DB_NAME))
 
@@ -12,14 +22,6 @@ try:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 except Exception:
     pass
-
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-# --- ПОЧАТОК ЗМІН: Додаємо перевірку наявності токена ---
-if not TELEGRAM_BOT_TOKEN:
-    raise RuntimeError("CRITICAL: TELEGRAM_BOT_TOKEN is not set in the environment!")
-# --- КІНЕЦЬ ЗМІН ---
-
-IS_DEV_MODE = os.getenv("NORD", "off").lower() == "on"
 
 def get_chat_id() -> int:
     chat_id_str = os.getenv("TELEGRAM_CHAT_ID")
