@@ -156,20 +156,22 @@ def analyze_candle_patterns(df: pd.DataFrame):
 
 def analyze_volume(df):
     if df.empty or 'Volume' not in df.columns or len(df) < 21: return "Недостатньо даних"
-    df['Volume_MA'] = df['Volume'].rolling(window=20).mean()
-    last = df.iloc[-1]
-    if pd.isna(last['Volume_MA']): return "Недостатньо даних"
-    if last['Volume'] > last['Volume_MA'] * 1.5: return "🟢 Підвищений об'єм"
-    elif last['Volume'] < last['Volume_MA'] * 0.5: return "🧊 Аномально низький об'єм"
-    return "Об'єм нейтральний"
+    try:
+        df['Volume_MA'] = df['Volume'].rolling(window=20).mean()
+        last = df.iloc[-1]
+        if pd.isna(last['Volume_MA']): return "Недостатньо даних"
+        if last['Volume'] > last['Volume_MA'] * 1.5: return "🟢 Підвищений об'єм"
+        elif last['Volume'] < last['Volume_MA'] * 0.5: return "🧊 Аномально низький об'єм"
+        return "Об'єм нейтральний"
+    except Exception: return "Помилка аналізу об'єму"
 
-# --- ПОЧАТОК ЗМІН: Перебудована, надійна функція аналізу ---
+# --- ПОЧАТОК ЗМІН: Фінальна, надійна версія аналітичного ядра ---
 def _calculate_core_signal(df, daily_df, current_price):
     score = 50
     reasons = []
     special_warning = None
 
-    # Розраховуємо всі індикатори одразу, але з захистом
+    # Розраховуємо всі індикатори одразу
     try:
         df.ta.rsi(length=14, append=True, col_names=('RSI',))
         df.ta.kama(length=14, append=True, col_names=('KAMA',))
@@ -180,51 +182,105 @@ def _calculate_core_signal(df, daily_df, current_price):
         df.ta.atr(append=True)
         df.ta.alligator(append=True)
     except Exception as e:
-        logger.error(f"Помилка при розрахунку індикаторів: {e}")
-        # Якщо щось пішло не так, ми не можемо продовжувати аналіз
+        logger.error(f"Критична помилка при розрахунку індикаторів: {e}")
         return { "score": 50, "reasons": ["Помилка розрахунку індикаторів"], "special_warning": "ВНУТРІШНЯ ПОМИЛКА АНАЛІЗУ" }
 
     last = df.iloc[-1]
 
-    # --- КРОК 1: Фільтри ринкового стану (найвищий пріоритет) ---
-    # Фільтр "Алігатор спить"
-    jaw, teeth, lips = last.get('JAW_13_8'), last.get('TEETH_8_5'), last.get('LIPS_5_3')
-    if pd.notna(jaw) and pd.notna(teeth) and pd.notna(lips):
-        max_spread = max(jaw, teeth, lips) - min(jaw, teeth, lips)
-        if (max_spread / current_price) < 0.0015:
-            special_warning = "❗️❗️❗️ УВАГА: РИНОК \"СПИТЬ\" (ФЛЕТ) ❗️❗️❗️"
-            reasons.append("Індикатор 'Алігатор' спить (сильний флет)")
-            score = 50
+    # --- Кожен фактор тепер у власному безпечному блоці ---
     
-    # Якщо попередження вже є, далі не йдемо
-    if special_warning:
-        return { "score": score, "reasons": reasons, "special_warning": special_warning }
-
-    # --- КРОК 2: Розрахунок основних факторів ---
-    # ... (тут ми будемо додавати бали, кожен блок у try/except) ...
+    # 1. Фільтри ринкового стану (найвищий пріоритет)
     try:
+        jaw, teeth, lips = last.get('JAW_13_8'), last.get('TEETH_8_5'), last.get('LIPS_5_3')
+        if pd.notna(jaw) and pd.notna(teeth) and pd.notna(lips):
+            max_spread = max(jaw, teeth, lips) - min(jaw, teeth, lips)
+            if (max_spread / current_price) < 0.0015:
+                special_warning = "❗️❗️❗️ УВАГА: РИНОК \"СПИТЬ\" (ФЛЕТ) ❗️❗️❗️"
+    except Exception: pass
+
+    if not special_warning:
+        try:
+            adx_value = last.get('ADX_14')
+            if pd.notna(adx_value) and adx_value < 20:
+                special_warning = "❗️❗️❗️ УВАГА: РИНОК \"БОКОВИЙ\" (ФЛЕТ) ❗️❗️❗️"
+        except Exception: pass
+
+    if not special_warning:
+        try:
+            avg_body_size = (df.tail(10)['Open'] - df.tail(10)['Close']).abs().mean()
+            atr_value = last.get('ATRr_14')
+            if pd.notna(atr_value) and atr_value > 0 and avg_body_size < (atr_value * 0.15):
+                special_warning = "❗️❗️❗️ УВАГА: РИНОК \"В'ЯЛИЙ\" ❗️❗️❗️\nЦіна майже не рухається, торгівля ризикована."
+        except Exception: pass
+
+    if special_warning:
+        reasons.append(special_warning)
+        score = 50
+    else:
+        # 2. Основна логіка, якщо ринок активний
         candle_pattern = analyze_candle_patterns(df)
-        is_near_short_support, is_near_short_resistance = False, False
         
+        long_term_support, long_term_resistance = identify_support_resistance_levels(daily_df)
         short_term_support, short_term_resistance = identify_support_resistance_levels(df, window=10)
+        
+        is_near_short_support, is_near_short_resistance = False, False
         if short_term_support:
             dist = min(abs(current_price - s) for s in short_term_support if s < current_price) if any(s < current_price for s in short_term_support) else float('inf')
             if dist / current_price < 0.002: is_near_short_support = True
-
         if short_term_resistance:
             dist = min(abs(current_price - r) for r in short_term_resistance if r > current_price) if any(r > current_price for r in short_term_resistance) else float('inf')
             if dist / current_price < 0.002: is_near_short_resistance = True
+
+        if is_near_short_support and is_near_short_resistance:
+            reasons.append("❗️КОНФЛІКТ: Ціна затиснута у вузькому коридорі S/R.")
+            score = 50
+        else:
+            if candle_pattern:
+                pattern_type = candle_pattern.get('type')
+                if (pattern_type == 'bullish' and is_near_short_resistance) or \
+                   (pattern_type == 'bearish' and is_near_short_support):
+                    reasons.append(f"❗️БИТВА ЗА РІВЕНЬ: Патерн ({candle_pattern['name']}) біля S/R.")
+                    score = 50
+                else:
+                    if pattern_type == 'bullish': score += 25; reasons.append(f"Сильний бичачий патерн: {candle_pattern['name']}")
+                    elif pattern_type == 'bearish': score -= 25; reasons.append(f"Сильний ведмежий патерн: {candle_pattern['name']}")
+            
+            if is_near_short_support: score += 20; reasons.append("Ціна на локальній підтримці")
+            if is_near_short_resistance: score -= 20; reasons.append("Ціна на локальному опорі")
         
-        # ... (решта логіки, яку ми розробили, з перевірками) ...
+            main_trend_direction, impulse_direction = 0, 0
+            if pd.notna(last.get('MACDh_12_26_9')) and len(df['MACDh_12_26_9']) >= 2:
+                if last['MACDh_12_26_9'] > df['MACDh_12_26_9'].iloc[-2]:
+                    score += 20; reasons.append("Імпульс MACD росте"); impulse_direction = 1
+                else:
+                    score -= 20; reasons.append("Імпульс MACD падає"); impulse_direction = -1
+            
+            if pd.notna(last.get('ISA_9')) and pd.notna(last.get('ISB_26')):
+                cloud_top, cloud_bottom = max(last['ISA_9'], last['ISB_26']), min(last['ISA_9'], last['ISB_26'])
+                if current_price > cloud_top: score += 15; reasons.append("Тренд: Ціна над Хмарою"); main_trend_direction = 1
+                elif current_price < cloud_bottom: score -= 15; reasons.append("Тренд: Ціна під Хмарою"); main_trend_direction = -1
+            
+            if (main_trend_direction * impulse_direction) == -1:
+                reasons.append("⚠️ КОНФЛІКТ: Імпульс проти тренду!"); score = 50
+            
+            rsi = last.get('RSI')
+            bbl, bbu = last.get('BBL_20_2.0'), last.get('BBU_20_2.0')
+            if pd.notna(rsi):
+                if rsi < 30: score += 15; reasons.append("RSI в зоні перепроданості")
+                elif rsi > 70: score -= 15; reasons.append("RSI в зоні перекупленості")
+            
+            is_on_bbl = pd.notna(bbl) and current_price <= bbl
+            is_on_bbu = pd.notna(bbu) and current_price >= bbu
+            if is_on_bbl: score += 15; reasons.append("Ціна на нижній смузі Боллінджера")
+            elif is_on_bbu: score -= 15; reasons.append("Ціна на верхній смузі Боллінджера")
 
-    except Exception as e:
-        logger.error(f"Непередбачена помилка в ядрі аналізу: {e}")
-        reasons.append("Внутрішня помилка обробки даних")
+            if score < 35 and (rsi < 30 or is_on_bbl):
+                reasons.append("❗️КОНФЛІКТ: Продаж при перепроданості!"); score = 50
+            if score > 65 and (rsi > 70 or is_on_bbu):
+                reasons.append("❗️КОНФЛІКТ: Покупка при перекупленості!"); score = 50
 
-    # --- КРОК 3: Фінальні перевірки та повернення результату ---
     score = int(np.clip(score, 0, 100))
     
-    long_term_support, long_term_resistance = identify_support_resistance_levels(daily_df)
     all_support = sorted(long_term_support + short_term_support)
     all_resistance = sorted(long_term_resistance + short_term_resistance)
     support_candidates = [s for s in all_support if s < current_price]
@@ -237,7 +293,6 @@ def _calculate_core_signal(df, daily_df, current_price):
         "candle_pattern": candle_pattern, "volume_info": analyze_volume(df),
         "special_warning": special_warning
     }
-
 # --- КІНЕЦЬ ЗМІН ---
 
 def _generate_verdict(score):
