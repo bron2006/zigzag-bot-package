@@ -1,17 +1,14 @@
-# db.py
 import sqlite3
 import logging
-from config import DB_NAME # <-- Імпортуємо просту назву
+from config import DB_NAME
 
 logger = logging.getLogger(__name__)
 
 def initialize_database():
     """Ініціалізує таблиці в базі даних, якщо вони ще не існують."""
     try:
-        # --- ПОВЕРТАЄМОСЬ ДО ПРОСТОГО ПІДКЛЮЧЕННЯ ---
         with sqlite3.connect(DB_NAME) as conn:
             cursor = conn.cursor()
-            # Таблиця для історії сигналів
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS signal_history (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -22,7 +19,6 @@ def initialize_database():
                     bull_percentage INTEGER
                 )
             ''')
-            # Таблиця для налаштувань користувача
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS user_settings (
                     user_id INTEGER PRIMARY KEY,
@@ -47,5 +43,47 @@ def add_signal_to_history(data):
     except Exception as e:
         logger.error(f"Помилка додавання сигналу в історію: {e}")
 
-# Викликаємо ініціалілізацію при першому імпорті модуля
+# --- ПОЧАТОК ЗМІН: Функції для списку обраного ---
+def get_watchlist(user_id: int) -> list:
+    """Отримує список обраних пар для користувача."""
+    if not user_id:
+        return []
+    try:
+        with sqlite3.connect(DB_NAME) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT subscribed_pairs FROM user_settings WHERE user_id = ?", (user_id,))
+            result = cursor.fetchone()
+            if result and result[0]:
+                return result[0].split(',')
+            return []
+    except Exception as e:
+        logger.error(f"Помилка отримання списку обраного для user_id {user_id}: {e}")
+        return []
+
+def toggle_watchlist(user_id: int, pair: str):
+    """Додає або видаляє пару зі списку обраного."""
+    if not user_id or not pair:
+        return
+    try:
+        current_list = get_watchlist(user_id)
+        
+        if pair in current_list:
+            current_list.remove(pair)
+        else:
+            current_list.append(pair)
+        
+        new_list_str = ",".join(current_list)
+        
+        with sqlite3.connect(DB_NAME) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO user_settings (user_id, subscribed_pairs) VALUES (?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET subscribed_pairs = excluded.subscribed_pairs
+            ''', (user_id, new_list_str))
+            conn.commit()
+            logger.info(f"Оновлено список обраного для user_id {user_id}: {new_list_str}")
+    except Exception as e:
+        logger.error(f"Помилка оновлення списку обраного для user_id {user_id}: {e}")
+# --- КІНЕЦЬ ЗМІН ---
+
 initialize_database()

@@ -13,7 +13,8 @@ import crochet
 crochet.setup()
 
 import state
-from auth import is_valid_init_data
+from auth import is_valid_init_data, get_user_id_from_init_data # <-- Додано імпорт
+from db import get_watchlist, toggle_watchlist # <-- Додано імпорт
 from spotware_connect import SpotwareConnect
 from config import (
     TELEGRAM_BOT_TOKEN, get_ct_client_id, get_ct_client_secret, 
@@ -40,12 +41,11 @@ def protected_route(f):
         init_data = request.args.get("initData")
         if not is_valid_init_data(init_data):
             logger.warning(f"Unauthorized API access attempt. Path: {request.path}")
-            # --- ПОЧАТОК ЗМІН: Стандартизуємо відповідь ---
             return jsonify({"success": False, "error": "Unauthorized"}), 401
-            # --- КІНЕЦЬ ЗМІН ---
         return f(*args, **kwargs)
     return decorated_function
 
+# ... (код до get_pairs без змін) ...
 def on_ctrader_ready():
     logger.info("cTrader client is ready. Loading symbols...")
     deferred = state.client.get_all_symbols()
@@ -135,10 +135,34 @@ def static_files(filename):
 @app.route("/api/get_pairs")
 @protected_route
 def get_pairs():
+    # --- ПОЧАТОК ЗМІН: Завантажуємо список обраного для користувача ---
+    user_id = get_user_id_from_init_data(request.args.get("initData"))
+    watchlist = get_watchlist(user_id) if user_id else []
+    # --- КІНЕЦЬ ЗМІН ---
     return jsonify({
         "forex": FOREX_SESSIONS, "crypto": CRYPTO_PAIRS, "stocks": STOCK_TICKERS,
-        "commodities": COMMODITIES, "watchlist": [] 
+        "commodities": COMMODITIES, "watchlist": watchlist 
     })
+
+# --- ПОЧАТОК ЗМІН: Новий API-ендпоінт для обраного ---
+@app.route("/api/toggle_watchlist")
+@protected_route
+def toggle_watchlist_route():
+    user_id = get_user_id_from_init_data(request.args.get("initData"))
+    pair = request.args.get("pair")
+
+    if not user_id or not pair:
+        return jsonify({"success": False, "error": "Missing parameters"}), 400
+
+    try:
+        # Нормалізуємо пару так само, як ми робимо для аналізу
+        pair_normalized = pair.replace("/", "")
+        toggle_watchlist(user_id, pair_normalized)
+        return jsonify({"success": True})
+    except Exception as e:
+        logger.error(f"Error in toggle_watchlist for user {user_id}: {e}")
+        return jsonify({"success": False, "error": "Internal server error"}), 500
+# --- КІНЕЦЬ ЗМІН ---
 
 @app.route("/api/signal")
 @protected_route
@@ -153,6 +177,7 @@ def api_signal():
         return jsonify({"error": "pair is required"}), 400
     
     pair_normalized = pair.replace("/", "")
+    user_id = get_user_id_from_init_data(request.args.get("initData"))
 
     if not state.client or not state.client.is_authorized:
         return jsonify({"error": "cTrader client is not connected..."}), 503
@@ -164,7 +189,7 @@ def api_signal():
 
     @crochet.run_in_reactor
     def do_analysis_and_get_result():
-        deferred = get_api_detailed_signal_data(state.client, state.symbol_cache, pair_normalized, 0, timeframe)
+        deferred = get_api_detailed_signal_data(state.client, state.symbol_cache, pair_normalized, user_id, timeframe)
         return deferred
 
     try:

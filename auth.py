@@ -1,14 +1,13 @@
-# auth.py
 import hmac
 import hashlib
-from urllib.parse import unquote
+import json
+from urllib.parse import unquote, parse_qs
 
 from config import TELEGRAM_BOT_TOKEN, IS_DEV_MODE
 
 def is_valid_init_data(init_data_str: str) -> bool:
     """
     Перевіряє, чи є рядок initData, отриманий від Telegram, валідним.
-    Якщо увімкнено режим розробника (IS_DEV_MODE), перевірка пропускається.
     """
     if IS_DEV_MODE:
         return True
@@ -34,3 +33,19 @@ def is_valid_init_data(init_data_str: str) -> bool:
         return calculated_hash == received_hash
     except Exception:
         return False
+
+# --- ПОЧАТОК ЗМІН: Нова функція для отримання даних користувача ---
+def get_user_id_from_init_data(init_data_str: str) -> int | None:
+    """Безпечно витягує user_id з рядка initData."""
+    if not init_data_str:
+        return None
+    try:
+        params = parse_qs(init_data_str)
+        user_json_str = params.get("user", [None])[0]
+        if user_json_str:
+            user_data = json.loads(user_json_str)
+            return user_data.get("id")
+    except Exception:
+        return None
+    return None
+# --- КІНЕЦЬ ЗМІН ---
