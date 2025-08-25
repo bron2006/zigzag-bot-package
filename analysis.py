@@ -171,7 +171,6 @@ def analyze_volume(df):
         return "🧊 Аномально низький об'єм"
     return "Об'єм нейтральний"
 
-# --- ПОЧАТОК ЗМІН: Перебалансування системи оцінки ---
 def _calculate_core_signal(df, daily_df, current_price):
     df.ta.rsi(length=14, append=True, col_names=('RSI',))
     df.ta.kama(length=14, append=True, col_names=('KAMA',))
@@ -192,16 +191,25 @@ def _calculate_core_signal(df, daily_df, current_price):
     score = 50
     reasons = []
 
-    # --- Нова логіка оцінки з пріоритетами ---
+    # --- ПОЧАТОК ЗМІН: Реалізація "Фільтра Тренду" ---
 
-    # 1. Сигнали розвороту (найвищий пріоритет)
+    # 1. Визначаємо основний тренд за Хмарою Ішимоку
+    main_trend = "NEUTRAL"
+    senkou_a, senkou_b = last.get('ISA_9'), last.get('ISB_26')
+    if pd.notna(senkou_a) and pd.notna(senkou_b):
+        cloud_top, cloud_bottom = max(senkou_a, senkou_b), min(senkou_a, senkou_b)
+        if current_price > cloud_top:
+            main_trend = "UP"
+        elif current_price < cloud_bottom:
+            main_trend = "DOWN"
+
+    # 2. Розраховуємо базовий score, як і раніше
     if candle_pattern:
         if candle_pattern['type'] == 'bullish':
             score += 30; reasons.append(f"❗️Сильний бичачий патерн: {candle_pattern['name']}")
         elif candle_pattern['type'] == 'bearish':
             score -= 30; reasons.append(f"❗️Сильний ведмежий патерн: {candle_pattern['name']}")
-
-    # 2. Локальні рівні S/R (високий пріоритет)
+    
     is_near_short_support = False
     if short_term_support:
         dist = min(abs(current_price - s) for s in short_term_support if s < current_price) if any(s < current_price for s in short_term_support) else float('inf')
@@ -219,7 +227,6 @@ def _calculate_core_signal(df, daily_df, current_price):
     elif is_near_short_resistance:
         score -= 25; reasons.append("Ціна на свіжому локальному рівні опору")
     
-    # 3. Імпульс (MACD)
     macd_hist = df['MACDh_12_26_9']
     if len(macd_hist) >= 2:
         if macd_hist.iloc[-1] > macd_hist.iloc[-2]:
@@ -227,18 +234,23 @@ def _calculate_core_signal(df, daily_df, current_price):
         elif macd_hist.iloc[-1] < macd_hist.iloc[-2]:
             score -= 15; reasons.append("Гістограма MACD падає (імпульс вниз)")
 
-    # 4. Основний тренд (Ішимоку)
-    tenkan, kijun = last.get('ITS_9'), last.get('IKS_26')
-    senkou_a, senkou_b = last.get('ISA_9'), last.get('ISB_26')
     if pd.notna(senkou_a) and pd.notna(senkou_b):
-        cloud_top, cloud_bottom = max(senkou_a, senkou_b), min(senkou_a, senkou_b)
-        if current_price > cloud_top: score += 15; reasons.append("Тренд: Ціна над Хмарою Ішимоку")
-        elif current_price < cloud_bottom: score -= 15; reasons.append("Тренд: Ціна під Хмарою Ішимоку")
-    if pd.notna(tenkan) and pd.notna(kijun):
-        if tenkan > kijun: score += 10; reasons.append("Тренд: Золотий хрест Ішимоку")
-        else: score -= 10; reasons.append("Тренд: Мертвий хрест Ішимоку")
-            
-    # 5. Вторинні індикатори
+        if senkou_a > senkou_b: score += 5; reasons.append("Висхідна Хмара (бичачий прогноз)")
+        else: score -= 5; reasons.append("Низхідна Хмара (ведмежий прогноз)")
+
+    # 3. Застосовуємо Фільтр Тренду
+    if main_trend == "UP" and score < 50:
+        reasons.append("⚠️ Сигнал на продаж ІГНОРУЄТЬСЯ (основний тренд висхідний)")
+        score = 50 # Нейтралізуємо контртрендовий сигнал
+        
+    if main_trend == "DOWN" and score > 50:
+        reasons.append("⚠️ Сигнал на покупку ІГНОРУЄТЬСЯ (основний тренд низхідний)")
+        score = 50 # Нейтралізуємо контртрендовий сигнал
+
+    # Додаємо решту індикаторів (їх вплив буде меншим через фільтр)
+    if current_price > last['KAMA']: score += 5; reasons.append("Ціна вище KAMA(14)")
+    else: score -= 5; reasons.append("Ціна нижче KAMA(14)")
+    
     rsi = float(last['RSI'])
     if rsi < 30: score += 10; reasons.append("RSI в зоні перепроданості (<30)")
     elif rsi > 70: score -= 10; reasons.append("RSI в зоні перекупленості (>70)")
