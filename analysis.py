@@ -171,7 +171,7 @@ def analyze_volume(df):
         return "🧊 Аномально низький об'єм"
     return "Об'єм нейтральний"
 
-# --- ПОЧАТОК ЗМІН: Перебалансування ваги індикаторів ---
+# --- ПОЧАТОК ЗМІН: Перебалансування системи оцінки ---
 def _calculate_core_signal(df, daily_df, current_price):
     df.ta.rsi(length=14, append=True, col_names=('RSI',))
     df.ta.kama(length=14, append=True, col_names=('KAMA',))
@@ -192,7 +192,16 @@ def _calculate_core_signal(df, daily_df, current_price):
     score = 50
     reasons = []
 
-    # Фактор 1 (високий пріоритет): Локальні рівні S/R
+    # --- Нова логіка оцінки з пріоритетами ---
+
+    # 1. Сигнали розвороту (найвищий пріоритет)
+    if candle_pattern:
+        if candle_pattern['type'] == 'bullish':
+            score += 30; reasons.append(f"❗️Сильний бичачий патерн: {candle_pattern['name']}")
+        elif candle_pattern['type'] == 'bearish':
+            score -= 30; reasons.append(f"❗️Сильний ведмежий патерн: {candle_pattern['name']}")
+
+    # 2. Локальні рівні S/R (високий пріоритет)
     is_near_short_support = False
     if short_term_support:
         dist = min(abs(current_price - s) for s in short_term_support if s < current_price) if any(s < current_price for s in short_term_support) else float('inf')
@@ -204,55 +213,43 @@ def _calculate_core_signal(df, daily_df, current_price):
         if dist / current_price < 0.002: is_near_short_resistance = True
 
     if is_near_short_support and is_near_short_resistance:
-        reasons.append("❗️Ціна затиснута між локальними S/R")
+        reasons.append("⚠️ Ціна затиснута між локальними S/R")
     elif is_near_short_support:
-        score += 25; reasons.append("❗️Ціна на свіжому локальному рівні підтримки")
+        score += 25; reasons.append("Ціна на свіжому локальному рівні підтримки")
     elif is_near_short_resistance:
-        score -= 25; reasons.append("❗️Ціна на свіжому локальному рівні опору")
+        score -= 25; reasons.append("Ціна на свіжому локальному рівні опору")
     
-    # Фактор 2 (високий пріоритет): Свічкові патерни
-    if candle_pattern:
-        if candle_pattern['type'] == 'bullish':
-            score += 20; reasons.append(f"Бичачий свічковий патерн: {candle_pattern['name']}")
-        elif candle_pattern['type'] == 'bearish':
-            score -= 20; reasons.append(f"Ведмежий свічковий патерн: {candle_pattern['name']}")
-
-    # Фактор 3: MACD (Імпульс)
+    # 3. Імпульс (MACD)
     macd_hist = df['MACDh_12_26_9']
     if len(macd_hist) >= 2:
         if macd_hist.iloc[-1] > macd_hist.iloc[-2]:
-            score += 20; reasons.append("Гістограма MACD росте (імпульс вгору)")
+            score += 15; reasons.append("Гістограма MACD росте (імпульс вгору)")
         elif macd_hist.iloc[-1] < macd_hist.iloc[-2]:
-            score -= 20; reasons.append("Гістограма MACD падає (імпульс вниз)")
+            score -= 15; reasons.append("Гістограма MACD падає (імпульс вниз)")
 
-    # Фактор 4: Хмара Ішимоку (Тренд)
+    # 4. Основний тренд (Ішимоку)
     tenkan, kijun = last.get('ITS_9'), last.get('IKS_26')
     senkou_a, senkou_b = last.get('ISA_9'), last.get('ISB_26')
     if pd.notna(senkou_a) and pd.notna(senkou_b):
         cloud_top, cloud_bottom = max(senkou_a, senkou_b), min(senkou_a, senkou_b)
-        if current_price > cloud_top: score += 15; reasons.append("Ціна над Хмарою Ішимоку (тренд вгору)")
-        elif current_price < cloud_bottom: score -= 15; reasons.append("Ціна під Хмарою Ішимоку (тренд вниз)")
-        if senkou_a > senkou_b: score += 5; reasons.append("Висхідна Хмара (бичачий прогноз)")
-        else: score -= 5; reasons.append("Низхідна Хмара (ведмежий прогноз)")
+        if current_price > cloud_top: score += 15; reasons.append("Тренд: Ціна над Хмарою Ішимоку")
+        elif current_price < cloud_bottom: score -= 15; reasons.append("Тренд: Ціна під Хмарою Ішимоку")
     if pd.notna(tenkan) and pd.notna(kijun):
-        if tenkan > kijun: score += 15; reasons.append("Золотий хрест Ішимоку (Tenkan > Kijun)")
-        else: score -= 15; reasons.append("Мертвий хрест Ішимоку (Tenkan < Kijun)")
+        if tenkan > kijun: score += 10; reasons.append("Тренд: Золотий хрест Ішимоку")
+        else: score -= 10; reasons.append("Тренд: Мертвий хрест Ішимоку")
             
-    # Інші фактори
-    if current_price > last['KAMA']: score += 5; reasons.append("Ціна вище KAMA(14)")
-    else: score -= 5; reasons.append("Ціна нижче KAMA(14)")
-    
+    # 5. Вторинні індикатори
     rsi = float(last['RSI'])
-    if rsi < 30: score += 15; reasons.append("RSI в зоні перепроданості (<30)")
-    elif rsi > 70: score -= 15; reasons.append("RSI в зоні перекупленості (>70)")
+    if rsi < 30: score += 10; reasons.append("RSI в зоні перепроданості (<30)")
+    elif rsi > 70: score -= 10; reasons.append("RSI в зоні перекупленості (>70)")
 
     bbl, bbu = last.get('BBL_20_2.0'), last.get('BBU_20_2.0')
     if pd.notna(bbl) and pd.notna(bbu):
-        if current_price <= bbl: score += 15; reasons.append("Ціна на нижній смузі Боллінджера")
-        elif current_price >= bbu: score -= 15; reasons.append("Ціна на верхній смузі Боллінджера")
+        if current_price <= bbl: score += 10; reasons.append("Ціна на нижній смузі Боллінджера")
+        elif current_price >= bbu: score -= 10; reasons.append("Ціна на верхній смузі Боллінджера")
 
     if "Аномально низький" in volume_info:
-        score = np.clip(score, 25, 75); reasons.append("Низький об'єм!")
+        score = np.clip(score, 30, 70); reasons.append("⚠️ Низький об'єм!")
         
     score = int(np.clip(score, 0, 100))
     
