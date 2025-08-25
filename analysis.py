@@ -177,10 +177,10 @@ def _calculate_core_signal(df, daily_df, current_price):
     df.ta.bbands(length=20, std=2, append=True)
     df.ta.ichimoku(append=True)
     df.ta.macd(append=True)
-    df.ta.adx(append=True) # <-- РОЗРАХОВУЄМО ADX
+    df.ta.adx(append=True)
 
     last = df.iloc[-1]
-    if pd.isna(last['RSI']) or pd.isna(last.get('ADX_14')): # Перевіряємо ADX
+    if pd.isna(last['RSI']) or pd.isna(last.get('ADX_14')):
         raise ValueError("Помилка розрахунку базових індикаторів")
 
     long_term_support, long_term_resistance = identify_support_resistance_levels(daily_df)
@@ -191,20 +191,14 @@ def _calculate_core_signal(df, daily_df, current_price):
     
     score = 50
     reasons = []
-    
-    # --- ПОЧАТОК ЗМІН: Додаємо фільтр "бокового" ринку ---
     special_warning = None
+    
     adx_value = last.get('ADX_14')
     if pd.notna(adx_value) and adx_value < 20:
         special_warning = "❗️❗️❗️ УВАГА: РИНОК \"БОКОВИЙ\" (ФЛЕТ) ❗️❗️❗️\nСигнали в такому ринку вкрай ненадійні."
-        score = 50 # Примусово нейтралізуємо сигнал
+        score = 50
         reasons.append("ADX < 20 (слабкий тренд)")
-    # --- КІНЕЦЬ ЗМІН ---
 
-    if candle_pattern:
-        if candle_pattern['type'] == 'bullish': score += 30; reasons.append(f"❗️Сильний бичачий патерн: {candle_pattern['name']}")
-        elif candle_pattern['type'] == 'bearish': score -= 30; reasons.append(f"❗️Сильний ведмежий патерн: {candle_pattern['name']}")
-    
     is_near_short_support = False
     if short_term_support:
         dist = min(abs(current_price - s) for s in short_term_support if s < current_price) if any(s < current_price for s in short_term_support) else float('inf')
@@ -215,13 +209,25 @@ def _calculate_core_signal(df, daily_df, current_price):
         dist = min(abs(current_price - r) for r in short_term_resistance if r > current_price) if any(r > current_price for r in short_term_resistance) else float('inf')
         if dist / current_price < 0.002: is_near_short_resistance = True
 
-    if is_near_short_support and is_near_short_resistance:
-        reasons.append("⚠️ Ціна затиснута між локальними S/R")
-    elif is_near_short_support: score += 25; reasons.append("Ціна на свіжому локальному рівні підтримки")
-    elif is_near_short_resistance: score -= 25; reasons.append("Ціна на свіжому локальному рівні опору")
+    # --- ПОЧАТОК ЗМІН: Нове правило "Битва за рівень" ---
+    if candle_pattern:
+        pattern_type = candle_pattern.get('type')
+        if (pattern_type == 'bullish' and is_near_short_resistance) or \
+           (pattern_type == 'bearish' and is_near_short_support):
+            reasons.append(f"❗️БИТВА ЗА РІВЕНЬ: Розворотний патерн ({candle_pattern['name']}) біля сильного локального рівня S/R.")
+            score = 50 # Нейтралізуємо сигнал у невизначеній ситуації
+        else:
+            if pattern_type == 'bullish': score += 30; reasons.append(f"Сильний бичачий патерн: {candle_pattern['name']}")
+            elif pattern_type == 'bearish': score -= 30; reasons.append(f"Сильний ведмежий патерн: {candle_pattern['name']}")
+    
+    if is_near_short_support and not is_near_short_resistance:
+        score += 25; reasons.append("Ціна на свіжому локальному рівні підтримки")
+    elif is_near_short_resistance and not is_near_short_support:
+        score -= 25; reasons.append("Ціна на свіжому локальному рівні опору")
+    # --- КІНЕЦЬ ЗМІН ---
     
     macd_hist = df['MACDh_12_26_9']
-    if len(macd_hist) >= 2:
+    if pd.notna(macd_hist.iloc[-1]) and len(macd_hist) >= 2 and pd.notna(macd_hist.iloc[-2]):
         if macd_hist.iloc[-1] > macd_hist.iloc[-2]: score += 15; reasons.append("Гістограма MACD росте (імпульс вгору)")
         elif macd_hist.iloc[-1] < macd_hist.iloc[-2]: score -= 15; reasons.append("Гістограма MACD падає (імпульс вниз)")
 
@@ -235,8 +241,9 @@ def _calculate_core_signal(df, daily_df, current_price):
         if tenkan > kijun: score += 10; reasons.append("Тренд: Золотий хрест Ішимоку")
         else: score -= 10; reasons.append("Тренд: Мертвий хрест Ішимоку")
             
-    if current_price > last['KAMA']: score += 5; reasons.append("Ціна вище KAMA(14)")
-    else: score -= 5; reasons.append("Ціна нижче KAMA(14)")
+    if pd.notna(last['KAMA']):
+        if current_price > last['KAMA']: score += 5; reasons.append("Ціна вище KAMA(14)")
+        else: score -= 5; reasons.append("Ціна нижче KAMA(14)")
     
     rsi = float(last['RSI'])
     bbl, bbu = last.get('BBL_20_2.0'), last.get('BBU_20_2.0')
@@ -272,7 +279,7 @@ def _calculate_core_signal(df, daily_df, current_price):
     return {
         "score": score, "reasons": reasons, "support": support, "resistance": resistance,
         "candle_pattern": candle_pattern, "volume_info": volume_info,
-        "special_warning": special_warning # <-- Повертаємо попередження
+        "special_warning": special_warning
     }
 
 def _generate_verdict(score):
@@ -296,12 +303,10 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int
             
             analysis = _calculate_core_signal(df, daily_df, current_price)
             
-            # --- ПОЧАТОК ЗМІН: Якщо є попередження, вердикт = Нейтральний ---
             if analysis.get("special_warning"):
                 verdict = "🟡 NEUTRAL"
             else:
                 verdict = _generate_verdict(analysis['score'])
-            # --- КІНЕЦЬ ЗМІН ---
 
             add_signal_to_history({
                 'user_id': user_id, 'pair': symbol, 
@@ -314,7 +319,7 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int
                 "resistance": analysis['resistance'], "bull_percentage": analysis['score'],
                 "bear_percentage": 100 - analysis['score'], "candle_pattern": analysis.get('candle_pattern'),
                 "volume_analysis": analysis.get('volume_info'),
-                "special_warning": analysis.get("special_warning") # <-- Додаємо у відповідь API
+                "special_warning": analysis.get("special_warning")
             }
             return response_data
             
