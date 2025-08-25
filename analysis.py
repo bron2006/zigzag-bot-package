@@ -117,35 +117,6 @@ def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: in
     deferred.addCallbacks(process_response, on_error)
     return d
 
-# --- ПОЧАТОК ЗМІН: Нова функція для розрахунку Pivot Points ---
-def calculate_pivot_points(daily_df):
-    """Розраховує класичні точки розвороту (Pivot Points) на основі даних попереднього дня."""
-    try:
-        if len(daily_df) < 2:
-            return {} # Потрібен хоча б один повний попередній день
-        
-        prev_day = daily_df.iloc[-2] # Беремо дані за вчора
-        high = prev_day['High']
-        low = prev_day['Low']
-        close = prev_day['Close']
-
-        pivot = (high + low + close) / 3
-        s1 = (2 * pivot) - high
-        r1 = (2 * pivot) - low
-        s2 = pivot - (high - low)
-        r2 = pivot + (high - low)
-        s3 = low - 2 * (high - pivot)
-        r3 = high + 2 * (pivot - low)
-
-        return {
-            "support": sorted([s1, s2, s3]),
-            "resistance": sorted([r1, r2, r3], reverse=True)
-        }
-    except Exception as e:
-        logger.error(f"Помилка розрахунку Pivot Points: {e}")
-        return {}
-# --- КІНЕЦЬ ЗМІН ---
-
 def group_close_values(values, threshold=0.01):
     if not len(values):
         return []
@@ -212,12 +183,6 @@ def _calculate_core_signal(df, daily_df, current_price):
     if pd.isna(last['RSI']) or pd.isna(last.get('ADX_14')):
         raise ValueError("Помилка розрахунку базових індикаторів")
 
-    # --- ПОЧАТОК ЗМІН: Інтегруємо Pivot Points ---
-    pivots = calculate_pivot_points(daily_df)
-    pivot_support = pivots.get("support", [])
-    pivot_resistance = pivots.get("resistance", [])
-    # --- КІНЕЦЬ ЗМІН ---
-
     long_term_support, long_term_resistance = identify_support_resistance_levels(daily_df)
     short_term_support, short_term_resistance = identify_support_resistance_levels(df, window=10)
 
@@ -243,51 +208,51 @@ def _calculate_core_signal(df, daily_df, current_price):
     if short_term_resistance:
         dist = min(abs(current_price - r) for r in short_term_resistance if r > current_price) if any(r > current_price for r in short_term_resistance) else float('inf')
         if dist / current_price < 0.002: is_near_short_resistance = True
-
-    if candle_pattern:
-        pattern_type = candle_pattern.get('type')
-        if (pattern_type == 'bullish' and is_near_short_resistance) or \
-           (pattern_type == 'bearish' and is_near_short_support):
-            reasons.append(f"❗️БИТВА ЗА РІВЕНЬ: Розворотний патерн ({candle_pattern['name']}) біля сильного локального рівня S/R.")
-            score = 50
-        else:
-            if pattern_type == 'bullish': score += 30; reasons.append(f"Сильний бичачий патерн: {candle_pattern['name']}")
-            elif pattern_type == 'bearish': score -= 30; reasons.append(f"Сильний ведмежий патерн: {candle_pattern['name']}")
     
-    if is_near_short_support and not is_near_short_resistance:
-        score += 25; reasons.append("Ціна на свіжому локальному рівні підтримки")
-    elif is_near_short_resistance and not is_near_short_support:
-        score -= 25; reasons.append("Ціна на свіжому локальному рівні опору")
-    
-    # --- ПОЧАТОК ЗМІН: Додаємо оцінку від Pivot Points ---
-    if pivot_support:
-        dist = min(abs(current_price - s) for s in pivot_support if s < current_price) if any(s < current_price for s in pivot_support) else float('inf')
-        if dist / current_price < 0.002:
-            score += 20; reasons.append("Ціна біля денного рівня підтримки (Pivot)")
-
-    if pivot_resistance:
-        dist = min(abs(current_price - r) for r in pivot_resistance if r > current_price) if any(r > current_price for r in pivot_resistance) else float('inf')
-        if dist / current_price < 0.002:
-            score -= 20; reasons.append("Ціна біля денного рівня опору (Pivot)")
-    # --- КІНЕЦЬ ЗМІН ---
-
-    main_trend_direction = 0
+    # --- ПОЧАТОК ЗМІН: Впроваджуємо "Право Вето" для свічкових патернів ---
     impulse_direction = 0
-
     macd_hist = df['MACDh_12_26_9']
     if pd.notna(macd_hist.iloc[-1]) and len(macd_hist) >= 2 and pd.notna(macd_hist.iloc[-2]):
         if macd_hist.iloc[-1] > macd_hist.iloc[-2]:
-            score += 25; reasons.append("Гістограма MACD росте (сильний імпульс вгору)"); impulse_direction = 1
+            impulse_direction = 1
         elif macd_hist.iloc[-1] < macd_hist.iloc[-2]:
-            score -= 25; reasons.append("Гістограма MACD падає (сильний імпульс вниз)"); impulse_direction = -1
+            impulse_direction = -1
 
+    if candle_pattern:
+        pattern_type = candle_pattern.get('type')
+        strong_patterns = {"BELTHOLD", "ENGULFING", "HARAMI", "3OUTSIDE"}
+        pattern_name = candle_pattern.get('name', '')
+
+        if pattern_name in strong_patterns:
+            if pattern_type == 'bullish':
+                score += 50; reasons.append(f"❗️Дуже сильний бичачий патерн: {pattern_name}")
+                # Якщо патерн сильний, він "перезаписує" імпульс
+                impulse_direction = 1 
+            elif pattern_type == 'bearish':
+                score -= 50; reasons.append(f"❗️Дуже сильний ведмежий патерн: {pattern_name}")
+                impulse_direction = -1
+        else: # Для слабших патернів
+            if pattern_type == 'bullish': score += 20; reasons.append(f"Бичачий патерн: {pattern_name}")
+            elif pattern_type == 'bearish': score -= 20; reasons.append(f"Ведмежий патерн: {pattern_name}")
+
+    if impulse_direction == 1:
+        score += 20; reasons.append("Імпульс MACD спрямований вгору")
+    elif impulse_direction == -1:
+        score -= 20; reasons.append("Імпульс MACD спрямований вниз")
+
+    if is_near_short_support: score += 25; reasons.append("Ціна на свіжому локальному рівні підтримки")
+    if is_near_short_resistance: score -= 25; reasons.append("Ціна на свіжому локальному рівні опору")
+    
+    # Решта індикаторів з меншою вагою
+    main_trend_direction = 0
+    tenkan, kijun = last.get('ITS_9'), last.get('IKS_26')
     senkou_a, senkou_b = last.get('ISA_9'), last.get('ISB_26')
     if pd.notna(senkou_a) and pd.notna(senkou_b):
         cloud_top, cloud_bottom = max(senkou_a, senkou_b), min(senkou_a, senkou_b)
         if current_price > cloud_top:
-            score += 15; reasons.append("Тренд: Ціна над Хмарою Ішимоку"); main_trend_direction = 1
+            score += 10; reasons.append("Тренд: Ціна над Хмарою Ішимоку"); main_trend_direction = 1
         elif current_price < cloud_bottom:
-            score -= 15; reasons.append("Тренд: Ціна під Хмарою Ішимоку"); main_trend_direction = -1
+            score -= 10; reasons.append("Тренд: Ціна під Хмарою Ішимоку"); main_trend_direction = -1
     
     if (main_trend_direction == 1 and impulse_direction == -1) or \
        (main_trend_direction == -1 and impulse_direction == 1):
@@ -322,8 +287,8 @@ def _calculate_core_signal(df, daily_df, current_price):
         
     score = int(np.clip(score, 0, 100))
     
-    all_support = sorted(long_term_support + short_term_support + pivot_support)
-    all_resistance = sorted(long_term_resistance + short_term_resistance + pivot_resistance, reverse=True)
+    all_support = sorted(long_term_support + short_term_support)
+    all_resistance = sorted(long_term_resistance + short_term_resistance)
     support_candidates = [s for s in all_support if s < current_price]
     support = max(support_candidates) if support_candidates else None
     resistance_candidates = [r for r in all_resistance if r > current_price]
@@ -334,11 +299,12 @@ def _calculate_core_signal(df, daily_df, current_price):
         "candle_pattern": candle_pattern, "volume_info": volume_info,
         "special_warning": special_warning
     }
+# --- КІНЕЦЬ ЗМІН ---
 
 def _generate_verdict(score):
-    if score > 65: return "⬆️ Strong BUY"
+    if score > 75: return "⬆️ Strong BUY" # Збільшуємо поріг для впевненості
     if score > 55: return "↗️ Moderate BUY"
-    if score < 35: return "⬇️ Strong SELL"
+    if score < 25: return "⬇️ Strong SELL" # Збільшуємо поріг для впевненості
     if score < 45: return "↘️ Moderate SELL"
     return "🟡 NEUTRAL"
 
