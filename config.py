@@ -5,16 +5,13 @@ from pathlib import Path
 
 load_dotenv()
 
-# --- ПОЧАТОК ЗМІН: Додаємо тестовий ID для режиму розробника ---
 IS_DEV_MODE = os.getenv("NORD", "off").lower() == "on"
-DEV_USER_ID = 123456789 # Ваш фіксований ID для тестів в браузері
-# --- КІНЕЦЬ ЗМІН ---
+DEV_USER_ID = 123456789
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 if not TELEGRAM_BOT_TOKEN:
     raise RuntimeError("CRITICAL: TELEGRAM_BOT_TOKEN is not set in the environment!")
 
-# ... (решта файлу без змін) ...
 DB_NAME = os.getenv("DB_NAME", "/data/signals.db")
 DB_PATH = Path(os.getenv("DB_PATH", DB_NAME))
 
@@ -35,6 +32,12 @@ def get_demo_account_id() -> int:
     return int(account_id_str) if account_id_str else None
 
 def get_fly_app_name() -> str: return os.getenv("FLY_APP_NAME")
+
+# --- ПОЧАТОК ЗМІН: Додаємо функцію для ключа Finnhub ---
+def get_finnhub_api_key() -> str:
+    """Отримує ключ API для Finnhub зі змінних середовища."""
+    return os.getenv("FINNHUB_API_KEY")
+# --- КІНЕЦЬ ЗМІН ---
 
 def load_assets_from_json():
     try:
