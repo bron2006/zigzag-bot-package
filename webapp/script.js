@@ -65,36 +65,32 @@ document.addEventListener('DOMContentLoaded', function() {
         });
 });
 
-// --- ПОЧАТОК ЗМІН: Виправляємо логіку відображення обраного ---
 function renderFavoriteButton(pair) {
-    // Нормалізуємо пару, щоб порівнювати "EUR/USD" з "EURUSD"
     const pairNormalized = pair.replace(/\//g, '');
     const isFavorite = currentWatchlist.includes(pairNormalized);
     const icon = isFavorite ? '✅' : '⭐';
-    // Передаємо в toggleFavorite оригінальну назву пари
     return `<button class="fav-btn" onclick="toggleFavorite(event, '${pair}')">${icon}</button>`;
 }
-// --- КІНЕЦЬ ЗМІН ---
 
 function toggleFavorite(event, pair) {
     event.stopPropagation();
     const button = event.currentTarget;
-    const isCurrentlyFavorite = button.innerHTML.includes('✅'); // Перевіряємо по іконці
+    const isCurrentlyFavorite = button.innerHTML.includes('✅');
 
     const url = `${API_BASE_URL}/api/toggle_watchlist?pair=${pair}&initData=${encodeURIComponent(initData)}`;
     
-    // Оптимістичне оновлення UI
     button.innerHTML = isCurrentlyFavorite ? '⭐' : '✅';
 
     fetch(url)
-        .then(res => res.json())
+        .then(res => {
+            if (res.status === 401) { throw new Error("Unauthorized"); }
+            return res.json();
+        })
         .then(data => {
             if (!data.success) {
-                // Якщо помилка, повертаємо стару іконку
                 button.innerHTML = isCurrentlyFavorite ? '✅' : '⭐';
                 alert("Не вдалося оновити список обраного.");
             } else {
-                // Оновлюємо локальний кеш списку
                 const pairNormalized = pair.replace(/\//g, '');
                 if (isCurrentlyFavorite) {
                     currentWatchlist = currentWatchlist.filter(p => p !== pairNormalized);
@@ -104,9 +100,8 @@ function toggleFavorite(event, pair) {
             }
         })
         .catch(err => {
-            // Якщо помилка мережі, повертаємо стару іконку
             button.innerHTML = isCurrentlyFavorite ? '✅' : '⭐';
-            alert("Помилка мережі при оновленні списку обраного.");
+            alert(`Помилка мережі при оновленні списку обраного: ${err.message}`);
             console.error(err);
         });
 }
@@ -130,11 +125,22 @@ function populateLists(staticData) {
         return sectionHtml;
     }
 
-    html += createSection('⭐ Обране', staticData.watchlist.map(p => {
-        // Конвертуємо EURUSD назад в EUR/USD для відображення, якщо потрібно
-        const forexPair = FOREX_SESSIONS.flat().find(fp => fp.replace('/', '') === p);
-        return forexPair || p;
-    }));
+    // --- ПОЧАТОК ЗМІН: Виправлена логіка для відображення "Обраного" ---
+    const allPairs = [
+        ...Object.values(staticData.forex || {}).flat(),
+        ...(staticData.crypto || []),
+        ...(staticData.stocks || []),
+        ...(staticData.commodities || [])
+    ];
+
+    const watchlistDisplay = (staticData.watchlist || []).map(p_normalized => {
+        const originalPair = allPairs.find(p_display => p_display.replace(/\//g, '') === p_normalized);
+        return originalPair || p_normalized;
+    });
+
+    html += createSection('⭐ Обране', watchlistDisplay);
+    // --- КІНЕЦЬ ЗМІН ---
+
     html += createSection('💎 Уся криптовалюта', staticData.crypto || []);
     
     if (staticData.forex && typeof staticData.forex === 'object') {
@@ -224,20 +230,24 @@ function fetchSignal(pair) {
 
 function drawChart(pair, history) {
     if (!window.Plotly) return;
-    const trace = {
-        x: history.dates, close: history.close, high: history.high,
-        low: history.low, open: history.open, type: 'candlestick',
-        increasing: { line: { color: '#26a69a' } },
-        decreasing: { line: { color: '#ef5350' } }
-    };
-    const layout = {
-        paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
-        font: { color: tg.themeParams.text_color || '#fff' },
-        xaxis: { rangeslider: { visible: false }, showgrid: false },
-        yaxis: { showgrid: false },
-        margin: { l: 35, r: 35, b: 35, t: 35 }
-    };
-    Plotly.newPlot('chart', [trace], layout);
+    try {
+        const trace = {
+            x: history.dates, close: history.close, high: history.high,
+            low: history.low, open: history.open, type: 'candlestick',
+            increasing: { line: { color: '#26a69a' } },
+            decreasing: { line: { color: '#ef5350' } }
+        };
+        const layout = {
+            paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
+            font: { color: tg.themeParams.text_color || '#fff' },
+            xaxis: { rangeslider: { visible: false }, showgrid: false },
+            yaxis: { showgrid: false },
+            margin: { l: 35, r: 35, b: 35, t: 35 }
+        };
+        Plotly.newPlot('chart', [trace], layout);
+    } catch(e) {
+        console.error("Error drawing chart:", e);
+    }
 }
 
 function showLoader(visible) {
