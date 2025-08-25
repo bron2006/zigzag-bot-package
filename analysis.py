@@ -171,54 +171,53 @@ def analyze_volume(df):
         return "🧊 Аномально низький об'єм"
     return "Об'єм нейтральний"
 
+# --- ПОЧАТОК ЗМІН: Реалізуємо дворівневий аналіз S/R ---
 def _calculate_core_signal(df, daily_df, current_price):
-    # --- ПОЧАТОК ЗМІН: Додаємо розрахунок MACD ---
     df.ta.rsi(length=14, append=True, col_names=('RSI',))
     df.ta.kama(length=14, append=True, col_names=('KAMA',))
     df.ta.bbands(length=20, std=2, append=True)
     df.ta.ichimoku(append=True)
-    df.ta.macd(append=True) # Розраховуємо MACD
-    # --- КІНЕЦЬ ЗМІН ---
+    df.ta.macd(append=True)
 
     last = df.iloc[-1]
-    # Перевіряємо, чи є достатньо даних для MACD
     if pd.isna(last['RSI']) or pd.isna(last['KAMA']) or pd.isna(last.get('MACDh_12_26_9')):
         raise ValueError("Помилка розрахунку базових індикаторів")
 
-    support_levels, resistance_levels = identify_support_resistance_levels(daily_df)
+    # Рівень 1: Глобальні (денні) рівні S/R
+    long_term_support, long_term_resistance = identify_support_resistance_levels(daily_df)
+    # Рівень 2: Локальні (свіжі) рівні S/R з поточного таймфрейму
+    short_term_support, short_term_resistance = identify_support_resistance_levels(df, window=10) # Менше вікно для чутливості
+
     candle_pattern = analyze_candle_patterns(df)
     volume_info = analyze_volume(df)
     
     score = 50
     reasons = []
+
+    # Фактор 1 (високий пріоритет): Локальні рівні S/R
+    if short_term_support:
+        dist = min(abs(current_price - s) for s in short_term_support)
+        if dist / current_price < 0.002: # Дуже вузький допуск
+            score += 25; reasons.append("❗️Ціна на свіжому локальному рівні підтримки")
+            
+    if short_term_resistance:
+        dist = min(abs(current_price - r) for r in short_term_resistance)
+        if dist / current_price < 0.002:
+            score -= 25; reasons.append("❗️Ціна на свіжому локальному рівні опору")
     
-    # Фактор 1: KAMA
-    if current_price > last['KAMA']: score += 10; reasons.append("Ціна вище KAMA(14)")
-    else: score -= 10; reasons.append("Ціна нижче KAMA(14)")
-    
-    # Фактор 2: RSI
-    rsi = float(last['RSI'])
-    if rsi < 30: score += 15; reasons.append("RSI в зоні перепроданості (<30)")
-    elif rsi > 70: score -= 15; reasons.append("RSI в зоні перекупленості (>70)")
+    # Фактор 2: MACD
+    macd_hist = df['MACDh_12_26_9']
+    if len(macd_hist) >= 2:
+        if macd_hist.iloc[-1] > macd_hist.iloc[-2]:
+            score += 15; reasons.append("Гістограма MACD росте (імпульс вгору)")
+        elif macd_hist.iloc[-1] < macd_hist.iloc[-2]:
+            score -= 15; reasons.append("Гістограма MACD падає (імпульс вниз)")
 
-    # Фактор 3: Смуги Боллінджера
-    bbl = last.get('BBL_20_2.0')
-    bbu = last.get('BBU_20_2.0')
-    if pd.notna(bbl) and pd.notna(bbu):
-        if current_price <= bbl:
-            score += 15; reasons.append("Ціна на нижній смузі Боллінджера")
-        elif current_price >= bbu:
-            score -= 15; reasons.append("Ціна на верхній смузі Боллінджера")
-
-    # Фактор 4: Хмара Ішимоку
-    tenkan = last.get('ITS_9')
-    kijun = last.get('IKS_26')
-    senkou_a = last.get('ISA_9')
-    senkou_b = last.get('ISB_26')
-
+    # Фактор 3: Хмара Ішимоку
+    tenkan, kijun = last.get('ITS_9'), last.get('IKS_26')
+    senkou_a, senkou_b = last.get('ISA_9'), last.get('ISB_26')
     if pd.notna(senkou_a) and pd.notna(senkou_b):
-        cloud_top = max(senkou_a, senkou_b)
-        cloud_bottom = min(senkou_a, senkou_b)
+        cloud_top, cloud_bottom = max(senkou_a, senkou_b), min(senkou_a, senkou_b)
         if current_price > cloud_top:
             score += 20; reasons.append("Ціна над Хмарою Ішимоку (сильний тренд вгору)")
         elif current_price < cloud_bottom:
@@ -227,48 +226,39 @@ def _calculate_core_signal(df, daily_df, current_price):
             score += 5; reasons.append("Висхідна Хмара (бичачий прогноз)")
         else:
             score -= 5; reasons.append("Низхідна Хмара (ведмежий прогноз)")
-
     if pd.notna(tenkan) and pd.notna(kijun):
-        if tenkan > kijun:
-            score += 10; reasons.append("Золотий хрест Ішимоку (Tenkan > Kijun)")
-        else:
-            score -= 10; reasons.append("Мертвий хрест Ішимоку (Tenkan < Kijun)")
+        if tenkan > kijun: score += 10; reasons.append("Золотий хрест Ішимоку (Tenkan > Kijun)")
+        else: score -= 10; reasons.append("Мертвий хрест Ішимоку (Tenkan < Kijun)")
+            
+    # Інші фактори
+    if current_price > last['KAMA']: score += 10; reasons.append("Ціна вище KAMA(14)")
+    else: score -= 10; reasons.append("Ціна нижче KAMA(14)")
     
-    # --- ПОЧАТОК ЗМІН: Додаємо новий Фактор 5: MACD ---
-    macd_hist = df['MACDh_12_26_9']
-    if len(macd_hist) >= 2:
-        # Порівнюємо дві останні колонки гістограми, щоб знайти напрямок
-        if macd_hist.iloc[-1] > macd_hist.iloc[-2]:
-            score += 15
-            reasons.append("Гістограма MACD росте (імпульс вгору)")
-        elif macd_hist.iloc[-1] < macd_hist.iloc[-2]:
-            score -= 15
-            reasons.append("Гістограма MACD падає (імпульс вниз)")
-    # --- КІНЕЦЬ ЗМІН ---
-            
-    # Фактор 6: Рівні підтримки/опору
-    if support_levels:
-        dist_to_support = min(abs(current_price - sl) for sl in support_levels)
-        if dist_to_support / current_price < 0.003:
-            score += 15; reasons.append("Ціна ДУЖЕ близько до підтримки")
-            
-    if resistance_levels:
-        dist_to_resistance = min(abs(current_price - rl) for rl in resistance_levels)
-        if dist_to_resistance / current_price < 0.003:
-            score -= 15; reasons.append("Ціна ДУЖЕ близько до опору")
-            
-    # Фактор 7: Об'єм
+    rsi = float(last['RSI'])
+    if rsi < 30: score += 15; reasons.append("RSI в зоні перепроданості (<30)")
+    elif rsi > 70: score -= 15; reasons.append("RSI в зоні перекупленості (>70)")
+
+    bbl, bbu = last.get('BBL_20_2.0'), last.get('BBU_20_2.0')
+    if pd.notna(bbl) and pd.notna(bbu):
+        if current_price <= bbl: score += 15; reasons.append("Ціна на нижній смузі Боллінджера")
+        elif current_price >= bbu: score -= 15; reasons.append("Ціна на верхній смузі Боллінджера")
+
     if "Аномально низький" in volume_info:
         score = np.clip(score, 25, 75); reasons.append("Низький об'єм!")
         
     score = int(np.clip(score, 0, 100))
-    support = min(support_levels, key=lambda x: abs(x - current_price)) if support_levels else None
-    resistance = min(resistance_levels, key=lambda x: abs(x - current_price)) if resistance_levels else None
+    
+    # Повертаємо найближчий з усіх рівнів
+    all_support = sorted(long_term_support + short_term_support)
+    all_resistance = sorted(long_term_resistance + short_term_resistance, reverse=True)
+    support = min(all_support, key=lambda x: abs(x - current_price)) if all_support else None
+    resistance = min(all_resistance, key=lambda x: abs(x - current_price)) if all_resistance else None
     
     return {
         "score": score, "reasons": reasons, "support": support, "resistance": resistance,
         "candle_pattern": candle_pattern, "volume_info": volume_info
     }
+# --- КІНЕЦЬ ЗМІН ---
 
 def _generate_verdict(score):
     if score > 65: return "⬆️ Strong BUY"
