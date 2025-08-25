@@ -191,24 +191,10 @@ def _calculate_core_signal(df, daily_df, current_price):
     score = 50
     reasons = []
 
-    # --- ПОЧАТОК ЗМІН: Реалізація "Фільтра Тренду" ---
-
-    # 1. Визначаємо основний тренд за Хмарою Ішимоку
-    main_trend = "NEUTRAL"
-    senkou_a, senkou_b = last.get('ISA_9'), last.get('ISB_26')
-    if pd.notna(senkou_a) and pd.notna(senkou_b):
-        cloud_top, cloud_bottom = max(senkou_a, senkou_b), min(senkou_a, senkou_b)
-        if current_price > cloud_top:
-            main_trend = "UP"
-        elif current_price < cloud_bottom:
-            main_trend = "DOWN"
-
-    # 2. Розраховуємо базовий score, як і раніше
+    # --- Нова логіка оцінки з пріоритетами ---
     if candle_pattern:
-        if candle_pattern['type'] == 'bullish':
-            score += 30; reasons.append(f"❗️Сильний бичачий патерн: {candle_pattern['name']}")
-        elif candle_pattern['type'] == 'bearish':
-            score -= 30; reasons.append(f"❗️Сильний ведмежий патерн: {candle_pattern['name']}")
+        if candle_pattern['type'] == 'bullish': score += 30; reasons.append(f"❗️Сильний бичачий патерн: {candle_pattern['name']}")
+        elif candle_pattern['type'] == 'bearish': score -= 30; reasons.append(f"❗️Сильний ведмежий патерн: {candle_pattern['name']}")
     
     is_near_short_support = False
     if short_term_support:
@@ -222,46 +208,50 @@ def _calculate_core_signal(df, daily_df, current_price):
 
     if is_near_short_support and is_near_short_resistance:
         reasons.append("⚠️ Ціна затиснута між локальними S/R")
-    elif is_near_short_support:
-        score += 25; reasons.append("Ціна на свіжому локальному рівні підтримки")
-    elif is_near_short_resistance:
-        score -= 25; reasons.append("Ціна на свіжому локальному рівні опору")
+    elif is_near_short_support: score += 25; reasons.append("Ціна на свіжому локальному рівні підтримки")
+    elif is_near_short_resistance: score -= 25; reasons.append("Ціна на свіжому локальному рівні опору")
     
     macd_hist = df['MACDh_12_26_9']
     if len(macd_hist) >= 2:
-        if macd_hist.iloc[-1] > macd_hist.iloc[-2]:
-            score += 15; reasons.append("Гістограма MACD росте (імпульс вгору)")
-        elif macd_hist.iloc[-1] < macd_hist.iloc[-2]:
-            score -= 15; reasons.append("Гістограма MACD падає (імпульс вниз)")
+        if macd_hist.iloc[-1] > macd_hist.iloc[-2]: score += 15; reasons.append("Гістограма MACD росте (імпульс вгору)")
+        elif macd_hist.iloc[-1] < macd_hist.iloc[-2]: score -= 15; reasons.append("Гістограма MACD падає (імпульс вниз)")
 
+    tenkan, kijun = last.get('ITS_9'), last.get('IKS_26')
+    senkou_a, senkou_b = last.get('ISA_9'), last.get('ISB_26')
     if pd.notna(senkou_a) and pd.notna(senkou_b):
-        if senkou_a > senkou_b: score += 5; reasons.append("Висхідна Хмара (бичачий прогноз)")
-        else: score -= 5; reasons.append("Низхідна Хмара (ведмежий прогноз)")
-
-    # 3. Застосовуємо Фільтр Тренду
-    if main_trend == "UP" and score < 50:
-        reasons.append("⚠️ Сигнал на продаж ІГНОРУЄТЬСЯ (основний тренд висхідний)")
-        score = 50 # Нейтралізуємо контртрендовий сигнал
-        
-    if main_trend == "DOWN" and score > 50:
-        reasons.append("⚠️ Сигнал на покупку ІГНОРУЄТЬСЯ (основний тренд низхідний)")
-        score = 50 # Нейтралізуємо контртрендовий сигнал
-
-    # Додаємо решту індикаторів (їх вплив буде меншим через фільтр)
+        cloud_top, cloud_bottom = max(senkou_a, senkou_b), min(senkou_a, senkou_b)
+        if current_price > cloud_top: score += 15; reasons.append("Тренд: Ціна над Хмарою Ішимоку")
+        elif current_price < cloud_bottom: score -= 15; reasons.append("Тренд: Ціна під Хмарою Ішимоку")
+    if pd.notna(tenkan) and pd.notna(kijun):
+        if tenkan > kijun: score += 10; reasons.append("Тренд: Золотий хрест Ішимоку")
+        else: score -= 10; reasons.append("Тренд: Мертвий хрест Ішимоку")
+            
     if current_price > last['KAMA']: score += 5; reasons.append("Ціна вище KAMA(14)")
     else: score -= 5; reasons.append("Ціна нижче KAMA(14)")
     
     rsi = float(last['RSI'])
+    bbl, bbu = last.get('BBL_20_2.0'), last.get('BBU_20_2.0')
+    is_on_bbl = pd.notna(bbl) and current_price <= bbl
+    is_on_bbu = pd.notna(bbu) and current_price >= bbu
+
     if rsi < 30: score += 10; reasons.append("RSI в зоні перепроданості (<30)")
     elif rsi > 70: score -= 10; reasons.append("RSI в зоні перекупленості (>70)")
 
-    bbl, bbu = last.get('BBL_20_2.0'), last.get('BBU_20_2.0')
-    if pd.notna(bbl) and pd.notna(bbu):
-        if current_price <= bbl: score += 10; reasons.append("Ціна на нижній смузі Боллінджера")
-        elif current_price >= bbu: score -= 10; reasons.append("Ціна на верхній смузі Боллінджера")
+    if is_on_bbl: score += 10; reasons.append("Ціна на нижній смузі Боллінджера")
+    elif is_on_bbu: score -= 10; reasons.append("Ціна на верхній смузі Боллінджера")
 
     if "Аномально низький" in volume_info:
         score = np.clip(score, 30, 70); reasons.append("⚠️ Низький об'єм!")
+        
+    # --- ПОЧАТОК ЗМІН: Фінальний "Стоп-кран" / Conflict Resolver ---
+    if score < 40 and (rsi < 30 or is_on_bbl):
+        reasons.append("❗️КОНФЛІКТ: Сигнал на продаж при перепроданості ринку!")
+        score = 50 # Нейтралізація сигналу
+
+    if score > 60 and (rsi > 70 or is_on_bbu):
+        reasons.append("❗️КОНФЛІКТ: Сигнал на покупку при перекупленості ринку!")
+        score = 50 # Нейтралізація сигналу
+    # --- КІНЕЦЬ ЗМІН ---
         
     score = int(np.clip(score, 0, 100))
     
@@ -276,7 +266,6 @@ def _calculate_core_signal(df, daily_df, current_price):
         "score": score, "reasons": reasons, "support": support, "resistance": resistance,
         "candle_pattern": candle_pattern, "volume_info": volume_info
     }
-# --- КІНЕЦЬ ЗМІН ---
 
 def _generate_verdict(score):
     if score > 65: return "⬆️ Strong BUY"
