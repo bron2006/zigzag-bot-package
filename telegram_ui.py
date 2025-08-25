@@ -71,12 +71,21 @@ def menu(update: Update, context: CallbackContext) -> None:
 def reset_ui(update: Update, context: CallbackContext) -> None:
     update.message.reply_text(f"Невідома команда: '{update.message.text}'. Використовуйте кнопки.", reply_markup=get_reply_keyboard())
 
-# --- ПОЧАТОК ЗМІН: Додаємо відображення попередження ---
+# --- ПОЧАТОК ЗМІН: Оновлюємо форматування звіту ---
 def _format_signal_message(result: dict, timeframe: str) -> str:
     if result.get("error"): return f"❌ Помилка аналізу: {result['error']}"
 
+    # Визначаємо рівень впевненості на основі score
+    score = result.get('bull_percentage', 50)
+    confidence_text = ""
+    if score > 75 or score < 25:
+        confidence_text = "Висока"
+    elif score > 55 or score < 45:
+        confidence_text = "Помірна (є суперечливі фактори)"
+    else:
+        confidence_text = "Низька (ринок невизначений)"
+
     message = ""
-    # Показуємо спеціальне попередження НАЙПЕРШИМ
     if result.get("special_warning"):
         message += f"**{result['special_warning']}**\n\n"
 
@@ -92,8 +101,9 @@ def _format_signal_message(result: dict, timeframe: str) -> str:
     price_str = f"{price:.5f}" if price else "N/A"
     message += f"📈 **Аналіз для {pair} ({timeframe})**\n\n"
     message += f"**Сигнал:** {verdict}\n"
+    message += f"**Впевненість:** {confidence_text}\n" # <-- НОВИЙ РЯДОК
     message += f"**Поточна ціна:** `{price_str}`\n\n"
-    message += f"**Баланс сил:**\n🐂 Бики: {result.get('bull_percentage', 0)}% ⬆️ | 🐃 Ведмеді: {result.get('bear_percentage', 100)}% ⬇️\n\n"
+    message += f"**Баланс сил:**\n🐂 Бики: {score}% ⬆️ | 🐃 Ведмеді: {100-score}% ⬇️\n\n"
 
     if candle_pattern and candle_pattern.get('text'):
         message += f"**🕯️ Свічковий патерн:**\n{candle_pattern['text']}\n\n"
@@ -108,7 +118,7 @@ def _format_signal_message(result: dict, timeframe: str) -> str:
         message += f"**📊 Аналіз об'єму:**\n{volume_analysis}\n\n"
 
     if reasons:
-        message += "📑 **Фактори аналізу:**\n"
+        message += "📑 **Ключові фактори аналізу:**\n"
         for reason in reasons: message += f"    - {reason}\n"
         
     return message
