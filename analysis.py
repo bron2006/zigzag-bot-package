@@ -171,6 +171,7 @@ def analyze_volume(df):
         return "🧊 Аномально низький об'єм"
     return "Об'єм нейтральний"
 
+# --- ПОЧАТОК ЗМІН: Фінальна версія з ієрархічною логікою ---
 def _calculate_core_signal(df, daily_df, current_price):
     df.ta.rsi(length=14, append=True, col_names=('RSI',))
     df.ta.kama(length=14, append=True, col_names=('KAMA',))
@@ -192,7 +193,8 @@ def _calculate_core_signal(df, daily_df, current_price):
     score = 50
     reasons = []
     special_warning = None
-    
+
+    # КРОК 1: Перевірка на "боковий" ринок (найвищий пріоритет)
     adx_value = last.get('ADX_14')
     if pd.notna(adx_value) and adx_value < 20:
         special_warning = "❗️❗️❗️ УВАГА: РИНОК \"БОКОВИЙ\" (ФЛЕТ) ❗️❗️❗️\nСигнали в такому ринку вкрай ненадійні."
@@ -208,83 +210,62 @@ def _calculate_core_signal(df, daily_df, current_price):
     if short_term_resistance:
         dist = min(abs(current_price - r) for r in short_term_resistance if r > current_price) if any(r > current_price for r in short_term_resistance) else float('inf')
         if dist / current_price < 0.002: is_near_short_resistance = True
-    
-    # --- ПОЧАТОК ЗМІН: Впроваджуємо "Право Вето" для свічкових патернів ---
-    impulse_direction = 0
-    macd_hist = df['MACDh_12_26_9']
-    if pd.notna(macd_hist.iloc[-1]) and len(macd_hist) >= 2 and pd.notna(macd_hist.iloc[-2]):
-        if macd_hist.iloc[-1] > macd_hist.iloc[-2]:
-            impulse_direction = 1
-        elif macd_hist.iloc[-1] < macd_hist.iloc[-2]:
-            impulse_direction = -1
 
-    if candle_pattern:
-        pattern_type = candle_pattern.get('type')
-        strong_patterns = {"BELTHOLD", "ENGULFING", "HARAMI", "3OUTSIDE"}
-        pattern_name = candle_pattern.get('name', '')
-
-        if pattern_name in strong_patterns:
-            if pattern_type == 'bullish':
-                score += 50; reasons.append(f"❗️Дуже сильний бичачий патерн: {pattern_name}")
-                # Якщо патерн сильний, він "перезаписує" імпульс
-                impulse_direction = 1 
-            elif pattern_type == 'bearish':
-                score -= 50; reasons.append(f"❗️Дуже сильний ведмежий патерн: {pattern_name}")
-                impulse_direction = -1
-        else: # Для слабших патернів
-            if pattern_type == 'bullish': score += 20; reasons.append(f"Бичачий патерн: {pattern_name}")
-            elif pattern_type == 'bearish': score -= 20; reasons.append(f"Ведмежий патерн: {pattern_name}")
-
-    if impulse_direction == 1:
-        score += 20; reasons.append("Імпульс MACD спрямований вгору")
-    elif impulse_direction == -1:
-        score -= 20; reasons.append("Імпульс MACD спрямований вниз")
-
-    if is_near_short_support: score += 25; reasons.append("Ціна на свіжому локальному рівні підтримки")
-    if is_near_short_resistance: score -= 25; reasons.append("Ціна на свіжому локальному рівні опору")
-    
-    # Решта індикаторів з меншою вагою
-    main_trend_direction = 0
-    tenkan, kijun = last.get('ITS_9'), last.get('IKS_26')
-    senkou_a, senkou_b = last.get('ISA_9'), last.get('ISB_26')
-    if pd.notna(senkou_a) and pd.notna(senkou_b):
-        cloud_top, cloud_bottom = max(senkou_a, senkou_b), min(senkou_a, senkou_b)
-        if current_price > cloud_top:
-            score += 10; reasons.append("Тренд: Ціна над Хмарою Ішимоку"); main_trend_direction = 1
-        elif current_price < cloud_bottom:
-            score -= 10; reasons.append("Тренд: Ціна під Хмарою Ішимоку"); main_trend_direction = -1
-    
-    if (main_trend_direction == 1 and impulse_direction == -1) or \
-       (main_trend_direction == -1 and impulse_direction == 1):
-        reasons.append("⚠️ КОНФЛІКТ: Імпульс (MACD) рухається проти основного тренду!")
+    if is_near_short_support and is_near_short_resistance:
+        reasons = ["❗️КОНФЛІКТ: Ціна затиснута у вузькому коридорі S/R (флет)."]
         score = 50
-            
-    if pd.notna(last['KAMA']):
-        if current_price > last['KAMA']: score += 5; reasons.append("Ціна вище KAMA(14)")
-        else: score -= 5; reasons.append("Ціна нижче KAMA(14)")
-    
-    rsi = float(last['RSI'])
-    bbl, bbu = last.get('BBL_20_2.0'), last.get('BBU_20_2.0')
-    is_on_bbl = pd.notna(bbl) and current_price <= bbl
-    is_on_bbu = pd.notna(bbu) and current_price >= bbu
 
-    if rsi < 30: score += 10; reasons.append("RSI в зоні перепроданості (<30)")
-    elif rsi > 70: score -= 10; reasons.append("RSI в зоні перекупленості (>70)")
+    # КРОК 2: Розрахунок основного сигналу, якщо ринок не "боковий"
+    if not special_warning and not (is_near_short_support and is_near_short_resistance):
+        # 2.1. Сигнали розвороту (високий пріоритет)
+        if candle_pattern:
+            pattern_type = candle_pattern.get('type')
+            strong_patterns = {"BELTHOLD", "ENGULFING", "HARAMI", "3OUTSIDE"}
+            pattern_name = candle_pattern.get('name', '')
+            if pattern_name in strong_patterns:
+                if pattern_type == 'bullish': score += 40; reasons.append(f"❗️Дуже сильний бичачий патерн: {pattern_name}")
+                elif pattern_type == 'bearish': score -= 40; reasons.append(f"❗️Дуже сильний ведмежий патерн: {pattern_name}")
 
-    if is_on_bbl: score += 10; reasons.append("Ціна на нижній смузі Боллінджера")
-    elif is_on_bbu: score -= 10; reasons.append("Ціна на верхній смузі Боллінджера")
-
-    if "Аномально низький" in volume_info:
-        score = np.clip(score, 30, 70); reasons.append("⚠️ Низький об'єм!")
+        if is_near_short_support: score += 25; reasons.append("Ціна на свіжому локальному рівні підтримки")
+        if is_near_short_resistance: score -= 25; reasons.append("Ціна на свіжому локальному рівні опору")
         
-    if score < 40 and (rsi < 30 or is_on_bbl):
-        reasons.append("❗️КОНФЛІКТ: Сигнал на продаж при перепроданості ринку!")
-        score = 50
+        # 2.2. Імпульс (MACD)
+        main_trend_direction, impulse_direction = 0, 0
+        macd_hist = df['MACDh_12_26_9']
+        if pd.notna(macd_hist.iloc[-1]) and len(macd_hist) >= 2 and pd.notna(macd_hist.iloc[-2]):
+            if macd_hist.iloc[-1] > macd_hist.iloc[-2]:
+                score += 20; reasons.append("Імпульс MACD спрямований вгору"); impulse_direction = 1
+            elif macd_hist.iloc[-1] < macd_hist.iloc[-2]:
+                score -= 20; reasons.append("Імпульс MACD спрямований вниз"); impulse_direction = -1
 
-    if score > 60 and (rsi > 70 or is_on_bbu):
-        reasons.append("❗️КОНФЛІКТ: Сигнал на покупку при перекупленості ринку!")
-        score = 50
+        # 2.3. Основний тренд (Ішимоку) - менший вплив
+        senkou_a, senkou_b = last.get('ISA_9'), last.get('ISB_26')
+        if pd.notna(senkou_a) and pd.notna(senkou_b):
+            cloud_top, cloud_bottom = max(senkou_a, senkou_b), min(senkou_a, senkou_b)
+            if current_price > cloud_top:
+                score += 10; reasons.append("Тренд: Ціна над Хмарою Ішимоку"); main_trend_direction = 1
+            elif current_price < cloud_bottom:
+                score -= 10; reasons.append("Тренд: Ціна під Хмарою Ішимоку"); main_trend_direction = -1
         
+        # 2.4. Фінальні фільтри-конфлікти
+        if (main_trend_direction == 1 and impulse_direction == -1) or \
+           (main_trend_direction == -1 and impulse_direction == 1):
+            reasons.append("⚠️ КОНФЛІКТ: Імпульс (MACD) рухається проти основного тренду!")
+            score = 50
+        
+        rsi = float(last['RSI'])
+        bbl, bbu = last.get('BBL_20_2.0'), last.get('BBU_20_2.0')
+        is_on_bbl = pd.notna(bbl) and current_price <= bbl
+        is_on_bbu = pd.notna(bbu) and current_price >= bbu
+
+        if score < 40 and (rsi < 30 or is_on_bbl):
+            reasons.append("❗️КОНФЛІКТ: Сигнал на продаж при перепроданості ринку!")
+            score = 50
+
+        if score > 60 and (rsi > 70 or is_on_bbu):
+            reasons.append("❗️КОНФЛІКТ: Сигнал на покупку при перекупленості ринку!")
+            score = 50
+
     score = int(np.clip(score, 0, 100))
     
     all_support = sorted(long_term_support + short_term_support)
@@ -302,9 +283,9 @@ def _calculate_core_signal(df, daily_df, current_price):
 # --- КІНЕЦЬ ЗМІН ---
 
 def _generate_verdict(score):
-    if score > 75: return "⬆️ Strong BUY" # Збільшуємо поріг для впевненості
+    if score > 75: return "⬆️ Strong BUY"
     if score > 55: return "↗️ Moderate BUY"
-    if score < 25: return "⬇️ Strong SELL" # Збільшуємо поріг для впевненості
+    if score < 25: return "⬇️ Strong SELL"
     if score < 45: return "↘️ Moderate SELL"
     return "🟡 NEUTRAL"
 
