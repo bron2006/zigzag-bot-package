@@ -224,24 +224,32 @@ def _calculate_core_signal(df, daily_df, current_price):
     elif is_near_short_resistance and not is_near_short_support:
         score -= 25; reasons.append("Ціна на свіжому локальному рівні опору")
     
-    # --- ПОЧАТОК ЗМІН: Підвищуємо вагу MACD ---
+    # --- ПОЧАТОК ЗМІН: Зберігаємо напрямок імпульсу і тренду ---
+    main_trend_direction = 0  # 1 для UP, -1 для DOWN
+    impulse_direction = 0 # 1 для UP, -1 для DOWN
+    # --- КІНЕЦЬ ЗМІН ---
+
     macd_hist = df['MACDh_12_26_9']
     if pd.notna(macd_hist.iloc[-1]) and len(macd_hist) >= 2 and pd.notna(macd_hist.iloc[-2]):
         if macd_hist.iloc[-1] > macd_hist.iloc[-2]:
-            score += 25; reasons.append("Гістограма MACD росте (сильний імпульс вгору)")
+            score += 25; reasons.append("Гістограма MACD росте (сильний імпульс вгору)"); impulse_direction = 1
         elif macd_hist.iloc[-1] < macd_hist.iloc[-2]:
-            score -= 25; reasons.append("Гістограма MACD падає (сильний імпульс вниз)")
-    # --- КІНЕЦЬ ЗМІН ---
+            score -= 25; reasons.append("Гістограма MACD падає (сильний імпульс вниз)"); impulse_direction = -1
 
-    tenkan, kijun = last.get('ITS_9'), last.get('IKS_26')
     senkou_a, senkou_b = last.get('ISA_9'), last.get('ISB_26')
     if pd.notna(senkou_a) and pd.notna(senkou_b):
         cloud_top, cloud_bottom = max(senkou_a, senkou_b), min(senkou_a, senkou_b)
-        if current_price > cloud_top: score += 15; reasons.append("Тренд: Ціна над Хмарою Ішимоку")
-        elif current_price < cloud_bottom: score -= 15; reasons.append("Тренд: Ціна під Хмарою Ішимоку")
-    if pd.notna(tenkan) and pd.notna(kijun):
-        if tenkan > kijun: score += 10; reasons.append("Тренд: Золотий хрест Ішимоку")
-        else: score -= 10; reasons.append("Тренд: Мертвий хрест Ішимоку")
+        if current_price > cloud_top:
+            score += 15; reasons.append("Тренд: Ціна над Хмарою Ішимоку"); main_trend_direction = 1
+        elif current_price < cloud_bottom:
+            score -= 15; reasons.append("Тренд: Ціна під Хмарою Ішимоку"); main_trend_direction = -1
+    
+    # --- ПОЧАТОК ЗМІН: Нове правило "Не йди проти імпульсу" ---
+    if (main_trend_direction == 1 and impulse_direction == -1) or \
+       (main_trend_direction == -1 and impulse_direction == 1):
+        reasons.append("⚠️ КОНФЛІКТ: Імпульс (MACD) рухається проти основного тренду!")
+        score = 50 # Нейтралізуємо сигнал при дивергенції
+    # --- КІНЕЦЬ ЗМІН ---
             
     if pd.notna(last['KAMA']):
         if current_price > last['KAMA']: score += 5; reasons.append("Ціна вище KAMA(14)")
