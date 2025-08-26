@@ -4,7 +4,7 @@ import pandas_ta as ta
 import numpy as np
 import time
 from twisted.internet.defer import Deferred, DeferredList
-from twisted.internet import reactor
+from twisted.internet import reactor, error as terror
 
 from ctrader_open_api.messages.OpenApiMessages_pb2 import (
     ProtoOAGetTrendbarsReq, ProtoOAGetTrendbarsRes,
@@ -20,11 +20,41 @@ PERIOD_MAP = {
     "1h": TrendbarPeriod.H1, "4h": TrendbarPeriod.H4, "1day": TrendbarPeriod.D1
 }
 
+# --- ПОЧАТОК ЗМІН: Функція для надсилання запиту з ретраєм ---
+def _send_with_retry(client, request, timeout=60, retries=1):
+    """Надсилає запит до cTrader API з можливістю повторної спроби при таймауті."""
+    d = Deferred()
+
+    def _attempt(remaining):
+        inner = client.send(request, timeout=timeout)
+
+        def ok(msg):
+            if not d.called:
+                d.callback(msg)
+
+        def err(f):
+            if f.check(terror.TimeoutError) and remaining > 0:
+                logger.warning(f"Request {type(request).__name__} timed out, retrying ({remaining} left)...")
+                reactor.callLater(0.2, _attempt, remaining - 1)
+            else:
+                if not d.called:
+                    d.errback(f)
+
+        inner.addCallbacks(ok, err)
+
+    _attempt(retries)
+    return d
+# --- КІНЕЦЬ ЗМІН ---
+
 def get_live_price(client, symbol_cache, norm_pair: str) -> Deferred:
     d = Deferred()
     symbol_details = symbol_cache.get(norm_pair)
+    
+    # --- ПОЧАТОК ЗМІН: Виправлено Deferred.fail ---
     if not symbol_details:
-        return Deferred.fail(Exception(f"Символ '{norm_pair}' не знайдено для live price."))
+        reactor.callLater(0, d.errback, Exception(f"Символ '{norm_pair}' не знайдено для live price."))
+        return d
+    # --- КІНЕЦЬ ЗМІН ---
     
     symbol_id = symbol_details.symbolId
     account_id = client._client.account_id
@@ -55,7 +85,9 @@ def get_live_price(client, symbol_cache, norm_pair: str) -> Deferred:
         if not d.called: d.callback(None)
 
     client.on(event_name, on_spot_event)
-    timeout_call = reactor.callLater(5, on_timeout)
+    # --- ПОЧАТОК ЗМІН: Збільшено таймаут очікування ціни ---
+    timeout_call = reactor.callLater(10, on_timeout)
+    # --- КІНЕЦЬ ЗМІН ---
 
     logger.info(f"Subscribing to live price for {norm_pair} (symbolId: {symbol_id})")
     subscribe_req = ProtoOASubscribeSpotsReq(ctidTraderAccountId=account_id, symbolId=[symbol_id])
@@ -67,12 +99,18 @@ def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: in
     d = Deferred()
     symbol_details = symbol_cache.get(norm_pair)
 
+    # --- ПОЧАТОК ЗМІН: Виправлено Deferred.fail ---
     if not symbol_details:
-        return Deferred.fail(Exception(f"Пара '{norm_pair}' не знайдена в кеші."))
+        reactor.callLater(0, d.errback, Exception(f"Пара '{norm_pair}' не знайдена в кеші."))
+        return d
+    # --- КІНЕЦЬ ЗМІН ---
 
     tf_proto = PERIOD_MAP.get(period)
     if not tf_proto:
-        return Deferred.fail(Exception(f"Непідтримуваний таймфрейм: {period}"))
+        # --- ПОЧАТОК ЗМІН: Виправлено Deferred.fail ---
+        reactor.callLater(0, d.errback, Exception(f"Непідтримуваний таймфрейм: {period}"))
+        return d
+        # --- КІНЕЦЬ ЗМІН ---
 
     now = int(time.time() * 1000)
     seconds_per_bar = {'1m': 60, '5m': 300, '15m': 900, '1h': 3600, '4h': 14400, '1day': 86400}
@@ -87,7 +125,9 @@ def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: in
     )
     
     logger.info(f"Requesting candles for {norm_pair} ({period})...")
-    deferred = client.send(request, timeout=25)
+    # --- ПОЧАТОК ЗМІН: Використовуємо функцію з ретраєм ---
+    deferred = _send_with_retry(client, request, timeout=60, retries=1)
+    # --- КІНЕЦЬ ЗМІН ---
 
     def process_response(message):
         response = ProtoOAGetTrendbarsRes()
