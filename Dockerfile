@@ -1,9 +1,7 @@
 # Dockerfile
-# Використовуємо повну версію python, оскільки slim не має потрібних інструментів для збірки
 FROM python:3.11-bullseye
 WORKDIR /app
 
-# Встановлюємо системні залежності для збірки TA-Lib
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     build-essential \
@@ -13,7 +11,6 @@ RUN apt-get update && \
     curl && \
     rm -rf /var/lib/apt/lists/*
 
-# Завантажуємо, компілюємо і встановлюємо TA-Lib
 RUN wget 'http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz' && \
     tar -xzf ta-lib-0.4.0-src.tar.gz && \
     cd ta-lib/ && \
@@ -23,12 +20,12 @@ RUN wget 'http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz' && 
     cd .. && \
     rm -rf ta-lib ta-lib-0.4.0-src.tar.gz
 
-# Встановлюємо Python-залежності
 COPY requirements.txt .
-# --- ПОЧАТОК ЗМІН: Прибираємо ненадійну команду echo ---
-RUN pip install --no-cache-dir -r requirements.txt
-# --- КІНЕЦЬ ЗМІН ---
+RUN echo "TA-Lib" >> requirements.txt && \
+    pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 EXPOSE 8080
-CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "1", "app:app"]
+# --- ПОЧАТОК ЗМІН: Додаємо --timeout 90 ---
+CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "1", "--timeout", "90", "app:app"]
+# --- КІНЕЦЬ ЗМІН ---
