@@ -25,6 +25,7 @@ if (!window.Telegram || !window.Telegram.WebApp) {
 let currentWatchlist = [];
 let initData = tg.initData || '';
 let currentTimeframe = '1m';
+let allData = {};
 
 document.addEventListener('DOMContentLoaded', function() {
     showLoader(true);
@@ -47,9 +48,9 @@ document.addEventListener('DOMContentLoaded', function() {
             return res.json();
         })
         .then(staticData => {
-            console.log("Received static pairs:", staticData);
+            allData = staticData;
             currentWatchlist = staticData.watchlist || [];
-            populateLists(staticData);
+            populateLists(allData);
             showLoader(false);
         })
         .catch(err => {
@@ -63,6 +64,34 @@ document.addEventListener('DOMContentLoaded', function() {
             `;
             showLoader(false);
         });
+    
+    const searchInput = document.getElementById('searchInput');
+    searchInput.addEventListener('input', debounce((event) => {
+        const query = event.target.value.toLowerCase();
+        
+        const filteredData = {
+            forex: (allData.forex || []).map(session => ({
+                ...session,
+                pairs: session.pairs.filter(p => p.toLowerCase().includes(query))
+            })).filter(session => session.pairs.length > 0),
+            crypto: (allData.crypto || []).filter(p => p.toLowerCase().includes(query)),
+            stocks: (allData.stocks || []).filter(p => p.toLowerCase().includes(query)),
+            commodities: (allData.commodities || []).filter(p => p.toLowerCase().includes(query))
+        };
+        // Для watchlist ми фільтруємо оригінальний список і потім конвертуємо
+        const originalWatchlist = (allData.watchlist || []).map(p_normalized => {
+             const allPairs = [
+                ...(allData.forex || []).map(session => session.pairs).flat(),
+                ...(allData.crypto || []),
+                ...(allData.stocks || []),
+                ...(allData.commodities || [])
+            ];
+            return allPairs.find(p_display => p_display.replace(/\//g, '') === p_normalized) || p_normalized;
+        });
+        filteredData.watchlist = originalWatchlist.filter(p => p.toLowerCase().includes(query));
+
+        populateLists(filteredData);
+    }, 300));
 });
 
 function renderFavoriteButton(pair) {
@@ -76,6 +105,7 @@ function toggleFavorite(event, pair) {
     event.stopPropagation();
     const button = event.currentTarget;
     const isCurrentlyFavorite = button.innerHTML.includes('✅');
+
     const url = `${API_BASE_URL}/api/toggle_watchlist?pair=${pair}&initData=${encodeURIComponent(initData)}`;
     
     button.innerHTML = isCurrentlyFavorite ? '⭐' : '✅';
@@ -112,7 +142,7 @@ function createPairButton(pair) {
     </div>`;
 }
 
-function populateLists(staticData) {
+function populateLists(data) {
     let html = '';
     function createSection(title, pairs) {
         if (!Array.isArray(pairs) || pairs.length === 0) return '';
@@ -122,28 +152,31 @@ function populateLists(staticData) {
         return sectionHtml;
     }
     
-    const allKnownPairs = [
-        ...Object.values(staticData.forex || {}).flat(),
-        ...(staticData.crypto || []),
-        ...(staticData.stocks || []),
-        ...(staticData.commodities || [])
+    // --- ПОЧАТОК ЗМІН: Виправлена логіка для відображення "Обраного" ---
+    const allPairsForMapping = [
+        ...(allData.forex || []).map(session => session.pairs).flat(),
+        ...(allData.crypto || []),
+        ...(allData.stocks || []),
+        ...(allData.commodities || [])
     ];
 
-    const watchlistDisplay = (staticData.watchlist || []).map(p_normalized => {
-        return allKnownPairs.find(p_display => p_display.replace(/\//g, '') === p_normalized) || p_normalized;
+    const watchlistDisplay = (currentWatchlist || []).map(p_normalized => {
+        return allPairsForMapping.find(p_display => p_display.replace(/\//g, '') === p_normalized) || p_normalized;
     });
 
-    html += createSection('⭐ Обране', watchlistDisplay);
-    html += createSection('💎 Уся криптовалюта', staticData.crypto || []);
+    html += createSection('⭐ Обране', data.watchlist ? watchlistDisplay.filter(p => data.watchlist.includes(p)) : watchlistDisplay);
+    // --- КІНЕЦЬ ЗМІН ---
+
+    html += createSection('💎 Уся криптовалюта', data.crypto || []);
     
-    if (staticData.forex && typeof staticData.forex === 'object') {
-        Object.keys(staticData.forex).forEach(sessionName => {
-            html += createSection(`💹 Усі валюти (${sessionName})`, staticData.forex[sessionName]);
+    if (Array.isArray(data.forex)) {
+        data.forex.forEach(session => {
+            html += createSection(session.title, session.pairs);
         });
     }
 
-    html += createSection('📈 Усі акції/індекси', staticData.stocks);
-    html += createSection('🥇 Уся сировина', staticData.commodities);
+    html += createSection('📈 Усі акції/індекси', data.stocks);
+    html += createSection('🥇 Уся сировина', data.commodities);
 
     listsContainer.innerHTML = html;
 
@@ -161,7 +194,7 @@ function fetchSignal(pair) {
     signalOutput.innerHTML = `⏳ Отримую аналіз для ${pair} (${currentTimeframe})...`;
     signalOutput.style.textAlign = 'left';
     historyContainer.innerHTML = ''; 
-    Plotly.purge('chart');
+    if (window.Plotly) Plotly.purge('chart');
 
     const initDataString = initData ? `&initData=${encodeURIComponent(initData)}` : '';
     const signalApiUrl = `${API_BASE_URL}/api/signal?pair=${pair}&timeframe=${currentTimeframe}${initDataString}`;
@@ -218,6 +251,7 @@ function fetchSignal(pair) {
             }
             
             showLoader(false);
+            signalContainer.scrollIntoView({ behavior: 'smooth' });
         })
         .catch(err => {
             console.error(`Error fetching signal for ${pair}:`, err);
@@ -251,12 +285,6 @@ function drawChart(pair, history) {
 
 function showLoader(visible) {
     loader.className = visible ? '' : 'hidden';
-}
-
-function getAssetType(pair) {
-    if (pair.includes('XAU')) return 'commodities';
-    if (pair.includes('/')) return pair.includes('USD') ? 'crypto' : 'forex';
-    return 'stocks';
 }
 
 function debounce(func, delay) {
