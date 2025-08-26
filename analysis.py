@@ -24,10 +24,7 @@ def get_live_price(client, symbol_cache, norm_pair: str) -> Deferred:
     d = Deferred()
     symbol_details = symbol_cache.get(norm_pair)
     if not symbol_details:
-        # --- ПОЧАТОК ЗМІН: Правильна обробка помилок ---
-        err = Exception(f"Символ '{norm_pair}' не знайдено для live price.")
-        return Deferred.fail(err)
-        # --- КІНЕЦЬ ЗМІН ---
+        return Deferred.fail(Exception(f"Символ '{norm_pair}' не знайдено для live price."))
     
     symbol_id = symbol_details.symbolId
     account_id = client._client.account_id
@@ -47,10 +44,8 @@ def get_live_price(client, symbol_cache, norm_pair: str) -> Deferred:
         cleanup()
         
         if spot_event.HasField('bid') and spot_event.HasField('ask'):
-            # --- ПОЧАТОК ЗМІН: Динамічний дільник ---
             divisor = 10**symbol_details.digits
             price = (spot_event.bid + spot_event.ask) / (2 * divisor)
-            # --- КІНЕЦЬ ЗМІН ---
             if not d.called: d.callback(price)
         else:
             if not d.called: d.callback(None)
@@ -74,13 +69,11 @@ def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: in
     symbol_details = symbol_cache.get(norm_pair)
 
     if not symbol_details:
-        err = Exception(f"Пара '{norm_pair}' не знайдена в кеші.")
-        return Deferred.fail(err)
+        return Deferred.fail(Exception(f"Пара '{norm_pair}' не знайдена в кеші."))
 
     tf_proto = PERIOD_MAP.get(period)
     if not tf_proto:
-        err = Exception(f"Непідтримуваний таймфрейм: {period}")
-        return Deferred.fail(err)
+        return Deferred.fail(Exception(f"Непідтримуваний таймфрейм: {period}"))
 
     now = int(time.time() * 1000)
     seconds_per_bar = {'1m': 60, '5m': 300, '15m': 900, '1h': 3600, '4h': 14400, '1day': 86400}
@@ -104,9 +97,7 @@ def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: in
         
         if not response.trendbar: return pd.DataFrame()
 
-        # --- ПОЧАТОК ЗМІН: Динамічний дільник ---
         divisor = 10**symbol_details.digits
-        # --- КІНЕЦЬ ЗМІН ---
         bars = [{
             'ts': pd.to_datetime(bar.utcTimestampInMinutes * 60, unit='s', utc=True),
             'Open': (bar.low + bar.deltaOpen) / divisor,
@@ -127,14 +118,11 @@ def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: in
     return d
 
 def _calculate_core_signal(df, daily_df, current_price):
-    score = 50
-    reasons = []
-    
+    df_copy = df.copy()
     try:
-        df_copy = df.copy()
-        df_copy.ta.rsi(length=14, append=True) # pandas-ta сама створить колонку 'RSI_14'
-        df_copy.ta.ichimoku(append=True)
-        df_copy.ta.macd(append=True)
+        if "RSI_14" not in df_copy.columns: df_copy.ta.rsi(length=14, append=True)
+        if "ISA_9" not in df_copy.columns: df_copy.ta.ichimoku(append=True)
+        if "MACD_12_26_9" not in df_copy.columns: df_copy.ta.macd(append=True)
     except Exception as e:
         logger.error(f"Помилка при розрахунку основних індикаторів: {e}")
         return { "score": 50, "reasons": ["Помилка розрахунку індикаторів"] }
@@ -142,6 +130,9 @@ def _calculate_core_signal(df, daily_df, current_price):
     last = df_copy.iloc[-1]
     
     main_trend = "NEUTRAL"
+    score = 50
+    reasons = []
+    
     senkou_a, senkou_b = last.get('ISA_9'), last.get('ISB_26')
     if pd.notna(senkou_a) and pd.notna(senkou_b):
         cloud_top, cloud_bottom = max(senkou_a, senkou_b), min(senkou_a, senkou_b)
@@ -153,6 +144,7 @@ def _calculate_core_signal(df, daily_df, current_price):
             reasons.append("📉 Основний тренд: Низхідний (ціна під Хмарою Ішимоку)")
         else:
             reasons.append("↔️ Основний тренд: Невизначений (ціна всередині Хмари)")
+            score = 50
 
     if main_trend != "NEUTRAL":
         is_bullish_cross, is_bearish_cross = False, False
@@ -160,6 +152,7 @@ def _calculate_core_signal(df, daily_df, current_price):
         if macd_col in df_copy.columns and signal_col in df_copy.columns and len(df_copy) >= 2:
             macd_line, signal_line = last.get(macd_col), last.get(signal_col)
             prev_macd, prev_signal = df_copy[macd_col].iloc[-2], df_copy[signal_col].iloc[-2]
+            
             if pd.notna(macd_line) and pd.notna(signal_line) and pd.notna(prev_macd) and pd.notna(prev_signal):
                 if prev_macd < prev_signal and macd_line > signal_line:
                     is_bullish_cross = True; reasons.append("🟢 Імпульс: Бичачий перетин MACD")
@@ -185,9 +178,7 @@ def _calculate_core_signal(df, daily_df, current_price):
             elif is_bullish_cross:
                 score = 50; reasons.append("⚠️ Контртрендовий імпульс проігноровано")
                 
-    # --- ПОЧАТОК ЗМІН: Використовуємо правильну назву 'RSI_14' ---
     rsi = last.get('RSI_14')
-    # --- КІНЕЦЬ ЗМІН ---
     if pd.notna(rsi):
         if rsi > 70 and score > 50:
             score -= 10; reasons.append("Ознака перекупленості (RSI > 70)")
@@ -216,7 +207,6 @@ def _calculate_core_signal(df, daily_df, current_price):
         "candle_pattern": candle_pattern, "volume_info": analyze_volume(df)
     }
 
-# ... (решта файлу без змін) ...
 def _generate_verdict(score):
     if score > 75: return "⬆️ Strong BUY"
     if score > 55: return "↗️ Moderate BUY"
@@ -255,7 +245,7 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int
                 "reasons": analysis['reasons'], "support": analysis['support'], 
                 "resistance": analysis['resistance'], "bull_percentage": analysis['score'],
                 "bear_percentage": 100 - analysis['score'], "candle_pattern": analysis.get('candle_pattern'),
-                "volume_info": analysis.get('volume_info'),
+                "volume_analysis": analysis.get('volume_info'),
                 "special_warning": analysis.get("special_warning")
             }
             return response_data
