@@ -5,6 +5,7 @@ import numpy as np
 import time
 from twisted.internet.defer import Deferred, DeferredList, fail
 from twisted.internet import reactor
+from twisted.internet import error as terror # <-- НОВИЙ ІМПОРТ
 
 from ctrader_open_api.messages.OpenApiMessages_pb2 import (
     ProtoOAGetTrendbarsReq, ProtoOAGetTrendbarsRes,
@@ -19,6 +20,31 @@ PERIOD_MAP = {
     "1m": TrendbarPeriod.M1, "5m": TrendbarPeriod.M5, "15m": TrendbarPeriod.M15,
     "1h": TrendbarPeriod.H1, "4h": TrendbarPeriod.H4, "1day": TrendbarPeriod.D1
 }
+
+# --- ПОЧАТОК ЗМІН: Нова функція для надійних запитів з ретраями ---
+def _send_with_retry(client, request, timeout=60, retries=1):
+    """Відправляє запит з можливістю повторної спроби при таймауті."""
+    d = Deferred()
+
+    def _attempt(remaining):
+        # Використовуємо внутрішній таймаут клієнта, а не crochet
+        inner = client.send(request, timeout=timeout)
+
+        def ok(msg):
+            if not d.called: d.callback(msg)
+
+        def err(f):
+            if f.check(terror.TimeoutError) and remaining > 0:
+                logger.warning(f"Request timed out for {type(request).__name__}, retrying...")
+                reactor.callLater(0.2, _attempt, remaining - 1)
+            else:
+                if not d.called: d.errback(f)
+        
+        inner.addCallbacks(ok, err)
+
+    _attempt(retries)
+    return d
+# --- КІНЕЦЬ ЗМІН ---
 
 def get_live_price(client, symbol_cache, norm_pair: str) -> Deferred:
     d = Deferred()
@@ -56,7 +82,8 @@ def get_live_price(client, symbol_cache, norm_pair: str) -> Deferred:
         if not d.called: d.callback(None)
 
     client.on(event_name, on_spot_event)
-    timeout_call = reactor.callLater(5, on_timeout)
+    # Збільшуємо таймаут очікування до 10 секунд
+    timeout_call = reactor.callLater(10, on_timeout)
 
     logger.info(f"Subscribing to live price for {norm_pair} (symbolId: {symbol_id})")
     subscribe_req = ProtoOASubscribeSpotsReq(ctidTraderAccountId=account_id, symbolId=[symbol_id])
@@ -66,7 +93,6 @@ def get_live_price(client, symbol_cache, norm_pair: str) -> Deferred:
 
 def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: int) -> Deferred:
     symbol_details = symbol_cache.get(norm_pair)
-
     if not symbol_details:
         return fail(Exception(f"Пара '{norm_pair}' не знайдена в кеші."))
 
@@ -88,7 +114,9 @@ def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: in
     )
     
     logger.info(f"Requesting candles for {norm_pair} ({period})...")
-    deferred = client.send(request, timeout=25)
+    # --- ПОЧАТОК ЗМІН: Використовуємо нову надійну функцію ---
+    deferred = _send_with_retry(client, request, timeout=60, retries=1)
+    # --- КІНЕЦЬ ЗМІН ---
 
     def process_response(message):
         response = ProtoOAGetTrendbarsRes()
@@ -119,6 +147,7 @@ def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: in
     deferred.addCallbacks(process_response, on_error)
     return d
 
+# ... (решта файлу analysis.py без змін) ...
 def _calculate_core_signal(df, daily_df, current_price):
     df_copy = df.copy()
     try:
@@ -128,42 +157,33 @@ def _calculate_core_signal(df, daily_df, current_price):
     except Exception as e:
         logger.error(f"Помилка при розрахунку основних індикаторів: {e}")
         return { "score": 50, "reasons": ["Помилка розрахунку індикаторів"] }
-
     last = df_copy.iloc[-1]
-    
     main_trend = "NEUTRAL"
     score = 50
     reasons = []
-    
     senkou_a, senkou_b = last.get('ISA_9'), last.get('ISB_26')
     if pd.notna(senkou_a) and pd.notna(senkou_b):
         cloud_top, cloud_bottom = max(senkou_a, senkou_b), min(senkou_a, senkou_b)
         if current_price > cloud_top:
-            main_trend = "UP"
-            reasons.append("📈 Основний тренд: Висхідний (ціна над Хмарою Ішимоку)")
+            main_trend = "UP"; reasons.append("📈 Основний тренд: Висхідний (ціна над Хмарою Ішимоку)")
         elif current_price < cloud_bottom:
-            main_trend = "DOWN"
-            reasons.append("📉 Основний тренд: Низхідний (ціна під Хмарою Ішимоку)")
+            main_trend = "DOWN"; reasons.append("📉 Основний тренд: Низхідний (ціна під Хмарою Ішимоку)")
         else:
             reasons.append("↔️ Основний тренд: Невизначений (ціна всередині Хмари)")
-
     if main_trend != "NEUTRAL":
         is_bullish_cross, is_bearish_cross = False, False
         macd_col, signal_col = 'MACD_12_26_9', 'MACDs_12_26_9'
         if macd_col in df_copy.columns and signal_col in df_copy.columns and len(df_copy) >= 2:
             macd_line, signal_line = last.get(macd_col), last.get(signal_col)
             prev_macd, prev_signal = df_copy[macd_col].iloc[-2], df_copy[signal_col].iloc[-2]
-            
             if pd.notna(macd_line) and pd.notna(signal_line) and pd.notna(prev_macd) and pd.notna(prev_signal):
                 if prev_macd < prev_signal and macd_line > signal_line:
                     is_bullish_cross = True; reasons.append("🟢 Імпульс: Бичачий перетин MACD")
                 if prev_macd > prev_signal and macd_line < signal_line:
                     is_bearish_cross = True; reasons.append("🔴 Імпульс: Ведмежий перетин MACD")
-
         short_term_support, short_term_resistance = identify_support_resistance_levels(df_copy, window=10)
         is_near_support = any((current_price - s) / current_price < 0.003 for s in short_term_support if s < current_price)
         is_near_resistance = any((r - current_price) / current_price < 0.003 for r in short_term_resistance if r > current_price)
-
         if main_trend == "UP":
             if is_bullish_cross and is_near_support:
                 score = 80; reasons.append("✅ СИГНАЛ: Вхід за трендом на відкаті до підтримки")
@@ -178,23 +198,19 @@ def _calculate_core_signal(df, daily_df, current_price):
                 score = 35; reasons.append("Сигнал на продаж за трендом")
             elif is_bullish_cross:
                 score = 50; reasons.append("⚠️ Контртрендовий імпульс проігноровано")
-                
     rsi = last.get('RSI_14')
     if pd.notna(rsi):
         if rsi > 70 and score > 50:
             score -= 10; reasons.append("Ознака перекупленості (RSI > 70)")
         if rsi < 30 and score < 50:
             score += 10; reasons.append("Ознака перепроданості (RSI < 30)")
-    
     candle_pattern = analyze_candle_patterns(df_copy)
     if candle_pattern:
         if candle_pattern['type'] == 'bullish' and score > 50:
             score += 10; reasons.append(f"Підтвердження: Бичачий патерн {candle_pattern['name']}")
         if candle_pattern['type'] == 'bearish' and score < 50:
             score -= 10; reasons.append(f"Підтвердження: Ведмежий патерн {candle_pattern['name']}")
-
     score = int(np.clip(score, 0, 100))
-    
     long_term_support, long_term_resistance = identify_support_resistance_levels(daily_df)
     all_support = sorted(long_term_support + short_term_support)
     all_resistance = sorted(long_term_resistance + short_term_resistance)
@@ -202,63 +218,48 @@ def _calculate_core_signal(df, daily_df, current_price):
     support = max(support_candidates) if support_candidates else None
     resistance_candidates = [r for r in all_resistance if r > current_price]
     resistance = min(resistance_candidates) if resistance_candidates else None
-    
     return {
         "score": score, "reasons": reasons, "support": support, "resistance": resistance,
         "candle_pattern": candle_pattern, "volume_info": analyze_volume(df)
     }
-
-# ... (решта файлу без змін) ...
 def _generate_verdict(score):
     if score > 75: return "⬆️ Strong BUY"
     if score > 55: return "↗️ Moderate BUY"
     if score < 25: return "⬇️ Strong SELL"
     if score < 45: return "↘️ Moderate SELL"
     return "🟡 NEUTRAL"
-
 def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int, timeframe: str = "15m") -> Deferred:
     def on_data_ready(results):
         try:
             success1, df = results[0]
             success2, daily_df = results[1]
             success3, live_price = results[2]
-
             if not (success1 and success2) or df.empty or len(df) < 50:
                 return {"error": f"Not enough historical data for {timeframe} analysis."}
-
             if success3 and live_price is not None:
                 current_price = live_price
                 logger.debug(f"Using live price for analysis: {current_price}")
             else:
                 current_price = df.iloc[-1]['Close']
                 logger.debug(f"Using last close price for analysis: {current_price}")
-            
             analysis = _calculate_core_signal(df, daily_df, current_price)
-            
             verdict = _generate_verdict(analysis['score'])
-
             add_signal_to_history({
-                'user_id': user_id, 'pair': symbol, 
-                'price': current_price, 'bull_percentage': analysis['score']
+                'user_id': user_id, 'pair': symbol, 'price': current_price, 'bull_percentage': analysis['score']
             })
-            
             response_data = {
-                "pair": symbol, "price": current_price, "verdict_text": verdict, 
-                "reasons": analysis['reasons'], "support": analysis['support'], 
-                "resistance": analysis['resistance'], "bull_percentage": analysis['score'],
+                "pair": symbol, "price": current_price, "verdict_text": verdict, "reasons": analysis['reasons'],
+                "support": analysis['support'], "resistance": analysis['resistance'], "bull_percentage": analysis['score'],
                 "bear_percentage": 100 - analysis['score'], "candle_pattern": analysis.get('candle_pattern'),
-                "volume_info": analysis.get('volume_info')
+                "volume_info": analysis.get('volume_info'), "special_warning": analysis.get("special_warning")
             }
             return response_data
-            
         except Exception as e:
             logger.exception(f"Critical analysis error for {symbol}: {e}")
             return {"error": "Internal data processing error."}
-
     d1 = get_market_data(client, symbol_cache, symbol, timeframe, 200)
     d2 = get_market_data(client, symbol_cache, symbol, '1day', 100)
     d3 = get_live_price(client, symbol_cache, symbol)
-    
     d_list = DeferredList([d1, d2, d3], consumeErrors=True)
     d_list.addCallback(on_data_ready)
     return d_list
