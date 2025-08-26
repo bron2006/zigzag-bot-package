@@ -165,7 +165,6 @@ def analyze_volume(df):
         return "Об'єм нейтральний"
     except Exception: return "Помилка аналізу об'єму"
 
-# --- ПОЧАТОК ЗМІН: Фінальний рефакторинг аналітичного ядра ---
 def _calculate_core_signal(df, daily_df, current_price):
     score = 50
     reasons = []
@@ -176,11 +175,10 @@ def _calculate_core_signal(df, daily_df, current_price):
         df.ta.rsi(length=14, append=True, col_names=('RSI',))
     except Exception as e:
         logger.error(f"Помилка при розрахунку основних індикаторів: {e}")
-        return { "score": 50, "reasons": ["Помилка розрахунку індикаторів"] }
+        return {"score": 50, "reasons": ["Помилка розрахунку індикаторів"]}
 
     last = df.iloc[-1]
     
-    # --- ЕТАП 1: ВИЗНАЧЕННЯ ГОЛОВНОГО ТРЕНДУ (ФІЛЬТР) ---
     main_trend = "NEUTRAL"
     senkou_a, senkou_b = last.get('ISA_9'), last.get('ISB_26')
     if pd.notna(senkou_a) and pd.notna(senkou_b):
@@ -193,58 +191,43 @@ def _calculate_core_signal(df, daily_df, current_price):
             reasons.append("📉 Основний тренд: Низхідний (ціна під Хмарою Ішимоку)")
         else:
             reasons.append("↔️ Основний тренд: Невизначений (ціна всередині Хмари)")
-            # Якщо ціна в хмарі, сигнал завжди нейтральний
             score = 50
 
-    # --- ЕТАП 2: ПОШУК ТОЧКИ ВХОДУ (ЯКЩО Є ТРЕНД) ---
     if main_trend != "NEUTRAL":
-        # 2.1 Сигнал імпульсу від MACD
-        macd_line = last.get('MACD_12_26_9')
-        signal_line = last.get('MACDs_12_26_9')
-        
-        is_bullish_cross = False
-        is_bearish_cross = False
-        if pd.notna(macd_line) and pd.notna(signal_line):
-            # Перевіряємо, чи був перетин на попередній свічці
-            prev_macd = df['MACD_12_26_9'].iloc[-2] if len(df) >= 2 else None
-            prev_signal = df['MACDs_12_26_9'].iloc[-2] if len(df) >= 2 else None
-            if pd.notna(prev_macd) and pd.notna(prev_signal):
+        is_bullish_cross, is_bearish_cross = False, False
+        # --- ПОЧАТОК ЗМІН: Безпечна перевірка MACD ---
+        macd_col, signal_col = 'MACD_12_26_9', 'MACDs_12_26_9'
+        if macd_col in df.columns and signal_col in df.columns and len(df) >= 2:
+            macd_line, signal_line = last.get(macd_col), last.get(signal_col)
+            prev_macd, prev_signal = df[macd_col].iloc[-2], df[signal_col].iloc[-2]
+            
+            if pd.notna(macd_line) and pd.notna(signal_line) and pd.notna(prev_macd) and pd.notna(prev_signal):
                 if prev_macd < prev_signal and macd_line > signal_line:
-                    is_bullish_cross = True
-                    reasons.append("🟢 Імпульс: Бичачий перетин MACD")
+                    is_bullish_cross = True; reasons.append("🟢 Імпульс: Бичачий перетин MACD")
                 if prev_macd > prev_signal and macd_line < signal_line:
-                    is_bearish_cross = True
-                    reasons.append("🔴 Імпульс: Ведмежий перетин MACD")
+                    is_bearish_cross = True; reasons.append("🔴 Імпульс: Ведмежий перетин MACD")
+        # --- КІНЕЦЬ ЗМІН ---
 
-        # 2.2 Рівні S/R
         short_term_support, short_term_resistance = identify_support_resistance_levels(df, window=10)
         is_near_support = any((current_price - s) / current_price < 0.003 for s in short_term_support if s < current_price)
         is_near_resistance = any((r - current_price) / current_price < 0.003 for r in short_term_resistance if r > current_price)
 
-        # 2.3 Прийняття рішення
         if main_trend == "UP":
             if is_bullish_cross and is_near_support:
-                score = 80 # Ідеальний сигнал: вхід за трендом на відкаті до підтримки
-                reasons.append("✅ СИГНАЛ: Вхід за трендом на відкаті до підтримки")
+                score = 80; reasons.append("✅ СИГНАЛ: Вхід за трендом на відкаті до підтримки")
             elif is_bullish_cross:
-                score = 65 # Просто сигнал за трендом
-                reasons.append("Сигнал на покупку за трендом")
+                score = 65; reasons.append("Сигнал на покупку за трендом")
             elif is_bearish_cross:
-                score = 50 # Контртрендовий імпульс - ігноруємо
-                reasons.append("⚠️ Контртрендовий імпульс проігноровано")
+                score = 50; reasons.append("⚠️ Контртрендовий імпульс проігноровано")
 
         elif main_trend == "DOWN":
             if is_bearish_cross and is_near_resistance:
-                score = 20 # Ідеальний сигнал: вхід за трендом на відкаті до опору
-                reasons.append("✅ СИГНАЛ: Вхід за трендом на відкаті до опору")
+                score = 20; reasons.append("✅ СИГНАЛ: Вхід за трендом на відкаті до опору")
             elif is_bearish_cross:
-                score = 35 # Просто сигнал за трендом
-                reasons.append("Сигнал на продаж за трендом")
+                score = 35; reasons.append("Сигнал на продаж за трендом")
             elif is_bullish_cross:
-                score = 50 # Контртрендовий імпульс - ігноруємо
-                reasons.append("⚠️ Контртрендовий імпульс проігноровано")
+                score = 50; reasons.append("⚠️ Контртрендовий імпульс проігноровано")
                 
-    # --- ЕТАП 3: ФІНАЛЬНЕ ПІДТВЕРДЖЕННЯ/ПОСЛАБЛЕННЯ ---
     rsi = last.get('RSI')
     if pd.notna(rsi):
         if rsi > 70 and score > 50:
@@ -273,7 +256,6 @@ def _calculate_core_signal(df, daily_df, current_price):
         "score": score, "reasons": reasons, "support": support, "resistance": resistance,
         "candle_pattern": candle_pattern, "volume_info": analyze_volume(df)
     }
-# --- КІНЕЦЬ ЗМІН ---
 
 def _generate_verdict(score):
     if score > 75: return "⬆️ Strong BUY"
