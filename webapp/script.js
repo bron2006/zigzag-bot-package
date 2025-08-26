@@ -2,6 +2,7 @@ const API_BASE_URL = window.API_BASE_URL || "https://fallback.example.com";
 
 const loader = document.getElementById("loader");
 const listsContainer = document.getElementById("listsContainer");
+const signalContainer = document.getElementById("signalContainer");
 const signalOutput = document.getElementById("signalOutput");
 const historyContainer = document.getElementById("historyContainer");
 
@@ -53,7 +54,13 @@ document.addEventListener('DOMContentLoaded', function() {
         })
         .catch(err => {
             console.error("Error fetching pair lists:", err);
-            signalOutput.innerHTML = `<h3 style="color: #ef5350;">❌ Помилка завантаження списків пар.</h3>`;
+            signalOutput.innerHTML = `
+                <div style="text-align: left; font-family: monospace; word-wrap: break-word;">
+                    <h3 style="color: #ef5350;">❌ Помилка завантаження списків пар.</h3>
+                    <p><strong>URL:</strong><br>${staticPairsUrl}</p>
+                    <p><strong>Помилка:</strong><br>${err.name}: ${err.message}</p>
+                </div>
+            `;
             showLoader(false);
         });
 });
@@ -74,7 +81,10 @@ function toggleFavorite(event, pair) {
     button.innerHTML = isCurrentlyFavorite ? '⭐' : '✅';
 
     fetch(url)
-        .then(res => res.json())
+        .then(res => {
+            if (res.status === 401) { throw new Error("Unauthorized"); }
+            return res.json();
+        })
         .then(data => {
             if (!data.success) {
                 button.innerHTML = isCurrentlyFavorite ? '✅' : '⭐';
@@ -90,7 +100,8 @@ function toggleFavorite(event, pair) {
         })
         .catch(err => {
             button.innerHTML = isCurrentlyFavorite ? '✅' : '⭐';
-            alert("Помилка мережі при оновленні списку обраного.");
+            alert(`Помилка мережі при оновленні списку обраного: ${err.message}`);
+            console.error(err);
         });
 }
 
@@ -148,7 +159,104 @@ function populateLists(staticData) {
 function fetchSignal(pair) {
     showLoader(true);
     signalOutput.innerHTML = `⏳ Отримую аналіз для ${pair} (${currentTimeframe})...`;
-    // ... (решта функції без змін)
+    signalOutput.style.textAlign = 'left';
+    historyContainer.innerHTML = ''; 
+    Plotly.purge('chart');
+
+    const initDataString = initData ? `&initData=${encodeURIComponent(initData)}` : '';
+    const signalApiUrl = `${API_BASE_URL}/api/signal?pair=${pair}&timeframe=${currentTimeframe}${initDataString}`;
+    
+    fetch(signalApiUrl)
+        .then(res => {
+            if (res.status === 401) { throw new Error("⛔ Немає доступу. Будь ласка, перезапустіть Web App через Telegram."); }
+            return res.json();
+        })
+        .then(signalData => {
+            if (signalData.error) {
+                let errorText = `❌ Помилка: ${signalData.error}`;
+                if (signalData.details) {
+                    errorText += `<br><br><strong>Деталі:</strong><pre>${signalData.details}</pre>`;
+                }
+                signalOutput.innerHTML = errorText;
+                signalOutput.style.textAlign = 'left';
+                showLoader(false);
+                return;
+            }
+
+            let html = '';
+            if (signalData.special_warning) {
+                html += `<div class="special-warning">${signalData.special_warning}</div>`;
+            }
+
+            let arrow = '🟡';
+            if (signalData.bull_percentage > 55) {
+                arrow = '⬆️';
+            } else if (signalData.bull_percentage < 45) {
+                arrow = '⬇️';
+            }
+
+            const supportText = signalData.support ? signalData.support.toFixed(5) : 'N/A';
+            const resistanceText = signalData.resistance ? signalData.resistance.toFixed(5) : 'N/A';
+            const reasons = Array.isArray(signalData.reasons) ? signalData.reasons : [];
+            const reasonsList = reasons.map(r => `<li>${r}</li>`).join('');
+            let candleHtml = signalData.candle_pattern?.text ? `<div style="margin-bottom:10px"><strong>Свічковий патерн:</strong><br>${signalData.candle_pattern.text}</div>` : '';
+            let volumeHtml = signalData.volume_analysis ? `<div style="margin-bottom:10px"><strong>Аналіз об'єму:</strong><br>${signalData.volume_analysis}</div>` : '';
+            
+            html += `
+                <div style="font-size: 32px; text-align: center; margin-bottom: 15px;">${arrow}</div>
+                <div style="margin-bottom: 10px;"><strong>${signalData.pair} (${currentTimeframe})</strong> | Ціна: ${signalData.price.toFixed(5)}</div>
+                <div style="margin-bottom: 10px;"><strong>Баланс сил:</strong><br>🐂 Бики: ${signalData.bull_percentage}% ⬆️ | 🐃 Ведмеді: ${signalData.bear_percentage}% ⬇️</div>
+                ${candleHtml}
+                <div style="margin-bottom: 10px;"><strong>Рівні S/R:</strong><br>Підтримка: ${supportText} | Опір: ${resistanceText}</div>
+                ${volumeHtml}
+                <div><strong>Ключові фактори:</strong><ul style="margin: 5px 0 0 20px; padding: 0;">${reasonsList}</ul></div>
+            `;
+            signalOutput.innerHTML = html;
+
+            if (signalData.history && signalData.history.dates) {
+                drawChart(pair, signalData.history);
+            }
+            
+            showLoader(false);
+        })
+        .catch(err => {
+            console.error(`Error fetching signal for ${pair}:`, err);
+            signalOutput.innerHTML = `❌ Помилка: ${err.message}`;
+            signalOutput.style.textAlign = 'center';
+            showLoader(false);
+        });
+}
+
+function drawChart(pair, history) {
+    if (!window.Plotly) return;
+    try {
+        const trace = {
+            x: history.dates, close: history.close, high: history.high,
+            low: history.low, open: history.open, type: 'candlestick',
+            increasing: { line: { color: '#26a69a' } },
+            decreasing: { line: { color: '#ef5350' } }
+        };
+        const layout = {
+            paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
+            font: { color: tg.themeParams.text_color || '#fff' },
+            xaxis: { rangeslider: { visible: false }, showgrid: false },
+            yaxis: { showgrid: false },
+            margin: { l: 35, r: 35, b: 35, t: 35 }
+        };
+        Plotly.newPlot('chart', [trace], layout);
+    } catch(e) {
+        console.error("Error drawing chart:", e);
+    }
+}
+
+function showLoader(visible) {
+    loader.className = visible ? '' : 'hidden';
+}
+
+function getAssetType(pair) {
+    if (pair.includes('XAU')) return 'commodities';
+    if (pair.includes('/')) return pair.includes('USD') ? 'crypto' : 'forex';
+    return 'stocks';
 }
 
 function debounce(func, delay) {
@@ -158,9 +266,3 @@ function debounce(func, delay) {
         timeout = setTimeout(() => func.apply(this, args), delay);
     };
 }
-
-function showLoader(visible) {
-    loader.className = visible ? '' : 'hidden';
-}
-
-// ... і решта функцій, які були раніше (drawChart, etc.)
