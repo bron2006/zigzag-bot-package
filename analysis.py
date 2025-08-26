@@ -3,7 +3,7 @@ import pandas as pd
 import pandas_ta as ta
 import numpy as np
 import time
-from twisted.internet.defer import Deferred, DeferredList
+from twisted.internet.defer import Deferred, DeferredList, fail
 from twisted.internet import reactor
 
 from ctrader_open_api.messages.OpenApiMessages_pb2 import (
@@ -24,7 +24,7 @@ def get_live_price(client, symbol_cache, norm_pair: str) -> Deferred:
     d = Deferred()
     symbol_details = symbol_cache.get(norm_pair)
     if not symbol_details:
-        return Deferred.fail(Exception(f"Символ '{norm_pair}' не знайдено для live price."))
+        return fail(Exception(f"Символ '{norm_pair}' не знайдено для live price."))
     
     symbol_id = symbol_details.symbolId
     account_id = client._client.account_id
@@ -65,16 +65,16 @@ def get_live_price(client, symbol_cache, norm_pair: str) -> Deferred:
     return d
 
 def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: int) -> Deferred:
-    d = Deferred()
     symbol_details = symbol_cache.get(norm_pair)
 
     if not symbol_details:
-        return Deferred.fail(Exception(f"Пара '{norm_pair}' не знайдена в кеші."))
+        return fail(Exception(f"Пара '{norm_pair}' не знайдена в кеші."))
 
     tf_proto = PERIOD_MAP.get(period)
     if not tf_proto:
-        return Deferred.fail(Exception(f"Непідтримуваний таймфрейм: {period}"))
+        return fail(Exception(f"Непідтримуваний таймфрейм: {period}"))
 
+    d = Deferred()
     now = int(time.time() * 1000)
     seconds_per_bar = {'1m': 60, '5m': 300, '15m': 900, '1h': 3600, '4h': 14400, '1day': 86400}
     from_ts = now - (count * seconds_per_bar[period] * 1000)
@@ -95,7 +95,9 @@ def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: in
         response.ParseFromString(message.payload)
         logger.info(f"✅ Received {len(response.trendbar)} candles for {norm_pair} ({period}).")
         
-        if not response.trendbar: return pd.DataFrame()
+        if not response.trendbar: 
+            d.callback(pd.DataFrame())
+            return
 
         divisor = 10**symbol_details.digits
         bars = [{
@@ -144,7 +146,6 @@ def _calculate_core_signal(df, daily_df, current_price):
             reasons.append("📉 Основний тренд: Низхідний (ціна під Хмарою Ішимоку)")
         else:
             reasons.append("↔️ Основний тренд: Невизначений (ціна всередині Хмари)")
-            score = 50
 
     if main_trend != "NEUTRAL":
         is_bullish_cross, is_bearish_cross = False, False
@@ -207,6 +208,7 @@ def _calculate_core_signal(df, daily_df, current_price):
         "candle_pattern": candle_pattern, "volume_info": analyze_volume(df)
     }
 
+# ... (решта файлу без змін) ...
 def _generate_verdict(score):
     if score > 75: return "⬆️ Strong BUY"
     if score > 55: return "↗️ Moderate BUY"
@@ -245,8 +247,7 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int
                 "reasons": analysis['reasons'], "support": analysis['support'], 
                 "resistance": analysis['resistance'], "bull_percentage": analysis['score'],
                 "bear_percentage": 100 - analysis['score'], "candle_pattern": analysis.get('candle_pattern'),
-                "volume_analysis": analysis.get('volume_info'),
-                "special_warning": analysis.get("special_warning")
+                "volume_info": analysis.get('volume_info')
             }
             return response_data
             

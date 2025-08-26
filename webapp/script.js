@@ -8,18 +8,11 @@ const historyContainer = document.getElementById("historyContainer");
 
 let tg;
 if (!window.Telegram || !window.Telegram.WebApp) {
-    console.warn("Telegram WebApp object not found. Running in browser mode with mock data.");
-    tg = { 
-        themeParams: { bg_color: '#1a1a1a', text_color: '#ffffff' }, 
-        initData: '',
-        ready: function() {},
-        expand: function() {}
-    };
+    tg = { themeParams: { bg_color: '#1a1a1a', text_color: '#ffffff' }, initData: '' };
 } else {
     tg = window.Telegram.WebApp;
     tg.ready();
     tg.expand();
-    console.log("Telegram WebApp object is ready.");
 }
 
 let currentWatchlist = [];
@@ -27,6 +20,8 @@ let initData = tg.initData || '';
 let currentTimeframe = '1m';
 let allData = {};
 let lastSelectedPair = null;
+
+const debouncedFetchSignal = debounce(fetchSignal, 300);
 
 document.addEventListener('DOMContentLoaded', function() {
     showLoader(true);
@@ -39,6 +34,7 @@ document.addEventListener('DOMContentLoaded', function() {
             timeframeButtons.forEach(btn => btn.classList.remove('active'));
             button.classList.add('active');
             currentTimeframe = button.dataset.tf;
+            
             if (lastSelectedPair) {
                 debouncedFetchSignal(lastSelectedPair);
             }
@@ -164,15 +160,16 @@ function populateLists(data, query = '') {
     });
 }
 
-const debouncedFetchSignal = debounce(fetchSignal, 300);
-
 function fetchSignal(pair) {
     lastSelectedPair = pair;
     showLoader(true);
     signalOutput.innerHTML = `⏳ Отримую аналіз для ${pair} (${currentTimeframe})...`;
     signalOutput.style.textAlign = 'left';
     historyContainer.innerHTML = ''; 
-    if (window.Plotly) Plotly.purge('chart');
+    
+    if (window.Plotly && document.getElementById('chart')) {
+        try { Plotly.purge('chart'); } catch(e) { console.error("Error purging chart:", e); }
+    }
 
     const initDataString = initData ? `&initData=${encodeURIComponent(initData)}` : '';
     const signalApiUrl = `${API_BASE_URL}/api/signal?pair=${pair}&timeframe=${currentTimeframe}${initDataString}`;
@@ -180,8 +177,9 @@ function fetchSignal(pair) {
     fetch(signalApiUrl)
         .then(res => {
             if (res.status === 401) { throw new Error("⛔ Немає доступу. Будь ласка, перезапустіть Web App через Telegram."); }
-            if (!res.ok) { return res.json().then(err => { throw new Error(err.error || `HTTP status ${res.status}`) }) }
-            return res.json();
+            // --- ПОЧАТОК ЗМІН: Безпечна обробка JSON ---
+            return res.json().catch(() => { throw new Error("Некоректна відповідь від сервера (не JSON)."); });
+            // --- КІНЕЦЬ ЗМІН ---
         })
         .then(signalData => {
             if (signalData.error) {
