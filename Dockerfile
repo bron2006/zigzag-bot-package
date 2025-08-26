@@ -1,3 +1,4 @@
+# Dockerfile
 FROM python:3.11-bullseye
 WORKDIR /app
 
@@ -20,10 +21,11 @@ RUN wget 'http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz' && 
     rm -rf ta-lib ta-lib-0.4.0-src.tar.gz
 
 COPY requirements.txt .
-# --- ПОЧАТОК ЗМІН: Прибираємо ненадійну команду echo ---
-RUN pip install --no-cache-dir -r requirements.txt
-# --- КІНЕЦЬ ЗМІН ---
+RUN echo "TA-Lib" >> requirements.txt && \
+    pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 EXPOSE 8080
-CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "1", "--timeout", "90", "app:app"]
+# --- ПОЧАТОК ЗМІН: Додаємо --preload для правильного запуску фонових сервісів ---
+CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "1", "--timeout", "90", "--preload", "app:app"]
+# --- КІНЕЦЬ ЗМІН ---
