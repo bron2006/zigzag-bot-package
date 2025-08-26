@@ -13,13 +13,13 @@ import crochet
 crochet.setup()
 
 import state
-from auth import is_valid_init_data, get_user_id_from_init_data # <-- Додано імпорт
-from db import get_watchlist, toggle_watchlist # <-- Додано імпорт
+from auth import is_valid_init_data, get_user_id_from_init_data
+from db import get_watchlist, toggle_watchlist
 from spotware_connect import SpotwareConnect
 from config import (
     TELEGRAM_BOT_TOKEN, get_ct_client_id, get_ct_client_secret, 
     FOREX_SESSIONS, get_fly_app_name, CRYPTO_PAIRS, STOCK_TICKERS,
-    COMMODITIES
+    COMMODITIES, TRADING_HOURS # <-- НОВИЙ ІМПОРТ
 )
 from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOASymbolsListRes
 
@@ -45,7 +45,6 @@ def protected_route(f):
         return f(*args, **kwargs)
     return decorated_function
 
-# ... (код до get_pairs без змін) ...
 def on_ctrader_ready():
     logger.info("cTrader client is ready. Loading symbols...")
     deferred = state.client.get_all_symbols()
@@ -135,16 +134,27 @@ def static_files(filename):
 @app.route("/api/get_pairs")
 @protected_route
 def get_pairs():
-    # --- ПОЧАТОК ЗМІН: Завантажуємо список обраного для користувача ---
     user_id = get_user_id_from_init_data(request.args.get("initData"))
     watchlist = get_watchlist(user_id) if user_id else []
+
+    # --- ПОЧАТОК ЗМІН: Змінюємо структуру відповіді для Forex ---
+    forex_data = [
+        {
+            "title": f"{name} {TRADING_HOURS.get(name, '')}".strip(),
+            "pairs": pairs
+        }
+        for name, pairs in FOREX_SESSIONS.items()
+    ]
     # --- КІНЕЦЬ ЗМІН ---
+
     return jsonify({
-        "forex": FOREX_SESSIONS, "crypto": CRYPTO_PAIRS, "stocks": STOCK_TICKERS,
-        "commodities": COMMODITIES, "watchlist": watchlist 
+        "forex": forex_data, 
+        "crypto": CRYPTO_PAIRS, 
+        "stocks": STOCK_TICKERS,
+        "commodities": COMMODITIES, 
+        "watchlist": watchlist 
     })
 
-# --- ПОЧАТОК ЗМІН: Новий API-ендпоінт для обраного ---
 @app.route("/api/toggle_watchlist")
 @protected_route
 def toggle_watchlist_route():
@@ -155,14 +165,12 @@ def toggle_watchlist_route():
         return jsonify({"success": False, "error": "Missing parameters"}), 400
 
     try:
-        # Нормалізуємо пару так само, як ми робимо для аналізу
         pair_normalized = pair.replace("/", "")
         toggle_watchlist(user_id, pair_normalized)
         return jsonify({"success": True})
     except Exception as e:
         logger.error(f"Error in toggle_watchlist for user {user_id}: {e}")
         return jsonify({"success": False, "error": "Internal server error"}), 500
-# --- КІНЕЦЬ ЗМІН ---
 
 @app.route("/api/signal")
 @protected_route

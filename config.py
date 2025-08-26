@@ -33,11 +33,8 @@ def get_demo_account_id() -> int:
 
 def get_fly_app_name() -> str: return os.getenv("FLY_APP_NAME")
 
-# --- ПОЧАТОК ЗМІН: Додаємо функцію для ключа Finnhub ---
 def get_finnhub_api_key() -> str:
-    """Отримує ключ API для Finnhub зі змінних середовища."""
     return os.getenv("FINNHUB_API_KEY")
-# --- КІНЕЦЬ ЗМІН ---
 
 def load_assets_from_json():
     try:
@@ -59,3 +56,12 @@ FOREX_SESSIONS = _assets["forex"]
 CRYPTO_PAIRS = _assets["crypto"]
 STOCK_TICKERS = _assets["stocks"]
 COMMODITIES = _assets["commodities"]
+
+# --- ПОЧАТОК ЗМІН: Додаємо години торгівлі ---
+TRADING_HOURS = {
+    "Європейська": "🇪🇺 (10:00 - 19:00)",
+    "Американська": "🇺🇸 (15:00 - 00:00)",
+    "Азіатська": "🇯🇵 (02:00 - 11:00)",
+    "Тихоокеанська": "🇦🇺 (00:00 - 09:00)"
+}
+# --- КІНЕЦЬ ЗМІН ---

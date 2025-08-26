@@ -5,7 +5,7 @@ from twisted.internet import reactor
 from telegram.error import BadRequest
 
 import state
-from config import FOREX_SESSIONS, CRYPTO_PAIRS, STOCK_TICKERS, COMMODITIES
+from config import FOREX_SESSIONS, CRYPTO_PAIRS, STOCK_TICKERS, COMMODITIES, TRADING_HOURS
 from analysis import get_api_detailed_signal_data
 
 logger = logging.getLogger(__name__)
@@ -34,12 +34,15 @@ def get_timeframe_kb(category: str) -> InlineKeyboardMarkup:
     keyboard.append([InlineKeyboardButton("⬅️ Назад до категорій", callback_data="main_menu")])
     return InlineKeyboardMarkup(keyboard)
 
+# --- ПОЧАТОК ЗМІН: Додаємо години в кнопки сесій ---
 def get_forex_sessions_kb(timeframe: str) -> InlineKeyboardMarkup:
     keyboard = []
-    for session in FOREX_SESSIONS:
-        keyboard.append([InlineKeyboardButton(f"--- {session} сесія ---", callback_data=f"session_forex_{timeframe}_{session}")])
+    for session_name in FOREX_SESSIONS:
+        display_text = f"{TRADING_HOURS.get(session_name, '')} {session_name}".strip()
+        keyboard.append([InlineKeyboardButton(display_text, callback_data=f"session_forex_{timeframe}_{session_name}")])
     keyboard.append([InlineKeyboardButton("⬅️ Назад до таймфреймів", callback_data="category_forex")])
     return InlineKeyboardMarkup(keyboard)
+# --- КІНЕЦЬ ЗМІН ---
 
 def get_assets_kb(asset_list: list, category: str, timeframe: str) -> InlineKeyboardMarkup:
     keyboard = []
@@ -71,19 +74,8 @@ def menu(update: Update, context: CallbackContext) -> None:
 def reset_ui(update: Update, context: CallbackContext) -> None:
     update.message.reply_text(f"Невідома команда: '{update.message.text}'. Використовуйте кнопки.", reply_markup=get_reply_keyboard())
 
-# --- ПОЧАТОК ЗМІН: Оновлюємо форматування звіту ---
 def _format_signal_message(result: dict, timeframe: str) -> str:
     if result.get("error"): return f"❌ Помилка аналізу: {result['error']}"
-
-    # Визначаємо рівень впевненості на основі score
-    score = result.get('bull_percentage', 50)
-    confidence_text = ""
-    if score > 75 or score < 25:
-        confidence_text = "Висока"
-    elif score > 55 or score < 45:
-        confidence_text = "Помірна (є суперечливі фактори)"
-    else:
-        confidence_text = "Низька (ринок невизначений)"
 
     message = ""
     if result.get("special_warning"):
@@ -92,16 +84,22 @@ def _format_signal_message(result: dict, timeframe: str) -> str:
     pair = result.get('pair', 'N/A')
     price = result.get('price', 0)
     verdict = result.get('verdict_text', 'Не вдалося визначити.')
+    score = result.get('bull_percentage', 50)
+    confidence_text = ""
+    if score > 75 or score < 25: confidence_text = "Висока"
+    elif score > 55 or score < 45: confidence_text = "Помірна (є суперечливі фактори)"
+    else: confidence_text = "Низька (ринок невизначений)"
+    
     support = result.get('support')
     resistance = result.get('resistance')
     reasons = result.get('reasons', [])
     candle_pattern = result.get('candle_pattern')
-    volume_analysis = result.get('volume_analysis')
+    volume_analysis = result.get('volume_info')
     
     price_str = f"{price:.5f}" if price else "N/A"
     message += f"📈 **Аналіз для {pair} ({timeframe})**\n\n"
     message += f"**Сигнал:** {verdict}\n"
-    message += f"**Впевненість:** {confidence_text}\n" # <-- НОВИЙ РЯДОК
+    message += f"**Впевненість:** {confidence_text}\n"
     message += f"**Поточна ціна:** `{price_str}`\n\n"
     message += f"**Баланс сил:**\n🐂 Бики: {score}% ⬆️ | 🐃 Ведмеді: {100-score}% ⬇️\n\n"
 
@@ -122,7 +120,6 @@ def _format_signal_message(result: dict, timeframe: str) -> str:
         for reason in reasons: message += f"    - {reason}\n"
         
     return message
-# --- КІНЕЦЬ ЗМІН ---
 
 def button_handler(update: Update, context: CallbackContext) -> None:
     query = update.callback_query

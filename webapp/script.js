@@ -125,29 +125,30 @@ function populateLists(staticData) {
         return sectionHtml;
     }
     
+    // --- ПОЧАТОК ЗМІН: Адаптуємо під нову структуру даних ---
     const allPairs = [
-        ...Object.values(staticData.forex || {}).flat(),
+        ...Object.values(staticData.forex || []).map(session => session.pairs).flat(),
         ...(staticData.crypto || []),
         ...(staticData.stocks || []),
         ...(staticData.commodities || [])
     ];
 
     const watchlistDisplay = (staticData.watchlist || []).map(p_normalized => {
-        const originalPair = allPairs.find(p_display => p_display.replace(/\//g, '') === p_normalized);
-        return originalPair || p_normalized;
+        return allPairs.find(p_display => p_display.replace(/\//g, '') === p_normalized) || p_normalized;
     });
 
     html += createSection('⭐ Обране', watchlistDisplay);
     html += createSection('💎 Уся криптовалюта', staticData.crypto || []);
     
-    if (staticData.forex && typeof staticData.forex === 'object') {
-        Object.keys(staticData.forex).forEach(sessionName => {
-            html += createSection(`💹 Усі валюти (${sessionName})`, staticData.forex[sessionName]);
+    if (Array.isArray(staticData.forex)) {
+        staticData.forex.forEach(session => {
+            html += createSection(session.title, session.pairs);
         });
     }
 
     html += createSection('📈 Усі акції/індекси', staticData.stocks);
     html += createSection('🥇 Уся сировина', staticData.commodities);
+    // --- КІНЕЦЬ ЗМІН ---
 
     listsContainer.innerHTML = html;
 
@@ -192,14 +193,12 @@ function fetchSignal(pair) {
                 html += `<div class="special-warning">${signalData.special_warning}</div>`;
             }
 
-            // --- ПОЧАТОК ЗМІН: Додаємо нейтральний стан для стрілки ---
-            let arrow = '🟡'; // За замовчуванням - нейтральний
+            let arrow = '🟡';
             if (signalData.bull_percentage > 55) {
                 arrow = '⬆️';
             } else if (signalData.bull_percentage < 45) {
                 arrow = '⬇️';
             }
-            // --- КІНЕЦЬ ЗМІН ---
 
             const supportText = signalData.support ? signalData.support.toFixed(5) : 'N/A';
             const resistanceText = signalData.resistance ? signalData.resistance.toFixed(5) : 'N/A';
