@@ -165,7 +165,6 @@ def analyze_volume(df):
         return "Об'єм нейтральний"
     except Exception: return "Помилка аналізу об'єму"
 
-# --- ПОЧАТОК ЗМІН: Фінальна версія з ієрархічною логікою ---
 def _calculate_core_signal(df, daily_df, current_price):
     score = 50
     reasons = []
@@ -178,76 +177,57 @@ def _calculate_core_signal(df, daily_df, current_price):
         df.ta.ichimoku(append=True)
         df.ta.macd(append=True)
         df.ta.adx(append=True)
-        df.ta.atr(append=True)
     except Exception as e:
         logger.error(f"Критична помилка при розрахунку індикаторів: {e}")
         return { "score": 50, "reasons": ["Помилка розрахунку індикаторів"] }
 
     last = df.iloc[-1]
     
-    # --- ЕТАП 1: ВИЗНАЧЕННЯ ХАРАКТЕРУ РИНКУ ---
-    market_character = "UNCERTAIN"
-    adx_value = last.get('ADX_14')
-    kama_value = last.get('KAMA')
-    
-    if pd.notna(adx_value):
-        if adx_value < 20:
-            market_character = "CHOPPY_FLAT"
-            special_warning = "❗️❗️❗️ УВАГА: РИНОК \"БОКОВИЙ\" (ФЛЕТ) ❗️❗️❗️"
-            reasons.append(f"ADX < 20 (тренд відсутній)")
-            score = 50
-        elif adx_value > 25 and pd.notna(kama_value):
-            if current_price > kama_value: market_character = "STRONG_TREND_UP"
-            else: market_character = "STRONG_TREND_DOWN"
-        elif pd.notna(kama_value):
-            if current_price > kama_value: market_character = "RANGING_UP"
-            else: market_character = "RANGING_DOWN"
+    # --- ПОЧАТОК ЗМІН: Фінальна версія — "Тільки факти" ---
 
-    if special_warning:
-        # Якщо ринок у флеті, подальший аналіз не потрібен
-        return { "score": 50, "reasons": reasons, "special_warning": special_warning, "support": None, "resistance": None, "candle_pattern": None, "volume_info": None }
-
-    # --- ЕТАП 2: ЗАСТОСУВАННЯ СТРАТЕГІЇ ВІДПОВІДНО ДО ХАРАКТЕРУ РИНКУ ---
-    long_term_support, long_term_resistance = identify_support_resistance_levels(daily_df)
-    short_term_support, short_term_resistance = identify_support_resistance_levels(df, window=10)
+    # 1. Збираємо всі факти
     candle_pattern = analyze_candle_patterns(df)
     volume_info = analyze_volume(df)
+    long_term_support, long_term_resistance = identify_support_resistance_levels(daily_df)
+    short_term_support, short_term_resistance = identify_support_resistance_levels(df, window=10)
+    
+    # 2. Оцінюємо факти і нараховуємо бали
+    if candle_pattern:
+        if candle_pattern['type'] == 'bullish': score += 20; reasons.append(f"Бичачий патерн: {candle_pattern['name']}")
+        else: score -= 20; reasons.append(f"Ведмежий патерн: {candle_pattern['name']}")
 
-    # --- СТРАТЕГІЯ ДЛЯ "СИЛЬНОГО ТРЕНДУ" ---
-    if "STRONG_TREND" in market_character:
-        reasons.append("Ринок в стані сильного тренду")
-        # Основний пріоритет - слідування за трендом
-        if market_character == "STRONG_TREND_UP":
-            score += 25
-            if candle_pattern and candle_pattern['type'] == 'bullish': score += 15
-            if is_near_level(current_price, short_term_support, "support"): score += 15
-        elif market_character == "STRONG_TREND_DOWN":
-            score -= 25
-            if candle_pattern and candle_pattern['type'] == 'bearish': score -= 15
-            if is_near_level(current_price, short_term_resistance, "resistance"): score -= 15
+    if short_term_support and any(s < current_price for s in short_term_support):
+        if (current_price - max(s for s in short_term_support if s < current_price)) / current_price < 0.002:
+            score += 20; reasons.append("Ціна біля локальної підтримки")
+    
+    if short_term_resistance and any(r > current_price for r in short_term_resistance):
+        if (min(r for r in short_term_resistance if r > current_price) - current_price) / current_price < 0.002:
+            score -= 20; reasons.append("Ціна біля локального опору")
 
-    # --- СТРАТЕГІЯ ДЛЯ "БОКОВОГО ТРЕНДУ" (КАНАЛУ) ---
-    elif "RANGING" in market_character:
-        reasons.append("Ринок в стані бокового тренду (канал)")
-        # Основний пріоритет - торгівля від меж каналу
-        if market_character == "RANGING_UP":
-            # Шукаємо точки для покупки біля підтримки
-            if is_near_level(current_price, short_term_support, "support"):
-                score += 30; reasons.append("❗️Купівля від нижньої межі каналу")
-        elif market_character == "RANGING_DOWN":
-            # Шукаємо точки для продажу біля опору
-            if is_near_level(current_price, short_term_resistance, "resistance"):
-                score -= 30; reasons.append("❗️Продаж від верхньої межі каналу")
+    if pd.notna(last.get('MACDh_12_26_9')) and len(df) > 1 and pd.notna(df['MACDh_12_26_9'].iloc[-2]):
+        if last['MACDh_12_26_9'] > df['MACDh_12_26_9'].iloc[-2]: score += 15; reasons.append("MACD росте")
+        else: score -= 15; reasons.append("MACD падає")
 
-    # --- ЗАГАЛЬНИЙ АНАЛІЗ (ЯКЩО СТАН НЕВИЗНАЧЕНИЙ) ---
-    else:
-        # Використовуємо збалансовану модель, якщо характер не чіткий
-        if candle_pattern:
-            if candle_pattern['type'] == 'bullish': score += 20
-            else: score -= 20
-            reasons.append(f"Патерн: {candle_pattern['text']}")
-        # ... можна додати інші індикатори з меншою вагою ...
+    if pd.notna(last.get('ISA_9')) and pd.notna(last.get('ISB_26')):
+        if current_price > max(last['ISA_9'], last['ISB_26']): score += 15; reasons.append("Тренд: Ціна над Хмарою")
+        elif current_price < min(last['ISA_9'], last['ISB_26']): score -= 15; reasons.append("Тренд: Ціна під Хмарою")
 
+    # 3. Застосовуємо фінальні фільтри-конфлікти
+    rsi = last.get('RSI')
+    bbl, bbu = last.get('BBL_20_2.0'), last.get('BBU_20_2.0')
+    if pd.notna(rsi):
+        if (rsi < 30 or (pd.notna(bbl) and current_price <= bbl)) and score < 50:
+            score = 50; reasons.append("❗️КОНФЛІКТ: Продаж при перепроданості!")
+        if (rsi > 70 or (pd.notna(bbu) and current_price >= bbu)) and score > 50:
+            score = 50; reasons.append("❗️КОНФЛІКТ: Покупка при перекупленості!")
+    
+    adx = last.get('ADX_14')
+    if pd.notna(adx) and adx < 25:
+        score = int(score * 0.7 + 15) # Зміщуємо до центру, зберігаючи напрямок
+        reasons.append(f"⚠️ Слабкий тренд (ADX={adx:.1f})")
+
+    # --- КІНЕЦЬ ЗМІН ---
+    
     score = int(np.clip(score, 0, 100))
     
     all_support = sorted(long_term_support + short_term_support)
@@ -262,21 +242,6 @@ def _calculate_core_signal(df, daily_df, current_price):
         "candle_pattern": candle_pattern, "volume_info": analyze_volume(df),
         "special_warning": special_warning
     }
-
-def is_near_level(price, levels, level_type):
-    """Допоміжна функція для перевірки близькості до рівня."""
-    if not levels: return False
-    if level_type == "support":
-        candidates = [s for s in levels if s < price]
-        if not candidates: return False
-        dist = abs(price - max(candidates))
-    else: # resistance
-        candidates = [r for r in levels if r > price]
-        if not candidates: return False
-        dist = abs(price - min(candidates))
-        
-    return (dist / price) < 0.002
-# --- КІНЕЦЬ ЗМІН ---
 
 def _generate_verdict(score):
     if score > 75: return "⬆️ Strong BUY"
