@@ -166,6 +166,10 @@ def analyze_volume(df):
     except Exception: return "Помилка аналізу об'єму"
 
 def _calculate_core_signal(df, daily_df, current_price):
+    score = 50
+    reasons = []
+    special_warning = None
+
     try:
         df.ta.rsi(length=14, append=True, col_names=('RSI',))
         df.ta.kama(length=14, append=True, col_names=('KAMA',))
@@ -179,92 +183,51 @@ def _calculate_core_signal(df, daily_df, current_price):
 
     last = df.iloc[-1]
     
-    score = 50
-    reasons = []
-    special_warning = None
-
-    long_term_support, long_term_resistance = identify_support_resistance_levels(daily_df)
-    short_term_support, short_term_resistance = identify_support_resistance_levels(df, window=10)
+    # --- ПОЧАТОК ЗМІН: Фінальна ієрархічна логіка ---
     
+    # 1. Розраховуємо всі змінні
     candle_pattern = analyze_candle_patterns(df)
     volume_info = analyze_volume(df)
-    
-    is_near_short_support = False
-    if short_term_support:
-        dist = min(abs(current_price - s) for s in short_term_support if s < current_price) if any(s < current_price for s in short_term_support) else float('inf')
-        if dist / current_price < 0.002: is_near_short_support = True
-
-    is_near_short_resistance = False
-    if short_term_resistance:
-        dist = min(abs(current_price - r) for r in short_term_resistance if r > current_price) if any(r > current_price for r in short_term_resistance) else float('inf')
-        if dist / current_price < 0.002: is_near_short_resistance = True
-    
-    # --- Ієрархія прийняття рішень ---
-    
-    # 1. Фільтри ринкового стану (найвищий пріоритет)
     adx_value = last.get('ADX_14')
-    if pd.notna(adx_value) and adx_value < 20:
-        special_warning = "❗️❗️❗️ УВАГА: РИНОК \"БОКОВИЙ\" (ФЛЕТ) ❗️❗️❗️"
-        reasons = [f"ADX < 20 (тренд відсутній)"]
-        score = 50
-
-    if not special_warning and is_near_short_support and is_near_short_resistance:
-        special_warning = "❗️❗️❗️ УВАГА: РИНОК У ВУЗЬКОМУ КОРИДОРІ ❗️❗️❗️"
-        reasons = ["Ціна затиснута між локальними S/R"]
-        score = 50
+    rsi_value = last.get('RSI')
     
-    # 2. Основний аналіз, якщо ринок активний
-    if not special_warning:
-        # 2.1 Пріоритет: Розворотні сигнали
-        if candle_pattern:
-            if candle_pattern['type'] == 'bullish': score += 25; reasons.append(f"Бичачий патерн: {candle_pattern['name']}")
-            elif candle_pattern['type'] == 'bearish': score -= 25; reasons.append(f"Ведмежий патерн: {candle_pattern['name']}")
-        
-        if is_near_short_support: score += 20; reasons.append("Ціна біля локальної підтримки")
-        if is_near_short_resistance: score -= 20; reasons.append("Ціна біля локального опору")
-        
-        # 2.2 Імпульс
-        main_trend_direction, impulse_direction = 0, 0
-        macd_hist = last.get('MACDh_12_26_9')
-        prev_macd_hist = df.get('MACDh_12_26_9').iloc[-2] if len(df) >= 2 else None
-        if pd.notna(macd_hist) and pd.notna(prev_macd_hist):
-            if macd_hist > prev_macd_hist: impulse_direction = 1
-            else: impulse_direction = -1
-        
-        # 2.3 Тренд
-        senkou_a, senkou_b = last.get('ISA_9'), last.get('ISB_26')
-        if pd.notna(senkou_a) and pd.notna(senkou_b):
-            cloud_top, cloud_bottom = max(senkou_a, senkou_b), min(senkou_a, senkou_b)
-            if current_price > cloud_top: main_trend_direction = 1
-            elif current_price < cloud_bottom: main_trend_direction = -1
-        
-        # Застосовуємо бали за імпульс та тренд
-        if impulse_direction == 1: score += 15; reasons.append("Імпульс MACD росте")
-        elif impulse_direction == -1: score -= 15; reasons.append("Імпульс MACD падає")
-        if main_trend_direction == 1: score += 15; reasons.append("Тренд: Ціна над Хмарою")
-        elif main_trend_direction == -1: score -= 15; reasons.append("Тренд: Ціна під Хмарою")
-            
-        # 2.4 Вторинні фактори
-        rsi = last.get('RSI')
-        bbl, bbu = last.get('BBL_20_2.0'), last.get('BBU_20_2.0')
-        is_on_bbl = pd.notna(bbl) and current_price <= bbl
-        is_on_bbu = pd.notna(bbu) and current_price >= bbu
-        if pd.notna(rsi):
-            if rsi < 30 or is_on_bbl: score += 10; reasons.append("Ознаки перепроданості (RSI/Bollinger)")
-            elif rsi > 70 or is_on_bbu: score -= 10; reasons.append("Ознаки перекупленості (RSI/Bollinger)")
+    # 2. Основна логіка оцінки
+    if candle_pattern and candle_pattern['type'] == 'bullish':
+        score += 40; reasons.append(f"❗️Сильний бичачий патерн: {candle_pattern['name']}")
+    elif candle_pattern and candle_pattern['type'] == 'bearish':
+        score -= 40; reasons.append(f"❗️Сильний ведмежий патерн: {candle_pattern['name']}")
 
-        # 3. Фінальні фільтри-конфлікти
-        # --- ПОЧАТОК ЗМІН: Новий, найпріоритетніший фільтр S/R ---
-        if score > 60 and is_near_short_resistance:
-            reasons.append("❗️КОНФЛІКТ: Покупка біля сильного опору!")
-            score = 50
-        if score < 40 and is_near_short_support:
-            reasons.append("❗️КОНФЛІКТ: Продаж біля сильної підтримки!")
-            score = 50
-        # --- КІНЕЦЬ ЗМІН ---
+    impulse_direction = 0
+    macd_hist = last.get('MACDh_12_26_9')
+    prev_macd_hist = df['MACDh_12_26_9'].iloc[-2] if len(df) >= 2 else None
+    if pd.notna(macd_hist) and pd.notna(prev_macd_hist):
+        if macd_hist > prev_macd_hist:
+            # Якщо є ведмежий патерн, ігноруємо бичачий MACD
+            if not (candle_pattern and candle_pattern['type'] == 'bearish'):
+                score += 15; reasons.append("Імпульс MACD росте"); impulse_direction = 1
+        else:
+            # Якщо є бичачий патерн, ігноруємо ведмежий MACD
+            if not (candle_pattern and candle_pattern['type'] == 'bullish'):
+                score -= 15; reasons.append("Імпульс MACD падає"); impulse_direction = -1
+
+    # 3. Фінальні фільтри та коригування
+    if pd.notna(adx_value) and adx_value < 20:
+        reasons.append("⚠️ Слабкий тренд (ADX < 20)")
+        score = int(score * 0.5 + 25) # Зміщуємо score до центру
+        
+    # "Право вето" для патернів
+    if candle_pattern:
+        if candle_pattern['type'] == 'bearish' and score > 55:
+            score = 50; reasons.append("⚠️ BUY заблоковано через ведмежий патерн")
+        if candle_pattern['type'] == 'bullish' and score < 45:
+            score = 50; reasons.append("⚠️ SELL заблоковано через бичачий патерн")
+    
+    # --- КІНЕЦЬ ЗМІН ---
     
     score = int(np.clip(score, 0, 100))
     
+    long_term_support, long_term_resistance = identify_support_resistance_levels(daily_df)
+    short_term_support, short_term_resistance = identify_support_resistance_levels(df, window=10)
     all_support = sorted(long_term_support + short_term_support)
     all_resistance = sorted(long_term_resistance + short_term_resistance)
     support_candidates = [s for s in all_support if s < current_price]
@@ -274,7 +237,7 @@ def _calculate_core_signal(df, daily_df, current_price):
     
     return {
         "score": score, "reasons": reasons, "support": support, "resistance": resistance,
-        "candle_pattern": candle_pattern, "volume_info": analyze_volume(df),
+        "candle_pattern": candle_pattern, "volume_info": volume_info,
         "special_warning": special_warning
     }
 
