@@ -110,8 +110,12 @@ def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: in
         d.callback(df.sort_values(by='ts').reset_index(drop=True))
 
     def on_error(failure):
-        err = failure.getErrorMessage() if hasattr(failure, 'getErrorMessage') else str(failure)
-        logger.error(f"❌ Data request failed for {norm_pair} ({period}): {err}")
+        # --- ПОЧАТОК ЗМІН: Додаємо детальний traceback в лог ---
+        logger.error(
+            f"❌ Data request failed for {norm_pair} ({period}): {failure.getErrorMessage()}",
+            exc_info=True  # Додає повний traceback
+        )
+        # --- КІНЕЦЬ ЗМІН ---
         d.errback(failure)
 
     deferred.addCallbacks(process_response, on_error)
@@ -131,6 +135,10 @@ def identify_support_resistance_levels(df, window=20, threshold=0.01):
         highs = df['High'].rolling(window=window, center=True, min_periods=3).max()
         support_levels = group_close_values(df.loc[df['Low'] == lows, 'Low'].tolist(), threshold)
         resistance_levels = group_close_values(df.loc[df['High'] == highs, 'High'].tolist(), threshold)
+        
+        if not support_levels and not resistance_levels:
+            logger.debug("Не знайдено значущих рівнів S/R.")
+            
         return sorted(support_levels), sorted(resistance_levels, reverse=True)
     except Exception as e:
         logger.error(f"Помилка в identify_support_resistance_levels: {e}")
@@ -142,7 +150,9 @@ def analyze_candle_patterns(df: pd.DataFrame):
         if patterns.empty: return None
         last_candle = patterns.iloc[-1]
         found_patterns = last_candle[last_candle != 0]
-        if found_patterns.empty: return None
+        if found_patterns.empty:
+            logger.debug("Свічкових патернів на останній свічці не знайдено.")
+            return None
         signal_strength = found_patterns.iloc[0]
         if abs(signal_strength) < 100: return None
         pattern_name = found_patterns.index[0].replace("CDL_", "")
@@ -169,15 +179,27 @@ def _calculate_core_signal(df, daily_df, current_price):
     score = 50
     reasons = []
     
+    # --- ПОЧАТОК ЗМІН: Захист від дублюючих колонок ---
+    local_df = df.copy()
     try:
-        df.ta.ichimoku(append=True)
-        df.ta.macd(append=True)
-        df.ta.rsi(length=14, append=True, col_names=('RSI',))
+        indicators_to_check = {
+            'RSI_14': lambda d: d.ta.rsi(length=14, append=True),
+            'KAMA_10_2_30': lambda d: d.ta.kama(length=14, append=True), # pandas-ta створює складну назву
+            'BBL_20_2.0': lambda d: d.ta.bbands(length=20, std=2, append=True),
+            'ISA_9': lambda d: d.ta.ichimoku(append=True),
+            'MACDh_12_26_9': lambda d: d.ta.macd(append=True),
+            'ADX_14': lambda d: d.ta.adx(append=True)
+        }
+        for indicator_col, func in indicators_to_check.items():
+            # Перевіряємо по одній з ключових колонок індикатора
+            if indicator_col not in local_df.columns:
+                func(local_df)
+    # --- КІНЕЦЬ ЗМІН ---
     except Exception as e:
-        logger.error(f"Помилка при розрахунку основних індикаторів: {e}")
-        return {"score": 50, "reasons": ["Помилка розрахунку індикаторів"]}
+        logger.error(f"Критична помилка при розрахунку індикаторів: {e}")
+        return { "score": 50, "reasons": ["Помилка розрахунку індикаторів"] }
 
-    last = df.iloc[-1]
+    last = local_df.iloc[-1]
     
     main_trend = "NEUTRAL"
     senkou_a, senkou_b = last.get('ISA_9'), last.get('ISB_26')
@@ -195,20 +217,18 @@ def _calculate_core_signal(df, daily_df, current_price):
 
     if main_trend != "NEUTRAL":
         is_bullish_cross, is_bearish_cross = False, False
-        # --- ПОЧАТОК ЗМІН: Безпечна перевірка MACD ---
         macd_col, signal_col = 'MACD_12_26_9', 'MACDs_12_26_9'
-        if macd_col in df.columns and signal_col in df.columns and len(df) >= 2:
+        if macd_col in local_df.columns and signal_col in local_df.columns and len(local_df) >= 2:
             macd_line, signal_line = last.get(macd_col), last.get(signal_col)
-            prev_macd, prev_signal = df[macd_col].iloc[-2], df[signal_col].iloc[-2]
+            prev_macd, prev_signal = local_df[macd_col].iloc[-2], local_df[signal_col].iloc[-2]
             
             if pd.notna(macd_line) and pd.notna(signal_line) and pd.notna(prev_macd) and pd.notna(prev_signal):
                 if prev_macd < prev_signal and macd_line > signal_line:
                     is_bullish_cross = True; reasons.append("🟢 Імпульс: Бичачий перетин MACD")
                 if prev_macd > prev_signal and macd_line < signal_line:
                     is_bearish_cross = True; reasons.append("🔴 Імпульс: Ведмежий перетин MACD")
-        # --- КІНЕЦЬ ЗМІН ---
 
-        short_term_support, short_term_resistance = identify_support_resistance_levels(df, window=10)
+        short_term_support, short_term_resistance = identify_support_resistance_levels(local_df, window=10)
         is_near_support = any((current_price - s) / current_price < 0.003 for s in short_term_support if s < current_price)
         is_near_resistance = any((r - current_price) / current_price < 0.003 for r in short_term_resistance if r > current_price)
 
@@ -235,7 +255,7 @@ def _calculate_core_signal(df, daily_df, current_price):
         if rsi < 30 and score < 50:
             score += 10; reasons.append("Ознака перепроданості (RSI < 30)")
     
-    candle_pattern = analyze_candle_patterns(df)
+    candle_pattern = analyze_candle_patterns(local_df)
     if candle_pattern:
         if candle_pattern['type'] == 'bullish' and score > 50:
             score += 10; reasons.append(f"Підтвердження: Бичачий патерн {candle_pattern['name']}")
@@ -274,7 +294,14 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int
             if not (success1 and success2) or df.empty or len(df) < 50:
                 return {"error": f"Not enough historical data for {timeframe} analysis."}
 
-            current_price = live_price if success3 and live_price is not None else df.iloc[-1]['Close']
+            # --- ПОЧАТОК ЗМІН: Логуємо, яку ціну використовуємо ---
+            if success3 and live_price is not None:
+                current_price = live_price
+                logger.debug(f"Using live price for analysis: {current_price}")
+            else:
+                current_price = df.iloc[-1]['Close']
+                logger.debug(f"Using last close price for analysis: {current_price}")
+            # --- КІНЕЦЬ ЗМІН ---
             
             analysis = _calculate_core_signal(df, daily_df, current_price)
             
