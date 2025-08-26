@@ -19,7 +19,7 @@ from spotware_connect import SpotwareConnect
 from config import (
     TELEGRAM_BOT_TOKEN, get_ct_client_id, get_ct_client_secret, 
     FOREX_SESSIONS, get_fly_app_name, CRYPTO_PAIRS, STOCK_TICKERS,
-    COMMODITIES, TRADING_HOURS # <-- НОВИЙ ІМПОРТ
+    COMMODITIES, TRADING_HOURS
 )
 from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOASymbolsListRes
 
@@ -45,11 +45,11 @@ def protected_route(f):
         return f(*args, **kwargs)
     return decorated_function
 
+# ... (код до get_pairs без змін) ...
 def on_ctrader_ready():
     logger.info("cTrader client is ready. Loading symbols...")
     deferred = state.client.get_all_symbols()
     deferred.addCallbacks(on_symbols_loaded, on_symbols_error)
-
 def on_symbols_loaded(raw_message):
     try:
         symbols_response = ProtoOASymbolsListRes()
@@ -60,40 +60,32 @@ def on_symbols_loaded(raw_message):
         logger.info(f"✅ Successfully loaded {len(state.symbol_cache)} light symbols.")
     except Exception as e:
         logger.error(f"Symbol processing error: {e}", exc_info=True)
-
 def on_symbols_error(failure):
     logger.error(f"Failed to load symbols: {failure.getErrorMessage()}")
-
 def symbols_command(update: Update, context: CallbackContext):
     if not state.SYMBOLS_LOADED or not hasattr(state, 'all_symbol_names'):
         update.message.reply_text("Список символів ще не завантажено. Спробуйте за хвилину.")
         return
-    
     forex = sorted([s for s in state.all_symbol_names if "/" in s and len(s) < 8 and "USD" not in s.upper()])
     crypto_usd = sorted([s for s in state.all_symbol_names if "/USD" in s.upper()])
     crypto_usdt = sorted([s for s in state.all_symbol_names if "/USDT" in s.upper()])
     others = sorted([s for s in state.all_symbol_names if "/" not in s])
-
     message = "**Доступні символи від брокера:**\n\n"
     if forex: message += f"**Forex:**\n`{', '.join(forex)}`\n\n"
     if crypto_usd: message += f"**Crypto (USD):**\n`{', '.join(crypto_usd)}`\n\n"
     if crypto_usdt: message += f"**Crypto (USDT):**\n`{', '.join(crypto_usdt)}`\n\n"
     if others: message += f"**Indices/Stocks/Commodities:**\n`{', '.join(others)}`"
-    
     for i in range(0, len(message), 4096):
         update.message.reply_text(message[i:i + 4096], parse_mode='Markdown')
-
 def start_background_services():
     logger.info("Initializing background services (Telegram, cTrader)...")
     if not TELEGRAM_BOT_TOKEN:
         logger.error("TELEGRAM_BOT_TOKEN not found!")
         return
-
     updater = Updater(token=TELEGRAM_BOT_TOKEN, use_context=True)
     client = SpotwareConnect(get_ct_client_id(), get_ct_client_secret())
     state.updater = updater
     state.client = client
-
     import telegram_ui
     dp = updater.dispatcher
     dp.add_handler(CommandHandler("start", telegram_ui.start))
@@ -101,14 +93,11 @@ def start_background_services():
     dp.add_handler(MessageHandler(Filters.text("МЕНЮ"), telegram_ui.menu))
     dp.add_handler(MessageHandler(Filters.text & ~Filters.command, telegram_ui.reset_ui))
     dp.add_handler(CallbackQueryHandler(telegram_ui.button_handler))
-
     updater.start_polling()
     logger.info("Telegram bot started.")
-
     client.on("ready", on_ctrader_ready)
     client.start()
     logger.info("cTrader client started.")
-
 @app.route("/")
 def home():
     try:
@@ -126,33 +115,21 @@ def home():
     except Exception as e:
         logger.error(f"Error serving index.html: {e}", exc_info=True)
         return "Internal Server Error", 500
-
 @app.route("/<path:filename>")
 def static_files(filename):
     return send_from_directory(WEBAPP_DIR, filename)
-
 @app.route("/api/get_pairs")
 @protected_route
 def get_pairs():
     user_id = get_user_id_from_init_data(request.args.get("initData"))
     watchlist = get_watchlist(user_id) if user_id else []
-
-    # --- ПОЧАТОК ЗМІН: Змінюємо структуру відповіді для Forex ---
     forex_data = [
-        {
-            "title": f"{name} {TRADING_HOURS.get(name, '')}".strip(),
-            "pairs": pairs
-        }
+        {"title": f"{name} {TRADING_HOURS.get(name, '')}".strip(), "pairs": pairs}
         for name, pairs in FOREX_SESSIONS.items()
     ]
-    # --- КІНЕЦЬ ЗМІН ---
-
     return jsonify({
-        "forex": forex_data, 
-        "crypto": CRYPTO_PAIRS, 
-        "stocks": STOCK_TICKERS,
-        "commodities": COMMODITIES, 
-        "watchlist": watchlist 
+        "forex": forex_data, "crypto": CRYPTO_PAIRS, "stocks": STOCK_TICKERS,
+        "commodities": COMMODITIES, "watchlist": watchlist 
     })
 
 @app.route("/api/toggle_watchlist")
@@ -164,13 +141,18 @@ def toggle_watchlist_route():
     if not user_id or not pair:
         return jsonify({"success": False, "error": "Missing parameters"}), 400
 
+    # --- ПОЧАТОК ЗМІН: Перевіряємо результат запису в БД ---
     try:
         pair_normalized = pair.replace("/", "")
-        toggle_watchlist(user_id, pair_normalized)
-        return jsonify({"success": True})
+        success = toggle_watchlist(user_id, pair_normalized)
+        if success:
+            return jsonify({"success": True})
+        else:
+            return jsonify({"success": False, "error": "Failed to write to database"}), 500
     except Exception as e:
         logger.error(f"Error in toggle_watchlist for user {user_id}: {e}")
         return jsonify({"success": False, "error": "Internal server error"}), 500
+    # --- КІНЕЦЬ ЗМІН ---
 
 @app.route("/api/signal")
 @protected_route

@@ -5,7 +5,6 @@ from config import DB_NAME
 logger = logging.getLogger(__name__)
 
 def initialize_database():
-    """Ініціалізує таблиці в базі даних, якщо вони ще не існують."""
     try:
         with sqlite3.connect(DB_NAME) as conn:
             cursor = conn.cursor()
@@ -31,7 +30,6 @@ def initialize_database():
         logger.error(f"Помилка ініціалізації бази даних: {e}")
 
 def add_signal_to_history(data):
-    """Додає запис про сигнал до історії."""
     try:
         with sqlite3.connect(DB_NAME) as conn:
             cursor = conn.cursor()
@@ -43,9 +41,7 @@ def add_signal_to_history(data):
     except Exception as e:
         logger.error(f"Помилка додавання сигналу в історію: {e}")
 
-# --- ПОЧАТОК ЗМІН: Функції для списку обраного ---
 def get_watchlist(user_id: int) -> list:
-    """Отримує список обраних пар для користувача."""
     if not user_id:
         return []
     try:
@@ -60,10 +56,11 @@ def get_watchlist(user_id: int) -> list:
         logger.error(f"Помилка отримання списку обраного для user_id {user_id}: {e}")
         return []
 
-def toggle_watchlist(user_id: int, pair: str):
-    """Додає або видаляє пару зі списку обраного."""
+# --- ПОЧАТОК ЗМІН: Функція тепер повертає True/False ---
+def toggle_watchlist(user_id: int, pair: str) -> bool:
+    """Додає або видаляє пару зі списку обраного. Повертає True при успіху, False при невдачі."""
     if not user_id or not pair:
-        return
+        return False
     try:
         current_list = get_watchlist(user_id)
         
@@ -72,7 +69,7 @@ def toggle_watchlist(user_id: int, pair: str):
         else:
             current_list.append(pair)
         
-        new_list_str = ",".join(current_list)
+        new_list_str = ",".join(sorted(list(set(current_list)))) # Сортуємо для порядку
         
         with sqlite3.connect(DB_NAME) as conn:
             cursor = conn.cursor()
@@ -82,8 +79,10 @@ def toggle_watchlist(user_id: int, pair: str):
             ''', (user_id, new_list_str))
             conn.commit()
             logger.info(f"Оновлено список обраного для user_id {user_id}: {new_list_str}")
+        return True
     except Exception as e:
-        logger.error(f"Помилка оновлення списку обраного для user_id {user_id}: {e}")
+        logger.error(f"Помилка оновлення списку обраного для user_id {user_id}: {e}", exc_info=True)
+        return False
 # --- КІНЕЦЬ ЗМІН ---
 
 initialize_database()

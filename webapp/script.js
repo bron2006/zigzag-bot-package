@@ -55,42 +55,14 @@ document.addEventListener('DOMContentLoaded', function() {
         })
         .catch(err => {
             console.error("Error fetching pair lists:", err);
-            signalOutput.innerHTML = `
-                <div style="text-align: left; font-family: monospace; word-wrap: break-word;">
-                    <h3 style="color: #ef5350;">❌ Помилка завантаження списків пар.</h3>
-                    <p><strong>URL:</strong><br>${staticPairsUrl}</p>
-                    <p><strong>Помилка:</strong><br>${err.name}: ${err.message}</p>
-                </div>
-            `;
+            signalOutput.innerHTML = `<h3 style="color: #ef5350;">❌ Помилка завантаження списків пар.</h3><p>${err.message}</p>`;
             showLoader(false);
         });
     
     const searchInput = document.getElementById('searchInput');
     searchInput.addEventListener('input', debounce((event) => {
         const query = event.target.value.toLowerCase();
-        
-        const filteredData = {
-            forex: (allData.forex || []).map(session => ({
-                ...session,
-                pairs: session.pairs.filter(p => p.toLowerCase().includes(query))
-            })).filter(session => session.pairs.length > 0),
-            crypto: (allData.crypto || []).filter(p => p.toLowerCase().includes(query)),
-            stocks: (allData.stocks || []).filter(p => p.toLowerCase().includes(query)),
-            commodities: (allData.commodities || []).filter(p => p.toLowerCase().includes(query))
-        };
-        // Для watchlist ми фільтруємо оригінальний список і потім конвертуємо
-        const originalWatchlist = (allData.watchlist || []).map(p_normalized => {
-             const allPairs = [
-                ...(allData.forex || []).map(session => session.pairs).flat(),
-                ...(allData.crypto || []),
-                ...(allData.stocks || []),
-                ...(allData.commodities || [])
-            ];
-            return allPairs.find(p_display => p_display.replace(/\//g, '') === p_normalized) || p_normalized;
-        });
-        filteredData.watchlist = originalWatchlist.filter(p => p.toLowerCase().includes(query));
-
-        populateLists(filteredData);
+        populateLists(allData, query);
     }, 300));
 });
 
@@ -98,23 +70,18 @@ function renderFavoriteButton(pair) {
     const pairNormalized = pair.replace(/\//g, '');
     const isFavorite = currentWatchlist.includes(pairNormalized);
     const icon = isFavorite ? '✅' : '⭐';
-    return `<button class="fav-btn" onclick="toggleFavorite(event, '${pair}')">${icon}</button>`;
+    return `<button class="fav-btn" onclick="toggleFavorite(event, this, '${pair}')">${icon}</button>`;
 }
 
-function toggleFavorite(event, pair) {
+function toggleFavorite(event, button, pair) {
     event.stopPropagation();
-    const button = event.currentTarget;
     const isCurrentlyFavorite = button.innerHTML.includes('✅');
-
     const url = `${API_BASE_URL}/api/toggle_watchlist?pair=${pair}&initData=${encodeURIComponent(initData)}`;
     
     button.innerHTML = isCurrentlyFavorite ? '⭐' : '✅';
 
     fetch(url)
-        .then(res => {
-            if (res.status === 401) { throw new Error("Unauthorized"); }
-            return res.json();
-        })
+        .then(res => res.json())
         .then(data => {
             if (!data.success) {
                 button.innerHTML = isCurrentlyFavorite ? '✅' : '⭐';
@@ -130,8 +97,7 @@ function toggleFavorite(event, pair) {
         })
         .catch(err => {
             button.innerHTML = isCurrentlyFavorite ? '✅' : '⭐';
-            alert(`Помилка мережі при оновленні списку обраного: ${err.message}`);
-            console.error(err);
+            alert("Помилка мережі при оновленні списку обраного.");
         });
 }
 
@@ -142,36 +108,42 @@ function createPairButton(pair) {
     </div>`;
 }
 
-function populateLists(data) {
+function populateLists(data, query = '') {
     let html = '';
+    const queryLower = query.toLowerCase();
+
     function createSection(title, pairs) {
-        if (!Array.isArray(pairs) || pairs.length === 0) return '';
+        const filteredPairs = pairs.filter(p => p.toLowerCase().includes(queryLower));
+        if (filteredPairs.length === 0) return '';
+
         let sectionHtml = `<div class="category"><div class="category-title">${title}</div><div class="pair-list">`;
-        pairs.forEach(pair => sectionHtml += createPairButton(pair));
+        filteredPairs.forEach(pair => sectionHtml += createPairButton(pair));
         sectionHtml += '</div></div>';
         return sectionHtml;
     }
     
-    // --- ПОЧАТОК ЗМІН: Виправлена логіка для відображення "Обраного" ---
-    const allPairsForMapping = [
-        ...(allData.forex || []).map(session => session.pairs).flat(),
-        ...(allData.crypto || []),
-        ...(allData.stocks || []),
-        ...(allData.commodities || [])
+    const allKnownPairs = [
+        ...(data.forex || []).map(session => session.pairs).flat(),
+        ...(data.crypto || []), ...(data.stocks || []), ...(data.commodities || [])
     ];
 
-    const watchlistDisplay = (currentWatchlist || []).map(p_normalized => {
-        return allPairsForMapping.find(p_display => p_display.replace(/\//g, '') === p_normalized) || p_normalized;
+    let watchlistDisplay = currentWatchlist.map(p_normalized => {
+        return allKnownPairs.find(p_display => p_display.replace(/\//g, '') === p_normalized) || p_normalized;
     });
 
-    html += createSection('⭐ Обране', data.watchlist ? watchlistDisplay.filter(p => data.watchlist.includes(p)) : watchlistDisplay);
-    // --- КІНЕЦЬ ЗМІН ---
+    if (queryLower) {
+        watchlistDisplay = watchlistDisplay.filter(p => p.toLowerCase().includes(queryLower));
+    }
 
+    html += createSection('⭐ Обране', watchlistDisplay);
     html += createSection('💎 Уся криптовалюта', data.crypto || []);
     
     if (Array.isArray(data.forex)) {
         data.forex.forEach(session => {
-            html += createSection(session.title, session.pairs);
+            const filteredSessionPairs = session.pairs.filter(p => p.toLowerCase().includes(queryLower));
+            if (filteredSessionPairs.length > 0) {
+                 html += createSection(session.title, filteredSessionPairs);
+            }
         });
     }
 
@@ -285,6 +257,12 @@ function drawChart(pair, history) {
 
 function showLoader(visible) {
     loader.className = visible ? '' : 'hidden';
+}
+
+function getAssetType(pair) {
+    if (pair.includes('XAU')) return 'commodities';
+    if (pair.includes('/')) return pair.includes('USD') ? 'crypto' : 'forex';
+    return 'stocks';
 }
 
 function debounce(func, delay) {
