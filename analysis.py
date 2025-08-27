@@ -182,9 +182,7 @@ def _calculate_core_signal(df, daily_df, current_price):
     
     score = 50
     reasons = []
-    # --- ПОЧАТОК ЗМІН: Створюємо окреме поле для критичних попереджень ---
     critical_warning = None
-    # --- КІНЕЦЬ ЗМІН ---
     
     long_term_support, long_term_resistance = identify_support_resistance_levels(daily_df)
     candle_pattern = analyze_candle_patterns(df)
@@ -227,7 +225,6 @@ def _calculate_core_signal(df, daily_df, current_price):
         if support_candidates and (current_price - max(support_candidates)) < atr_threshold:
             score += 20; reasons.append("⚠️ Ціна біля сильної денної підтримки")
 
-    # --- ПОЧАТОК ЗМІН: Записуємо попередження в окреме поле ---
     if is_daily_uptrend is not None:
         if not is_daily_uptrend and score > 65:
             score = 65
@@ -235,7 +232,6 @@ def _calculate_core_signal(df, daily_df, current_price):
         elif is_daily_uptrend and score < 35:
             score = 35
             critical_warning = "❗️ Сигнал обмежений через денний аптренд"
-    # --- КІНЕЦЬ ЗМІН ---
                 
     score = int(np.clip(score, 0, 100))
     
@@ -244,10 +240,21 @@ def _calculate_core_signal(df, daily_df, current_price):
     resistance_candidates = [r for r in long_term_resistance if r > current_price]
     resistance = min(resistance_candidates) if resistance_candidates else None
     
+    # --- ДОДАНО: перевірка на конфлікт ---
+    if candle_pattern:
+        if candle_pattern['type'] == 'bullish':
+            if "MACD падає" in reasons or "Тренд: Ціна під Хмарою" in reasons:
+                score = 50
+                critical_warning = "❗️ Конфлікт сигналів: бичачий патерн суперечить тренду/індикаторам"
+        elif candle_pattern['type'] == 'bearish':
+            if "MACD росте" in reasons or "Тренд: Ціна над Хмарою" in reasons:
+                score = 50
+                critical_warning = "❗️ Конфлікт сигналів: ведмежий патерн суперечить тренду/індикаторам"
+    
     return {
         "score": score, "reasons": reasons, "support": support, "resistance": resistance,
         "candle_pattern": candle_pattern, "volume_info": analyze_volume(df),
-        "critical_warning": critical_warning # Повертаємо нове поле
+        "critical_warning": critical_warning
     }
 
 def _generate_verdict(score):
@@ -278,10 +285,8 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int
                 analysis['score'] = 50
                 analysis['reasons'] = [f"❗️ {news_text}"]
                 final_warning = news_text
-            # --- ПОЧАТОК ЗМІН: Визначаємо, яке попередження показати ---
             else:
                 final_warning = analysis.get("critical_warning")
-            # --- КІНЕЦЬ ЗМІН ---
             
             verdict = _generate_verdict(analysis['score'])
 
@@ -296,7 +301,7 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int
                 "resistance": analysis['resistance'], "bull_percentage": analysis['score'],
                 "bear_percentage": 100 - analysis['score'], "candle_pattern": analysis.get('candle_pattern'),
                 "volume_info": analysis.get('volume_info'),
-                "special_warning": final_warning # Використовуємо фінальне попередження
+                "special_warning": final_warning
             }
             return response_data
             
