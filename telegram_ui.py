@@ -12,11 +12,16 @@ logger = logging.getLogger(__name__)
 
 TIMEFRAMES = ["1m", "5m", "15m"]
 
-# --- ПОЧАТОК ЗМІН: Постійна клавіатура з однією кнопкою "МЕНЮ" ---
+# --- ПОЧАТОК ЗМІН: Додано параметри для постійного відображення ---
 def get_reply_keyboard() -> ReplyKeyboardMarkup:
     """Створює головну клавіатуру, яка завжди присутня внизу екрану."""
     keyboard = [[KeyboardButton("МЕНЮ")]]
-    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    return ReplyKeyboardMarkup(
+        keyboard,
+        resize_keyboard=True,
+        one_time_keyboard=False,
+        persistent=True
+    )
 # --- КІНЕЦЬ ЗМІН ---
 
 def get_main_menu_kb() -> InlineKeyboardMarkup:
