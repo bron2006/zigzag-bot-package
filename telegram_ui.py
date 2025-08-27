@@ -68,22 +68,38 @@ def get_assets_kb(asset_list: list, category: str, timeframe: str) -> InlineKeyb
     keyboard.append([InlineKeyboardButton("⬅️ Назад до таймфреймів", callback_data=f"category_{category}")])
     return InlineKeyboardMarkup(keyboard)
 
+# --- ПОЧАТОК ЗМІН: Уніфіковано логіку start і menu ---
 def start(update: Update, context: CallbackContext) -> None:
-    update.message.reply_text(
-        "👋 Вітаю! Використовуйте кнопку 'МЕНЮ' для навігації.",
-        reply_markup=get_reply_keyboard()
-    )
-
-# --- ПОЧАТОК ЗМІН: Функція меню тепер працює з єдиним сховищем ID ---
-def menu(update: Update, context: CallbackContext) -> None:
-    # Спочатку видаляємо старе повідомлення з меню, якщо воно є
+    """Обробляє команду /start, показуючи головне меню і постійну клавіатуру."""
+    # Видаляємо попереднє меню, якщо воно є
     if state.last_menu_message_id:
         try:
             context.bot.delete_message(chat_id=update.effective_chat.id, message_id=state.last_menu_message_id)
         except BadRequest:
-            logger.warning("Could not delete previous menu message (it may have been deleted manually).")
+            pass # Ігноруємо, якщо повідомлення вже видалено
 
     # Надсилаємо нове меню і зберігаємо його ID
+    sent_message = update.message.reply_text(
+        "👋 Вітаю! Використовуйте кнопки нижче для навігації.",
+        reply_markup=get_main_menu_kb()
+    )
+    state.last_menu_message_id = sent_message.message_id
+    
+    # Окремо надсилаємо повідомлення, щоб гарантовано показати постійну клавіатуру
+    update.message.reply_text(
+        "Клавіатура активована.",
+        reply_markup=get_reply_keyboard()
+    ).delete() # Це повідомлення одразу видаляється, але клавіатура залишається
+
+
+def menu(update: Update, context: CallbackContext) -> None:
+    """Обробляє натискання на кнопку 'МЕНЮ', оновлюючи інтерактивне меню."""
+    if state.last_menu_message_id:
+        try:
+            context.bot.delete_message(chat_id=update.effective_chat.id, message_id=state.last_menu_message_id)
+        except BadRequest:
+            pass
+
     sent_message = update.message.reply_text("🏠 Головне меню:", reply_markup=get_main_menu_kb())
     state.last_menu_message_id = sent_message.message_id
 # --- КІНЕЦЬ ЗМІН ---
@@ -141,12 +157,10 @@ def _format_signal_message(result: dict, timeframe: str) -> str:
         
     return message
 
-# --- ПОЧАТОК ЗМІН: Обробник кнопок тепер також зберігає ID нового меню ---
 def button_handler(update: Update, context: CallbackContext) -> None:
     query = update.callback_query
     query.answer()
     data = query.data
-    # Зберігаємо ID повідомлення, яке ми будемо редагувати
     state.last_menu_message_id = query.message.message_id
 
     parts = data.split('_')
@@ -205,4 +219,3 @@ def button_handler(update: Update, context: CallbackContext) -> None:
             deferred.addCallbacks(on_success, on_error)
             
         reactor.callFromThread(do_analysis)
-# --- КІНЕЦЬ ЗМІН ---
