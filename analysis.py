@@ -172,9 +172,7 @@ def _calculate_core_signal(df, daily_df, current_price):
         df.ta.macd(append=True)
         df.ta.adx(append=True)
         df.ta.atr(length=14, append=True)
-        # --- ПОЧАТОК ЗМІН: Розраховуємо індикатор для денного ТФ ---
         daily_df.ta.kama(length=14, append=True, col_names=('KAMA_14',))
-        # --- КІНЕЦЬ ЗМІН ---
     except Exception as e:
         logger.error(f"Критична помилка при розрахунку індикаторів: {e}")
         return { "score": 50, "reasons": ["Помилка розрахунку індикаторів"] }
@@ -189,75 +187,64 @@ def _calculate_core_signal(df, daily_df, current_price):
     
     candle_pattern = analyze_candle_patterns(df)
     
-    # --- ПОЧАТОК ЗМІН: Посилення логіки S/R та додавання фільтру старшого ТФ ---
+    # --- ПОЧАТОК ЗМІН: Нова, більш надійна логіка оцінки ---
     
-    # Фільтр 1: Перевірка глобального тренду на D1
+    is_daily_uptrend = None
     if pd.notna(last_daily.get('KAMA_14')):
         is_daily_uptrend = last_daily['Close'] > last_daily['KAMA_14']
-        
-        # Перевіряємо MACD і Хмару, тільки якщо глобальний тренд збігається або нейтральний
-        if pd.notna(last.get('MACDh_12_26_9')) and len(df) > 1 and pd.notna(df['MACDh_12_26_9'].iloc[-2]):
-            if last['MACDh_12_26_9'] > 0 and not is_daily_uptrend:
-                score -= 15; reasons.append("MACD суперечить денному тренду")
-            elif last['MACDh_12_26_9'] > 0:
-                score += 15; reasons.append("MACD росте")
-            elif last['MACDh_12_26_9'] < 0 and is_daily_uptrend:
-                score += 15; reasons.append("MACD суперечить денному тренду (корекція)")
-            else:
-                score -= 15; reasons.append("MACD падає")
-
-        if pd.notna(last.get('ISA_9')) and pd.notna(last.get('ISB_26')):
-             is_cloud_bullish = current_price > max(last['ISA_9'], last['ISB_26'])
-             if is_cloud_bullish and not is_daily_uptrend:
-                 score -= 15; reasons.append("Хмара Ішимоку суперечить денному тренду")
-             elif is_cloud_bullish:
-                 score += 15; reasons.append("Тренд: Ціна над Хмарою")
-             elif not is_cloud_bullish and is_daily_uptrend:
-                 score += 15; reasons.append("Ціна під Хмарою (корекція проти денного тренду)")
-             else:
-                 score -= 15; reasons.append("Тренд: Ціна під Хмарою")
     
+    # Оцінка MACD
+    if pd.notna(last.get('MACDh_12_26_9')):
+        if last['MACDh_12_26_9'] > 0: score += 15; reasons.append("MACD росте")
+        else: score -= 15; reasons.append("MACD падає")
+
+    # Оцінка Хмари Ішимоку
+    if pd.notna(last.get('ISA_9')) and pd.notna(last.get('ISB_26')):
+         if current_price > max(last['ISA_9'], last['ISB_26']):
+             score += 15; reasons.append("Тренд: Ціна над Хмарою")
+         else:
+             score -= 15; reasons.append("Тренд: Ціна під Хмарою")
+    
+    # Оцінка свічкових патернів
+    neutral_patterns = ["SPINNINGTOP", "DOJI", "DOJISTAR"]
     if candle_pattern:
-        if candle_pattern['type'] == 'bullish': score += 20; reasons.append(f"Бичачий патерн: {candle_pattern['name']}")
-        else: score -= 20; reasons.append(f"Ведмежий патерн: {candle_pattern['name']}")
+        if candle_pattern['name'] in neutral_patterns:
+            reasons.append(f"Нейтральний патерн: {candle_pattern['name']}")
+        elif candle_pattern['type'] == 'bullish':
+            score += 20; reasons.append(f"Бичачий патерн: {candle_pattern['name']}")
+        else:
+            score -= 20; reasons.append(f"Ведмежий патерн: {candle_pattern['name']}")
 
+    # Оцінка перекупленості/перепроданості
     rsi = last.get('RSI_14')
-    bbl, bbu = last.get('BBL_20_2.0'), last.get('BBU_20_2.0')
     if pd.notna(rsi):
-        if (rsi < 30 or (pd.notna(bbl) and current_price <= bbl)):
-            score += 10; reasons.append("Ознаки перепроданості (RSI/Bollinger)")
-        elif (rsi > 70 or (pd.notna(bbu) and current_price >= bbu)):
-            score -= 10; reasons.append("Ознаки перекупленості (RSI/Bollinger)")
+        if rsi < 30: score += 10; reasons.append("Ознаки перепроданості (RSI)")
+        elif rsi > 70: score -= 10; reasons.append("Ознаки перекупленості (RSI)")
 
-    # Фільтр 2: Посилена перевірка рівнів S/R з денного графіка
+    # Фільтр 1: Посилена перевірка рівнів S/R
     last_atr = last.get('ATRr_14')
     if last_atr and pd.notna(last_atr):
         atr_threshold = last_atr * 0.5
-        
-        # Перевірка опору
-        resistance_candidates_long = [r for r in long_term_resistance if r > current_price]
-        if resistance_candidates_long:
-            closest_resistance = min(resistance_candidates_long)
-            if (closest_resistance - current_price) < atr_threshold:
-                score = 50 # Нейтралізуємо сигнал
-                reasons = ["⚠️ Ціна біля сильного денного опору"]
+        resistance_candidates = [r for r in long_term_resistance if r > current_price]
+        if resistance_candidates and (min(resistance_candidates) - current_price) < atr_threshold:
+            score -= 20; reasons.append("⚠️ Ціна біля сильного денного опору")
+        support_candidates = [s for s in long_term_support if s < current_price]
+        if support_candidates and (current_price - max(support_candidates)) < atr_threshold:
+            score += 20; reasons.append("⚠️ Ціна біля сильної денної підтримки")
 
-        # Перевірка підтримки
-        support_candidates_long = [s for s in long_term_support if s < current_price]
-        if support_candidates_long:
-            closest_support = max(support_candidates_long)
-            if (current_price - closest_support) < atr_threshold:
-                score = 50 # Нейтралізуємо сигнал
-                reasons = ["⚠️ Ціна біля сильної денної підтримки"]
+    # Фільтр 2: Обмеження сигналу, якщо він суперечить денному тренду
+    if is_daily_uptrend is not None:
+        if not is_daily_uptrend and score > 65:
+            score = 65; reasons.append("❗️ Сигнал обмежений через денний даунтренд")
+        elif is_daily_uptrend and score < 35:
+            score = 35; reasons.append("❗️ Сигнал обмежений через денний аптренд")
     # --- КІНЕЦЬ ЗМІН ---
                 
     score = int(np.clip(score, 0, 100))
     
-    all_support = sorted(long_term_support)
-    all_resistance = sorted(long_term_resistance)
-    support_candidates = [s for s in all_support if s < current_price]
+    support_candidates = [s for s in long_term_support if s < current_price]
     support = max(support_candidates) if support_candidates else None
-    resistance_candidates = [r for r in all_resistance if r > current_price]
+    resistance_candidates = [r for r in long_term_resistance if r > current_price]
     resistance = min(resistance_candidates) if resistance_candidates else None
     
     return {
@@ -265,14 +252,12 @@ def _calculate_core_signal(df, daily_df, current_price):
         "candle_pattern": candle_pattern, "volume_info": analyze_volume(df)
     }
 
-# --- ПОЧАТОК ЗМІН: Змінено пороги для генерації вердикту ---
 def _generate_verdict(score):
     if score > 80: return "⬆️ Strong BUY"
     if score > 65: return "↗️ Moderate BUY"
     if score < 20: return "⬇️ Strong SELL"
     if score < 35: return "↘️ Moderate SELL"
     return "🟡 NEUTRAL"
-# --- КІНЕЦЬ ЗМІН ---
 
 def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int, timeframe: str = "15m") -> Deferred:
     def on_data_ready(results):
@@ -286,7 +271,6 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int
 
             current_price = live_price if success3 and live_price is not None else df.iloc[-1]['Close']
             
-            # --- ПОЧАТОК ЗМІН: Новини стають блокуючим фактором ---
             has_news, news_text = check_for_imminent_news(symbol)
             
             analysis = _calculate_core_signal(df, daily_df, current_price)
@@ -294,7 +278,6 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int
             if has_news:
                 analysis['score'] = 50
                 analysis['reasons'] = [f"❗️ {news_text}"]
-            # --- КІНЕЦЬ ЗМІН ---
             
             verdict = _generate_verdict(analysis['score'])
 
