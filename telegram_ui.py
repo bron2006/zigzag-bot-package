@@ -12,26 +12,26 @@ logger = logging.getLogger(__name__)
 
 TIMEFRAMES = ["1m", "5m", "15m"]
 
+# --- ПОЧАТОК ЗМІН: Постійна клавіатура з однією кнопкою "МЕНЮ" ---
 def get_reply_keyboard() -> ReplyKeyboardMarkup:
+    """Створює головну клавіатуру, яка завжди присутня внизу екрану."""
     keyboard = [[KeyboardButton("МЕНЮ")]]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+# --- КІНЕЦЬ ЗМІН ---
 
 def get_main_menu_kb() -> InlineKeyboardMarkup:
+    """Створює вбудоване меню, яке з'являється після натискання на кнопку 'МЕНЮ'."""
     keyboard = [
         [InlineKeyboardButton("💹 Валютні пари (Forex)", callback_data="category_forex")],
         [InlineKeyboardButton("💎 Криптовалюти", callback_data="category_crypto")],
         [InlineKeyboardButton("📈 Акції/Індекси", callback_data="category_stocks")],
         [InlineKeyboardButton("🥇 Сировина", callback_data="category_commodities")]
     ]
-    
-    # --- ПОЧАТОК ЗМІН: Додаємо динамічну кнопку керування сканером ---
     if state.SCANNER_ENABLED:
         scanner_button_text = "✅ Сканер УВІМКНЕНО (вимкнути)"
     else:
         scanner_button_text = "❌ Сканер ВИМКНЕНО (увімкнути)"
     keyboard.append([InlineKeyboardButton(scanner_button_text, callback_data="toggle_scanner")])
-    # --- КІНЕЦЬ ЗМІН ---
-    
     return InlineKeyboardMarkup(keyboard)
 
 def get_timeframe_kb(category: str) -> InlineKeyboardMarkup:
@@ -67,7 +67,7 @@ def get_assets_kb(asset_list: list, category: str, timeframe: str) -> InlineKeyb
 
 def start(update: Update, context: CallbackContext) -> None:
     update.message.reply_text(
-        "👋 Вітаю! Натисніть «МЕНЮ» для вибору активів.",
+        "👋 Вітаю! Використовуйте кнопку 'МЕНЮ' для навігації.",
         reply_markup=get_reply_keyboard()
     )
 
@@ -79,7 +79,10 @@ def menu(update: Update, context: CallbackContext) -> None:
     context.user_data['last_menu_id'] = sent_message.message_id
 
 def reset_ui(update: Update, context: CallbackContext) -> None:
-    update.message.reply_text(f"Невідома команда: '{update.message.text}'. Використовуйте кнопки.", reply_markup=get_reply_keyboard())
+    update.message.reply_text(
+        f"Невідома команда: '{update.message.text}'. Використовуйте кнопку 'МЕНЮ'.",
+        reply_markup=get_reply_keyboard()
+    )
 
 def _format_signal_message(result: dict, timeframe: str) -> str:
     if result.get("error"): return f"❌ Помилка аналізу: {result['error']}"
@@ -137,7 +140,6 @@ def button_handler(update: Update, context: CallbackContext) -> None:
     parts = data.split('_')
     action = parts[0]
 
-    # --- ПОЧАТОК ЗМІН: Обробник для нової кнопки ---
     if action == "toggle":
         if len(parts) > 1 and parts[1] == "scanner":
             state.SCANNER_ENABLED = not state.SCANNER_ENABLED
@@ -145,7 +147,6 @@ def button_handler(update: Update, context: CallbackContext) -> None:
             query.answer(text=f"Сканер ринку {status_text}")
             query.edit_message_text("🏠 Головне меню:", reply_markup=get_main_menu_kb())
             return
-    # --- КІНЕЦЬ ЗМІН ---
 
     if action == "main":
         query.edit_message_text("🏠 Головне меню:", reply_markup=get_main_menu_kb())

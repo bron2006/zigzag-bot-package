@@ -201,30 +201,22 @@ def _calculate_core_signal(df, daily_df, current_price):
          else:
              score -= 15; reasons.append("Тренд: Ціна під Хмарою")
     
-    # --- ПОЧАТОК ЗМІН: Покращена логіка обробки патернів ---
-    neutral_patterns = ["SPINNINGTOP", "DOJI", "DOJISTAR"]
+    # --- ПОЧАТОК ЗМІН: Розширено список нейтральних патернів ---
+    neutral_patterns = ["SPINNINGTOP", "DOJI", "DOJISTAR", "SHORTLINE", "HIGHWAVE", "HARAMI"]
     if candle_pattern:
         pattern_name = candle_pattern['name'].upper()
-        # Спочатку перевіряємо, чи патерн нейтральний
         if any(neutral in pattern_name for neutral in neutral_patterns):
             reasons.append(f"Нейтральний патерн: {candle_pattern['name']}")
-        # Інакше, якщо він не нейтральний, оцінюємо його тип
         elif candle_pattern['type'] == 'bullish':
             score += 20; reasons.append(f"Бичачий патерн: {candle_pattern['name']}")
-        else: # bearish
+        else:
             score -= 20; reasons.append(f"Ведмежий патерн: {candle_pattern['name']}")
     # --- КІНЕЦЬ ЗМІН ---
 
     rsi = last.get('RSI_14')
     if pd.notna(rsi):
         if rsi < 30: score += 10; reasons.append("Ознаки перепроданості (RSI)")
-        # --- ПОЧАТОК ЗМІН: Посилено умову перекупленості ---
-        elif rsi > 75: # Змінено з 70 на 75 для більш сильного сигналу
-            score -= 20 # Збільшено штраф з 10 до 20
-            reasons.append("❗️ Ознаки сильної перекупленості (RSI > 75)")
-        elif rsi > 70:
-            reasons.append("Ознаки перекупленості (RSI > 70)")
-        # --- КІНЕЦЬ ЗМІН ---
+        elif rsi > 70: reasons.append("Ознаки перекупленості (RSI)")
 
     last_atr = last.get('ATRr_14')
     if last_atr and pd.notna(last_atr):
@@ -260,7 +252,17 @@ def _calculate_core_signal(df, daily_df, current_price):
             if "MACD росте" in reasons or "Тренд: Ціна над Хмарою" in reasons:
                 score = 50
                 critical_warning = "❗️ Конфлікт: ведмежий патерн проти бичачих індикаторів"
-    
+                
+    # --- ПОЧАТОК ЗМІН: Додано фінальний VETO-фільтр для RSI ---
+    if pd.notna(rsi):
+        if score > 80 and rsi > 75:
+            score = 60 # Знижуємо до помірного
+            critical_warning = "❗️ Ризик розвороту: сильна перекупленість!"
+        elif score < 20 and rsi < 25:
+            score = 40 # Знижуємо до помірного
+            critical_warning = "❗️ Ризик розвороту: сильна перепроданість!"
+    # --- КІНЕЦЬ ЗМІН ---
+
     return {
         "score": score, "reasons": reasons, "support": support, "resistance": resistance,
         "candle_pattern": candle_pattern, "volume_info": analyze_volume(df),

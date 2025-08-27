@@ -64,7 +64,6 @@ def protected_route(f):
 @crochet.run_in_reactor
 def scan_markets():
     if not state.SCANNER_ENABLED:
-        logger.info("SCANNER: Scanner is disabled, skipping run.")
         return
 
     logger.info("SCANNER: Starting market scan...")
@@ -92,15 +91,19 @@ def scan_markets():
                 if (now - last_notified) > SCANNER_COOLDOWN_SECONDS:
                     logger.info(f"SCANNER: Ideal entry found for {pair_name}! Score: {score}. Sending notification.")
                     message = telegram_ui._format_signal_message(result, "5m")
-                    # --- ПОЧАТОК ЗМІН: Додаємо клавіатуру до повідомлення сканера ---
-                    keyboard = telegram_ui.get_main_menu_kb()
-                    state.updater.bot.send_message(chat_id=chat_id, text=message, parse_mode='Markdown', reply_markup=keyboard)
+                    # --- ПОЧАТОК ЗМІН: Додаємо постійну клавіатуру ---
+                    state.updater.bot.send_message(
+                        chat_id=chat_id,
+                        text=message,
+                        parse_mode='Markdown',
+                        reply_markup=telegram_ui.get_reply_keyboard() # Використовуємо нову функцію
+                    )
                     # --- КІНЕЦЬ ЗМІН ---
                     state.scanner_cooldown_cache[pair_name] = now
                 else:
                     logger.info(f"SCANNER: Ideal entry found for {pair_name} (Score: {score}) but it's on cooldown.")
         except Exception as e:
-            logger.error(f"SCANNER: Error processing result for {pair_name}: {e}", exc_info=True)
+            logger.error(f"SCANNER: CRITICAL - Unhandled exception in on_analysis_done for {pair_name}: {e}", exc_info=True)
 
     d = Deferred()
     d.callback(None)
@@ -108,11 +111,14 @@ def scan_markets():
     for pair in all_forex_pairs:
         def process_next_pair(_, current_pair):
             norm_pair = current_pair.replace("/", "")
-            logger.info(f"SCANNER: Analyzing {norm_pair}...")
-            deferred = get_api_detailed_signal_data(state.client, state.symbol_cache, norm_pair, 0, "5m")
-            deferred.addCallback(on_analysis_done, pair_name=norm_pair)
-            deferred.addErrback(lambda f: logger.error(f"SCANNER: Deferred error for {norm_pair}: {f.getErrorMessage()}"))
-            return deferred
+            try:
+                deferred = get_api_detailed_signal_data(state.client, state.symbol_cache, norm_pair, 0, "5m")
+                deferred.addCallback(on_analysis_done, pair_name=norm_pair)
+                deferred.addErrback(lambda f, p=norm_pair: logger.error(f"SCANNER: Deferred error for {p}: {f.getErrorMessage()}", exc_info=True))
+                return deferred
+            except Exception as e:
+                logger.error(f"SCANNER: CRITICAL - Failed to even start analysis for {norm_pair}: {e}", exc_info=True)
+                return Deferred().callback(None)
 
         d.addCallback(process_next_pair, current_pair=pair)
 
@@ -184,6 +190,11 @@ def start_background_services():
     dp.add_handler(CommandHandler("start", telegram_ui.start))
     dp.add_handler(CommandHandler("symbols", symbols_command))
     dp.add_handler(MessageHandler(Filters.text("МЕНЮ"), telegram_ui.menu))
+    
+    # --- ПОЧАТОК ЗМІН: Видаляємо старий обробник для кнопки сканера ---
+    # dp.add_handler(MessageHandler(Filters.regex(r'^(✅ Сканер УВІМКНЕНО|❌ Сканер ВИМКНЕНО)'), toggle_scanner_command))
+    # --- КІНЕЦЬ ЗМІН ---
+
     dp.add_handler(MessageHandler(Filters.text & ~Filters.command, telegram_ui.reset_ui))
     dp.add_handler(CallbackQueryHandler(telegram_ui.button_handler))
 
