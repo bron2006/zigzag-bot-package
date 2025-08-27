@@ -9,6 +9,7 @@ from functools import wraps
 from flask import Flask, jsonify, send_from_directory, Response, request
 from telegram import Update
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackQueryHandler, CallbackContext
+from telegram.error import BadRequest
 
 import crochet
 crochet.setup()
@@ -90,15 +91,28 @@ def scan_markets():
 
                 if (now - last_notified) > SCANNER_COOLDOWN_SECONDS:
                     logger.info(f"SCANNER: Ideal entry found for {pair_name}! Score: {score}. Sending notification.")
+                    
+                    # --- ПОЧАТОК ЗМІН: Сканер тепер також видаляє старе меню ---
+                    if state.last_menu_message_id:
+                        try:
+                            state.updater.bot.delete_message(chat_id=chat_id, message_id=state.last_menu_message_id)
+                        except BadRequest:
+                            logger.warning("Scanner could not delete previous menu message.")
+                    # --- КІНЕЦЬ ЗМІН ---
+
                     message = telegram_ui._format_signal_message(result, "5m")
-                    # --- ПОЧАТОК ЗМІН: Додаємо постійну клавіатуру ---
-                    state.updater.bot.send_message(
+                    keyboard = telegram_ui.get_main_menu_kb() # Використовуємо вбудовану клавіатуру
+                    
+                    sent_message = state.updater.bot.send_message(
                         chat_id=chat_id,
                         text=message,
                         parse_mode='Markdown',
-                        reply_markup=telegram_ui.get_reply_keyboard() # Використовуємо нову функцію
+                        reply_markup=keyboard
                     )
+                    # --- ПОЧАТОК ЗМІН: І зберігає ID нового ---
+                    state.last_menu_message_id = sent_message.message_id
                     # --- КІНЕЦЬ ЗМІН ---
+
                     state.scanner_cooldown_cache[pair_name] = now
                 else:
                     logger.info(f"SCANNER: Ideal entry found for {pair_name} (Score: {score}) but it's on cooldown.")
@@ -191,10 +205,6 @@ def start_background_services():
     dp.add_handler(CommandHandler("symbols", symbols_command))
     dp.add_handler(MessageHandler(Filters.text("МЕНЮ"), telegram_ui.menu))
     
-    # --- ПОЧАТОК ЗМІН: Видаляємо старий обробник для кнопки сканера ---
-    # dp.add_handler(MessageHandler(Filters.regex(r'^(✅ Сканер УВІМКНЕНО|❌ Сканер ВИМКНЕНО)'), toggle_scanner_command))
-    # --- КІНЕЦЬ ЗМІН ---
-
     dp.add_handler(MessageHandler(Filters.text & ~Filters.command, telegram_ui.reset_ui))
     dp.add_handler(CallbackQueryHandler(telegram_ui.button_handler))
 

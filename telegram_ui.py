@@ -12,7 +12,6 @@ logger = logging.getLogger(__name__)
 
 TIMEFRAMES = ["1m", "5m", "15m"]
 
-# --- ПОЧАТОК ЗМІН: Додано параметри для постійного відображення ---
 def get_reply_keyboard() -> ReplyKeyboardMarkup:
     """Створює головну клавіатуру, яка завжди присутня внизу екрану."""
     keyboard = [[KeyboardButton("МЕНЮ")]]
@@ -22,7 +21,6 @@ def get_reply_keyboard() -> ReplyKeyboardMarkup:
         one_time_keyboard=False,
         persistent=True
     )
-# --- КІНЕЦЬ ЗМІН ---
 
 def get_main_menu_kb() -> InlineKeyboardMarkup:
     """Створює вбудоване меню, яке з'являється після натискання на кнопку 'МЕНЮ'."""
@@ -76,12 +74,19 @@ def start(update: Update, context: CallbackContext) -> None:
         reply_markup=get_reply_keyboard()
     )
 
+# --- ПОЧАТОК ЗМІН: Функція меню тепер працює з єдиним сховищем ID ---
 def menu(update: Update, context: CallbackContext) -> None:
-    if 'last_menu_id' in context.user_data:
-        try: context.bot.delete_message(chat_id=update.message.chat_id, message_id=context.user_data['last_menu_id'])
-        except BadRequest: pass
+    # Спочатку видаляємо старе повідомлення з меню, якщо воно є
+    if state.last_menu_message_id:
+        try:
+            context.bot.delete_message(chat_id=update.effective_chat.id, message_id=state.last_menu_message_id)
+        except BadRequest:
+            logger.warning("Could not delete previous menu message (it may have been deleted manually).")
+
+    # Надсилаємо нове меню і зберігаємо його ID
     sent_message = update.message.reply_text("🏠 Головне меню:", reply_markup=get_main_menu_kb())
-    context.user_data['last_menu_id'] = sent_message.message_id
+    state.last_menu_message_id = sent_message.message_id
+# --- КІНЕЦЬ ЗМІН ---
 
 def reset_ui(update: Update, context: CallbackContext) -> None:
     update.message.reply_text(
@@ -136,11 +141,13 @@ def _format_signal_message(result: dict, timeframe: str) -> str:
         
     return message
 
+# --- ПОЧАТОК ЗМІН: Обробник кнопок тепер також зберігає ID нового меню ---
 def button_handler(update: Update, context: CallbackContext) -> None:
     query = update.callback_query
     query.answer()
     data = query.data
-    context.user_data['last_menu_id'] = query.message.message_id
+    # Зберігаємо ID повідомлення, яке ми будемо редагувати
+    state.last_menu_message_id = query.message.message_id
 
     parts = data.split('_')
     action = parts[0]
@@ -157,8 +164,7 @@ def button_handler(update: Update, context: CallbackContext) -> None:
         query.edit_message_text("🏠 Головне меню:", reply_markup=get_main_menu_kb())
 
     elif action == "category":
-        category = parts[1]
-        query.edit_message_text(f"Виберіть таймфрейм для '{category}':", reply_markup=get_timeframe_kb(category))
+        query.edit_message_text(f"Виберіть таймфрейм:", reply_markup=get_timeframe_kb(parts[1]))
 
     elif action == "tf":
         _, category, timeframe = parts
@@ -199,3 +205,4 @@ def button_handler(update: Update, context: CallbackContext) -> None:
             deferred.addCallbacks(on_success, on_error)
             
         reactor.callFromThread(do_analysis)
+# --- КІНЕЦЬ ЗМІН ---
