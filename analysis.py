@@ -22,91 +22,69 @@ PERIOD_MAP = {
 }
 
 def _send_with_retry(client, request, timeout=60, retries=1):
-    """Надсилає запит до cTrader API з можливістю повторної спроби при таймауті."""
     d = Deferred()
-
     def _attempt(remaining):
         inner = client.send(request, timeout=timeout)
-
         def ok(msg):
-            if not d.called:
-                d.callback(msg)
-
+            if not d.called: d.callback(msg)
         def err(f):
             if f.check(terror.TimeoutError) and remaining > 0:
                 logger.warning(f"Request {type(request).__name__} timed out, retrying ({remaining} left)...")
                 reactor.callLater(0.2, _attempt, remaining - 1)
             else:
-                if not d.called:
-                    d.errback(f)
-
+                if not d.called: d.errback(f)
         inner.addCallbacks(ok, err)
-
     _attempt(retries)
     return d
 
 def get_live_price(client, symbol_cache, norm_pair: str) -> Deferred:
     d = Deferred()
     symbol_details = symbol_cache.get(norm_pair)
-    
     if not symbol_details:
         reactor.callLater(0, d.errback, Exception(f"Символ '{norm_pair}' не знайдено для live price."))
         return d
-    
     symbol_id = symbol_details.symbolId
     account_id = client._client.account_id
     event_name = f"spot_event_{symbol_id}"
-    
     timeout_call = None
-
     def cleanup():
         unsubscribe_req = ProtoOAUnsubscribeSpotsReq(ctidTraderAccountId=account_id, symbolId=[symbol_id])
         client.send(unsubscribe_req)
         client.remove_listener(event_name, on_spot_event)
         if timeout_call and not timeout_call.called:
             timeout_call.cancel()
-
     def on_spot_event(spot_event):
         logger.info(f"Live price received for {norm_pair}. Unsubscribing...")
         cleanup()
-        
         if spot_event.HasField('bid') and spot_event.HasField('ask'):
             price = (spot_event.bid + spot_event.ask) / 2
             if not d.called: d.callback(price / (10**5))
         else:
             if not d.called: d.callback(None)
-
     def on_timeout():
         logger.warning(f"Live price request for {norm_pair} timed out. Market might be closed.")
         cleanup()
         if not d.called: d.callback(None)
-
     client.on(event_name, on_spot_event)
     timeout_call = reactor.callLater(10, on_timeout)
-
     logger.info(f"Subscribing to live price for {norm_pair} (symbolId: {symbol_id})")
     subscribe_req = ProtoOASubscribeSpotsReq(ctidTraderAccountId=account_id, symbolId=[symbol_id])
     client.send(subscribe_req)
-
     return d
 
 def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: int) -> Deferred:
     d = Deferred()
     symbol_details = symbol_cache.get(norm_pair)
-
     if not symbol_details:
         reactor.callLater(0, d.errback, Exception(f"Пара '{norm_pair}' не знайдена в кеші."))
         return d
-
     tf_proto = PERIOD_MAP.get(period)
     if not tf_proto:
         reactor.callLater(0, d.errback, Exception(f"Непідтримуваний таймфрейм: {period}"))
         return d
-
     now = int(time.time() * 1000)
     seconds_per_bar = {'1m': 60, '5m': 300, '15m': 900, '1h': 3600, '4h': 14400, '1day': 86400}
     from_ts = now - (count * seconds_per_bar[period] * 1000)
-
     request = ProtoOAGetTrendbarsReq(
         ctidTraderAccountId=client._client.account_id,
         symbolId=symbol_details.symbolId,
@@ -114,35 +92,26 @@ def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: in
         fromTimestamp=from_ts,
         toTimestamp=now
     )
-    
     logger.info(f"Requesting candles for {norm_pair} ({period})...")
     deferred = _send_with_retry(client, request, timeout=60, retries=1)
-
     def process_response(message):
         response = ProtoOAGetTrendbarsRes()
         response.ParseFromString(message.payload)
         logger.info(f"✅ Received {len(response.trendbar)} candles for {norm_pair} ({period}).")
-        
-        if not response.trendbar: return pd.DataFrame()
-
+        if not response.trendbar:
+            d.callback(pd.DataFrame())
+            return
         divisor = 10**5
-        bars = [{
-            'ts': pd.to_datetime(bar.utcTimestampInMinutes * 60, unit='s', utc=True),
-            'Open': (bar.low + bar.deltaOpen) / divisor,
-            'High': (bar.low + bar.deltaHigh) / divisor,
-            'Low': bar.low / divisor,
-            'Close': (bar.low + bar.deltaClose) / divisor,
-            'Volume': bar.volume
-        } for bar in response.trendbar]
-        
+        bars = [{'ts': pd.to_datetime(bar.utcTimestampInMinutes * 60, unit='s', utc=True),
+                 'Open': (bar.low + bar.deltaOpen) / divisor, 'High': (bar.low + bar.deltaHigh) / divisor,
+                 'Low': bar.low / divisor, 'Close': (bar.low + bar.deltaClose) / divisor,
+                 'Volume': bar.volume} for bar in response.trendbar]
         df = pd.DataFrame(bars)
         d.callback(df.sort_values(by='ts').reset_index(drop=True))
-
     def on_error(failure):
         err = failure.getErrorMessage() if hasattr(failure, 'getErrorMessage') else str(failure)
         logger.error(f"❌ Data request failed for {norm_pair} ({period}): {err}")
         d.errback(failure)
-
     deferred.addCallbacks(process_response, on_error)
     return d
 
@@ -202,57 +171,55 @@ def _calculate_core_signal(df, daily_df, current_price):
         df.ta.ichimoku(append=True)
         df.ta.macd(append=True)
         df.ta.adx(append=True)
-        # --- ПОЧАТОК ЗМІН: Додано розрахунок ATR ---
         df.ta.atr(length=14, append=True)
+        # --- ПОЧАТОК ЗМІН: Розраховуємо індикатор для денного ТФ ---
+        daily_df.ta.kama(length=14, append=True, col_names=('KAMA_14',))
         # --- КІНЕЦЬ ЗМІН ---
     except Exception as e:
         logger.error(f"Критична помилка при розрахунку індикаторів: {e}")
         return { "score": 50, "reasons": ["Помилка розрахунку індикаторів"] }
 
     last = df.iloc[-1]
+    last_daily = daily_df.iloc[-1]
     
     score = 50
     reasons = []
     
     long_term_support, long_term_resistance = identify_support_resistance_levels(daily_df)
-    short_term_support, short_term_resistance = identify_support_resistance_levels(df, window=10)
     
     candle_pattern = analyze_candle_patterns(df)
-    volume_info = analyze_volume(df)
+    
+    # --- ПОЧАТОК ЗМІН: Посилення логіки S/R та додавання фільтру старшого ТФ ---
+    
+    # Фільтр 1: Перевірка глобального тренду на D1
+    if pd.notna(last_daily.get('KAMA_14')):
+        is_daily_uptrend = last_daily['Close'] > last_daily['KAMA_14']
+        
+        # Перевіряємо MACD і Хмару, тільки якщо глобальний тренд збігається або нейтральний
+        if pd.notna(last.get('MACDh_12_26_9')) and len(df) > 1 and pd.notna(df['MACDh_12_26_9'].iloc[-2]):
+            if last['MACDh_12_26_9'] > 0 and not is_daily_uptrend:
+                score -= 15; reasons.append("MACD суперечить денному тренду")
+            elif last['MACDh_12_26_9'] > 0:
+                score += 15; reasons.append("MACD росте")
+            elif last['MACDh_12_26_9'] < 0 and is_daily_uptrend:
+                score += 15; reasons.append("MACD суперечить денному тренду (корекція)")
+            else:
+                score -= 15; reasons.append("MACD падає")
 
+        if pd.notna(last.get('ISA_9')) and pd.notna(last.get('ISB_26')):
+             is_cloud_bullish = current_price > max(last['ISA_9'], last['ISB_26'])
+             if is_cloud_bullish and not is_daily_uptrend:
+                 score -= 15; reasons.append("Хмара Ішимоку суперечить денному тренду")
+             elif is_cloud_bullish:
+                 score += 15; reasons.append("Тренд: Ціна над Хмарою")
+             elif not is_cloud_bullish and is_daily_uptrend:
+                 score += 15; reasons.append("Ціна під Хмарою (корекція проти денного тренду)")
+             else:
+                 score -= 15; reasons.append("Тренд: Ціна під Хмарою")
+    
     if candle_pattern:
         if candle_pattern['type'] == 'bullish': score += 20; reasons.append(f"Бичачий патерн: {candle_pattern['name']}")
         else: score -= 20; reasons.append(f"Ведмежий патерн: {candle_pattern['name']}")
-
-    # --- ПОЧАТОК ЗМІН: Логіка близькості до S/R на основі ATR ---
-    last_atr = last.get('ATRr_14')
-    if last_atr and pd.notna(last_atr):
-        atr_threshold = last_atr * 0.5  # Визначаємо поріг як 50% від ATR
-        
-        # Перевірка підтримки
-        support_candidates = [s for s in short_term_support if s < current_price]
-        if support_candidates:
-            closest_support = max(support_candidates)
-            if (current_price - closest_support) < atr_threshold:
-                score += 20
-                reasons.append("Ціна біля локальної підтримки (ATR)")
-
-        # Перевірка опору
-        resistance_candidates = [r for r in short_term_resistance if r > current_price]
-        if resistance_candidates:
-            closest_resistance = min(resistance_candidates)
-            if (closest_resistance - current_price) < atr_threshold:
-                score -= 20
-                reasons.append("Ціна біля локального опору (ATR)")
-    # --- КІНЕЦЬ ЗМІН ---
-
-    if pd.notna(last.get('MACDh_12_26_9')) and len(df) > 1 and pd.notna(df['MACDh_12_26_9'].iloc[-2]):
-        if last['MACDh_12_26_9'] > df['MACDh_12_26_9'].iloc[-2]: score += 15; reasons.append("MACD росте")
-        else: score -= 15; reasons.append("MACD падає")
-
-    if pd.notna(last.get('ISA_9')) and pd.notna(last.get('ISB_26')):
-        if current_price > max(last['ISA_9'], last['ISB_26']): score += 15; reasons.append("Тренд: Ціна над Хмарою")
-        elif current_price < min(last['ISA_9'], last['ISB_26']): score -= 15; reasons.append("Тренд: Ціна під Хмарою")
 
     rsi = last.get('RSI_14')
     bbl, bbu = last.get('BBL_20_2.0'), last.get('BBU_20_2.0')
@@ -261,11 +228,33 @@ def _calculate_core_signal(df, daily_df, current_price):
             score += 10; reasons.append("Ознаки перепроданості (RSI/Bollinger)")
         elif (rsi > 70 or (pd.notna(bbu) and current_price >= bbu)):
             score -= 10; reasons.append("Ознаки перекупленості (RSI/Bollinger)")
-    
+
+    # Фільтр 2: Посилена перевірка рівнів S/R з денного графіка
+    last_atr = last.get('ATRr_14')
+    if last_atr and pd.notna(last_atr):
+        atr_threshold = last_atr * 0.5
+        
+        # Перевірка опору
+        resistance_candidates_long = [r for r in long_term_resistance if r > current_price]
+        if resistance_candidates_long:
+            closest_resistance = min(resistance_candidates_long)
+            if (closest_resistance - current_price) < atr_threshold:
+                score = 50 # Нейтралізуємо сигнал
+                reasons = ["⚠️ Ціна біля сильного денного опору"]
+
+        # Перевірка підтримки
+        support_candidates_long = [s for s in long_term_support if s < current_price]
+        if support_candidates_long:
+            closest_support = max(support_candidates_long)
+            if (current_price - closest_support) < atr_threshold:
+                score = 50 # Нейтралізуємо сигнал
+                reasons = ["⚠️ Ціна біля сильної денної підтримки"]
+    # --- КІНЕЦЬ ЗМІН ---
+                
     score = int(np.clip(score, 0, 100))
     
-    all_support = sorted(long_term_support + short_term_support)
-    all_resistance = sorted(long_term_resistance + short_term_resistance)
+    all_support = sorted(long_term_support)
+    all_resistance = sorted(long_term_resistance)
     support_candidates = [s for s in all_support if s < current_price]
     support = max(support_candidates) if support_candidates else None
     resistance_candidates = [r for r in all_resistance if r > current_price]
@@ -276,12 +265,14 @@ def _calculate_core_signal(df, daily_df, current_price):
         "candle_pattern": candle_pattern, "volume_info": analyze_volume(df)
     }
 
+# --- ПОЧАТОК ЗМІН: Змінено пороги для генерації вердикту ---
 def _generate_verdict(score):
-    if score > 75: return "⬆️ Strong BUY"
-    if score > 55: return "↗️ Moderate BUY"
-    if score < 25: return "⬇️ Strong SELL"
-    if score < 45: return "↘️ Moderate SELL"
+    if score > 80: return "⬆️ Strong BUY"
+    if score > 65: return "↗️ Moderate BUY"
+    if score < 20: return "⬇️ Strong SELL"
+    if score < 35: return "↘️ Moderate SELL"
     return "🟡 NEUTRAL"
+# --- КІНЕЦЬ ЗМІН ---
 
 def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int, timeframe: str = "15m") -> Deferred:
     def on_data_ready(results):
@@ -290,12 +281,20 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int
             success2, daily_df = results[1]
             success3, live_price = results[2]
 
-            if not (success1 and success2) or df.empty or len(df) < 50:
+            if not (success1 and success2) or df.empty or len(df) < 50 or daily_df.empty:
                 return {"error": f"Not enough historical data for {timeframe} analysis."}
 
             current_price = live_price if success3 and live_price is not None else df.iloc[-1]['Close']
             
+            # --- ПОЧАТОК ЗМІН: Новини стають блокуючим фактором ---
+            has_news, news_text = check_for_imminent_news(symbol)
+            
             analysis = _calculate_core_signal(df, daily_df, current_price)
+
+            if has_news:
+                analysis['score'] = 50
+                analysis['reasons'] = [f"❗️ {news_text}"]
+            # --- КІНЕЦЬ ЗМІН ---
             
             verdict = _generate_verdict(analysis['score'])
 
@@ -304,19 +303,13 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int
                 'price': current_price, 'bull_percentage': analysis['score']
             })
             
-            # --- ПОЧАТОК ЗМІН: Перевірка новин ---
-            has_news, news_text = check_for_imminent_news(symbol)
-            # --- КІНЕЦЬ ЗМІН ---
-
             response_data = {
                 "pair": symbol, "price": current_price, "verdict_text": verdict, 
                 "reasons": analysis['reasons'], "support": analysis['support'], 
                 "resistance": analysis['resistance'], "bull_percentage": analysis['score'],
                 "bear_percentage": 100 - analysis['score'], "candle_pattern": analysis.get('candle_pattern'),
                 "volume_info": analysis.get('volume_info'),
-                # --- ПОЧАТОК ЗМІН: Додавання попередження про новини ---
                 "special_warning": news_text if has_news else None
-                # --- КІНЕЦЬ ЗМІН ---
             }
             return response_data
             
