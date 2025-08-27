@@ -1,26 +1,19 @@
-# state.py
+# Цей файл зберігає глобальний стан додатку,
+# щоб різні модулі мали доступ до спільних об'єктів.
 
-from typing import Optional, Any
+# Клієнт для cTrader API
+client = None
 
-# Оголошуємо "контейнери" для майбутніх об'єктів.
-# Вони будуть ініціалізовані в main.py перед тим, як їх хтось використає.
-state: Optional[Any] = None
-client: Optional[Any] = None
-bot: Optional[Any] = None
+# Об'єкт для взаємодії з Telegram Bot API
+updater = None
 
-class AppState:
-    """
-    Клас для зберігання всього стану програми.
-    Тут будуть дані про акаунти, позиції, налаштування тощо.
-    """
-    def __init__(self):
-        self.message = "Initial state"
-        # Наприклад, тут можна зберігати інформацію про торгові рахунки
-        self.accounts = {}
+# Кеш для символів, завантажених з cTrader
+symbol_cache = {}
+all_symbol_names = []
+SYMBOLS_LOADED = False
 
-    def update_message(self, new_message: str):
-        self.message = new_message
-
-    def get_status(self):
-        # У майбутньому цей метод буде збирати повний статус з усіх систем
-        return f"Current App State: '{self.message}'"
+# --- ПОЧАТОК ЗМІН: Кеш для сканера ринку ---
+# Зберігає час останнього сповіщення для кожної пари
+# Формат: {'EURUSD': 1672531200.0, 'GBPUSD': 1672531230.0}
+scanner_cooldown_cache = {}
+# --- КІНЕЦЬ ЗМІН ---
