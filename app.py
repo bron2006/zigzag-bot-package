@@ -26,10 +26,8 @@ from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOASymbolsListRes
 
 from twisted.internet import reactor
 from twisted.internet.defer import Deferred
-# --- ПОЧАТОК ЗМІН: Імпортуємо необхідні компоненти ---
 from twisted.internet.task import LoopingCall
 import telegram_ui
-# --- КІНЕЦЬ ЗМІН ---
 
 from analysis import get_api_detailed_signal_data, PERIOD_MAP
 
@@ -63,17 +61,23 @@ def protected_route(f):
         return f(*args, **kwargs)
     return decorated_function
 
-# --- ПОЧАТОК ЗМІН: Логіка сканера ринку ---
-
 @crochet.run_in_reactor
 def scan_markets():
     """Послідовно аналізує всі Forex пари і надсилає сповіщення про ідеальні входи."""
+    # --- ПОЧАТОК ЗМІН: Перевірка, чи увімкнено сканер ---
+    if not state.SCANNER_ENABLED:
+        logger.info("SCANNER: Scanner is disabled, skipping run.")
+        return
+    # --- КІНЕЦЬ ЗМІН ---
+
     logger.info("SCANNER: Starting market scan...")
     all_forex_pairs = list(set(itertools.chain.from_iterable(FOREX_SESSIONS.values())))
     chat_id = get_chat_id()
 
     if not chat_id:
-        logger.warning("SCANNER: TELEGRAM_CHAT_ID is not set. Scanner will not send notifications.")
+        # --- ПОЧАТОК ЗМІН: Оновлено текст попередження ---
+        logger.warning("SCANNER: CHAT_ID is not set. Scanner will not send notifications.")
+        # --- КІНЕЦЬ ЗМІН ---
         return
 
     def on_analysis_done(result, pair_name):
@@ -100,7 +104,6 @@ def scan_markets():
         except Exception as e:
             logger.error(f"SCANNER: Error processing result for {pair_name}: {e}", exc_info=True)
 
-    # Запускаємо аналіз послідовно
     d = Deferred()
     d.callback(None)
 
@@ -116,8 +119,6 @@ def scan_markets():
         d.addCallback(process_next_pair, current_pair=pair)
 
     return d
-
-# --- КІНЕЦЬ ЗМІН ---
 
 def on_ctrader_ready():
     logger.info("cTrader client is ready. Loading symbols...")
@@ -135,11 +136,9 @@ def on_symbols_loaded(raw_message):
         if _client_ready_deferred and not _client_ready_deferred.called:
             _client_ready_deferred.callback(True)
         
-        # --- ПОЧАТОК ЗМІН: Запускаємо сканер після завантаження символів ---
         logger.info("Starting market scanner loop...")
         scanner_loop = LoopingCall(scan_markets)
-        scanner_loop.start(60) # запускати кожні 60 секунд
-        # --- КІНЕЦЬ ЗМІН ---
+        scanner_loop.start(60)
 
     except Exception as e:
         logger.error(f"Symbol processing error: {e}", exc_info=True)
@@ -197,6 +196,7 @@ def start_background_services():
     client.start()
     logger.info("cTrader client started.")
 
+# ... (решта файлу app.py без змін) ...
 @app.route("/")
 def home():
     try:

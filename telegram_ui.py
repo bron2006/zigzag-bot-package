@@ -23,6 +23,15 @@ def get_main_menu_kb() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("📈 Акції/Індекси", callback_data="category_stocks")],
         [InlineKeyboardButton("🥇 Сировина", callback_data="category_commodities")]
     ]
+    
+    # --- ПОЧАТОК ЗМІН: Додаємо динамічну кнопку керування сканером ---
+    if state.SCANNER_ENABLED:
+        scanner_button_text = "✅ Сканер УВІМКНЕНО (вимкнути)"
+    else:
+        scanner_button_text = "❌ Сканер ВИМКНЕНО (увімкнути)"
+    keyboard.append([InlineKeyboardButton(scanner_button_text, callback_data="toggle_scanner")])
+    # --- КІНЕЦЬ ЗМІН ---
+    
     return InlineKeyboardMarkup(keyboard)
 
 def get_timeframe_kb(category: str) -> InlineKeyboardMarkup:
@@ -72,15 +81,12 @@ def menu(update: Update, context: CallbackContext) -> None:
 def reset_ui(update: Update, context: CallbackContext) -> None:
     update.message.reply_text(f"Невідома команда: '{update.message.text}'. Використовуйте кнопки.", reply_markup=get_reply_keyboard())
 
-# --- ПОЧАТОК ЗМІН: Оновлена логіка форматування ---
 def _format_signal_message(result: dict, timeframe: str) -> str:
     if result.get("error"): return f"❌ Помилка аналізу: {result['error']}"
 
     message = ""
-    # Спочатку перевіряємо, чи є попередження, і додаємо його
     if result.get("special_warning"):
         message += f"**{result.get('special_warning')}**\n\n"
-    # --- КІНЕЦЬ ЗМІН ---
 
     pair = result.get('pair', 'N/A')
     price = result.get('price', 0)
@@ -130,6 +136,16 @@ def button_handler(update: Update, context: CallbackContext) -> None:
 
     parts = data.split('_')
     action = parts[0]
+
+    # --- ПОЧАТОК ЗМІН: Обробник для нової кнопки ---
+    if action == "toggle":
+        if len(parts) > 1 and parts[1] == "scanner":
+            state.SCANNER_ENABLED = not state.SCANNER_ENABLED
+            status_text = "увімкнено" if state.SCANNER_ENABLED else "вимкнено"
+            query.answer(text=f"Сканер ринку {status_text}")
+            query.edit_message_text("🏠 Головне меню:", reply_markup=get_main_menu_kb())
+            return
+    # --- КІНЕЦЬ ЗМІН ---
 
     if action == "main":
         query.edit_message_text("🏠 Головне меню:", reply_markup=get_main_menu_kb())
