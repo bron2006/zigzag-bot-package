@@ -68,29 +68,21 @@ def get_assets_kb(asset_list: list, category: str, timeframe: str) -> InlineKeyb
     keyboard.append([InlineKeyboardButton("⬅️ Назад до таймфреймів", callback_data=f"category_{category}")])
     return InlineKeyboardMarkup(keyboard)
 
-# --- ПОЧАТОК ЗМІН: Уніфіковано логіку start і menu ---
+# --- ПОЧАТОК ЗМІН: Виправлено логіку команди /start ---
 def start(update: Update, context: CallbackContext) -> None:
-    """Обробляє команду /start, показуючи головне меню і постійну клавіатуру."""
-    # Видаляємо попереднє меню, якщо воно є
+    """Обробляє команду /start, показуючи вітальне повідомлення і постійну клавіатуру."""
+    update.message.reply_text(
+        "👋 Вітаю! Натисніть 'МЕНЮ' для початку роботи.",
+        reply_markup=get_reply_keyboard()
+    )
+    # Також видаляємо будь-яке старе меню, щоб уникнути конфліктів
     if state.last_menu_message_id:
         try:
             context.bot.delete_message(chat_id=update.effective_chat.id, message_id=state.last_menu_message_id)
         except BadRequest:
-            pass # Ігноруємо, якщо повідомлення вже видалено
-
-    # Надсилаємо нове меню і зберігаємо його ID
-    sent_message = update.message.reply_text(
-        "👋 Вітаю! Використовуйте кнопки нижче для навігації.",
-        reply_markup=get_main_menu_kb()
-    )
-    state.last_menu_message_id = sent_message.message_id
-    
-    # Окремо надсилаємо повідомлення, щоб гарантовано показати постійну клавіатуру
-    update.message.reply_text(
-        "Клавіатура активована.",
-        reply_markup=get_reply_keyboard()
-    ).delete() # Це повідомлення одразу видаляється, але клавіатура залишається
-
+            pass
+        state.last_menu_message_id = None
+# --- КІНЕЦЬ ЗМІН ---
 
 def menu(update: Update, context: CallbackContext) -> None:
     """Обробляє натискання на кнопку 'МЕНЮ', оновлюючи інтерактивне меню."""
@@ -102,7 +94,6 @@ def menu(update: Update, context: CallbackContext) -> None:
 
     sent_message = update.message.reply_text("🏠 Головне меню:", reply_markup=get_main_menu_kb())
     state.last_menu_message_id = sent_message.message_id
-# --- КІНЕЦЬ ЗМІН ---
 
 def reset_ui(update: Update, context: CallbackContext) -> None:
     update.message.reply_text(
