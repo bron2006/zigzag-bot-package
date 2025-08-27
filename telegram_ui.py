@@ -34,7 +34,6 @@ def get_timeframe_kb(category: str) -> InlineKeyboardMarkup:
     keyboard.append([InlineKeyboardButton("⬅️ Назад до категорій", callback_data="main_menu")])
     return InlineKeyboardMarkup(keyboard)
 
-# --- ПОЧАТОК ЗМІН: Додаємо години в кнопки сесій ---
 def get_forex_sessions_kb(timeframe: str) -> InlineKeyboardMarkup:
     keyboard = []
     for session_name in FOREX_SESSIONS:
@@ -42,7 +41,6 @@ def get_forex_sessions_kb(timeframe: str) -> InlineKeyboardMarkup:
         keyboard.append([InlineKeyboardButton(display_text, callback_data=f"session_forex_{timeframe}_{session_name}")])
     keyboard.append([InlineKeyboardButton("⬅️ Назад до таймфреймів", callback_data="category_forex")])
     return InlineKeyboardMarkup(keyboard)
-# --- КІНЕЦЬ ЗМІН ---
 
 def get_assets_kb(asset_list: list, category: str, timeframe: str) -> InlineKeyboardMarkup:
     keyboard = []
@@ -74,12 +72,15 @@ def menu(update: Update, context: CallbackContext) -> None:
 def reset_ui(update: Update, context: CallbackContext) -> None:
     update.message.reply_text(f"Невідома команда: '{update.message.text}'. Використовуйте кнопки.", reply_markup=get_reply_keyboard())
 
+# --- ПОЧАТОК ЗМІН: Оновлена логіка форматування ---
 def _format_signal_message(result: dict, timeframe: str) -> str:
     if result.get("error"): return f"❌ Помилка аналізу: {result['error']}"
 
     message = ""
+    # Спочатку перевіряємо, чи є попередження, і додаємо його
     if result.get("special_warning"):
-        message += f"**{result['special_warning']}**\n\n"
+        message += f"**{result.get('special_warning')}**\n\n"
+    # --- КІНЕЦЬ ЗМІН ---
 
     pair = result.get('pair', 'N/A')
     price = result.get('price', 0)

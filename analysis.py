@@ -182,30 +182,27 @@ def _calculate_core_signal(df, daily_df, current_price):
     
     score = 50
     reasons = []
+    # --- ПОЧАТОК ЗМІН: Створюємо окреме поле для критичних попереджень ---
+    critical_warning = None
+    # --- КІНЕЦЬ ЗМІН ---
     
     long_term_support, long_term_resistance = identify_support_resistance_levels(daily_df)
-    
     candle_pattern = analyze_candle_patterns(df)
-    
-    # --- ПОЧАТОК ЗМІН: Нова, більш надійна логіка оцінки ---
     
     is_daily_uptrend = None
     if pd.notna(last_daily.get('KAMA_14')):
         is_daily_uptrend = last_daily['Close'] > last_daily['KAMA_14']
     
-    # Оцінка MACD
     if pd.notna(last.get('MACDh_12_26_9')):
         if last['MACDh_12_26_9'] > 0: score += 15; reasons.append("MACD росте")
         else: score -= 15; reasons.append("MACD падає")
 
-    # Оцінка Хмари Ішимоку
     if pd.notna(last.get('ISA_9')) and pd.notna(last.get('ISB_26')):
          if current_price > max(last['ISA_9'], last['ISB_26']):
              score += 15; reasons.append("Тренд: Ціна над Хмарою")
          else:
              score -= 15; reasons.append("Тренд: Ціна під Хмарою")
     
-    # Оцінка свічкових патернів
     neutral_patterns = ["SPINNINGTOP", "DOJI", "DOJISTAR"]
     if candle_pattern:
         if candle_pattern['name'] in neutral_patterns:
@@ -215,13 +212,11 @@ def _calculate_core_signal(df, daily_df, current_price):
         else:
             score -= 20; reasons.append(f"Ведмежий патерн: {candle_pattern['name']}")
 
-    # Оцінка перекупленості/перепроданості
     rsi = last.get('RSI_14')
     if pd.notna(rsi):
         if rsi < 30: score += 10; reasons.append("Ознаки перепроданості (RSI)")
         elif rsi > 70: score -= 10; reasons.append("Ознаки перекупленості (RSI)")
 
-    # Фільтр 1: Посилена перевірка рівнів S/R
     last_atr = last.get('ATRr_14')
     if last_atr and pd.notna(last_atr):
         atr_threshold = last_atr * 0.5
@@ -232,12 +227,14 @@ def _calculate_core_signal(df, daily_df, current_price):
         if support_candidates and (current_price - max(support_candidates)) < atr_threshold:
             score += 20; reasons.append("⚠️ Ціна біля сильної денної підтримки")
 
-    # Фільтр 2: Обмеження сигналу, якщо він суперечить денному тренду
+    # --- ПОЧАТОК ЗМІН: Записуємо попередження в окреме поле ---
     if is_daily_uptrend is not None:
         if not is_daily_uptrend and score > 65:
-            score = 65; reasons.append("❗️ Сигнал обмежений через денний даунтренд")
+            score = 65
+            critical_warning = "❗️ Сигнал обмежений через денний даунтренд"
         elif is_daily_uptrend and score < 35:
-            score = 35; reasons.append("❗️ Сигнал обмежений через денний аптренд")
+            score = 35
+            critical_warning = "❗️ Сигнал обмежений через денний аптренд"
     # --- КІНЕЦЬ ЗМІН ---
                 
     score = int(np.clip(score, 0, 100))
@@ -249,7 +246,8 @@ def _calculate_core_signal(df, daily_df, current_price):
     
     return {
         "score": score, "reasons": reasons, "support": support, "resistance": resistance,
-        "candle_pattern": candle_pattern, "volume_info": analyze_volume(df)
+        "candle_pattern": candle_pattern, "volume_info": analyze_volume(df),
+        "critical_warning": critical_warning # Повертаємо нове поле
     }
 
 def _generate_verdict(score):
@@ -275,9 +273,15 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int
             
             analysis = _calculate_core_signal(df, daily_df, current_price)
 
+            final_warning = None
             if has_news:
                 analysis['score'] = 50
                 analysis['reasons'] = [f"❗️ {news_text}"]
+                final_warning = news_text
+            # --- ПОЧАТОК ЗМІН: Визначаємо, яке попередження показати ---
+            else:
+                final_warning = analysis.get("critical_warning")
+            # --- КІНЕЦЬ ЗМІН ---
             
             verdict = _generate_verdict(analysis['score'])
 
@@ -292,7 +296,7 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int
                 "resistance": analysis['resistance'], "bull_percentage": analysis['score'],
                 "bear_percentage": 100 - analysis['score'], "candle_pattern": analysis.get('candle_pattern'),
                 "volume_info": analysis.get('volume_info'),
-                "special_warning": news_text if has_news else None
+                "special_warning": final_warning # Використовуємо фінальне попередження
             }
             return response_data
             
