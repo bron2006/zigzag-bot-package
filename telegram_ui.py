@@ -13,28 +13,23 @@ logger = logging.getLogger(__name__)
 TIMEFRAMES = ["1m", "5m", "15m"]
 
 def get_reply_keyboard() -> ReplyKeyboardMarkup:
-    """Створює головну клавіатуру, яка завжди присутня внизу екрану."""
     keyboard = [[KeyboardButton("МЕНЮ")]]
-    return ReplyKeyboardMarkup(
-        keyboard,
-        resize_keyboard=True,
-        one_time_keyboard=False,
-        persistent=True
-    )
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 def get_main_menu_kb() -> InlineKeyboardMarkup:
-    """Створює вбудоване меню, яке з'являється після натискання на кнопку 'МЕНЮ'."""
     keyboard = [
         [InlineKeyboardButton("💹 Валютні пари (Forex)", callback_data="category_forex")],
         [InlineKeyboardButton("💎 Криптовалюти", callback_data="category_crypto")],
         [InlineKeyboardButton("📈 Акції/Індекси", callback_data="category_stocks")],
         [InlineKeyboardButton("🥇 Сировина", callback_data="category_commodities")]
     ]
+    
     if state.SCANNER_ENABLED:
         scanner_button_text = "✅ Сканер УВІМКНЕНО (вимкнути)"
     else:
         scanner_button_text = "❌ Сканер ВИМКНЕНО (увімкнути)"
     keyboard.append([InlineKeyboardButton(scanner_button_text, callback_data="toggle_scanner")])
+    
     return InlineKeyboardMarkup(keyboard)
 
 def get_timeframe_kb(category: str) -> InlineKeyboardMarkup:
@@ -68,38 +63,39 @@ def get_assets_kb(asset_list: list, category: str, timeframe: str) -> InlineKeyb
     keyboard.append([InlineKeyboardButton("⬅️ Назад до таймфреймів", callback_data=f"category_{category}")])
     return InlineKeyboardMarkup(keyboard)
 
-# --- ПОЧАТОК ЗМІН: Виправлено логіку команди /start ---
 def start(update: Update, context: CallbackContext) -> None:
-    """Обробляє команду /start, показуючи вітальне повідомлення і постійну клавіатуру."""
     update.message.reply_text(
-        "👋 Вітаю! Натисніть 'МЕНЮ' для початку роботи.",
+        "👋 Вітаю! Натисніть «МЕНЮ» для вибору активів.",
         reply_markup=get_reply_keyboard()
     )
-    # Також видаляємо будь-яке старе меню, щоб уникнути конфліктів
-    if state.last_menu_message_id:
+
+# --- ПОЧАТОК ЗМІН: Оновлена логіка функції menu згідно з рекомендацією експерта ---
+def menu(update: Update, context: CallbackContext) -> None:
+    # Видаляємо попереднє повідомлення з inline-меню, якщо воно є
+    if 'last_menu_id' in context.user_data:
         try:
-            context.bot.delete_message(chat_id=update.effective_chat.id, message_id=state.last_menu_message_id)
+            context.bot.delete_message(chat_id=update.effective_chat.id, message_id=context.user_data['last_menu_id'])
         except BadRequest:
             pass
-        state.last_menu_message_id = None
+
+    # Надсилаємо нове повідомлення з inline-меню
+    sent_message = update.message.reply_text(
+        "🏠 Головне меню:",
+        reply_markup=get_main_menu_kb()
+    )
+    context.user_data['last_menu_id'] = sent_message.message_id
+
+    # 🔑 Надсилаємо друге, "сервісне" повідомлення, щоб "закріпити" нижню кнопку "МЕНЮ"
+    # Це технічний трюк для обходу багу мобільних клієнтів Telegram
+    context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text="⌨️", # Короткий текст, щоб не заважати
+        reply_markup=get_reply_keyboard()
+    )
 # --- КІНЕЦЬ ЗМІН ---
 
-def menu(update: Update, context: CallbackContext) -> None:
-    """Обробляє натискання на кнопку 'МЕНЮ', оновлюючи інтерактивне меню."""
-    if state.last_menu_message_id:
-        try:
-            context.bot.delete_message(chat_id=update.effective_chat.id, message_id=state.last_menu_message_id)
-        except BadRequest:
-            pass
-
-    sent_message = update.message.reply_text("🏠 Головне меню:", reply_markup=get_main_menu_kb())
-    state.last_menu_message_id = sent_message.message_id
-
 def reset_ui(update: Update, context: CallbackContext) -> None:
-    update.message.reply_text(
-        f"Невідома команда: '{update.message.text}'. Використовуйте кнопку 'МЕНЮ'.",
-        reply_markup=get_reply_keyboard()
-    )
+    update.message.reply_text(f"Невідома команда: '{update.message.text}'. Використовуйте кнопки.", reply_markup=get_reply_keyboard())
 
 def _format_signal_message(result: dict, timeframe: str) -> str:
     if result.get("error"): return f"❌ Помилка аналізу: {result['error']}"
@@ -152,7 +148,7 @@ def button_handler(update: Update, context: CallbackContext) -> None:
     query = update.callback_query
     query.answer()
     data = query.data
-    state.last_menu_message_id = query.message.message_id
+    context.user_data['last_menu_id'] = query.message.message_id
 
     parts = data.split('_')
     action = parts[0]
@@ -169,7 +165,8 @@ def button_handler(update: Update, context: CallbackContext) -> None:
         query.edit_message_text("🏠 Головне меню:", reply_markup=get_main_menu_kb())
 
     elif action == "category":
-        query.edit_message_text(f"Виберіть таймфрейм:", reply_markup=get_timeframe_kb(parts[1]))
+        category = parts[1]
+        query.edit_message_text(f"Виберіть таймфрейм для '{category}':", reply_markup=get_timeframe_kb(category))
 
     elif action == "tf":
         _, category, timeframe = parts
