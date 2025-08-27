@@ -201,7 +201,6 @@ def _calculate_core_signal(df, daily_df, current_price):
          else:
              score -= 15; reasons.append("Тренд: Ціна під Хмарою")
     
-    # --- ПОЧАТОК ЗМІН: Розширено список нейтральних патернів ---
     neutral_patterns = ["SPINNINGTOP", "DOJI", "DOJISTAR", "SHORTLINE", "HIGHWAVE", "HARAMI"]
     if candle_pattern:
         pattern_name = candle_pattern['name'].upper()
@@ -211,7 +210,6 @@ def _calculate_core_signal(df, daily_df, current_price):
             score += 20; reasons.append(f"Бичачий патерн: {candle_pattern['name']}")
         else:
             score -= 20; reasons.append(f"Ведмежий патерн: {candle_pattern['name']}")
-    # --- КІНЕЦЬ ЗМІН ---
 
     rsi = last.get('RSI_14')
     if pd.notna(rsi):
@@ -252,15 +250,17 @@ def _calculate_core_signal(df, daily_df, current_price):
             if "MACD росте" in reasons or "Тренд: Ціна над Хмарою" in reasons:
                 score = 50
                 critical_warning = "❗️ Конфлікт: ведмежий патерн проти бичачих індикаторів"
-                
-    # --- ПОЧАТОК ЗМІН: Додано фінальний VETO-фільтр для RSI ---
+
+    # --- ПОЧАТОК ЗМІН: Фінальний VETO-фільтр для RSI ---
     if pd.notna(rsi):
         if score > 80 and rsi > 75:
-            score = 60 # Знижуємо до помірного
-            critical_warning = "❗️ Ризик розвороту: сильна перекупленість!"
+            score = 50 # Нейтралізуємо сигнал
+            critical_warning = "❗️ Сигнал скасовано: сильна перекупленість (RSI > 75)!"
+            reasons.append(critical_warning)
         elif score < 20 and rsi < 25:
-            score = 40 # Знижуємо до помірного
-            critical_warning = "❗️ Ризик розвороту: сильна перепроданість!"
+            score = 50 # Нейтралізуємо сигнал
+            critical_warning = "❗️ Сигнал скасовано: сильна перепроданість (RSI < 25)!"
+            reasons.append(critical_warning)
     # --- КІНЕЦЬ ЗМІН ---
 
     return {
