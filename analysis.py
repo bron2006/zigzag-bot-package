@@ -201,19 +201,30 @@ def _calculate_core_signal(df, daily_df, current_price):
          else:
              score -= 15; reasons.append("Тренд: Ціна під Хмарою")
     
+    # --- ПОЧАТОК ЗМІН: Покращена логіка обробки патернів ---
     neutral_patterns = ["SPINNINGTOP", "DOJI", "DOJISTAR"]
     if candle_pattern:
-        if candle_pattern['name'] in neutral_patterns:
+        pattern_name = candle_pattern['name'].upper()
+        # Спочатку перевіряємо, чи патерн нейтральний
+        if any(neutral in pattern_name for neutral in neutral_patterns):
             reasons.append(f"Нейтральний патерн: {candle_pattern['name']}")
+        # Інакше, якщо він не нейтральний, оцінюємо його тип
         elif candle_pattern['type'] == 'bullish':
             score += 20; reasons.append(f"Бичачий патерн: {candle_pattern['name']}")
-        else:
+        else: # bearish
             score -= 20; reasons.append(f"Ведмежий патерн: {candle_pattern['name']}")
+    # --- КІНЕЦЬ ЗМІН ---
 
     rsi = last.get('RSI_14')
     if pd.notna(rsi):
         if rsi < 30: score += 10; reasons.append("Ознаки перепроданості (RSI)")
-        elif rsi > 70: score -= 10; reasons.append("Ознаки перекупленості (RSI)")
+        # --- ПОЧАТОК ЗМІН: Посилено умову перекупленості ---
+        elif rsi > 75: # Змінено з 70 на 75 для більш сильного сигналу
+            score -= 20 # Збільшено штраф з 10 до 20
+            reasons.append("❗️ Ознаки сильної перекупленості (RSI > 75)")
+        elif rsi > 70:
+            reasons.append("Ознаки перекупленості (RSI > 70)")
+        # --- КІНЕЦЬ ЗМІН ---
 
     last_atr = last.get('ATRr_14')
     if last_atr and pd.notna(last_atr):
@@ -226,12 +237,12 @@ def _calculate_core_signal(df, daily_df, current_price):
             score += 20; reasons.append("⚠️ Ціна біля сильної денної підтримки")
 
     if is_daily_uptrend is not None:
-        if not is_daily_uptrend and score > 65:
-            score = 65
-            critical_warning = "❗️ Сигнал обмежений через денний даунтренд"
-        elif is_daily_uptrend and score < 35:
-            score = 35
-            critical_warning = "❗️ Сигнал обмежений через денний аптренд"
+        if not is_daily_uptrend and score > 50:
+            critical_warning = "❗️ Сигнал суперечить денному даунтренду"
+            score = 50
+        elif is_daily_uptrend and score < 50:
+            critical_warning = "❗️ Сигнал суперечить денному аптренду"
+            score = 50
                 
     score = int(np.clip(score, 0, 100))
     
@@ -240,16 +251,15 @@ def _calculate_core_signal(df, daily_df, current_price):
     resistance_candidates = [r for r in long_term_resistance if r > current_price]
     resistance = min(resistance_candidates) if resistance_candidates else None
     
-    # --- ДОДАНО: перевірка на конфлікт ---
     if candle_pattern:
         if candle_pattern['type'] == 'bullish':
             if "MACD падає" in reasons or "Тренд: Ціна під Хмарою" in reasons:
                 score = 50
-                critical_warning = "❗️ Конфлікт сигналів: бичачий патерн суперечить тренду/індикаторам"
+                critical_warning = "❗️ Конфлікт: бичачий патерн проти ведмежих індикаторів"
         elif candle_pattern['type'] == 'bearish':
             if "MACD росте" in reasons or "Тренд: Ціна над Хмарою" in reasons:
                 score = 50
-                critical_warning = "❗️ Конфлікт сигналів: ведмежий патерн суперечить тренду/індикаторам"
+                critical_warning = "❗️ Конфлікт: ведмежий патерн проти бичачих індикаторів"
     
     return {
         "score": score, "reasons": reasons, "support": support, "resistance": resistance,

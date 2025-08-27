@@ -63,21 +63,16 @@ def protected_route(f):
 
 @crochet.run_in_reactor
 def scan_markets():
-    """Послідовно аналізує всі Forex пари і надсилає сповіщення про ідеальні входи."""
-    # --- ПОЧАТОК ЗМІН: Перевірка, чи увімкнено сканер ---
     if not state.SCANNER_ENABLED:
         logger.info("SCANNER: Scanner is disabled, skipping run.")
         return
-    # --- КІНЕЦЬ ЗМІН ---
 
     logger.info("SCANNER: Starting market scan...")
     all_forex_pairs = list(set(itertools.chain.from_iterable(FOREX_SESSIONS.values())))
     chat_id = get_chat_id()
 
     if not chat_id:
-        # --- ПОЧАТОК ЗМІН: Оновлено текст попередження ---
         logger.warning("SCANNER: CHAT_ID is not set. Scanner will not send notifications.")
-        # --- КІНЕЦЬ ЗМІН ---
         return
 
     def on_analysis_done(result, pair_name):
@@ -97,7 +92,10 @@ def scan_markets():
                 if (now - last_notified) > SCANNER_COOLDOWN_SECONDS:
                     logger.info(f"SCANNER: Ideal entry found for {pair_name}! Score: {score}. Sending notification.")
                     message = telegram_ui._format_signal_message(result, "5m")
-                    state.updater.bot.send_message(chat_id=chat_id, text=message, parse_mode='Markdown')
+                    # --- ПОЧАТОК ЗМІН: Додаємо клавіатуру до повідомлення сканера ---
+                    keyboard = telegram_ui.get_main_menu_kb()
+                    state.updater.bot.send_message(chat_id=chat_id, text=message, parse_mode='Markdown', reply_markup=keyboard)
+                    # --- КІНЕЦЬ ЗМІН ---
                     state.scanner_cooldown_cache[pair_name] = now
                 else:
                     logger.info(f"SCANNER: Ideal entry found for {pair_name} (Score: {score}) but it's on cooldown.")
@@ -196,7 +194,6 @@ def start_background_services():
     client.start()
     logger.info("cTrader client started.")
 
-# ... (решта файлу app.py без змін) ...
 @app.route("/")
 def home():
     try:
