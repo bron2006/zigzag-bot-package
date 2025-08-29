@@ -1,4 +1,3 @@
-# economic_calendar.py
 import logging
 import requests
 from typing import Tuple, Optional
@@ -15,6 +14,11 @@ def check_for_imminent_news(pair: str) -> Tuple[bool, Optional[str]]:
     """
     Перевіряє наявність важливих новин для валют у парі через API Finnhub.
     """
+    # --- ПОЧАТОК ЗМІН: Функцію вимкнено, оскільки вона вимагає платної підписки Finnhub ---
+    return False, None
+    # --- КІНЕЦЬ ЗМІН ---
+
+    # Весь код нижче більше не буде виконуватися
     if not API_KEY:
         logger.warning("Finnhub API key is not configured. Skipping news check.")
         return False, None
@@ -23,13 +27,11 @@ def check_for_imminent_news(pair: str) -> Tuple[bool, Optional[str]]:
         base_currency = pair[:3].upper()
         quote_currency = pair[3:].upper()
         
-        # Визначаємо часовий проміжок для запиту (сьогодні)
         today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
         
-        # Робимо запит до API
         params = {'token': API_KEY, 'from': today, 'to': today}
         response = requests.get(BASE_URL, params=params, timeout=10)
-        response.raise_for_status() # Перевіряємо наявність HTTP-помилок
+        response.raise_for_status()
         
         data = response.json()
         
@@ -37,14 +39,12 @@ def check_for_imminent_news(pair: str) -> Tuple[bool, Optional[str]]:
             return False, None
             
         now = datetime.now(timezone.utc)
-        imminent_window = now + timedelta(minutes=30) # Перевіряємо новини на 30 хв вперед
+        imminent_window = now + timedelta(minutes=30)
 
         for event in data["economicCalendar"]:
             event_time_utc = datetime.fromtimestamp(event['time'], tz=timezone.utc)
 
-            # Перевіряємо, чи подія ще не відбулася і чи відбудеться скоро
             if now < event_time_utc < imminent_window:
-                # Перевіряємо, чи подія стосується наших валют і чи вона важлива
                 if event['impact'] == 'high' and event['currency'] in [base_currency, quote_currency]:
                     news_text = (
                         f"❗️УВАГА: СКОРО ВАЖЛИВІ НОВИНИ ({event['currency']})❗️\n"
