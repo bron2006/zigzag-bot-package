@@ -60,7 +60,6 @@ def protected_route(f):
         return f(*args, **kwargs)
     return decorated_function
 
-# --- ПОЧАТОК ЗМІН: Повністю переписана логіка сканера на послідовну ---
 def scan_markets_wrapper():
     """Захисна оболонка для запуску сканера, щоб уникнути падіння."""
     try:
@@ -77,47 +76,42 @@ def scan_markets():
     all_forex_pairs = list(set(itertools.chain.from_iterable(FOREX_SESSIONS.values())))
     chat_id = get_chat_id()
 
-    if not chat_id:
-        logger.warning("SCANNER: CHAT_ID is not set. Scanner will not send notifications.")
-        return
-
     def on_analysis_done(result, pair_name):
         try:
-            if result.get("error"):
-                return
+            # --- ПОЧАТОК ЗМІН: Зберігаємо результат в кеш ---
+            if not result.get("error"):
+                state.latest_analysis_cache[pair_name] = result
+            # --- КІНЕЦЬ ЗМІН ---
+
             score = result.get('bull_percentage', 50)
             if score >= IDEAL_ENTRY_THRESHOLD or score <= (100 - IDEAL_ENTRY_THRESHOLD):
                 now = time.time()
                 if (now - state.scanner_cooldown_cache.get(pair_name, 0)) > SCANNER_COOLDOWN_SECONDS:
                     logger.info(f"SCANNER: Ideal entry for {pair_name}. Notifying.")
+                    state.sse_queue.put(result)
                     message = telegram_ui._format_signal_message(result, "5m")
                     keyboard = telegram_ui.get_main_menu_kb()
-                    state.updater.bot.send_message(chat_id=chat_id, text=message, parse_mode='Markdown', reply_markup=keyboard)
+                    if chat_id:
+                        state.updater.bot.send_message(chat_id=chat_id, text=message, parse_mode='Markdown', reply_markup=keyboard)
                     state.scanner_cooldown_cache[pair_name] = now
         except Exception as e:
             logger.error(f"SCANNER: Error processing result for {pair_name}: {e}", exc_info=True)
 
     def process_next_pair(result, pairs_to_scan):
-        # Якщо список пар для сканування порожній, завершуємо роботу
         if not pairs_to_scan:
             logger.info("SCANNER: Sequential scan finished.")
             return
         
-        # Беремо першу пару зі списку
         pair = pairs_to_scan.pop(0)
         norm_pair = pair.replace("/", "")
         
-        # Запускаємо аналіз для цієї пари
         d = get_api_detailed_signal_data(state.client, state.symbol_cache, norm_pair, 0, "5m")
-        # Після завершення аналізу, обробляємо результат
         d.addCallback(on_analysis_done, pair_name=norm_pair)
-        # Незалежно від успіху чи помилки, запускаємо обробку наступної пари зі списку
         d.addBoth(process_next_pair, pairs_to_scan=pairs_to_scan)
         return d
 
-    # Запускаємо ланцюжок послідовних викликів з копією списку пар
     process_next_pair(None, all_forex_pairs.copy())
-# --- КІНЕЦЬ ЗМІН ---
+
 
 def on_ctrader_ready():
     logger.info("cTrader client is ready. Loading symbols...")
@@ -250,43 +244,56 @@ def toggle_watchlist_route():
         logger.error(f"Error in toggle_watchlist for user {user_id}: {e}")
         return jsonify({"success": False, "error": "Internal server error"}), 500
 
+# --- ПОЧАТОК ЗМІН: Повністю переписана логіка /api/signal ---
 @app.route("/api/signal")
 @protected_route
 def api_signal():
     pair = request.args.get("pair")
-    timeframe = request.args.get("timeframe", "15m")
+    # Таймфрейм більше не потрібен, оскільки сканер працює на 5m,
+    # але ми залишаємо його для сумісності
+    timeframe = request.args.get("timeframe", "5m") 
     
-    if timeframe not in PERIOD_MAP:
-        return jsonify({"error": "Invalid timeframe"}), 400
     if not pair:
         return jsonify({"error": "pair is required"}), 400
     
     pair_normalized = pair.replace("/", "")
-    user_id = get_user_id_from_init_data(request.args.get("initData"))
-
-    logger.info(f"Received signal request for pair: {pair}, timeframe: {timeframe}")
-
-    @crochet.run_in_reactor
-    def do_analysis_and_get_result():
-        d = Deferred()
-        def _run_analysis(_):
-            inner_d = get_api_detailed_signal_data(state.client, state.symbol_cache, pair_normalized, user_id, timeframe)
-            inner_d.addBoth(d.callback)
-        wait_client_ready().addCallback(_run_analysis)
-        return d
-
-    try:
-        result = do_analysis_and_get_result().wait(timeout=30)
-        return jsonify(result)
-    except crochet.TimeoutError:
-        logger.error(f"Request timed out for pair: {pair}")
-        return jsonify({"error": "Request timed out"}), 504
-    except Exception as e:
-        tb_str = traceback.format_exc()
-        logger.error(f"Error in signal API for {pair}: {e}\n{tb_str}")
+    
+    # Миттєво беремо дані з кешу, замість запуску нового аналізу
+    cached_result = state.latest_analysis_cache.get(pair_normalized)
+    
+    if cached_result:
+        return jsonify(cached_result)
+    else:
+        # Якщо даних ще немає (сканер ще не дійшов до цієї пари)
         return jsonify({
-            "error": "Internal server error", "details": str(e), "traceback": tb_str
-        }), 500
+            "error": "Дані для цього активу ще аналізуються сканером. Спробуйте за хвилину."
+        }), 404
+# --- КІНЕЦЬ ЗМІН ---
+
+@app.route("/api/scanner/status")
+@protected_route
+def get_scanner_status():
+    return jsonify({"enabled": state.SCANNER_ENABLED})
+
+@app.route("/api/scanner/toggle")
+@protected_route
+def toggle_scanner_status():
+    state.SCANNER_ENABLED = not state.SCANNER_ENABLED
+    logger.info(f"Scanner status toggled via API. New status: {state.SCANNER_ENABLED}")
+    return jsonify({"enabled": state.SCANNER_ENABLED})
+
+@app.route("/api/signal-stream")
+@protected_route
+def signal_stream():
+    def generate():
+        while True:
+            try:
+                signal_data = state.sse_queue.get(timeout=None)
+                sse_data = f"data: {json.dumps(signal_data, ensure_ascii=False)}\n\n"
+                yield sse_data
+            except Exception:
+                continue
+    return Response(generate(), mimetype='text/event-stream')
 
 if __name__ != "__main__":
     start_background_services()
