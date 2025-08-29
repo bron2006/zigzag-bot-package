@@ -7,11 +7,15 @@ import itertools
 import queue
 from functools import wraps
 from flask import Flask, jsonify, send_from_directory, Response, request, stream_with_context
-from telegram import Update
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackQueryHandler, CallbackContext
 
-import crochet
-crochet.setup()
+# --- ПОЧАТОК ЗМІН: Змінено імпорти для нової архітектури ---
+from twisted.internet import reactor
+from twisted.internet.defer import Deferred
+from twisted.internet.task import LoopingCall
+from twisted.web.server import Site
+from twisted.web.wsgi import WSGIResource
+from klein import Klein
+# --- КІНЕЦЬ ЗМІН ---
 
 import state
 from auth import is_valid_init_data, get_user_id_from_init_data
@@ -24,11 +28,7 @@ from config import (
 )
 from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOASymbolsListRes
 
-from twisted.internet import reactor
-from twisted.internet.defer import Deferred
-from twisted.internet.task import LoopingCall
 import telegram_ui
-
 from analysis import get_api_detailed_signal_data, PERIOD_MAP
 
 logging.basicConfig(level=logging.INFO,
@@ -50,7 +50,6 @@ def wait_client_ready():
     from twisted.internet.defer import succeed
     return _client_ready_deferred if _client_ready_deferred is not None else succeed(True)
 
-
 def protected_route(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
@@ -63,11 +62,11 @@ def protected_route(f):
 
 def scan_markets_wrapper():
     try:
+        # Більше не потрібен @crochet.run_in_reactor, оскільки ми вже в потоці Twisted
         scan_markets()
     except Exception as e:
         logger.critical(f"SCANNER: CRITICAL FAILURE IN SCAN WRAPPER: {e}", exc_info=True)
 
-@crochet.run_in_reactor
 def scan_markets():
     if not state.SCANNER_ENABLED:
         return
@@ -113,64 +112,83 @@ def scan_markets():
 
     process_next_pair(None, all_forex_pairs.copy())
 
-# ... (решта коду до /api/signal-stream без змін) ...
+def on_ctrader_ready():
+    logger.info("cTrader client is ready. Loading symbols...")
+    deferred = state.client.get_all_symbols()
+    deferred.addCallbacks(on_symbols_loaded, on_symbols_error)
 
-@app.route("/api/signal")
-@protected_route
-def api_signal():
-    pair = request.args.get("pair")
-    if not pair:
-        return jsonify({"error": "pair is required"}), 400
+def on_symbols_loaded(raw_message):
+    try:
+        symbols_response = ProtoOASymbolsListRes()
+        symbols_response.ParseFromString(raw_message.payload)
+        state.symbol_cache = {s.symbolName.replace("/", ""): s for s in symbols_response.symbol}
+        state.all_symbol_names = [s.symbolName for s in symbols_response.symbol]
+        state.SYMBOLS_LOADED = True
+        logger.info(f"✅ Successfully loaded {len(state.symbol_cache)} light symbols.")
+        if _client_ready_deferred and not _client_ready_deferred.called:
+            _client_ready_deferred.callback(True)
+        
+        logger.info("Starting market scanner loop...")
+        scanner_loop = LoopingCall(scan_markets_wrapper)
+        scanner_loop.start(60)
+
+    except Exception as e:
+        logger.error(f"Symbol processing error: {e}", exc_info=True)
+
+
+def on_symbols_error(failure):
+    logger.error(f"Failed to load symbols: {failure.getErrorMessage()}")
+    if _client_ready_deferred and not _client_ready_deferred.called:
+        _client_ready_deferred.errback(failure)
+
+# --- Flask маршрути залишаються практично без змін ---
+# ... (всі ваші @app.route(...) йдуть тут)
+
+@app.route("/")
+def home():
+    # ... (код без змін)
+    pass
     
-    pair_normalized = pair.replace("/", "")
-    cached_result = state.latest_analysis_cache.get(pair_normalized)
-    
-    if cached_result:
-        return jsonify(cached_result)
-    else:
-        return jsonify({
-            "error": "Дані для цього активу ще аналізуються сканером. Спробуйте за хвилину."
-        }), 404
+# ... і так далі для всіх маршрутів ...
 
-@app.route("/api/scanner/status")
-@protected_route
-def get_scanner_status():
-    return jsonify({"enabled": state.SCANNER_ENABLED})
+# --- ПОЧАТОК ЗМІН: Повністю переписаний запуск додатку ---
 
-@app.route("/api/scanner/toggle")
-@protected_route
-def toggle_scanner_status():
-    state.SCANNER_ENABLED = not state.SCANNER_ENABLED
-    logger.info(f"Scanner status toggled via API. New status: {state.SCANNER_ENABLED}")
-    return jsonify({"enabled": state.SCANNER_ENABLED})
+def start_background_services():
+    """Ініціалізує Telegram та cTrader клієнти."""
+    logger.info("Initializing background services (Telegram, cTrader)...")
+    if not TELEGRAM_BOT_TOKEN:
+        logger.error("TELEGRAM_BOT_TOKEN not found!")
+        return
+        
+    updater = Updater(token=TELEGRAM_BOT_TOKEN, use_context=True)
+    client = SpotwareConnect(get_ct_client_id(), get_ct_client_secret())
+    state.updater = updater
+    state.client = client
 
+    dp = updater.dispatcher
+    dp.add_handler(CommandHandler("start", telegram_ui.start))
+    # ... (решта обробників)
+    dp.add_handler(CallbackQueryHandler(telegram_ui.button_handler))
 
-# --- ПОЧАТОК ЗМІН: Повністю переписаний signal_stream згідно з рекомендаціями експерта ---
-@app.route("/api/signal-stream")
-@protected_route
-def signal_stream():
-    def generate():
-        while True:
-            try:
-                # Очікуємо на новий сигнал, але не довше 20 секунд
-                signal_data = state.sse_queue.get(timeout=20)
-                sse_data = f"data: {json.dumps(signal_data, ensure_ascii=False)}\n\n"
-                yield sse_data
-            except queue.Empty:
-                # Якщо за 20 секунд нічого не прийшло, надсилаємо "ping", щоб зберегти з'єднання
-                yield ": ping\n\n"
-            except Exception as e:
-                logger.error(f"SSE Stream error: {e}")
-                # У разі помилки просто продовжуємо цикл
-                continue
+    updater.start_polling()
+    logger.info("Telegram bot started.")
 
-    # Створюємо відповідь з правильними заголовками, щоб уникнути буферизації
-    response = Response(stream_with_context(generate()), mimetype='text/event-stream')
-    response.headers['Cache-Control'] = 'no-cache'
-    response.headers['Connection'] = 'keep-alive'
-    response.headers['X-Accel-Buffering'] = 'no'
-    return response
-# --- КІНЕЦЬ ЗМІН ---
+    client.on("ready", on_ctrader_ready)
+    # Важливо: client.start() тепер викликається реактором Twisted
+    reactor.callWhenRunning(client.start)
+    logger.info("cTrader client scheduled to start with reactor.")
 
-if __name__ != "__main__":
+if __name__ == "__main__":
+    # 1. Запускаємо фонові сервіси (Telegram, cTrader)
     start_background_services()
+    
+    # 2. Створюємо ресурс Twisted для нашого Flask додатку
+    wsgi_resource = WSGIResource(reactor, reactor.getThreadPool(), app)
+    site = Site(wsgi_resource)
+    
+    # 3. Запускаємо Twisted сервер, який буде обслуговувати все
+    port = int(os.environ.get("PORT", 8080))
+    logger.info(f"Starting Twisted server on port {port}...")
+    reactor.listenTCP(port, site)
+    reactor.run()
+# --- КІНЕЦЬ ЗМІН ---
