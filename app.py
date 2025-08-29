@@ -60,7 +60,7 @@ def protected_route(f):
         return f(*args, **kwargs)
     return decorated_function
 
-# --- ПОЧАТОК ЗМІН: Виправлена логіка сканера ---
+# --- ПОЧАТОК ЗМІН: Повністю переписана логіка сканера на послідовну ---
 def scan_markets_wrapper():
     """Захисна оболонка для запуску сканера, щоб уникнути падіння."""
     try:
@@ -73,7 +73,7 @@ def scan_markets():
     if not state.SCANNER_ENABLED:
         return
 
-    logger.info("SCANNER: Starting market scan...")
+    logger.info("SCANNER: Starting sequential market scan...")
     all_forex_pairs = list(set(itertools.chain.from_iterable(FOREX_SESSIONS.values())))
     chat_id = get_chat_id()
 
@@ -97,21 +97,26 @@ def scan_markets():
         except Exception as e:
             logger.error(f"SCANNER: Error processing result for {pair_name}: {e}", exc_info=True)
 
-    def process_next_pair(results, pairs_to_scan):
+    def process_next_pair(result, pairs_to_scan):
+        # Якщо список пар для сканування порожній, завершуємо роботу
         if not pairs_to_scan:
+            logger.info("SCANNER: Sequential scan finished.")
             return
         
+        # Беремо першу пару зі списку
         pair = pairs_to_scan.pop(0)
         norm_pair = pair.replace("/", "")
         
+        # Запускаємо аналіз для цієї пари
         d = get_api_detailed_signal_data(state.client, state.symbol_cache, norm_pair, 0, "5m")
+        # Після завершення аналізу, обробляємо результат
         d.addCallback(on_analysis_done, pair_name=norm_pair)
-        d.addBoth(lambda res: process_next_pair(res, pairs_to_scan)) # Запускаємо наступну пару
+        # Незалежно від успіху чи помилки, запускаємо обробку наступної пари зі списку
+        d.addBoth(process_next_pair, pairs_to_scan=pairs_to_scan)
         return d
 
-    # Запускаємо ланцюжок послідовних викликів
-    process_next_pair(None, all_forex_pairs)
-
+    # Запускаємо ланцюжок послідовних викликів з копією списку пар
+    process_next_pair(None, all_forex_pairs.copy())
 # --- КІНЕЦЬ ЗМІН ---
 
 def on_ctrader_ready():
