@@ -98,7 +98,6 @@ def scan_markets():
                 logger.error(f"SCANNER: Error analyzing {norm_pair}: {e}")
         logger.info("SCANNER: Sequential scan finished.")
 
-    # Run the processing in the reactor's thread pool
     threads.deferToThread(process_all_pairs)
 
 # --- cTrader Event Handlers (Twisted Native) ---
@@ -116,9 +115,8 @@ def on_symbols_loaded(raw_message):
         state.SYMBOLS_LOADED = True
         logger.info(f"✅ Successfully loaded {len(state.symbol_cache)} light symbols.")
         
-        # Start the scanner loop now that symbols are loaded
         scanner_loop = LoopingCall(scan_markets)
-        scanner_loop.start(60, now=True) # Start immediately and then every 60s
+        scanner_loop.start(60, now=True)
         _client_ready_deferred.callback(True)
     except Exception as e:
         logger.error(f"Symbol processing error: {e}", exc_info=True)
@@ -216,14 +214,18 @@ if __name__ == "__main__":
     dp.add_handler(MessageHandler(Filters.text("МЕНЮ"), telegram_ui.menu))
     dp.add_handler(MessageHandler(Filters.text & ~Filters.command, telegram_ui.reset_ui))
     dp.add_handler(CallbackQueryHandler(telegram_ui.button_handler))
-    updater.start_polling()
-    logger.info("Telegram bot started.")
+    
+    # --- ПОЧАТОК ЗМІН: Запускаємо Telegram-бота у фоновому потоці ---
+    reactor.callInThread(updater.start_polling)
+    # --- КІНЕЦЬ ЗМІН ---
+    
+    logger.info("Telegram bot scheduled to start in a background thread.")
     
     # 2. Initialize cTrader Client
     client = SpotwareConnect(get_ct_client_id(), get_ct_client_secret())
     state.client = client
     client.on("ready", on_ctrader_ready)
-    reactor.callWhenRunning(client.start) # Schedule client to start with the reactor
+    reactor.callWhenRunning(client.start)
     logger.info("cTrader client scheduled to start.")
     
     # 3. Create a Twisted Web server resource for the Flask app
