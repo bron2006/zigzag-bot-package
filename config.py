@@ -21,9 +21,7 @@ except Exception:
     pass
 
 def get_chat_id() -> int:
-    # --- ПОЧАТОК ЗМІН: Змінено назву змінної ---
     chat_id_str = os.getenv("CHAT_ID")
-    # --- КІНЕЦЬ ЗМІН ---
     return int(chat_id_str) if chat_id_str else None
 
 def get_ct_client_id() -> str: return os.getenv("CT_CLIENT_ID")
@@ -66,5 +64,7 @@ TRADING_HOURS = {
     "Тихоокеанська": "🇦🇺 (00:00 - 09:00)"
 }
 
-IDEAL_ENTRY_THRESHOLD = 85
-SCANNER_COOLDOWN_SECONDS = 300
+# --- ПОЧАТОК ЗМІН: Налаштування для сканера ринку ---
+IDEAL_ENTRY_THRESHOLD = 85 # Поріг для купівлі (для продажу буде 100 - 85 = 15)
+SCANNER_COOLDOWN_SECONDS = 300 # 5 хвилин (5 * 60)
+# --- КІНЕЦЬ ЗМІН ---
