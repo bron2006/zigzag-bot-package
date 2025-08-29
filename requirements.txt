@@ -14,4 +14,3 @@ cryptography
 numpy
 crochet==2.1.1
 TA-Lib
-gevent # <--- ДОДАНО НОВУ БІБЛІОТЕКУ

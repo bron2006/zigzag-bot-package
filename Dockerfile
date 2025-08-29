@@ -28,6 +28,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 EXPOSE 8080
 
-# --- ПОЧАТОК ЗМІН: Оновлено команду запуску Gunicorn ---
-CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "1", "--timeout", "120", "-k", "gevent", "app:app"]
+# --- ПОЧАТОК ЗМІН: Перемикаємо Gunicorn на багатопотоковий worker ---
+CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "1", "--threads", "4", "-k", "gthread", "--timeout", "120", "app:app"]
 # --- КІНЕЦЬ ЗМІН ---
