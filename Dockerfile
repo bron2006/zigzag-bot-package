@@ -1,4 +1,3 @@
-# Dockerfile
 FROM python:3.11-bullseye
 WORKDIR /app
 
@@ -28,4 +27,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 EXPOSE 8080
-CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "1", "--timeout", "120", "app:app"]
+
+# --- ПОЧАТОК ЗМІН: Оновлено команду запуску Gunicorn ---
+CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "1", "--timeout", "120", "-k", "gevent", "app:app"]
+# --- КІНЕЦЬ ЗМІН ---

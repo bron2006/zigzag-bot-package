@@ -1,4 +1,3 @@
-# requirements.txt
 Flask==2.3.3
 gunicorn==21.2.0
 python-telegram-bot==13.15
@@ -15,3 +14,4 @@ cryptography
 numpy
 crochet==2.1.1
 TA-Lib
+gevent # <--- ДОДАНО НОВУ БІБЛІОТЕКУ
