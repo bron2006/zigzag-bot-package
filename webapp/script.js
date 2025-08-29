@@ -5,6 +5,7 @@ const listsContainer = document.getElementById("listsContainer");
 const signalOutput = document.getElementById("signalOutput");
 const scannerToggleButton = document.getElementById('scannerToggleButton');
 const liveSignalsContainer = document.getElementById('liveSignalsContainer');
+const signalContainer = document.getElementById('signalContainer'); // <-- Додано цей рядок
 
 let tg = window.Telegram.WebApp;
 tg.ready();
@@ -200,7 +201,6 @@ function toggleFavorite(event, button, pair) {
         });
 }
 
-// --- ПОЧАТОК ЗМІН: Повністю переписана функція fetchSignal ---
 function fetchSignal(pair) {
     lastSelectedPair = pair;
     showLoader(true);
@@ -212,23 +212,22 @@ function fetchSignal(pair) {
     
     fetch(signalApiUrl)
         .then(res => {
-            // Перевіряємо, чи відповідь успішна. Якщо ні - одразу переходимо до .catch
             if (!res.ok) {
                 return res.json().then(errData => { throw new Error(errData.error || `HTTP ${res.status}`) });
             }
             return res.json();
         })
         .then(signalData => {
-            // Цей блок виконається тільки для успішних відповідей (200 OK)
             let html = formatSignalAsHtml(signalData);
             signalOutput.innerHTML = html;
         })
         .catch(err => {
-            // Цей блок "зловить" усі помилки: і мережеві, і 404, і 500
             signalOutput.innerHTML = `❌ Помилка: ${err.message}`;
         })
         .finally(() => {
-            // Цей блок виконається завжди, і в ньому ми ховаємо завантажувач
+            // --- ПОЧАТОК ЗМІН: Повертаємо авто-прокрутку ---
+            signalContainer.scrollIntoView({ behavior: 'smooth' });
+            // --- КІНЕЦЬ ЗМІН ---
             showLoader(false);
         });
 }
@@ -263,7 +262,6 @@ function formatSignalAsHtml(signalData) {
     }
     return html;
 }
-// --- КІНЕЦЬ ЗМІН ---
 
 function showLoader(visible) {
     loader.className = visible ? '' : 'hidden';
