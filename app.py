@@ -25,7 +25,7 @@ from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOASymbolsListRes
 
 from twisted.internet import reactor
 from twisted.internet.defer import Deferred
-from twisted.internet.task import LoopingCall # Імпортуємо LoopingCall
+from twisted.internet.task import LoopingCall
 import telegram_ui
 
 from analysis import get_api_detailed_signal_data, PERIOD_MAP
@@ -60,9 +60,9 @@ def protected_route(f):
         return f(*args, **kwargs)
     return decorated_function
 
-# --- ПОЧАТОК ЗМІН: Логіка сканера ринку ---
+# --- ПОЧАТОК ЗМІН: Виправлена логіка сканера ---
 def scan_markets_wrapper():
-    """Захисна оболонка для сканера, щоб уникнути падіння."""
+    """Захисна оболонка для запуску сканера, щоб уникнути падіння."""
     try:
         scan_markets()
     except Exception as e:
@@ -85,43 +85,33 @@ def scan_markets():
         try:
             if result.get("error"):
                 return
-
             score = result.get('bull_percentage', 50)
-            is_buy_signal = score >= IDEAL_ENTRY_THRESHOLD
-            is_sell_signal = score <= (100 - IDEAL_ENTRY_THRESHOLD)
-
-            if is_buy_signal or is_sell_signal:
+            if score >= IDEAL_ENTRY_THRESHOLD or score <= (100 - IDEAL_ENTRY_THRESHOLD):
                 now = time.time()
-                last_notified = state.scanner_cooldown_cache.get(pair_name, 0)
-
-                if (now - last_notified) > SCANNER_COOLDOWN_SECONDS:
-                    logger.info(f"SCANNER: Ideal entry found for {pair_name}! Score: {score}. Sending notification.")
+                if (now - state.scanner_cooldown_cache.get(pair_name, 0)) > SCANNER_COOLDOWN_SECONDS:
+                    logger.info(f"SCANNER: Ideal entry for {pair_name}. Notifying.")
                     message = telegram_ui._format_signal_message(result, "5m")
                     keyboard = telegram_ui.get_main_menu_kb()
-                    if chat_id:
-                        state.updater.bot.send_message(chat_id=chat_id, text=message, parse_mode='Markdown', reply_markup=keyboard)
+                    state.updater.bot.send_message(chat_id=chat_id, text=message, parse_mode='Markdown', reply_markup=keyboard)
                     state.scanner_cooldown_cache[pair_name] = now
         except Exception as e:
-            logger.error(f"SCANNER: CRITICAL - Unhandled exception in on_analysis_done for {pair_name}: {e}", exc_info=True)
+            logger.error(f"SCANNER: Error processing result for {pair_name}: {e}", exc_info=True)
 
-    d = Deferred()
-    d.callback(None)
+    def process_next_pair(results, pairs_to_scan):
+        if not pairs_to_scan:
+            return
+        
+        pair = pairs_to_scan.pop(0)
+        norm_pair = pair.replace("/", "")
+        
+        d = get_api_detailed_signal_data(state.client, state.symbol_cache, norm_pair, 0, "5m")
+        d.addCallback(on_analysis_done, pair_name=norm_pair)
+        d.addBoth(lambda res: process_next_pair(res, pairs_to_scan)) # Запускаємо наступну пару
+        return d
 
-    for pair in all_forex_pairs:
-        def process_next_pair(_, current_pair):
-            norm_pair = current_pair.replace("/", "")
-            try:
-                deferred = get_api_detailed_signal_data(state.client, state.symbol_cache, norm_pair, 0, "5m")
-                deferred.addCallback(on_analysis_done, pair_name=norm_pair)
-                deferred.addErrback(lambda f, p=norm_pair: logger.error(f"SCANNER: Deferred error for {p}: {f.getErrorMessage()}", exc_info=True))
-                return deferred
-            except Exception as e:
-                logger.error(f"SCANNER: CRITICAL - Failed to start analysis for {norm_pair}: {e}", exc_info=True)
-                return Deferred().callback(None)
+    # Запускаємо ланцюжок послідовних викликів
+    process_next_pair(None, all_forex_pairs)
 
-        d.addCallback(process_next_pair, current_pair=pair)
-
-    return d
 # --- КІНЕЦЬ ЗМІН ---
 
 def on_ctrader_ready():
@@ -140,18 +130,13 @@ def on_symbols_loaded(raw_message):
         if _client_ready_deferred and not _client_ready_deferred.called:
             _client_ready_deferred.callback(True)
         
-        # --- ПОЧАТОК ЗМІН: Запускаємо сканер після завантаження символів ---
         logger.info("Starting market scanner loop...")
         scanner_loop = LoopingCall(scan_markets_wrapper)
-        scanner_loop.start(60) # запускати кожні 60 секунд
-        # --- КІНЕЦЬ ЗМІН ---
+        scanner_loop.start(60)
 
     except Exception as e:
         logger.error(f"Symbol processing error: {e}", exc_info=True)
 
-# ... (решта файлу незмінна, тому я її не дублюю, щоб зберегти місце) ...
-# В реальній відповіді я надам ПОВНИЙ файл.
-# (Here I would include the rest of the file content from start_background_services onwards)
 
 def on_symbols_error(failure):
     logger.error(f"Failed to load symbols: {failure.getErrorMessage()}")
