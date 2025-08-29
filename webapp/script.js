@@ -3,10 +3,8 @@ const API_BASE_URL = window.API_BASE_URL || "https://fallback.example.com";
 const loader = document.getElementById("loader");
 const listsContainer = document.getElementById("listsContainer");
 const signalOutput = document.getElementById("signalOutput");
-// --- ПОЧАТОК ЗМІН: Нові елементи UI ---
 const scannerToggleButton = document.getElementById('scannerToggleButton');
 const liveSignalsContainer = document.getElementById('liveSignalsContainer');
-// --- КІНЕЦЬ ЗМІН ---
 
 let tg = window.Telegram.WebApp;
 tg.ready();
@@ -25,7 +23,6 @@ document.addEventListener('DOMContentLoaded', function() {
     const initDataQuery = initData ? `?initData=${encodeURIComponent(initData)}` : '';
     const staticPairsUrl = `${API_BASE_URL}/api/get_pairs${initDataQuery}`;
 
-    // Завантаження списку пар
     fetch(staticPairsUrl)
         .then(res => {
             if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
@@ -38,26 +35,20 @@ document.addEventListener('DOMContentLoaded', function() {
             showLoader(false);
         })
         .catch(err => {
-            console.error("Error fetching pair lists:", err);
             signalOutput.innerHTML = `<h3 style="color: #ef5350;">❌ Помилка завантаження списків пар.</h3><p>${err.message}</p>`;
             showLoader(false);
         });
     
-    // --- ПОЧАТОК ЗМІН: Логіка для сканера та SSE ---
-
-    // 1. Отримуємо початковий статус сканера
     fetch(`${API_BASE_URL}/api/scanner/status${initDataQuery}`)
         .then(res => res.json())
         .then(data => updateScannerButton(data.enabled));
 
-    // 2. Додаємо обробник кліку для перемикання сканера
     scannerToggleButton.addEventListener('click', () => {
         fetch(`${API_BASE_URL}/api/scanner/toggle${initDataQuery}`)
             .then(res => res.json())
             .then(data => updateScannerButton(data.enabled));
     });
 
-    // 3. Підключаємось до потоку сигналів (Server-Sent Events)
     const eventSource = new EventSource(`${API_BASE_URL}/api/signal-stream${initDataQuery}`);
     
     eventSource.onmessage = function(event) {
@@ -68,10 +59,7 @@ document.addEventListener('DOMContentLoaded', function() {
     eventSource.onerror = function(err) {
         console.error("EventSource failed:", err);
     };
-
-    // --- КІНЕЦЬ ЗМІН ---
     
-    // Обробники для кнопок таймфреймів та пошуку (без змін)
     const timeframeButtons = document.querySelectorAll('.tf-button');
     timeframeButtons.forEach(button => {
         button.addEventListener('click', () => {
@@ -89,8 +77,6 @@ document.addEventListener('DOMContentLoaded', function() {
         populateLists(allData, event.target.value);
     }, 300));
 });
-
-// --- ПОЧАТОК ЗМІН: Нові функції для інтерфейсу сканера ---
 
 function updateScannerButton(isEnabled) {
     if (isEnabled) {
@@ -111,8 +97,8 @@ function displayLiveSignal(signalData) {
     const score = signalData.bull_percentage || 50;
     
     let signalClass = 'neutral';
-    if (score >= 65) signalClass = 'buy'; // Використовуємо 65 як поріг для "Moderate Buy"
-    if (score <= 35) signalClass = 'sell'; // Використовуємо 35 як поріг для "Moderate Sell"
+    if (score >= 65) signalClass = 'buy';
+    if (score <= 35) signalClass = 'sell';
     
     signalDiv.classList.add(signalClass);
 
@@ -120,17 +106,12 @@ function displayLiveSignal(signalData) {
     
     liveSignalsContainer.prepend(signalDiv);
     
-    // Автоматично видаляємо сповіщення через 15 секунд
     setTimeout(() => {
         signalDiv.classList.add('fade-out');
         setTimeout(() => signalDiv.remove(), 500);
     }, 15000);
 }
 
-// --- КІНЕЦЬ ЗМІН ---
-
-// Решта функцій (populateLists, fetchSignal, і т.д.) без змін
-// ... (тут іде решта коду з вашого файлу script.js)
 function createPairButton(pair) {
     return `<div class="pair-item">
         <button class="pair-button" data-pair="${pair}">${pair}</button>
@@ -165,8 +146,9 @@ function populateLists(data, query = '') {
         watchlistDisplay = watchlistDisplay.filter(p => p.toLowerCase().includes(queryLower));
     }
 
-    html += createSection('⭐ Обране', watchlistDisplay);
-    html += createSection('💎 Уся криптовалюта', data.crypto || []);
+    if (watchlistDisplay.length > 0) {
+        html += createSection('⭐ Обране', watchlistDisplay);
+    }
     
     if (Array.isArray(data.forex)) {
         data.forex.forEach(session => {
@@ -177,9 +159,6 @@ function populateLists(data, query = '') {
         });
     }
 
-    html += createSection('📈 Усі акції/індекси', data.stocks);
-    html += createSection('🥇 Уся сировина', data.commodities);
-
     listsContainer.innerHTML = html;
     
     listsContainer.querySelectorAll('.pair-button').forEach(button => {
@@ -189,12 +168,14 @@ function populateLists(data, query = '') {
         });
     });
 }
+
 function renderFavoriteButton(pair) {
     const pairNormalized = pair.replace(/\//g, '');
     const isFavorite = currentWatchlist.includes(pairNormalized);
     const icon = isFavorite ? '✅' : '⭐';
     return `<button class="fav-btn" onclick="toggleFavorite(event, this, '${pair}')">${icon}</button>`;
 }
+
 function toggleFavorite(event, button, pair) {
     event.stopPropagation();
     const isCurrentlyFavorite = button.innerHTML.includes('✅');
@@ -218,33 +199,76 @@ function toggleFavorite(event, button, pair) {
             }
         });
 }
+
+// --- ПОЧАТОК ЗМІН: Повністю переписана функція fetchSignal ---
 function fetchSignal(pair) {
     lastSelectedPair = pair;
     showLoader(true);
-    signalOutput.innerHTML = `⏳ Отримую аналіз для ${pair} (${currentTimeframe})...`;
+    signalOutput.innerHTML = `⏳ Отримую дані для ${pair}...`;
     signalOutput.style.textAlign = 'left';
     
-    const initDataString = initData ? `&initData=${encodeURIComponent(initData)}` : '';
-    const signalApiUrl = `${API_BASE_URL}/api/signal?pair=${pair}&timeframe=${currentTimeframe}${initDataString}`;
+    const initDataQuery = initData ? `?initData=${encodeURIComponent(initData)}` : '';
+    const signalApiUrl = `${API_BASE_URL}/api/signal?pair=${pair}&timeframe=${currentTimeframe}${initDataQuery.replace('?', '&')}`;
     
     fetch(signalApiUrl)
-        .then(res => res.json())
-        .then(signalData => {
-            if (signalData.error) {
-                signalOutput.innerHTML = `❌ Помилка: ${signalData.error}`;
-                showLoader(false);
-                return;
+        .then(res => {
+            // Перевіряємо, чи відповідь успішна. Якщо ні - одразу переходимо до .catch
+            if (!res.ok) {
+                return res.json().then(errData => { throw new Error(errData.error || `HTTP ${res.status}`) });
             }
-
-            let html = '';
-            // ... (rest of the signal formatting logic)
-            signalOutput.innerHTML = html; // Simplified for brevity
+            return res.json();
+        })
+        .then(signalData => {
+            // Цей блок виконається тільки для успішних відповідей (200 OK)
+            let html = formatSignalAsHtml(signalData);
+            signalOutput.innerHTML = html;
+        })
+        .catch(err => {
+            // Цей блок "зловить" усі помилки: і мережеві, і 404, і 500
+            signalOutput.innerHTML = `❌ Помилка: ${err.message}`;
+        })
+        .finally(() => {
+            // Цей блок виконається завжди, і в ньому ми ховаємо завантажувач
             showLoader(false);
         });
 }
+
+function formatSignalAsHtml(signalData) {
+    let html = '';
+    if (signalData.special_warning) {
+        html += `<div class="special-warning">${signalData.special_warning}</div>`;
+    }
+
+    const pair = signalData.pair || 'N/A';
+    const price = signalData.price || 0;
+    const verdict = signalData.verdict_text || 'Не вдалося визначити.';
+    const score = signalData.bull_percentage || 50;
+    
+    const priceStr = price.toFixed(5);
+    html += `
+        <div class="signal-header">
+            <strong>${pair} (${currentTimeframe})</strong> | Ціна: <code>${priceStr}</code>
+        </div>
+        <div class="verdict">${verdict}</div>
+        <div class="power-balance">
+            <span>🐂 Бики: ${score}%</span>
+            <span>🐃 Ведмеді: ${100 - score}%</span>
+        </div>
+    `;
+
+    if (signalData.reasons && signalData.reasons.length > 0) {
+        html += '<div class="reasons"><strong>Ключові фактори:</strong><ul>';
+        signalData.reasons.forEach(r => { html += `<li>${r}</li>`; });
+        html += '</ul></div>';
+    }
+    return html;
+}
+// --- КІНЕЦЬ ЗМІН ---
+
 function showLoader(visible) {
     loader.className = visible ? '' : 'hidden';
 }
+
 function debounce(func, delay) {
     let timeout;
     return function(...args) {
