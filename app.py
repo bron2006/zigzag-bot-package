@@ -2,22 +2,27 @@ import logging
 import os
 import json
 import time
-import traceback
-import itertools
 import queue
 from functools import wraps
-from flask import Flask, jsonify, send_from_directory, Response, request, stream_with_context
+import itertools
 
-# --- ПОЧАТОК ЗМІН: Змінено імпорти для нової архітектури ---
-from twisted.internet import reactor
-from twisted.internet.defer import Deferred
+# Twisted imports
+from twisted.internet import reactor, threads
+from twisted.internet.defer import Deferred, inlineCallbacks
 from twisted.internet.task import LoopingCall
 from twisted.web.server import Site
 from twisted.web.wsgi import WSGIResource
-from klein import Klein
-# --- КІНЕЦЬ ЗМІН ---
 
+# Flask imports
+from flask import Flask, jsonify, send_from_directory, Response, request, stream_with_context
+
+# Telegram imports
+from telegram import Update
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackQueryHandler, CallbackContext
+
+# Local imports
 import state
+import telegram_ui
 from auth import is_valid_init_data, get_user_id_from_init_data
 from db import get_watchlist, toggle_watchlist
 from spotware_connect import SpotwareConnect
@@ -27,46 +32,35 @@ from config import (
     COMMODITIES, TRADING_HOURS, IDEAL_ENTRY_THRESHOLD, SCANNER_COOLDOWN_SECONDS, get_chat_id
 )
 from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOASymbolsListRes
-
-import telegram_ui
 from analysis import get_api_detailed_signal_data, PERIOD_MAP
 
-logging.basicConfig(level=logging.INFO,
-                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+# --- Setup ---
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 app.config['JSON_AS_ASCII'] = False
-
 WEBAPP_DIR = os.path.join(os.path.dirname(__file__), "webapp")
+_client_ready_deferred = Deferred()
 
-_client_ready_deferred = None
-
+# --- Helper Functions ---
 def set_client_ready_deferred(d):
     global _client_ready_deferred
     _client_ready_deferred = d
 
 def wait_client_ready():
-    from twisted.internet.defer import succeed
-    return _client_ready_deferred if _client_ready_deferred is not None else succeed(True)
+    return _client_ready_deferred
 
 def protected_route(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
         init_data = request.args.get("initData")
         if not is_valid_init_data(init_data):
-            logger.warning(f"Unauthorized API access attempt. Path: {request.path}")
             return jsonify({"success": False, "error": "Unauthorized"}), 401
         return f(*args, **kwargs)
     return decorated_function
 
-def scan_markets_wrapper():
-    try:
-        # Більше не потрібен @crochet.run_in_reactor, оскільки ми вже в потоці Twisted
-        scan_markets()
-    except Exception as e:
-        logger.critical(f"SCANNER: CRITICAL FAILURE IN SCAN WRAPPER: {e}", exc_info=True)
-
+# --- Scanner Logic (Twisted Native) ---
 def scan_markets():
     if not state.SCANNER_ENABLED:
         return
@@ -74,48 +68,44 @@ def scan_markets():
     logger.info("SCANNER: Starting sequential market scan...")
     all_forex_pairs = list(set(itertools.chain.from_iterable(FOREX_SESSIONS.values())))
     chat_id = get_chat_id()
-
-    if not chat_id:
-        logger.warning("SCANNER: CHAT_ID is not set. Scanner will not send notifications.")
         
     def on_analysis_done(result, pair_name):
         try:
-            if result.get("error"):
-                return
-            state.latest_analysis_cache[pair_name] = result
-            score = result.get('bull_percentage', 50)
-            if score >= IDEAL_ENTRY_THRESHOLD or score <= (100 - IDEAL_ENTRY_THRESHOLD):
-                now = time.time()
-                if (now - state.scanner_cooldown_cache.get(pair_name, 0)) > SCANNER_COOLDOWN_SECONDS:
-                    logger.info(f"SCANNER: Ideal entry for {pair_name}. Notifying.")
-                    state.sse_queue.put(result)
-                    message = telegram_ui._format_signal_message(result, "5m")
-                    keyboard = telegram_ui.get_main_menu_kb()
-                    if chat_id:
-                        state.updater.bot.send_message(chat_id=chat_id, text=message, parse_mode='Markdown', reply_markup=keyboard)
-                    state.scanner_cooldown_cache[pair_name] = now
+            if not result.get("error"):
+                state.latest_analysis_cache[pair_name] = result
+                score = result.get('bull_percentage', 50)
+                if score >= IDEAL_ENTRY_THRESHOLD or score <= (100 - IDEAL_ENTRY_THRESHOLD):
+                    now = time.time()
+                    if (now - state.scanner_cooldown_cache.get(pair_name, 0)) > SCANNER_COOLDOWN_SECONDS:
+                        logger.info(f"SCANNER: Ideal entry for {pair_name}. Notifying.")
+                        state.sse_queue.put(result)
+                        if chat_id:
+                            message = telegram_ui._format_signal_message(result, "5m")
+                            keyboard = telegram_ui.get_main_menu_kb()
+                            state.updater.bot.send_message(chat_id=chat_id, text=message, parse_mode='Markdown', reply_markup=keyboard)
+                        state.scanner_cooldown_cache[pair_name] = now
         except Exception as e:
-            logger.error(f"SCANNER: Error processing result for {pair_name}: {e}", exc_info=True)
+            logger.error(f"SCANNER: Error in on_analysis_done for {pair_name}: {e}", exc_info=True)
 
-    def process_next_pair(result, pairs_to_scan):
-        if not pairs_to_scan:
-            logger.info("SCANNER: Sequential scan finished.")
-            return
-        
-        pair = pairs_to_scan.pop(0)
-        norm_pair = pair.replace("/", "")
-        
-        d = get_api_detailed_signal_data(state.client, state.symbol_cache, norm_pair, 0, "5m")
-        d.addCallback(on_analysis_done, pair_name=norm_pair)
-        d.addBoth(process_next_pair, pairs_to_scan=pairs_to_scan)
-        return d
+    @inlineCallbacks
+    def process_all_pairs():
+        for pair in all_forex_pairs:
+            norm_pair = pair.replace("/", "")
+            try:
+                result = yield get_api_detailed_signal_data(state.client, state.symbol_cache, norm_pair, 0, "5m")
+                on_analysis_done(result, norm_pair)
+            except Exception as e:
+                logger.error(f"SCANNER: Error analyzing {norm_pair}: {e}")
+        logger.info("SCANNER: Sequential scan finished.")
 
-    process_next_pair(None, all_forex_pairs.copy())
+    # Run the processing in the reactor's thread pool
+    threads.deferToThread(process_all_pairs)
 
+# --- cTrader Event Handlers (Twisted Native) ---
 def on_ctrader_ready():
     logger.info("cTrader client is ready. Loading symbols...")
-    deferred = state.client.get_all_symbols()
-    deferred.addCallbacks(on_symbols_loaded, on_symbols_error)
+    d = state.client.get_all_symbols()
+    d.addCallbacks(on_symbols_loaded, on_symbols_error)
 
 def on_symbols_loaded(raw_message):
     try:
@@ -125,70 +115,123 @@ def on_symbols_loaded(raw_message):
         state.all_symbol_names = [s.symbolName for s in symbols_response.symbol]
         state.SYMBOLS_LOADED = True
         logger.info(f"✅ Successfully loaded {len(state.symbol_cache)} light symbols.")
-        if _client_ready_deferred and not _client_ready_deferred.called:
-            _client_ready_deferred.callback(True)
         
-        logger.info("Starting market scanner loop...")
-        scanner_loop = LoopingCall(scan_markets_wrapper)
-        scanner_loop.start(60)
-
+        # Start the scanner loop now that symbols are loaded
+        scanner_loop = LoopingCall(scan_markets)
+        scanner_loop.start(60, now=True) # Start immediately and then every 60s
+        _client_ready_deferred.callback(True)
     except Exception as e:
         logger.error(f"Symbol processing error: {e}", exc_info=True)
-
+        _client_ready_deferred.errback(e)
 
 def on_symbols_error(failure):
     logger.error(f"Failed to load symbols: {failure.getErrorMessage()}")
-    if _client_ready_deferred and not _client_ready_deferred.called:
-        _client_ready_deferred.errback(failure)
+    _client_ready_deferred.errback(failure)
 
-# --- Flask маршрути залишаються практично без змін ---
-# ... (всі ваші @app.route(...) йдуть тут)
-
+# --- Flask Routes ---
 @app.route("/")
 def home():
-    # ... (код без змін)
-    pass
+    try:
+        with open(os.path.join(WEBAPP_DIR, "index.html"), "r", encoding="utf-8") as f: content = f.read()
+        app_name = get_fly_app_name() or "zigzag-bot-package"
+        api_base_url = f"https://{app_name}.fly.dev"
+        cache_buster = int(time.time())
+        content = content.replace("{{API_BASE_URL}}", api_base_url)
+        content = content.replace("script.js", f"script.js?v={cache_buster}")
+        content = content.replace("style.css", f"style.css?v={cache_buster}")
+        return Response(content, mimetype='text/html')
+    except Exception as e:
+        return "Internal Server Error", 500
+
+@app.route("/<path:filename>")
+def static_files(filename):
+    return send_from_directory(WEBAPP_DIR, filename)
+
+@app.route("/api/get_pairs")
+@protected_route
+def get_pairs():
+    user_id = get_user_id_from_init_data(request.args.get("initData"))
+    watchlist = get_watchlist(user_id) if user_id else []
+    forex_data = [{"title": f"{name} {TRADING_HOURS.get(name, '')}".strip(), "pairs": pairs} for name, pairs in FOREX_SESSIONS.items()]
+    return jsonify({"forex": forex_data, "crypto": CRYPTO_PAIRS, "stocks": STOCK_TICKERS, "commodities": COMMODITIES, "watchlist": watchlist})
+
+@app.route("/api/toggle_watchlist")
+@protected_route
+def toggle_watchlist_route():
+    user_id = get_user_id_from_init_data(request.args.get("initData"))
+    pair = request.args.get("pair")
+    if not user_id or not pair: return jsonify({"success": False, "error": "Missing parameters"}), 400
+    success = toggle_watchlist(user_id, pair.replace("/", ""))
+    return jsonify({"success": success})
+
+@app.route("/api/signal")
+@protected_route
+def api_signal():
+    pair_normalized = (request.args.get("pair") or "").replace("/", "")
+    if not pair_normalized: return jsonify({"error": "pair is required"}), 400
     
-# ... і так далі для всіх маршрутів ...
+    cached_result = state.latest_analysis_cache.get(pair_normalized)
+    if cached_result:
+        return jsonify(cached_result)
+    else:
+        return jsonify({"error": "Дані для цього активу ще аналізуються сканером. Спробуйте за хвилину."}), 404
 
-# --- ПОЧАТОК ЗМІН: Повністю переписаний запуск додатку ---
+@app.route("/api/scanner/status")
+@protected_route
+def get_scanner_status():
+    return jsonify({"enabled": state.SCANNER_ENABLED})
 
-def start_background_services():
-    """Ініціалізує Telegram та cTrader клієнти."""
-    logger.info("Initializing background services (Telegram, cTrader)...")
-    if not TELEGRAM_BOT_TOKEN:
-        logger.error("TELEGRAM_BOT_TOKEN not found!")
-        return
-        
+@app.route("/api/scanner/toggle")
+@protected_route
+def toggle_scanner_status():
+    state.SCANNER_ENABLED = not state.SCANNER_ENABLED
+    logger.info(f"Scanner status toggled via API. New status: {state.SCANNER_ENABLED}")
+    return jsonify({"enabled": state.SCANNER_ENABLED})
+
+@app.route("/api/signal-stream")
+@protected_route
+def signal_stream():
+    def generate():
+        while True:
+            try:
+                signal_data = state.sse_queue.get(timeout=20)
+                yield f"data: {json.dumps(signal_data, ensure_ascii=False)}\n\n"
+            except queue.Empty:
+                yield ": ping\n\n"
+    
+    response = Response(stream_with_context(generate()), mimetype='text/event-stream')
+    response.headers['Cache-Control'] = 'no-cache'
+    response.headers['Connection'] = 'keep-alive'
+    response.headers['X-Accel-Buffering'] = 'no'
+    return response
+
+# --- Main Application Startup ---
+if __name__ == "__main__":
+    # 1. Initialize Telegram Bot
     updater = Updater(token=TELEGRAM_BOT_TOKEN, use_context=True)
-    client = SpotwareConnect(get_ct_client_id(), get_ct_client_secret())
     state.updater = updater
-    state.client = client
-
     dp = updater.dispatcher
     dp.add_handler(CommandHandler("start", telegram_ui.start))
-    # ... (решта обробників)
+    dp.add_handler(CommandHandler("symbols", telegram_ui.symbols_command))
+    dp.add_handler(MessageHandler(Filters.text("МЕНЮ"), telegram_ui.menu))
+    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, telegram_ui.reset_ui))
     dp.add_handler(CallbackQueryHandler(telegram_ui.button_handler))
-
     updater.start_polling()
     logger.info("Telegram bot started.")
-
-    client.on("ready", on_ctrader_ready)
-    # Важливо: client.start() тепер викликається реактором Twisted
-    reactor.callWhenRunning(client.start)
-    logger.info("cTrader client scheduled to start with reactor.")
-
-if __name__ == "__main__":
-    # 1. Запускаємо фонові сервіси (Telegram, cTrader)
-    start_background_services()
     
-    # 2. Створюємо ресурс Twisted для нашого Flask додатку
+    # 2. Initialize cTrader Client
+    client = SpotwareConnect(get_ct_client_id(), get_ct_client_secret())
+    state.client = client
+    client.on("ready", on_ctrader_ready)
+    reactor.callWhenRunning(client.start) # Schedule client to start with the reactor
+    logger.info("cTrader client scheduled to start.")
+    
+    # 3. Create a Twisted Web server resource for the Flask app
     wsgi_resource = WSGIResource(reactor, reactor.getThreadPool(), app)
     site = Site(wsgi_resource)
     
-    # 3. Запускаємо Twisted сервер, який буде обслуговувати все
+    # 4. Start the Twisted reactor and listen for web requests
     port = int(os.environ.get("PORT", 8080))
+    reactor.listenTCP(port, site, interface="0.0.0.0")
     logger.info(f"Starting Twisted server on port {port}...")
-    reactor.listenTCP(port, site)
     reactor.run()
-# --- КІНЕЦЬ ЗМІН ---
