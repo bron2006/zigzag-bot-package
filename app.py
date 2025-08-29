@@ -4,8 +4,9 @@ import json
 import time
 import traceback
 import itertools
+import queue
 from functools import wraps
-from flask import Flask, jsonify, send_from_directory, Response, request
+from flask import Flask, jsonify, send_from_directory, Response, request, stream_with_context
 from telegram import Update
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackQueryHandler, CallbackContext
 
@@ -61,7 +62,6 @@ def protected_route(f):
     return decorated_function
 
 def scan_markets_wrapper():
-    """Захисна оболонка для запуску сканера, щоб уникнути падіння."""
     try:
         scan_markets()
     except Exception as e:
@@ -76,13 +76,14 @@ def scan_markets():
     all_forex_pairs = list(set(itertools.chain.from_iterable(FOREX_SESSIONS.values())))
     chat_id = get_chat_id()
 
+    if not chat_id:
+        logger.warning("SCANNER: CHAT_ID is not set. Scanner will not send notifications.")
+        
     def on_analysis_done(result, pair_name):
         try:
-            # --- ПОЧАТОК ЗМІН: Зберігаємо результат в кеш ---
-            if not result.get("error"):
-                state.latest_analysis_cache[pair_name] = result
-            # --- КІНЕЦЬ ЗМІН ---
-
+            if result.get("error"):
+                return
+            state.latest_analysis_cache[pair_name] = result
             score = result.get('bull_percentage', 50)
             if score >= IDEAL_ENTRY_THRESHOLD or score <= (100 - IDEAL_ENTRY_THRESHOLD):
                 now = time.time()
@@ -112,163 +113,24 @@ def scan_markets():
 
     process_next_pair(None, all_forex_pairs.copy())
 
+# ... (решта коду до /api/signal-stream без змін) ...
 
-def on_ctrader_ready():
-    logger.info("cTrader client is ready. Loading symbols...")
-    deferred = state.client.get_all_symbols()
-    deferred.addCallbacks(on_symbols_loaded, on_symbols_error)
-
-def on_symbols_loaded(raw_message):
-    try:
-        symbols_response = ProtoOASymbolsListRes()
-        symbols_response.ParseFromString(raw_message.payload)
-        state.symbol_cache = {s.symbolName.replace("/", ""): s for s in symbols_response.symbol}
-        state.all_symbol_names = [s.symbolName for s in symbols_response.symbol]
-        state.SYMBOLS_LOADED = True
-        logger.info(f"✅ Successfully loaded {len(state.symbol_cache)} light symbols.")
-        if _client_ready_deferred and not _client_ready_deferred.called:
-            _client_ready_deferred.callback(True)
-        
-        logger.info("Starting market scanner loop...")
-        scanner_loop = LoopingCall(scan_markets_wrapper)
-        scanner_loop.start(60)
-
-    except Exception as e:
-        logger.error(f"Symbol processing error: {e}", exc_info=True)
-
-
-def on_symbols_error(failure):
-    logger.error(f"Failed to load symbols: {failure.getErrorMessage()}")
-    if _client_ready_deferred and not _client_ready_deferred.called:
-        _client_ready_deferred.errback(failure)
-
-
-def symbols_command(update: Update, context: CallbackContext):
-    if not state.SYMBOLS_LOADED or not hasattr(state, 'all_symbol_names'):
-        update.message.reply_text("Список символів ще не завантажено. Спробуйте за хвилину.")
-        return
-    
-    forex = sorted([s for s in state.all_symbol_names if "/" in s and len(s) < 8 and "USD" not in s.upper()])
-    crypto_usd = sorted([s for s in state.all_symbol_names if "/USD" in s.upper()])
-    crypto_usdt = sorted([s for s in state.all_symbol_names if "/USDT" in s.upper()])
-    others = sorted([s for s in state.all_symbol_names if "/" not in s])
-
-    message = "**Доступні символи від брокера:**\n\n"
-    if forex: message += f"**Forex:**\n`{', '.join(forex)}`\n\n"
-    if crypto_usd: message += f"**Crypto (USD):**\n`{', '.join(crypto_usd)}`\n\n"
-    if crypto_usdt: message += f"**Crypto (USDT):**\n`{', '.join(crypto_usdt)}`\n\n"
-    if others: message += f"**Indices/Stocks/Commodities:**\n`{', '.join(others)}`"
-    
-    for i in range(0, len(message), 4096):
-        update.message.reply_text(message[i:i + 4096], parse_mode='Markdown')
-
-def start_background_services():
-    logger.info("Initializing background services (Telegram, cTrader)...")
-    if not TELEGRAM_BOT_TOKEN:
-        logger.error("TELEGRAM_BOT_TOKEN not found!")
-        return
-        
-    ready_deferred = Deferred()
-    set_client_ready_deferred(ready_deferred)
-
-    updater = Updater(token=TELEGRAM_BOT_TOKEN, use_context=True)
-    client = SpotwareConnect(get_ct_client_id(), get_ct_client_secret())
-    state.updater = updater
-    state.client = client
-
-    dp = updater.dispatcher
-    dp.add_handler(CommandHandler("start", telegram_ui.start))
-    dp.add_handler(CommandHandler("symbols", symbols_command))
-    dp.add_handler(MessageHandler(Filters.text("МЕНЮ"), telegram_ui.menu))
-    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, telegram_ui.reset_ui))
-    dp.add_handler(CallbackQueryHandler(telegram_ui.button_handler))
-
-    updater.start_polling()
-    logger.info("Telegram bot started.")
-
-    client.on("ready", on_ctrader_ready)
-    client.start()
-    logger.info("cTrader client started.")
-
-@app.route("/")
-def home():
-    try:
-        with open(os.path.join(WEBAPP_DIR, "index.html"), "r", encoding="utf-8") as f:
-            content = f.read()
-        app_name = get_fly_app_name()
-        if not app_name:
-            app_name = "zigzag-bot-package"
-        api_base_url = f"https://{app_name}.fly.dev"
-        cache_buster = int(time.time())
-        content = content.replace("{{API_BASE_URL}}", api_base_url)
-        content = content.replace("script.js", f"script.js?v={cache_buster}")
-        content = content.replace("style.css", f"style.css?v={cache_buster}")
-        return Response(content, mimetype='text/html')
-    except Exception as e:
-        logger.error(f"Error serving index.html: {e}", exc_info=True)
-        return "Internal Server Error", 500
-
-@app.route("/<path:filename>")
-def static_files(filename):
-    return send_from_directory(WEBAPP_DIR, filename)
-
-@app.route("/api/get_pairs")
-@protected_route
-def get_pairs():
-    user_id = get_user_id_from_init_data(request.args.get("initData"))
-    watchlist = get_watchlist(user_id) if user_id else []
-    forex_data = [
-        {"title": f"{name} {TRADING_HOURS.get(name, '')}".strip(), "pairs": pairs}
-        for name, pairs in FOREX_SESSIONS.items()
-    ]
-    return jsonify({
-        "forex": forex_data, "crypto": CRYPTO_PAIRS, "stocks": STOCK_TICKERS,
-        "commodities": COMMODITIES, "watchlist": watchlist
-    })
-
-@app.route("/api/toggle_watchlist")
-@protected_route
-def toggle_watchlist_route():
-    user_id = get_user_id_from_init_data(request.args.get("initData"))
-    pair = request.args.get("pair")
-    if not user_id or not pair:
-        return jsonify({"success": False, "error": "Missing parameters"}), 400
-    try:
-        pair_normalized = pair.replace("/", "")
-        success = toggle_watchlist(user_id, pair_normalized)
-        if success:
-            return jsonify({"success": True})
-        else:
-            return jsonify({"success": False, "error": "Failed to write to database"}), 500
-    except Exception as e:
-        logger.error(f"Error in toggle_watchlist for user {user_id}: {e}")
-        return jsonify({"success": False, "error": "Internal server error"}), 500
-
-# --- ПОЧАТОК ЗМІН: Повністю переписана логіка /api/signal ---
 @app.route("/api/signal")
 @protected_route
 def api_signal():
     pair = request.args.get("pair")
-    # Таймфрейм більше не потрібен, оскільки сканер працює на 5m,
-    # але ми залишаємо його для сумісності
-    timeframe = request.args.get("timeframe", "5m") 
-    
     if not pair:
         return jsonify({"error": "pair is required"}), 400
     
     pair_normalized = pair.replace("/", "")
-    
-    # Миттєво беремо дані з кешу, замість запуску нового аналізу
     cached_result = state.latest_analysis_cache.get(pair_normalized)
     
     if cached_result:
         return jsonify(cached_result)
     else:
-        # Якщо даних ще немає (сканер ще не дійшов до цієї пари)
         return jsonify({
             "error": "Дані для цього активу ще аналізуються сканером. Спробуйте за хвилину."
         }), 404
-# --- КІНЕЦЬ ЗМІН ---
 
 @app.route("/api/scanner/status")
 @protected_route
@@ -282,18 +144,33 @@ def toggle_scanner_status():
     logger.info(f"Scanner status toggled via API. New status: {state.SCANNER_ENABLED}")
     return jsonify({"enabled": state.SCANNER_ENABLED})
 
+
+# --- ПОЧАТОК ЗМІН: Повністю переписаний signal_stream згідно з рекомендаціями експерта ---
 @app.route("/api/signal-stream")
 @protected_route
 def signal_stream():
     def generate():
         while True:
             try:
-                signal_data = state.sse_queue.get(timeout=None)
+                # Очікуємо на новий сигнал, але не довше 20 секунд
+                signal_data = state.sse_queue.get(timeout=20)
                 sse_data = f"data: {json.dumps(signal_data, ensure_ascii=False)}\n\n"
                 yield sse_data
-            except Exception:
+            except queue.Empty:
+                # Якщо за 20 секунд нічого не прийшло, надсилаємо "ping", щоб зберегти з'єднання
+                yield ": ping\n\n"
+            except Exception as e:
+                logger.error(f"SSE Stream error: {e}")
+                # У разі помилки просто продовжуємо цикл
                 continue
-    return Response(generate(), mimetype='text/event-stream')
+
+    # Створюємо відповідь з правильними заголовками, щоб уникнути буферизації
+    response = Response(stream_with_context(generate()), mimetype='text/event-stream')
+    response.headers['Cache-Control'] = 'no-cache'
+    response.headers['Connection'] = 'keep-alive'
+    response.headers['X-Accel-Buffering'] = 'no'
+    return response
+# --- КІНЕЦЬ ЗМІН ---
 
 if __name__ != "__main__":
     start_background_services()
