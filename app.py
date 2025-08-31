@@ -2,8 +2,8 @@ import logging
 import os
 import json
 import time
-import threading
 import traceback
+import itertools
 from functools import wraps
 from flask import Flask, jsonify, send_from_directory, Response, request
 from telegram import Update
@@ -17,16 +17,16 @@ from auth import is_valid_init_data, get_user_id_from_init_data
 from db import get_watchlist, toggle_watchlist
 from spotware_connect import SpotwareConnect
 from config import (
-    TELEGRAM_BOT_TOKEN, get_ct_client_id, get_ct_client_secret, 
+    TELEGRAM_BOT_TOKEN, get_ct_client_id, get_ct_client_secret,
     FOREX_SESSIONS, get_fly_app_name, CRYPTO_PAIRS, STOCK_TICKERS,
-    COMMODITIES, TRADING_HOURS
+    COMMODITIES, TRADING_HOURS, IDEAL_ENTRY_THRESHOLD, SCANNER_COOLDOWN_SECONDS, get_chat_id
 )
 from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOASymbolsListRes
 
-# --- ПОЧАТОК ЗМІН: Логіка "сигналу готовності" ---
 from twisted.internet import reactor
 from twisted.internet.defer import Deferred
-# --- КІНЕЦЬ ЗМІН ---
+from twisted.internet.task import LoopingCall
+import telegram_ui
 
 from analysis import get_api_detailed_signal_data, PERIOD_MAP
 
@@ -39,19 +39,15 @@ app.config['JSON_AS_ASCII'] = False
 
 WEBAPP_DIR = os.path.join(os.path.dirname(__file__), "webapp")
 
-# --- ПОЧАТОК ЗМІН: Створюємо Deferred Barrier ---
 _client_ready_deferred = None
 
 def set_client_ready_deferred(d):
-    """Встановлює глобальний Deferred, який сигналізує про готовність клієнта."""
     global _client_ready_deferred
     _client_ready_deferred = d
 
 def wait_client_ready():
-    """Повертає Deferred, який спрацює, коли клієнт буде готовий."""
     from twisted.internet.defer import succeed
     return _client_ready_deferred if _client_ready_deferred is not None else succeed(True)
-# --- КІНЕЦЬ ЗМІН ---
 
 
 def protected_route(f):
@@ -63,6 +59,59 @@ def protected_route(f):
             return jsonify({"success": False, "error": "Unauthorized"}), 401
         return f(*args, **kwargs)
     return decorated_function
+
+def scan_markets_wrapper():
+    """Захисна оболонка для запуску сканера, щоб уникнути падіння."""
+    try:
+        scan_markets()
+    except Exception as e:
+        logger.critical(f"SCANNER: CRITICAL FAILURE IN SCAN WRAPPER: {e}", exc_info=True)
+
+@crochet.run_in_reactor
+def scan_markets():
+    if not state.SCANNER_ENABLED:
+        return
+
+    logger.info("SCANNER: Starting sequential market scan...")
+    all_forex_pairs = list(set(itertools.chain.from_iterable(FOREX_SESSIONS.values())))
+    chat_id = get_chat_id()
+
+    def on_analysis_done(result, pair_name):
+        try:
+            # --- ПОЧАТОК ЗМІН: Зберігаємо результат в кеш ---
+            if not result.get("error"):
+                state.latest_analysis_cache[pair_name] = result
+            # --- КІНЕЦЬ ЗМІН ---
+
+            score = result.get('bull_percentage', 50)
+            if score >= IDEAL_ENTRY_THRESHOLD or score <= (100 - IDEAL_ENTRY_THRESHOLD):
+                now = time.time()
+                if (now - state.scanner_cooldown_cache.get(pair_name, 0)) > SCANNER_COOLDOWN_SECONDS:
+                    logger.info(f"SCANNER: Ideal entry for {pair_name}. Notifying.")
+                    state.sse_queue.put(result)
+                    message = telegram_ui._format_signal_message(result, "5m")
+                    keyboard = telegram_ui.get_main_menu_kb()
+                    if chat_id:
+                        state.updater.bot.send_message(chat_id=chat_id, text=message, parse_mode='Markdown', reply_markup=keyboard)
+                    state.scanner_cooldown_cache[pair_name] = now
+        except Exception as e:
+            logger.error(f"SCANNER: Error processing result for {pair_name}: {e}", exc_info=True)
+
+    def process_next_pair(result, pairs_to_scan):
+        if not pairs_to_scan:
+            logger.info("SCANNER: Sequential scan finished.")
+            return
+        
+        pair = pairs_to_scan.pop(0)
+        norm_pair = pair.replace("/", "")
+        
+        d = get_api_detailed_signal_data(state.client, state.symbol_cache, norm_pair, 0, "5m")
+        d.addCallback(on_analysis_done, pair_name=norm_pair)
+        d.addBoth(process_next_pair, pairs_to_scan=pairs_to_scan)
+        return d
+
+    process_next_pair(None, all_forex_pairs.copy())
+
 
 def on_ctrader_ready():
     logger.info("cTrader client is ready. Loading symbols...")
@@ -77,12 +126,16 @@ def on_symbols_loaded(raw_message):
         state.all_symbol_names = [s.symbolName for s in symbols_response.symbol]
         state.SYMBOLS_LOADED = True
         logger.info(f"✅ Successfully loaded {len(state.symbol_cache)} light symbols.")
-        # --- ПОЧАТОК ЗМІН: СИГНАЛІЗУЄМО, ЩО КЛІЄНТ ПОВНІСТЮ ГОТОВИЙ ---
         if _client_ready_deferred and not _client_ready_deferred.called:
             _client_ready_deferred.callback(True)
-        # --- КІНЕЦЬ ЗМІН ---
+        
+        logger.info("Starting market scanner loop...")
+        scanner_loop = LoopingCall(scan_markets_wrapper)
+        scanner_loop.start(60)
+
     except Exception as e:
         logger.error(f"Symbol processing error: {e}", exc_info=True)
+
 
 def on_symbols_error(failure):
     logger.error(f"Failed to load symbols: {failure.getErrorMessage()}")
@@ -115,17 +168,14 @@ def start_background_services():
         logger.error("TELEGRAM_BOT_TOKEN not found!")
         return
         
-    # --- ПОЧАТОК ЗМІН: Ініціалізуємо Deferred Barrier ---
     ready_deferred = Deferred()
     set_client_ready_deferred(ready_deferred)
-    # --- КІНЕЦЬ ЗМІН ---
 
     updater = Updater(token=TELEGRAM_BOT_TOKEN, use_context=True)
     client = SpotwareConnect(get_ct_client_id(), get_ct_client_secret())
     state.updater = updater
     state.client = client
 
-    import telegram_ui
     dp = updater.dispatcher
     dp.add_handler(CommandHandler("start", telegram_ui.start))
     dp.add_handler(CommandHandler("symbols", symbols_command))
@@ -173,7 +223,7 @@ def get_pairs():
     ]
     return jsonify({
         "forex": forex_data, "crypto": CRYPTO_PAIRS, "stocks": STOCK_TICKERS,
-        "commodities": COMMODITIES, "watchlist": watchlist 
+        "commodities": COMMODITIES, "watchlist": watchlist
     })
 
 @app.route("/api/toggle_watchlist")
@@ -194,46 +244,56 @@ def toggle_watchlist_route():
         logger.error(f"Error in toggle_watchlist for user {user_id}: {e}")
         return jsonify({"success": False, "error": "Internal server error"}), 500
 
+# --- ПОЧАТОК ЗМІН: Повністю переписана логіка /api/signal ---
 @app.route("/api/signal")
 @protected_route
 def api_signal():
     pair = request.args.get("pair")
-    timeframe = request.args.get("timeframe", "15m")
+    # Таймфрейм більше не потрібен, оскільки сканер працює на 5m,
+    # але ми залишаємо його для сумісності
+    timeframe = request.args.get("timeframe", "5m") 
     
-    if timeframe not in PERIOD_MAP:
-        return jsonify({"error": "Invalid timeframe"}), 400
     if not pair:
         return jsonify({"error": "pair is required"}), 400
     
     pair_normalized = pair.replace("/", "")
-    user_id = get_user_id_from_init_data(request.args.get("initData"))
-
-    logger.info(f"Received signal request for pair: {pair}, timeframe: {timeframe}")
-
-    @crochet.run_in_reactor
-    def do_analysis_and_get_result():
-        # --- ПОЧАТОК ЗМІН: Чекаємо на готовність клієнта перед аналізом ---
-        d = Deferred()
-        def _run_analysis(_):
-            # Передаємо результат get_api_detailed_signal_data в наш Deferred
-            inner_d = get_api_detailed_signal_data(state.client, state.symbol_cache, pair_normalized, user_id, timeframe)
-            inner_d.addBoth(d.callback)
-        wait_client_ready().addCallback(_run_analysis)
-        return d
-        # --- КІНЕЦЬ ЗМІН ---
-
-    try:
-        result = do_analysis_and_get_result().wait(timeout=30)
-        return jsonify(result)
-    except crochet.TimeoutError:
-        logger.error(f"Request timed out for pair: {pair}")
-        return jsonify({"error": "Request timed out"}), 504
-    except Exception as e:
-        tb_str = traceback.format_exc()
-        logger.error(f"Error in signal API for {pair}: {e}\n{tb_str}")
+    
+    # Миттєво беремо дані з кешу, замість запуску нового аналізу
+    cached_result = state.latest_analysis_cache.get(pair_normalized)
+    
+    if cached_result:
+        return jsonify(cached_result)
+    else:
+        # Якщо даних ще немає (сканер ще не дійшов до цієї пари)
         return jsonify({
-            "error": "Internal server error", "details": str(e), "traceback": tb_str
-        }), 500
+            "error": "Дані для цього активу ще аналізуються сканером. Спробуйте за хвилину."
+        }), 404
+# --- КІНЕЦЬ ЗМІН ---
+
+@app.route("/api/scanner/status")
+@protected_route
+def get_scanner_status():
+    return jsonify({"enabled": state.SCANNER_ENABLED})
+
+@app.route("/api/scanner/toggle")
+@protected_route
+def toggle_scanner_status():
+    state.SCANNER_ENABLED = not state.SCANNER_ENABLED
+    logger.info(f"Scanner status toggled via API. New status: {state.SCANNER_ENABLED}")
+    return jsonify({"enabled": state.SCANNER_ENABLED})
+
+@app.route("/api/signal-stream")
+@protected_route
+def signal_stream():
+    def generate():
+        while True:
+            try:
+                signal_data = state.sse_queue.get(timeout=None)
+                sse_data = f"data: {json.dumps(signal_data, ensure_ascii=False)}\n\n"
+                yield sse_data
+            except Exception:
+                continue
+    return Response(generate(), mimetype='text/event-stream')
 
 if __name__ != "__main__":
     start_background_services()

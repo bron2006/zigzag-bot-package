@@ -1,5 +1,3 @@
-# Dockerfile
-# Використовуємо повну версію python, оскільки slim не має потрібних інструментів для збірки
 FROM python:3.11-bullseye
 WORKDIR /app
 
@@ -13,7 +11,7 @@ RUN apt-get update && \
     curl && \
     rm -rf /var/lib/apt/lists/*
 
-# Завантажуємо, компілюємо і встановлюємо TA-Lib
+# Завантажуємо, компілюємо і встановлюємо системну бібліотеку TA-Lib
 RUN wget 'http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz' && \
     tar -xzf ta-lib-0.4.0-src.tar.gz && \
     cd ta-lib/ && \
@@ -23,12 +21,13 @@ RUN wget 'http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz' && 
     cd .. && \
     rm -rf ta-lib ta-lib-0.4.0-src.tar.gz
 
-# Встановлюємо Python-залежності
+# Встановлюємо Python-залежності з файлу
 COPY requirements.txt .
-# --- ПОЧАТОК ЗМІН: Прибираємо ненадійну команду echo ---
 RUN pip install --no-cache-dir -r requirements.txt
-# --- КІНЕЦЬ ЗМІН ---
 
 COPY . .
 EXPOSE 8080
-CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "1", "app:app"]
+
+# --- ПОЧАТОК ЗМІН: Перемикаємо Gunicorn на багатопотоковий worker ---
+CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "1", "--threads", "4", "-k", "gthread", "--timeout", "120", "app:app"]
+# --- КІНЕЦЬ ЗМІН ---
