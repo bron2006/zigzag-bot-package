@@ -11,7 +11,7 @@ from twisted.internet import reactor, threads
 from twisted.internet.defer import Deferred, inlineCallbacks
 from twisted.internet.task import LoopingCall
 from twisted.web.server import Site, NOT_DONE_YET
-from twisted.web.static import File # NEW: For serving static files
+from twisted.web.static import File
 
 # Klein import - REPLACES FLASK
 from klein import Klein
@@ -141,12 +141,10 @@ def on_symbols_error(failure):
     logger.error(f"Failed to load symbols: {failure.getErrorMessage()}")
     _client_ready_deferred.errback(failure)
 
-# --- Klein Routes (Replaces Flask Routes) ---
+# --- Klein Routes ---
 
-# MODIFIED: Повністю перероблена логіка маршрутизації для надійності
-# NEW: Окремий, чіткий маршрут для головної сторінки
 @app.route("/", methods=['GET'])
-def home(request):
+def home(self, request): # MODIFIED: Added 'self'
     filepath = os.path.join(WEBAPP_DIR, 'index.html')
     try:
         with open(filepath, "r", encoding="utf-8") as f: content = f.read()
@@ -163,21 +161,31 @@ def home(request):
         request.setResponseCode(500)
         return b"Internal Server Error"
 
-# NEW: Окремий маршрут для всіх інших статичних файлів (style.css, script.js)
+@app.route("/debug")
+def debug_request_info(self, request): # MODIFIED: Added 'self'
+    headers = {k.decode('utf-8'): v[0].decode('utf-8') for k, v in request.requestHeaders.getAllRawHeaders()}
+    
+    response_html = f"""
+    <h1>Request Debug Information</h1>
+    <h2>Headers</h2>
+    <pre>{json.dumps(headers, indent=2)}</pre>
+    """
+    request.setHeader('Content-Type', 'text/html; charset=utf-8')
+    return response_html.encode('utf-8')
+
 @app.route("/<path:filename>", methods=['GET'])
-def static_files(request, filename):
+def static_files(self, request, filename): # MODIFIED: Added 'self'
     filepath = os.path.join(WEBAPP_DIR, filename)
     if os.path.isfile(filepath):
         return File(filepath)
     else:
-        # Якщо файл не знайдено, повертаємо 404
         request.setResponseCode(404)
         return b"Not Found"
 
 
 @app.route("/api/get_pairs")
 @protected_route
-def get_pairs(request):
+def get_pairs(self, request): # MODIFIED: Added 'self'
     init_data_list = request.args.get(b"initData")
     init_data = init_data_list[0].decode('utf-8') if init_data_list else None
     
@@ -192,7 +200,7 @@ def get_pairs(request):
 
 @app.route("/api/toggle_watchlist")
 @protected_route
-def toggle_watchlist_route(request):
+def toggle_watchlist_route(self, request): # MODIFIED: Added 'self'
     init_data_list = request.args.get(b"initData")
     init_data = init_data_list[0].decode('utf-8') if init_data_list else None
     user_id = get_user_id_from_init_data(init_data)
@@ -210,7 +218,7 @@ def toggle_watchlist_route(request):
 
 @app.route("/api/signal")
 @protected_route
-def api_signal(request):
+def api_signal(self, request): # MODIFIED: Added 'self'
     pair_list = request.args.get(b"pair")
     pair_normalized = pair_list[0].decode('utf-8').replace("/", "") if pair_list else None
 
@@ -228,7 +236,7 @@ def api_signal(request):
 
 @app.route("/api/scanner/status")
 @protected_route
-def get_scanner_status(request):
+def get_scanner_status(self, request): # MODIFIED: Added 'self'
     with state.scanner_lock:
         is_enabled = state.SCANNER_ENABLED
     request.setHeader('Content-Type', 'application/json')
@@ -236,7 +244,7 @@ def get_scanner_status(request):
 
 @app.route("/api/scanner/toggle")
 @protected_route
-def toggle_scanner_status(request):
+def toggle_scanner_status(self, request): # MODIFIED: Added 'self'
     with state.scanner_lock:
         state.SCANNER_ENABLED = not state.SCANNER_ENABLED
         new_status = state.SCANNER_ENABLED
@@ -246,7 +254,7 @@ def toggle_scanner_status(request):
 
 @app.route("/api/signal-stream")
 @protected_route
-def signal_stream(request):
+def signal_stream(self, request): # MODIFIED: Added 'self'
     request.setHeader(b'Content-Type', b'text/event-stream; charset=utf-8')
     request.setHeader(b'Cache-Control', b'no-cache')
     request.setHeader(b'Connection', b'keep-alive')
