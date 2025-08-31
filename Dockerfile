@@ -28,6 +28,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 EXPOSE 8080
 
-# --- ПОЧАТОК ЗМІН: Перемикаємо Gunicorn на багатопотоковий worker ---
-CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "1", "--threads", "4", "-k", "gthread", "--timeout", "120", "app:app"]
+# --- ПОЧАТОК ЗМІН: Повністю змінено команду запуску ---
+# Замість Gunicorn, тепер ми запускаємо додаток напряму через Python,
+# оскільки він буде використовувати вбудований сервер Twisted.
+CMD ["python", "app.py"]
 # --- КІНЕЦЬ ЗМІН ---
