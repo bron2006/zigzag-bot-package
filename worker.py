@@ -39,21 +39,29 @@ def broadcast_sse_signal(signal_data):
 def scan_assets(asset_type, asset_list):
     if not get_scanner_state().get(asset_type, False): return
     logger.info(f"SCANNER ({asset_type.upper()}): Starting...")
+    
     def on_analysis_done(result, pair_name):
         try:
-            score = result.get('bull_percentage', 50)
-            if not result.get("error") and (score >= IDEAL_ENTRY_THRESHOLD or score <= (100 - IDEAL_ENTRY_THRESHOLD)):
-                broadcast_sse_signal(result)
-                # ... інша логіка сповіщень
-        except Exception as e: logger.error(f"SCANNER Error in on_analysis_done: {e}", exc_info=True)
+            if result and not result.get("error"):
+                score = result.get('bull_percentage', 50)
+                if score >= IDEAL_ENTRY_THRESHOLD or score <= (100 - IDEAL_ENTRY_THRESHOLD):
+                    broadcast_sse_signal(result)
+        except Exception as e:
+            logger.error(f"SCANNER Error in on_analysis_done: {e}", exc_info=True)
+
     @inlineCallbacks
     def process_all_pairs():
         for pair in asset_list:
-            result = yield get_api_detailed_signal_data(state.client, state.symbol_cache, pair.replace('/',''), 0, "5m")
-            on_analysis_done(result, pair)
+            try:
+                result = yield get_api_detailed_signal_data(state.client, state.symbol_cache, pair.replace('/',''), 0, "5m")
+                on_analysis_done(result, pair)
+            except Exception as e:
+                logger.error(f"Error analyzing {pair}: {e}")
+    
     threads.deferToThread(process_all_pairs)
 
 def on_ctrader_ready():
+    logger.info("cTrader client ready. Loading symbols...")
     d = state.client.get_all_symbols()
     d.addCallbacks(on_symbols_loaded, lambda f: logger.error(f"Failed symbols load: {f}"))
 
@@ -67,36 +75,39 @@ def on_symbols_loaded(raw_message):
     LoopingCall(scan_assets, "metals", COMMODITIES).start(120)
 
 @internal_api.route("/status")
-def get_status(req): req.setHeader('Content-Type', 'application/json'); return json.dumps(get_scanner_state())
+def get_status(request):
+    request.setHeader('Content-Type', 'application/json'); return json.dumps(get_scanner_state())
 
 @internal_api.route("/get_pairs")
-def get_pairs(req): req.setHeader('Content-Type', 'application/json'); return json.dumps({"forex_sessions": FOREX_SESSIONS, "crypto": CRYPTO_PAIRS, "commodities": COMMODITIES}, ensure_ascii=False)
+def get_pairs(request):
+    request.setHeader('Content-Type', 'application/json'); 
+    return json.dumps({"forex_sessions": FOREX_SESSIONS, "crypto": CRYPTO_PAIRS, "commodities": COMMODITIES, "trading_hours": TRADING_HOURS}, ensure_ascii=False)
 
 @internal_api.route("/toggle_scanner", methods=['POST'])
-def toggle_scanner(req):
-    content = json.loads(req.content.read()); stype = content.get('type')
+def toggle_scanner(request):
+    content = json.loads(request.content.read()); stype = content.get('type')
     state = get_scanner_state(); state[stype] = not state.get(stype, False); save_scanner_state(state)
-    logger.info(f"Toggled '{stype}' to {state[stype]}"); req.setHeader('Content-Type', 'application/json')
+    logger.info(f"Toggled '{stype}' to {state[stype]}"); request.setHeader('Content-Type', 'application/json')
     return json.dumps({"success": True, "newState": state})
 
 @internal_api.route("/analyze")
 @inlineCallbacks
-def analyze(req):
-    pair = req.args.get(b"pair")[0].decode('utf-8')
-    tf = req.args.get(b"timeframe")[0].decode('utf-8')
-    req.setHeader('Content-Type', 'application/json; charset=utf-8')
+def analyze(request):
+    pair = request.args.get(b"pair")[0].decode('utf-8')
+    tf = request.args.get(b"timeframe")[0].decode('utf-8')
+    request.setHeader('Content-Type', 'application/json; charset=utf-8')
     result = yield get_api_detailed_signal_data(state.client, state.symbol_cache, pair, 0, tf)
     return json.dumps(result, ensure_ascii=False)
 
 @internal_api.route("/signal-stream")
-def sse(req):
-    req.setHeader(b'Content-Type', b'text/event-stream; charset=utf-8')
-    sse_clients.append(req)
-    req.notifyFinish().addBoth(lambda _: sse_clients.remove(req) if req in sse_clients else None)
+def sse(request):
+    request.setHeader(b'Content-Type', b'text/event-stream; charset=utf-8')
+    sse_clients.append(request)
+    request.notifyFinish().addBoth(lambda _: sse_clients.remove(request) if request in sse_clients else None)
     return NOT_DONE_YET
 
 if __name__ == "__main__":
-    logger.info("Starting worker..."); site = Site(internal_api.resource())
+    site = Site(internal_api.resource())
     reactor.listenTCP(8081, site, interface="0.0.0.0")
     updater = Updater(token=TELEGRAM_BOT_TOKEN, use_context=True); state.updater = updater
     dp = updater.dispatcher; dp.add_handler(CommandHandler("start", telegram_ui.start))
@@ -104,4 +115,5 @@ if __name__ == "__main__":
     reactor.callInThread(updater.start_polling)
     client = SpotwareConnect(get_ct_client_id(), get_ct_client_secret()); state.client = client
     client.on("ready", on_ctrader_ready); reactor.callWhenRunning(client.start)
+    logger.info("Worker process started successfully.")
     reactor.run()

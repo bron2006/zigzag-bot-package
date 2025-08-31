@@ -20,7 +20,9 @@ def proxy(path, **kwargs):
         if 'text/event-stream' in resp.headers.get('Content-Type', ''):
             return Response(resp.iter_content(chunk_size=1024), content_type=resp.headers['Content-Type'])
         return jsonify(resp.json())
-    except requests.RequestException: return jsonify({"error": "Сервіс недоступний"}), 503
+    except requests.RequestException as e:
+        logging.error(f"Proxy request to worker failed: {e}")
+        return jsonify({"error": "Сервіс аналітики тимчасово недоступний"}), 503
 
 @app.route("/api/get_pairs")
 def get_pairs(): return proxy('/get_pairs')
