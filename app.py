@@ -1,3 +1,4 @@
+# app.py
 import logging
 import os
 import json
@@ -14,7 +15,7 @@ from twisted.web.server import Site
 from twisted.web.wsgi import WSGIResource
 
 # Flask imports
-from flask import Flask, jsonify, send_from_directory, Response, request, stream_with_context
+from flask import Flask, jsonify, send_from_directory, Response, request
 
 # Telegram imports
 from telegram import Update
@@ -62,7 +63,11 @@ def protected_route(f):
 
 # --- Scanner Logic (Twisted Native) ---
 def scan_markets():
-    if not state.SCANNER_ENABLED:
+    # MODIFIED: Використовуємо блокування для безпечного читання стану сканера
+    with state.scanner_lock:
+        is_enabled = state.SCANNER_ENABLED
+    
+    if not is_enabled:
         return
 
     logger.info("SCANNER: Starting sequential market scan...")
@@ -177,14 +182,20 @@ def api_signal():
 @app.route("/api/scanner/status")
 @protected_route
 def get_scanner_status():
-    return jsonify({"enabled": state.SCANNER_ENABLED})
+    # MODIFIED: Використовуємо блокування для безпечного читання
+    with state.scanner_lock:
+        is_enabled = state.SCANNER_ENABLED
+    return jsonify({"enabled": is_enabled})
 
 @app.route("/api/scanner/toggle")
 @protected_route
 def toggle_scanner_status():
-    state.SCANNER_ENABLED = not state.SCANNER_ENABLED
-    logger.info(f"Scanner status toggled via API. New status: {state.SCANNER_ENABLED}")
-    return jsonify({"enabled": state.SCANNER_ENABLED})
+    # MODIFIED: Використовуємо блокування для безпечної зміни стану
+    with state.scanner_lock:
+        state.SCANNER_ENABLED = not state.SCANNER_ENABLED
+        new_status = state.SCANNER_ENABLED
+    logger.info(f"Scanner status toggled via API. New status: {new_status}")
+    return jsonify({"enabled": new_status})
 
 @app.route("/api/signal-stream")
 @protected_route
@@ -197,10 +208,13 @@ def signal_stream():
             except queue.Empty:
                 yield ": ping\n\n"
     
-    response = Response(stream_with_context(generate()), mimetype='text/event-stream')
+    # MODIFIED: Прибираємо stream_with_context та додаємо заголовок Content-Encoding
+    # для запобігання буферизації на проксі-серверах (Fly.io)
+    response = Response(generate(), mimetype='text/event-stream')
     response.headers['Cache-Control'] = 'no-cache'
     response.headers['Connection'] = 'keep-alive'
     response.headers['X-Accel-Buffering'] = 'no'
+    response.headers['Content-Encoding'] = 'identity' # NEW
     return response
 
 # --- Main Application Startup ---

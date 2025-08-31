@@ -1,4 +1,6 @@
+# state.py
 import queue
+import threading # NEW: Імпортуємо модуль для роботи з потоками
 
 # Цей файл зберігає глобальний стан додатку,
 # щоб різні модулі мали доступ до спільних об'єктів.
@@ -19,6 +21,9 @@ scanner_cooldown_cache = {}
 
 # Прапорець стану сканера
 SCANNER_ENABLED = True
+
+# NEW: Об'єкт блокування для безпечного доступу до SCANNER_ENABLED
+scanner_lock = threading.Lock()
 
 # Черга для передачі сигналів у веб-додаток
 sse_queue = queue.Queue()
