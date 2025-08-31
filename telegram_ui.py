@@ -23,6 +23,13 @@ def get_main_menu_kb() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("📈 Акції/Індекси", callback_data="category_stocks")],
         [InlineKeyboardButton("🥇 Сировина", callback_data="category_commodities")]
     ]
+    
+    if state.SCANNER_ENABLED:
+        scanner_button_text = "✅ Сканер УВІМКНЕНО (вимкнути)"
+    else:
+        scanner_button_text = "❌ Сканер ВИМКНЕНО (увімкнути)"
+    keyboard.append([InlineKeyboardButton(scanner_button_text, callback_data="toggle_scanner")])
+    
     return InlineKeyboardMarkup(keyboard)
 
 def get_timeframe_kb(category: str) -> InlineKeyboardMarkup:
@@ -64,23 +71,55 @@ def start(update: Update, context: CallbackContext) -> None:
 
 def menu(update: Update, context: CallbackContext) -> None:
     if 'last_menu_id' in context.user_data:
-        try: context.bot.delete_message(chat_id=update.message.chat_id, message_id=context.user_data['last_menu_id'])
-        except BadRequest: pass
-    sent_message = update.message.reply_text("🏠 Головне меню:", reply_markup=get_main_menu_kb())
+        try:
+            context.bot.delete_message(chat_id=update.effective_chat.id, message_id=context.user_data['last_menu_id'])
+        except BadRequest:
+            pass
+
+    sent_message = update.message.reply_text(
+        "🏠 Головне меню:",
+        reply_markup=get_main_menu_kb()
+    )
     context.user_data['last_menu_id'] = sent_message.message_id
+
+    context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text=".",
+        disable_notification=True,
+        reply_markup=get_reply_keyboard()
+    )
 
 def reset_ui(update: Update, context: CallbackContext) -> None:
     update.message.reply_text(f"Невідома команда: '{update.message.text}'. Використовуйте кнопки.", reply_markup=get_reply_keyboard())
 
-# --- ПОЧАТОК ЗМІН: Оновлена логіка форматування ---
+# --- ПОЧАТОК ЗМІН: Додано відсутню функцію symbols_command ---
+def symbols_command(update: Update, context: CallbackContext):
+    if not state.SYMBOLS_LOADED or not hasattr(state, 'all_symbol_names'):
+        update.message.reply_text("Список символів ще не завантажено. Спробуйте за хвилину.")
+        return
+    
+    forex = sorted([s for s in state.all_symbol_names if "/" in s and len(s) < 8 and "USD" not in s.upper()])
+    crypto_usd = sorted([s for s in state.all_symbol_names if "/USD" in s.upper()])
+    crypto_usdt = sorted([s for s in state.all_symbol_names if "/USDT" in s.upper()])
+    others = sorted([s for s in state.all_symbol_names if "/" not in s])
+
+    message = "**Доступні символи від брокера:**\n\n"
+    if forex: message += f"**Forex:**\n`{', '.join(forex)}`\n\n"
+    if crypto_usd: message += f"**Crypto (USD):**\n`{', '.join(crypto_usd)}`\n\n"
+    if crypto_usdt: message += f"**Crypto (USDT):**\n`{', '.join(crypto_usdt)}`\n\n"
+    if others: message += f"**Indices/Stocks/Commodities:**\n`{', '.join(others)}`"
+    
+    # Розбиваємо повідомлення, якщо воно занадто довге для Telegram
+    for i in range(0, len(message), 4096):
+        update.message.reply_text(message[i:i + 4096], parse_mode='Markdown')
+# --- КІНЕЦЬ ЗМІН ---
+
 def _format_signal_message(result: dict, timeframe: str) -> str:
     if result.get("error"): return f"❌ Помилка аналізу: {result['error']}"
 
     message = ""
-    # Спочатку перевіряємо, чи є попередження, і додаємо його
     if result.get("special_warning"):
         message += f"**{result.get('special_warning')}**\n\n"
-    # --- КІНЕЦЬ ЗМІН ---
 
     pair = result.get('pair', 'N/A')
     price = result.get('price', 0)
@@ -130,6 +169,14 @@ def button_handler(update: Update, context: CallbackContext) -> None:
 
     parts = data.split('_')
     action = parts[0]
+
+    if action == "toggle":
+        if len(parts) > 1 and parts[1] == "scanner":
+            state.SCANNER_ENABLED = not state.SCANNER_ENABLED
+            status_text = "увімкнено" if state.SCANNER_ENABLED else "вимкнено"
+            query.answer(text=f"Сканер ринку {status_text}")
+            query.edit_message_text("🏠 Головне меню:", reply_markup=get_main_menu_kb())
+            return
 
     if action == "main":
         query.edit_message_text("🏠 Головне меню:", reply_markup=get_main_menu_kb())
