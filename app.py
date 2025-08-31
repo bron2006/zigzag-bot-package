@@ -10,14 +10,15 @@ import json
 import time
 import itertools
 from queue import Queue
-from threading import Lock
+from threading import Lock, Thread # MODIFIED: Changed import to include Thread directly
+import threading # FIX: Додано відсутній імпорт
 
 from flask import Flask, jsonify, send_from_directory, Response, request
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackQueryHandler
-import crochet # NEW: To run Twisted in a background thread
+import crochet
 
 # Local imports
-import state # We will use it for in-memory state
+import state
 import telegram_ui
 from spotware_connect import SpotwareConnect
 from config import *
@@ -27,7 +28,7 @@ from analysis import get_api_detailed_signal_data
 # --- Setup ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
-crochet.setup() # Initialize crochet
+crochet.setup()
 
 app = Flask(__name__)
 WEBAPP_DIR = os.path.join(app.root_path, "webapp")
@@ -62,7 +63,6 @@ def scan_assets(asset_type, asset_list):
             try:
                 result = yield get_api_detailed_signal_data(state.client, state.symbol_cache, norm_pair, 0, "5m")
                 
-                # The rest of the analysis logic from your file
                 score = result.get('bull_percentage', 50)
                 if score >= IDEAL_ENTRY_THRESHOLD or score <= (100 - IDEAL_ENTRY_THRESHOLD):
                     now = time.time()
@@ -88,6 +88,7 @@ def on_ctrader_ready():
     d.addCallbacks(on_symbols_loaded, lambda f: logger.error(f"Failed to load symbols: {f}"))
 
 def on_symbols_loaded(raw_message):
+    from twisted.internet.task import LoopingCall
     symbols_response = ProtoOASymbolsListRes()
     symbols_response.ParseFromString(raw_message.payload)
     state.symbol_cache = {s.symbolName.replace("/", ""): s for s in symbols_response.symbol}
@@ -95,14 +96,9 @@ def on_symbols_loaded(raw_message):
     
     all_forex = list(set(itertools.chain.from_iterable(FOREX_SESSIONS.values())))
     
-    # Use Twisted's LoopingCall from within the reactor thread, started via crochet
-    @crochet.run_in_reactor
-    def start_scanners():
-        LoopingCall(scan_assets, "forex", all_forex).start(90)
-        LoopingCall(scan_assets, "crypto", CRYPTO_PAIRS).start(60)
-        LoopingCall(scan_assets, "metals", COMMODITIES).start(120)
-
-    start_scanners()
+    LoopingCall(scan_assets, "forex", all_forex).start(90)
+    LoopingCall(scan_assets, "crypto", CRYPTO_PAIRS).start(60)
+    LoopingCall(scan_assets, "metals", COMMODITIES).start(120)
 
 # --- Flask Routes ---
 @app.route("/")
@@ -143,9 +139,10 @@ def api_signal():
     
     logger.info(f"On-demand analysis for {pair}")
     
-    # Use crochet.wait_for to call the async function and wait for its result
     @crochet.wait_for(timeout=20.0)
     def run_analysis():
+        # Since this is called from a non-reactor thread, we need to ensure
+        # the async call is properly awaited.
         return get_api_detailed_signal_data(state.client, state.symbol_cache, pair.replace('/',''), 0, timeframe)
     
     try:
@@ -167,6 +164,7 @@ def signal_stream():
 # --- Application Startup ---
 def start_background_services():
     logger.info("Starting background services...")
+    
     # 1. Initialize Telegram Bot
     updater = Updater(token=TELEGRAM_BOT_TOKEN, use_context=True)
     state.updater = updater
@@ -174,13 +172,12 @@ def start_background_services():
     dp.add_handler(CommandHandler("start", telegram_ui.start))
     dp.add_handler(CallbackQueryHandler(telegram_ui.button_handler))
     
-    # Run the bot in a separate, non-blocking thread
     bot_thread = threading.Thread(target=updater.start_polling)
     bot_thread.daemon = True
     bot_thread.start()
     logger.info("Telegram bot has started.")
     
-    # 2. Initialize cTrader Client in the Crochet/Twisted background thread
+    # 2. Initialize cTrader Client
     client = SpotwareConnect(get_ct_client_id(), get_ct_client_secret())
     state.client = client
     client.on("ready", on_ctrader_ready)
@@ -193,11 +190,9 @@ def start_background_services():
     logger.info("cTrader client scheduled to start.")
 
 
-# MODIFIED: Removed @app.before_first_request and call the startup function directly.
-# This code runs once when the Gunicorn worker process is initialized.
+# Call the startup function when the module is imported by Gunicorn
 start_background_services()
 
 
 if __name__ == '__main__':
-    # This block is for local development only and is not used by Gunicorn
     app.run(host='0.0.0.0', port=8080, debug=True)
