@@ -63,7 +63,6 @@ def protected_route(f):
 
 # --- Scanner Logic (Twisted Native) ---
 def scan_markets():
-    # MODIFIED: Використовуємо блокування для безпечного читання стану сканера
     with state.scanner_lock:
         is_enabled = state.SCANNER_ENABLED
     
@@ -71,7 +70,10 @@ def scan_markets():
         return
 
     logger.info("SCANNER: Starting sequential market scan...")
-    all_forex_pairs = list(set(itertools.chain.from_iterable(FOREX_SESSIONS.values())))
+    # MODIFIED: Тимчасово перемикаємо сканер на криптовалюти для тестування
+    assets_to_scan = CRYPTO_PAIRS
+    logger.info(f"SCANNER: Weekend mode. Scanning crypto pairs: {assets_to_scan}")
+    
     chat_id = get_chat_id()
         
     def on_analysis_done(result, pair_name):
@@ -94,7 +96,8 @@ def scan_markets():
 
     @inlineCallbacks
     def process_all_pairs():
-        for pair in all_forex_pairs:
+        # MODIFIED: Використовуємо новий список активів
+        for pair in assets_to_scan:
             norm_pair = pair.replace("/", "")
             try:
                 result = yield get_api_detailed_signal_data(state.client, state.symbol_cache, norm_pair, 0, "5m")
@@ -182,7 +185,6 @@ def api_signal():
 @app.route("/api/scanner/status")
 @protected_route
 def get_scanner_status():
-    # MODIFIED: Використовуємо блокування для безпечного читання
     with state.scanner_lock:
         is_enabled = state.SCANNER_ENABLED
     return jsonify({"enabled": is_enabled})
@@ -190,7 +192,6 @@ def get_scanner_status():
 @app.route("/api/scanner/toggle")
 @protected_route
 def toggle_scanner_status():
-    # MODIFIED: Використовуємо блокування для безпечної зміни стану
     with state.scanner_lock:
         state.SCANNER_ENABLED = not state.SCANNER_ENABLED
         new_status = state.SCANNER_ENABLED
@@ -208,13 +209,11 @@ def signal_stream():
             except queue.Empty:
                 yield ": ping\n\n"
     
-    # MODIFIED: Прибираємо stream_with_context та додаємо заголовок Content-Encoding
-    # для запобігання буферизації на проксі-серверах (Fly.io)
     response = Response(generate(), mimetype='text/event-stream')
     response.headers['Cache-Control'] = 'no-cache'
     response.headers['Connection'] = 'keep-alive'
     response.headers['X-Accel-Buffering'] = 'no'
-    response.headers['Content-Encoding'] = 'identity' # NEW
+    response.headers['Content-Encoding'] = 'identity'
     return response
 
 # --- Main Application Startup ---
@@ -224,9 +223,7 @@ if __name__ == "__main__":
     state.updater = updater
     dp = updater.dispatcher
     dp.add_handler(CommandHandler("start", telegram_ui.start))
-    # --- ПОЧАТОК ЗМІН: Використовуємо функцію з telegram_ui ---
     dp.add_handler(CommandHandler("symbols", telegram_ui.symbols_command))
-    # --- КІНЕЦЬ ЗМІН ---
     dp.add_handler(MessageHandler(Filters.text("МЕНЮ"), telegram_ui.menu))
     dp.add_handler(MessageHandler(Filters.text & ~Filters.command, telegram_ui.reset_ui))
     dp.add_handler(CallbackQueryHandler(telegram_ui.button_handler))
