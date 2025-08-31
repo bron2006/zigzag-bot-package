@@ -22,10 +22,9 @@ primary_region = 'fra'
   source = "signals_data"
   destination = "/data"
 
-# "Мозок" - внутрішній сервіс, який слухає команди на порту 8081
-[[services]]
-  internal_port = 8081
-  processes = ["worker"]
+# MODIFIED: Секцію [[services]] для воркера ВИДАЛЕНО.
+# Це гарантує, що буде запущено лише один екземпляр worker.
+# Внутрішній зв'язок між app та worker все одно буде працювати.
 
 [processes]
   app = "gunicorn --worker-class gevent --bind 0.0.0.0:8080 app:app"
