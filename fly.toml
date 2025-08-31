@@ -1,31 +1,28 @@
-# fly.toml
-app = "zigzag-bot-package"
-primary_region = "fra"
+# fly.toml file generated for zigzag-bot-package on 2025-08-26T19:35:46+03:00
+
+app = 'zigzag-bot-package'
+primary_region = 'fra'
 
 [build]
 
-[processes]
-  app = "gunicorn --bind 0.0.0.0:8080 --workers 1 app:app"
-
-[[mounts]]
-  source = "signals_data"
-  destination = "/data"
-
-[[services]]
+[http_service]
   internal_port = 8080
-  protocol = "tcp"
-  processes = ["app"]
+  force_https = true
+  auto_stop_machines = true
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ['app']
 
-  [[services.ports]]
-    handlers = ["http"]
-    port = 80
+[[vm]]
+  memory = '1gb'
+  cpu_kind = 'shared'
+  cpus = 1
 
-  [[services.ports]]
-    handlers = ["tls", "http"]
-    port = 443
+[mounts]
+  source="signals_data"
+  destination="/data"
 
-  [[services.tcp_checks]]
-    interval = "15s"
-    timeout = "2s"
-    grace_period = "10s"
-    restart_limit = 0
+# --- ПОЧАТОК ЗМІН: Змінюємо команду запуску ---
+[processes]
+  app = "python app.py"
+# --- КІНЕЦЬ ЗМІН ---
