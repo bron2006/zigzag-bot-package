@@ -1,4 +1,4 @@
-# fly.toml file generated for zigzag-bot-package on 2025-08-26T19:35:46+03:00
+# fly.toml
 
 app = 'zigzag-bot-package'
 primary_region = 'fra'
@@ -7,12 +7,10 @@ primary_region = 'fra'
 
 [http_service]
   internal_port = 8080
-  # FIX: Вимикаємо примусове перенаправлення, щоб розірвати цикл.
-  # З'єднання з клієнтом все одно буде захищене стандартними сертифікатами Fly.io.
   force_https = false
   auto_stop_machines = true
   auto_start_machines = true
-  min_machines_running = 0
+  min_machines_running = 1 # MODIFIED: Веб-сервер має працювати постійно
   processes = ['app']
 
 [[vm]]
@@ -24,7 +22,7 @@ primary_region = 'fra'
   source="signals_data"
   destination="/data"
 
-# --- ПОЧАТОК ЗМІН: Змінюємо команду запуску ---
+# MODIFIED: Описуємо два окремі процеси
 [processes]
-  app = "python app.py"
-# --- КІНЕЦЬ ЗМІН ---
+  app = "gunicorn --worker-class gevent --workers 4 --bind 0.0.0.0:8080 app:app"
+  worker = "python worker.py"
