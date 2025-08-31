@@ -44,7 +44,7 @@ app.config['JSON_AS_ASCII'] = False
 WEBAPP_DIR = os.path.join(os.path.dirname(__file__), "webapp")
 _client_ready_deferred = Deferred()
 
-# --- NEW: Native Twisted SSE Implementation ---
+# --- Native Twisted SSE Implementation ---
 
 class SignalStreamResource(Resource):
     isLeaf = True
@@ -67,9 +67,7 @@ class SignalStreamResource(Resource):
 
 def broadcast_sse_signal(signal_data):
     sse_formatted_data = f"data: {json.dumps(signal_data, ensure_ascii=False)}\n\n".encode('utf-8')
-    # Робимо копію списку, щоб уникнути проблем при зміні списку під час ітерації
     for client_request in list(state.sse_clients):
-        # Використовуємо callFromThread, щоб безпечно взаємодіяти з Twisted з іншого потоку
         reactor.callFromThread(client_request.write, sse_formatted_data)
 
 # --- Helper Functions ---
@@ -112,10 +110,7 @@ def scan_markets():
                     now = time.time()
                     if (now - state.scanner_cooldown_cache.get(pair_name, 0)) > SCANNER_COOLDOWN_SECONDS:
                         logger.info(f"SCANNER: Ideal entry for {pair_name}. Notifying.")
-                        
-                        # MODIFIED: Викликаємо нову функцію розсилки замість черги
                         broadcast_sse_signal(result)
-                        
                         if chat_id:
                             message = telegram_ui._format_signal_message(result, "5m")
                             keyboard = telegram_ui.get_main_menu_kb()
@@ -250,32 +245,30 @@ if __name__ == "__main__":
     logger.info("cTrader client scheduled to start.")
     
     # MODIFIED: Створюємо гібридний сервер
-    # Спочатку створюємо обробник для Flask (WSGI)
     wsgi_resource = WSGIResource(reactor, reactor.getThreadPool(), app)
 
-    # Потім створюємо кореневий ресурс Twisted, який буде нашим диспетчером
     class Root(Resource):
         def __init__(self, wsgi_resource):
             Resource.__init__(self)
             self.wsgi_resource = wsgi_resource
-            # Явно додаємо наші нативні Twisted-ресурси
             api = Resource()
             api.putChild(b"signal-stream", SignalStreamResource())
             self.putChild(b"api", api)
 
         def getChild(self, path, request):
-            # Якщо шлях - це наш нативний ресурс, Twisted його обробить
             if path in self.children:
                 return self.children[path]
-            # Всі інші запити віддаємо на обробку Flask
-            request.prepath.insert(0, request.postpath.pop(0))
+            
+            # FIX: Перевіряємо, чи є шлях запиту, перед тим як маніпулювати ним.
+            # Це виправляє збій IndexError при запиті до кореневої сторінки ('/').
+            if request.postpath:
+                request.prepath.insert(0, request.postpath.pop(0))
+
             return self.wsgi_resource
         
         def render(self, request):
-            # Запити на корінь ("/") також віддаємо Flask
             return self.wsgi_resource.render(request)
 
-    # Створюємо сайт з нашим новим гібридним диспетчером
     site = Site(Root(wsgi_resource))
     
     port = int(os.environ.get("PORT", 8080))
