@@ -16,6 +16,8 @@ from twisted.web.wsgi import WSGIResource
 
 # Flask imports
 from flask import Flask, jsonify, send_from_directory, Response, request
+# NEW: Імпортуємо ProxyFix для коректної роботи за проксі-сервером
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 # Telegram imports
 from telegram import Update
@@ -41,6 +43,11 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 app.config['JSON_AS_ASCII'] = False
+
+# FIX: Додаємо ProxyFix, щоб Flask "розумів", що він працює за проксі (Fly.io)
+# Це виправляє цикл нескінченних HTTPS-перенаправлень.
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
+
 WEBAPP_DIR = os.path.join(os.path.dirname(__file__), "webapp")
 _client_ready_deferred = Deferred()
 
@@ -244,7 +251,7 @@ if __name__ == "__main__":
     reactor.callWhenRunning(client.start)
     logger.info("cTrader client scheduled to start.")
     
-    # MODIFIED: Створюємо гібридний сервер
+    # Створюємо гібридний сервер
     wsgi_resource = WSGIResource(reactor, reactor.getThreadPool(), app)
 
     class Root(Resource):
@@ -255,19 +262,12 @@ if __name__ == "__main__":
             api.putChild(b"signal-stream", SignalStreamResource())
             self.putChild(b"api", api)
 
-        # MODIFIED: Спрощена логіка для уникнення циклу перенаправлень.
         def getChild(self, path, request):
-            # Якщо шлях явно веде до нашого нативного ресурсу (наприклад, 'api'),
-            # дозволяємо Twisted обробити його.
             if path in self.children:
                 return self.children[path]
-            
-            # FIX: Для всіх інших шляхів просто повертаємо ресурс Flask.
-            # БЕЗ маніпуляцій зі шляхом запиту. Це виправляє цикл перенаправлень.
             return self.wsgi_resource
         
         def render(self, request):
-            # Запити на корінь ("/") також віддаємо Flask
             return self.wsgi_resource.render(request)
 
     site = Site(Root(wsgi_resource))
