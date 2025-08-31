@@ -255,18 +255,19 @@ if __name__ == "__main__":
             api.putChild(b"signal-stream", SignalStreamResource())
             self.putChild(b"api", api)
 
+        # MODIFIED: Спрощена логіка для уникнення циклу перенаправлень.
         def getChild(self, path, request):
+            # Якщо шлях явно веде до нашого нативного ресурсу (наприклад, 'api'),
+            # дозволяємо Twisted обробити його.
             if path in self.children:
                 return self.children[path]
             
-            # FIX: Перевіряємо, чи є шлях запиту, перед тим як маніпулювати ним.
-            # Це виправляє збій IndexError при запиті до кореневої сторінки ('/').
-            if request.postpath:
-                request.prepath.insert(0, request.postpath.pop(0))
-
+            # FIX: Для всіх інших шляхів просто повертаємо ресурс Flask.
+            # БЕЗ маніпуляцій зі шляхом запиту. Це виправляє цикл перенаправлень.
             return self.wsgi_resource
         
         def render(self, request):
+            # Запити на корінь ("/") також віддаємо Flask
             return self.wsgi_resource.render(request)
 
     site = Site(Root(wsgi_resource))
