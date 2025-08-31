@@ -3,7 +3,6 @@ import logging
 import os
 import json
 import time
-import queue
 from functools import wraps
 import itertools
 
@@ -11,7 +10,8 @@ import itertools
 from twisted.internet import reactor, threads
 from twisted.internet.defer import Deferred, inlineCallbacks
 from twisted.internet.task import LoopingCall
-from twisted.web.server import Site
+from twisted.web.server import Site, NOT_DONE_YET
+from twisted.web.resource import Resource
 from twisted.web.wsgi import WSGIResource
 
 # Flask imports
@@ -44,6 +44,34 @@ app.config['JSON_AS_ASCII'] = False
 WEBAPP_DIR = os.path.join(os.path.dirname(__file__), "webapp")
 _client_ready_deferred = Deferred()
 
+# --- NEW: Native Twisted SSE Implementation ---
+
+class SignalStreamResource(Resource):
+    isLeaf = True
+    def render_GET(self, request):
+        request.setHeader(b'Content-Type', b'text/event-stream; charset=utf-8')
+        request.setHeader(b'Cache-Control', b'no-cache')
+        request.setHeader(b'Connection', b'keep-alive')
+        request.setHeader(b'X-Accel-Buffering', b'no')
+        request.setHeader(b'Content-Encoding', b'identity')
+        
+        state.sse_clients.append(request)
+        logger.info(f"SSE client connected. Total clients: {len(state.sse_clients)}")
+
+        def on_disconnect(_):
+            state.sse_clients.remove(request)
+            logger.info(f"SSE client disconnected. Total clients: {len(state.sse_clients)}")
+
+        request.notifyFinish().addErrback(on_disconnect)
+        return NOT_DONE_YET
+
+def broadcast_sse_signal(signal_data):
+    sse_formatted_data = f"data: {json.dumps(signal_data, ensure_ascii=False)}\n\n".encode('utf-8')
+    # Робимо копію списку, щоб уникнути проблем при зміні списку під час ітерації
+    for client_request in list(state.sse_clients):
+        # Використовуємо callFromThread, щоб безпечно взаємодіяти з Twisted з іншого потоку
+        reactor.callFromThread(client_request.write, sse_formatted_data)
+
 # --- Helper Functions ---
 def set_client_ready_deferred(d):
     global _client_ready_deferred
@@ -70,7 +98,6 @@ def scan_markets():
         return
 
     logger.info("SCANNER: Starting sequential market scan...")
-    # MODIFIED: Тимчасово перемикаємо сканер на криптовалюти для тестування
     assets_to_scan = CRYPTO_PAIRS
     logger.info(f"SCANNER: Weekend mode. Scanning crypto pairs: {assets_to_scan}")
     
@@ -85,7 +112,10 @@ def scan_markets():
                     now = time.time()
                     if (now - state.scanner_cooldown_cache.get(pair_name, 0)) > SCANNER_COOLDOWN_SECONDS:
                         logger.info(f"SCANNER: Ideal entry for {pair_name}. Notifying.")
-                        state.sse_queue.put(result)
+                        
+                        # MODIFIED: Викликаємо нову функцію розсилки замість черги
+                        broadcast_sse_signal(result)
+                        
                         if chat_id:
                             message = telegram_ui._format_signal_message(result, "5m")
                             keyboard = telegram_ui.get_main_menu_kb()
@@ -96,7 +126,6 @@ def scan_markets():
 
     @inlineCallbacks
     def process_all_pairs():
-        # MODIFIED: Використовуємо новий список активів
         for pair in assets_to_scan:
             norm_pair = pair.replace("/", "")
             try:
@@ -198,24 +227,6 @@ def toggle_scanner_status():
     logger.info(f"Scanner status toggled via API. New status: {new_status}")
     return jsonify({"enabled": new_status})
 
-@app.route("/api/signal-stream")
-@protected_route
-def signal_stream():
-    def generate():
-        while True:
-            try:
-                signal_data = state.sse_queue.get(timeout=20)
-                yield f"data: {json.dumps(signal_data, ensure_ascii=False)}\n\n"
-            except queue.Empty:
-                yield ": ping\n\n"
-    
-    response = Response(generate(), mimetype='text/event-stream')
-    response.headers['Cache-Control'] = 'no-cache'
-    response.headers['Connection'] = 'keep-alive'
-    response.headers['X-Accel-Buffering'] = 'no'
-    response.headers['Content-Encoding'] = 'identity'
-    return response
-
 # --- Main Application Startup ---
 if __name__ == "__main__":
     # 1. Initialize Telegram Bot
@@ -238,12 +249,36 @@ if __name__ == "__main__":
     reactor.callWhenRunning(client.start)
     logger.info("cTrader client scheduled to start.")
     
-    # 3. Create a Twisted Web server resource for the Flask app
+    # MODIFIED: Створюємо гібридний сервер
+    # Спочатку створюємо обробник для Flask (WSGI)
     wsgi_resource = WSGIResource(reactor, reactor.getThreadPool(), app)
-    site = Site(wsgi_resource)
+
+    # Потім створюємо кореневий ресурс Twisted, який буде нашим диспетчером
+    class Root(Resource):
+        def __init__(self, wsgi_resource):
+            Resource.__init__(self)
+            self.wsgi_resource = wsgi_resource
+            # Явно додаємо наші нативні Twisted-ресурси
+            api = Resource()
+            api.putChild(b"signal-stream", SignalStreamResource())
+            self.putChild(b"api", api)
+
+        def getChild(self, path, request):
+            # Якщо шлях - це наш нативний ресурс, Twisted його обробить
+            if path in self.children:
+                return self.children[path]
+            # Всі інші запити віддаємо на обробку Flask
+            request.prepath.insert(0, request.postpath.pop(0))
+            return self.wsgi_resource
+        
+        def render(self, request):
+            # Запити на корінь ("/") також віддаємо Flask
+            return self.wsgi_resource.render(request)
+
+    # Створюємо сайт з нашим новим гібридним диспетчером
+    site = Site(Root(wsgi_resource))
     
-    # 4. Start the Twisted reactor and listen for web requests
     port = int(os.environ.get("PORT", 8080))
     reactor.listenTCP(port, site, interface="0.0.0.0")
-    logger.info(f"Starting Twisted server on port {port}...")
+    logger.info(f"Starting HYBRID Twisted/Flask server on port {port}...")
     reactor.run()
