@@ -5,18 +5,17 @@ import json
 import time
 from functools import wraps
 import itertools
+import mimetypes
 
 # Twisted imports
 from twisted.internet import reactor, threads
 from twisted.internet.defer import Deferred, inlineCallbacks
 from twisted.internet.task import LoopingCall
 from twisted.web.server import Site, NOT_DONE_YET
-from twisted.web.resource import Resource
-from twisted.web.wsgi import WSGIResource
+from twisted.web.static import File # NEW: For serving static files
 
-# Flask imports
-from flask import Flask, jsonify, send_from_directory, Response, request
-from werkzeug.middleware.proxy_fix import ProxyFix
+# Klein import - REPLACES FLASK
+from klein import Klein
 
 # Telegram imports
 from telegram import Update
@@ -40,37 +39,18 @@ from analysis import get_api_detailed_signal_data, PERIOD_MAP
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-app = Flask(__name__)
-app.config['JSON_AS_ASCII'] = False
-app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
+# MODIFIED: Ініціалізуємо Klein замість Flask
+app = Klein()
 
 WEBAPP_DIR = os.path.join(os.path.dirname(__file__), "webapp")
 _client_ready_deferred = Deferred()
 
-# --- Native Twisted SSE Implementation ---
-
-class SignalStreamResource(Resource):
-    isLeaf = True
-    def render_GET(self, request):
-        request.setHeader(b'Content-Type', b'text/event-stream; charset=utf-8')
-        request.setHeader(b'Cache-Control', b'no-cache')
-        request.setHeader(b'Connection', b'keep-alive')
-        request.setHeader(b'X-Accel-Buffering', b'no')
-        request.setHeader(b'Content-Encoding', b'identity')
-        
-        state.sse_clients.append(request)
-        logger.info(f"SSE client connected. Total clients: {len(state.sse_clients)}")
-
-        def on_disconnect(_):
-            state.sse_clients.remove(request)
-            logger.info(f"SSE client disconnected. Total clients: {len(state.sse_clients)}")
-
-        request.notifyFinish().addErrback(on_disconnect)
-        return NOT_DONE_YET
+# --- NEW: Native Klein SSE and Broadcast Implementation ---
 
 def broadcast_sse_signal(signal_data):
     sse_formatted_data = f"data: {json.dumps(signal_data, ensure_ascii=False)}\n\n".encode('utf-8')
     for client_request in list(state.sse_clients):
+        # Використовуємо callFromThread, щоб безпечно взаємодіяти з Twisted з іншого потоку
         reactor.callFromThread(client_request.write, sse_formatted_data)
 
 # --- Helper Functions ---
@@ -83,11 +63,14 @@ def wait_client_ready():
 
 def protected_route(f):
     @wraps(f)
-    def decorated_function(*args, **kwargs):
-        init_data = request.args.get("initData")
+    def decorated_function(instance, request, *args, **kwargs):
+        init_data_list = request.args.get(b"initData")
+        init_data = init_data_list[0].decode('utf-8') if init_data_list else None
         if not is_valid_init_data(init_data):
-            return jsonify({"success": False, "error": "Unauthorized"}), 401
-        return f(*args, **kwargs)
+            request.setResponseCode(401)
+            request.setHeader('Content-Type', 'application/json')
+            return json.dumps({"success": False, "error": "Unauthorized"})
+        return f(instance, request, *args, **kwargs)
     return decorated_function
 
 # --- Scanner Logic (Twisted Native) ---
@@ -161,83 +144,127 @@ def on_symbols_error(failure):
     logger.error(f"Failed to load symbols: {failure.getErrorMessage()}")
     _client_ready_deferred.errback(failure)
 
-# --- Flask Routes ---
-@app.route("/")
-def home():
-    try:
-        with open(os.path.join(WEBAPP_DIR, "index.html"), "r", encoding="utf-8") as f: content = f.read()
-        app_name = get_fly_app_name() or "zigzag-bot-package"
-        api_base_url = f"https://{app_name}.fly.dev"
-        cache_buster = int(time.time())
-        content = content.replace("{{API_BASE_URL}}", api_base_url)
-        content = content.replace("script.js", f"script.js?v={cache_buster}")
-        content = content.replace("style.css", f"style.css?v={cache_buster}")
-        return Response(content, mimetype='text/html')
-    except Exception as e:
-        return "Internal Server Error", 500
+# --- Klein Routes (Replaces Flask Routes) ---
 
-@app.route("/debug")
-def debug_request_info():
-    headers = {k: v for k, v in request.headers}
-    environ = {k: str(v) for k, v in request.environ.items()}
-    
-    response_html = f"""
-    <h1>Request Debug Information</h1>
-    <h2>Headers</h2>
-    <pre>{json.dumps(headers, indent=2)}</pre>
-    <h2>WSGI Environ</h2>
-    <pre>{json.dumps(environ, indent=2)}</pre>
-    """
-    return Response(response_html, mimetype='text/html')
+@app.route("/", branch=True) # branch=True means it can also serve sub-paths
+def home(request):
+    # This route will handle serving index.html and all other static files from the webapp directory
+    path = request.path.decode('utf-8').strip('/')
+    if not path:
+        path = 'index.html'
 
-@app.route("/<path:filename>")
-def static_files(filename):
-    return send_from_directory(WEBAPP_DIR, filename)
+    filepath = os.path.join(WEBAPP_DIR, path)
+
+    if not os.path.exists(filepath):
+        request.setResponseCode(404)
+        return b"Not Found"
+
+    if path == 'index.html':
+        try:
+            with open(filepath, "r", encoding="utf-8") as f: content = f.read()
+            app_name = get_fly_app_name() or "zigzag-bot-package"
+            api_base_url = f"https://{app_name}.fly.dev"
+            cache_buster = int(time.time())
+            content = content.replace("{{API_BASE_URL}}", api_base_url)
+            content = content.replace("script.js", f"script.js?v={cache_buster}")
+            content = content.replace("style.css", f"style.css?v={cache_buster}")
+            request.setHeader('Content-Type', 'text/html; charset=utf-8')
+            return content.encode('utf-8')
+        except Exception:
+            request.setResponseCode(500)
+            return b"Internal Server Error"
+    else:
+        # For other static files, use Twisted's File resource
+        return File(filepath)
 
 @app.route("/api/get_pairs")
 @protected_route
-def get_pairs():
-    user_id = get_user_id_from_init_data(request.args.get("initData"))
+def get_pairs(request):
+    init_data_list = request.args.get(b"initData")
+    init_data = init_data_list[0].decode('utf-8') if init_data_list else None
+    
+    user_id = get_user_id_from_init_data(init_data)
     watchlist = get_watchlist(user_id) if user_id else []
     forex_data = [{"title": f"{name} {TRADING_HOURS.get(name, '')}".strip(), "pairs": pairs} for name, pairs in FOREX_SESSIONS.items()]
-    return jsonify({"forex": forex_data, "crypto": CRYPTO_PAIRS, "stocks": STOCK_TICKERS, "commodities": COMMODITIES, "watchlist": watchlist})
+    
+    response_data = {"forex": forex_data, "crypto": CRYPTO_PAIRS, "stocks": STOCK_TICKERS, "commodities": COMMODITIES, "watchlist": watchlist}
+    
+    request.setHeader('Content-Type', 'application/json; charset=utf-8')
+    return json.dumps(response_data, ensure_ascii=False)
 
 @app.route("/api/toggle_watchlist")
 @protected_route
-def toggle_watchlist_route():
-    user_id = get_user_id_from_init_data(request.args.get("initData"))
-    pair = request.args.get("pair")
-    if not user_id or not pair: return jsonify({"success": False, "error": "Missing parameters"}), 400
+def toggle_watchlist_route(request):
+    init_data_list = request.args.get(b"initData")
+    init_data = init_data_list[0].decode('utf-8') if init_data_list else None
+    user_id = get_user_id_from_init_data(init_data)
+
+    pair_list = request.args.get(b"pair")
+    pair = pair_list[0].decode('utf-8') if pair_list else None
+    
+    request.setHeader('Content-Type', 'application/json')
+    if not user_id or not pair:
+        request.setResponseCode(400)
+        return json.dumps({"success": False, "error": "Missing parameters"})
+
     success = toggle_watchlist(user_id, pair.replace("/", ""))
-    return jsonify({"success": success})
+    return json.dumps({"success": success})
 
 @app.route("/api/signal")
 @protected_route
-def api_signal():
-    pair_normalized = (request.args.get("pair") or "").replace("/", "")
-    if not pair_normalized: return jsonify({"error": "pair is required"}), 400
+def api_signal(request):
+    pair_list = request.args.get(b"pair")
+    pair_normalized = pair_list[0].decode('utf-8').replace("/", "") if pair_list else None
+
+    request.setHeader('Content-Type', 'application/json')
+    if not pair_normalized:
+        request.setResponseCode(400)
+        return json.dumps({"error": "pair is required"})
     
     cached_result = state.latest_analysis_cache.get(pair_normalized)
     if cached_result:
-        return jsonify(cached_result)
+        return json.dumps(cached_result, ensure_ascii=False)
     else:
-        return jsonify({"error": "Дані для цього активу ще аналізуються сканером. Спробуйте за хвилину."}), 404
+        request.setResponseCode(404)
+        return json.dumps({"error": "Дані для цього активу ще аналізуються сканером. Спробуйте за хвилину."})
 
 @app.route("/api/scanner/status")
 @protected_route
-def get_scanner_status():
+def get_scanner_status(request):
     with state.scanner_lock:
         is_enabled = state.SCANNER_ENABLED
-    return jsonify({"enabled": is_enabled})
+    request.setHeader('Content-Type', 'application/json')
+    return json.dumps({"enabled": is_enabled})
 
 @app.route("/api/scanner/toggle")
 @protected_route
-def toggle_scanner_status():
+def toggle_scanner_status(request):
     with state.scanner_lock:
         state.SCANNER_ENABLED = not state.SCANNER_ENABLED
         new_status = state.SCANNER_ENABLED
     logger.info(f"Scanner status toggled via API. New status: {new_status}")
-    return jsonify({"enabled": new_status})
+    request.setHeader('Content-Type', 'application/json')
+    return json.dumps({"enabled": new_status})
+
+@app.route("/api/signal-stream")
+@protected_route
+def signal_stream(request):
+    request.setHeader(b'Content-Type', b'text/event-stream; charset=utf-8')
+    request.setHeader(b'Cache-Control', b'no-cache')
+    request.setHeader(b'Connection', b'keep-alive')
+    request.setHeader(b'X-Accel-Buffering', b'no')
+    request.setHeader(b'Content-Encoding', b'identity')
+    
+    state.sse_clients.append(request)
+    logger.info(f"SSE client connected. Total clients: {len(state.sse_clients)}")
+
+    def on_disconnect(_):
+        if request in state.sse_clients:
+            state.sse_clients.remove(request)
+        logger.info(f"SSE client disconnected. Total clients: {len(state.sse_clients)}")
+
+    request.notifyFinish().addErrback(on_disconnect)
+    return NOT_DONE_YET
 
 # --- Main Application Startup ---
 if __name__ == "__main__":
@@ -261,47 +288,10 @@ if __name__ == "__main__":
     reactor.callWhenRunning(client.start)
     logger.info("cTrader client scheduled to start.")
     
-    # MODIFIED: Повністю нова, надійна архітектура гібридного сервера
-    wsgi_resource = WSGIResource(reactor, reactor.getThreadPool(), app)
-
-    # NEW: Створюємо спеціальний ресурс для /api, який вміє делегувати запити
-    class ApiResource(Resource):
-        def __init__(self, wsgi_resource):
-            Resource.__init__(self)
-            self._wsgi_resource = wsgi_resource
-            # Явно вказуємо дочірній ресурс, який обробляється Twisted
-            self.putChild(b"signal-stream", SignalStreamResource())
-
-        def getChild(self, path, request):
-            # Якщо шлях - це наш нативний ресурс, віддаємо його
-            if path in self.children:
-                return self.children[path]
-            # Всі інші запити (/api/get_pairs, /api/scanner/status)
-            # повертаємо назад у Flask
-            return self._wsgi_resource
-
-    # NEW: Головний ресурс-диспетчер
-    class Root(Resource):
-        def __init__(self, wsgi_resource):
-            Resource.__init__(self)
-            self._wsgi_resource = wsgi_resource
-            # Всі запити на /api/* будуть оброблятися нашим новим ApiResource
-            self.putChild(b"api", ApiResource(self._wsgi_resource))
-
-        def getChild(self, path, request):
-            # Якщо шлях - 'api', передаємо керування нашому ApiResource
-            if path in self.children:
-                return self.children[path]
-            # Всі інші шляхи (наприклад, '/style.css', '/debug') віддаємо Flask
-            return self._wsgi_resource
-        
-        def render(self, request):
-            # Запити на корінь ('/') також віддаємо Flask
-            return self._wsgi_resource.render(request)
-
-    site = Site(Root(wsgi_resource))
+    # MODIFIED: Створюємо сайт з ресурсу Klein, який нативно працює з Twisted
+    site = Site(app.resource())
     
     port = int(os.environ.get("PORT", 8080))
     reactor.listenTCP(port, site, interface="0.0.0.0")
-    logger.info(f"Starting HYBRID Twisted/Flask server on port {port}...")
+    logger.info(f"Starting Klein server on port {port}...")
     reactor.run()
