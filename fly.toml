@@ -4,6 +4,7 @@ primary_region = 'fra'
 
 [build]
 
+# "Обличчя" - публічний веб-сервер, що запускається через Gunicorn
 [http_service]
   internal_port = 8080
   force_https = false
@@ -21,6 +22,11 @@ primary_region = 'fra'
   source = "signals_data"
   destination = "/data"
 
-# MODIFIED: Залишаємо лише один процес app
+# "Мозок" - внутрішній сервіс, який слухає команди на порту 8081
+[[services]]
+  internal_port = 8081
+  processes = ["worker"]
+
 [processes]
   app = "gunicorn --worker-class gevent --bind 0.0.0.0:8080 app:app"
+  worker = "python worker.py"
