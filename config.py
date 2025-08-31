@@ -21,7 +21,7 @@ except Exception:
     pass
 
 def get_chat_id() -> int:
-    chat_id_str = os.getenv("CHAT_ID")
+    chat_id_str = os.getenv("TELEGRAM_CHAT_ID")
     return int(chat_id_str) if chat_id_str else None
 
 def get_ct_client_id() -> str: return os.getenv("CT_CLIENT_ID")
@@ -57,14 +57,11 @@ CRYPTO_PAIRS = _assets["crypto"]
 STOCK_TICKERS = _assets["stocks"]
 COMMODITIES = _assets["commodities"]
 
+# --- ПОЧАТОК ЗМІН: Додаємо години торгівлі ---
 TRADING_HOURS = {
     "Європейська": "🇪🇺 (10:00 - 19:00)",
     "Американська": "🇺🇸 (15:00 - 00:00)",
     "Азіатська": "🇯🇵 (02:00 - 11:00)",
     "Тихоокеанська": "🇦🇺 (00:00 - 09:00)"
 }
-
-# --- ПОЧАТОК ЗМІН: Налаштування для сканера ринку ---
-IDEAL_ENTRY_THRESHOLD = 85 # Поріг для купівлі (для продажу буде 100 - 85 = 15)
-SCANNER_COOLDOWN_SECONDS = 300 # 5 хвилин (5 * 60)
 # --- КІНЕЦЬ ЗМІН ---

@@ -22,6 +22,7 @@ body {
 .container { max-width: 100%; margin: auto; }
 h1 { text-align: center; color: var(--text-color); font-size: 24px; margin-top: 0; }
 
+/* --- ПОЧАТОК ЗМІН: Стилі для панелі керування та пошуку --- */
 .controls-panel {
     display: flex;
     flex-direction: column;
@@ -43,84 +44,7 @@ h1 { text-align: center; color: var(--text-color); font-size: 24px; margin-top: 
     outline: none;
     border-color: var(--button-color);
 }
-
-.timeframe-selector {
-    display: flex;
-    justify-content: center;
-    gap: 10px;
-}
-.tf-button {
-    padding: 8px 16px;
-    font-size: 14px;
-    background-color: var(--secondary-bg-color);
-    color: var(--text-color);
-    border: 1px solid var(--secondary-bg-color);
-    border-radius: 8px;
-    cursor: pointer;
-    transition: all 0.2s;
-}
-.tf-button:hover {
-    border-color: var(--button-color);
-}
-.tf-button.active {
-    background-color: var(--button-color);
-    color: var(--button-text-color);
-    border-color: var(--button-color);
-}
-
-/* --- ПОЧАТОК ЗМІН: Стилі для нових елементів --- */
-.scanner-button {
-    width: 100%;
-    padding: 10px 15px;
-    font-size: 16px;
-    font-weight: bold;
-    border-radius: 8px;
-    cursor: pointer;
-    transition: background-color 0.2s, color 0.2s;
-    border: 1px solid var(--button-color);
-    background-color: var(--secondary-bg-color);
-    color: var(--hint-color);
-}
-.scanner-button.enabled {
-    background-color: var(--button-color);
-    color: var(--button-text-color);
-}
-
-#liveSignalsContainer {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    margin-bottom: 15px;
-}
-
-.live-signal {
-    padding: 12px;
-    border-radius: 8px;
-    font-size: 15px;
-    text-align: center;
-    animation: fade-in 0.5s ease-in-out;
-}
-.live-signal.buy {
-    background-color: rgba(38, 166, 154, 0.2);
-    border-left: 4px solid var(--buy-color);
-    color: var(--buy-color);
-}
-.live-signal.sell {
-    background-color: rgba(239, 83, 80, 0.2);
-    border-left: 4px solid var(--sell-color);
-    color: var(--sell-color);
-}
-.live-signal.fade-out {
-    opacity: 0;
-    transition: opacity 0.5s ease-out;
-}
-
-@keyframes fade-in {
-    from { opacity: 0; transform: translateY(-10px); }
-    to { opacity: 1; transform: translateY(0); }
-}
 /* --- КІНЕЦЬ ЗМІН --- */
-
 
 .category { margin-bottom: 15px; }
 .category-title { font-size: 18px; font-weight: bold; margin-bottom: 10px; padding-bottom: 5px; border-bottom: 1px solid var(--secondary-bg-color); }
@@ -166,9 +90,68 @@ h1 { text-align: center; color: var(--text-color); font-size: 24px; margin-top: 
 
 #signalContainer { text-align: center; }
 #signalOutput { padding: 15px; background: var(--secondary-bg-color); border-radius: 8px; line-height: 1.6; min-height: 50px; }
+#chart { width: 100%; height: 350px; margin-top: 15px; }
 #loader { position: fixed; left: 50%; top: 50%; width: 50px; height: 50px; border: 5px solid var(--secondary-bg-color); border-top: 5px solid var(--button-color); border-radius: 50%; transform: translate(-50%, -50%); animation: spin 1s linear infinite; }
 .hidden { display: none; }
 @keyframes spin { 0% { transform: translate(-50%, -50%) rotate(0deg); } 100% { transform: translate(-50%, -50%) rotate(360deg); } }
+
+.mta-container { margin-top: 15px; padding-top: 10px; border-top: 1px solid rgba(128, 128, 128, 0.3); }
+.mta-table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+.mta-table th, .mta-table td { border: 1px solid var(--secondary-bg-color); padding: 8px; text-align: center; font-size: 14px; }
+.mta-table th { font-weight: normal; color: var(--hint-color); }
+.mta-table .buy { color: var(--buy-color); font-weight: bold; }
+.mta-table .sell { color: var(--sell-color); font-weight: bold; }
+
+#historyContainer {
+    margin-top: 20px;
+    text-align: left;
+}
+.history-title {
+    font-size: 18px;
+    font-weight: bold;
+    margin-bottom: 10px;
+}
+.history-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+}
+.history-table th, .history-table td {
+    border-bottom: 1px solid var(--secondary-bg-color);
+    padding: 10px 8px;
+}
+.history-table th {
+    color: var(--hint-color);
+    font-weight: normal;
+    text-align: left;
+}
+.history-table .signal-buy { color: var(--buy-color); }
+.history-table .signal-sell { color: var(--sell-color); }
+.history-table .signal-neutral { color: var(--hint-color); }
+
+.timeframe-selector {
+    display: flex;
+    justify-content: center;
+    gap: 10px;
+}
+.tf-button {
+    padding: 8px 16px;
+    font-size: 14px;
+    background-color: var(--secondary-bg-color);
+    color: var(--text-color);
+    border: 1px solid var(--secondary-bg-color);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+.tf-button:hover {
+    border-color: var(--button-color);
+}
+.tf-button.active {
+    background-color: var(--button-color);
+    color: var(--button-text-color);
+    border-color: var(--button-color);
+}
 
 .special-warning {
     background-color: rgba(255, 152, 0, 0.1);

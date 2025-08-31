@@ -1,33 +1,31 @@
 # fly.toml
-app = 'zigzag-bot-package'
-primary_region = 'fra'
+app = "zigzag-bot-package"
+primary_region = "fra"
 
 [build]
 
-[http_service]
-  internal_port = 8080
-  force_https = false
-  auto_stop_machines = true
-  auto_start_machines = true
-  min_machines_running = 1
-  processes = ['app']
+[processes]
+  app = "gunicorn --bind 0.0.0.0:8080 --workers 1 app:app"
 
-[[vm]]
-  memory = '1gb'
-  cpu_kind = 'shared'
-  cpus = 1
-
-[mounts]
+[[mounts]]
   source = "signals_data"
   destination = "/data"
 
 [[services]]
-  internal_port = 8081
-  processes = ["worker"]
-  min_machines_running = 1
-  max_machines_running = 1
-  auto_stop_machines = false
+  internal_port = 8080
+  protocol = "tcp"
+  processes = ["app"]
 
-[processes]
-  app = "gunicorn --worker-class gevent --bind 0.0.0.0:8080 app:app"
-  worker = "python worker.py"
+  [[services.ports]]
+    handlers = ["http"]
+    port = 80
+
+  [[services.ports]]
+    handlers = ["tls", "http"]
+    port = 443
+
+  [[services.tcp_checks]]
+    interval = "15s"
+    timeout = "2s"
+    grace_period = "10s"
+    restart_limit = 0
