@@ -5,7 +5,6 @@ import json
 import time
 from functools import wraps
 import itertools
-import mimetypes
 
 # Twisted imports
 from twisted.internet import reactor, threads
@@ -39,18 +38,16 @@ from analysis import get_api_detailed_signal_data, PERIOD_MAP
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# MODIFIED: Ініціалізуємо Klein замість Flask
 app = Klein()
 
 WEBAPP_DIR = os.path.join(os.path.dirname(__file__), "webapp")
 _client_ready_deferred = Deferred()
 
-# --- NEW: Native Klein SSE and Broadcast Implementation ---
+# --- Native Klein SSE and Broadcast Implementation ---
 
 def broadcast_sse_signal(signal_data):
     sse_formatted_data = f"data: {json.dumps(signal_data, ensure_ascii=False)}\n\n".encode('utf-8')
     for client_request in list(state.sse_clients):
-        # Використовуємо callFromThread, щоб безпечно взаємодіяти з Twisted з іншого потоку
         reactor.callFromThread(client_request.write, sse_formatted_data)
 
 # --- Helper Functions ---
@@ -146,36 +143,37 @@ def on_symbols_error(failure):
 
 # --- Klein Routes (Replaces Flask Routes) ---
 
-@app.route("/", branch=True) # branch=True means it can also serve sub-paths
+# MODIFIED: Повністю перероблена логіка маршрутизації для надійності
+# NEW: Окремий, чіткий маршрут для головної сторінки
+@app.route("/", methods=['GET'])
 def home(request):
-    # This route will handle serving index.html and all other static files from the webapp directory
-    path = request.path.decode('utf-8').strip('/')
-    if not path:
-        path = 'index.html'
+    filepath = os.path.join(WEBAPP_DIR, 'index.html')
+    try:
+        with open(filepath, "r", encoding="utf-8") as f: content = f.read()
+        app_name = get_fly_app_name() or "zigzag-bot-package"
+        api_base_url = f"https://{app_name}.fly.dev"
+        cache_buster = int(time.time())
+        content = content.replace("{{API_BASE_URL}}", api_base_url)
+        content = content.replace("script.js", f"script.js?v={cache_buster}")
+        content = content.replace("style.css", f"style.css?v={cache_buster}")
+        request.setHeader('Content-Type', 'text/html; charset=utf-8')
+        return content.encode('utf-8')
+    except Exception as e:
+        logger.error(f"Error serving index.html: {e}", exc_info=True)
+        request.setResponseCode(500)
+        return b"Internal Server Error"
 
-    filepath = os.path.join(WEBAPP_DIR, path)
-
-    if not os.path.exists(filepath):
+# NEW: Окремий маршрут для всіх інших статичних файлів (style.css, script.js)
+@app.route("/<path:filename>", methods=['GET'])
+def static_files(request, filename):
+    filepath = os.path.join(WEBAPP_DIR, filename)
+    if os.path.isfile(filepath):
+        return File(filepath)
+    else:
+        # Якщо файл не знайдено, повертаємо 404
         request.setResponseCode(404)
         return b"Not Found"
 
-    if path == 'index.html':
-        try:
-            with open(filepath, "r", encoding="utf-8") as f: content = f.read()
-            app_name = get_fly_app_name() or "zigzag-bot-package"
-            api_base_url = f"https://{app_name}.fly.dev"
-            cache_buster = int(time.time())
-            content = content.replace("{{API_BASE_URL}}", api_base_url)
-            content = content.replace("script.js", f"script.js?v={cache_buster}")
-            content = content.replace("style.css", f"style.css?v={cache_buster}")
-            request.setHeader('Content-Type', 'text/html; charset=utf-8')
-            return content.encode('utf-8')
-        except Exception:
-            request.setResponseCode(500)
-            return b"Internal Server Error"
-    else:
-        # For other static files, use Twisted's File resource
-        return File(filepath)
 
 @app.route("/api/get_pairs")
 @protected_route
@@ -288,7 +286,6 @@ if __name__ == "__main__":
     reactor.callWhenRunning(client.start)
     logger.info("cTrader client scheduled to start.")
     
-    # MODIFIED: Створюємо сайт з ресурсу Klein, який нативно працює з Twisted
     site = Site(app.resource())
     
     port = int(os.environ.get("PORT", 8080))
