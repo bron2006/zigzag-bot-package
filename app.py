@@ -176,7 +176,6 @@ def home():
     except Exception as e:
         return "Internal Server Error", 500
 
-# NEW: Діагностичний маршрут
 @app.route("/debug")
 def debug_request_info():
     headers = {k: v for k, v in request.headers}
@@ -262,24 +261,43 @@ if __name__ == "__main__":
     reactor.callWhenRunning(client.start)
     logger.info("cTrader client scheduled to start.")
     
-    # Створюємо гібридний сервер
+    # MODIFIED: Повністю нова, надійна архітектура гібридного сервера
     wsgi_resource = WSGIResource(reactor, reactor.getThreadPool(), app)
 
+    # NEW: Створюємо спеціальний ресурс для /api, який вміє делегувати запити
+    class ApiResource(Resource):
+        def __init__(self, wsgi_resource):
+            Resource.__init__(self)
+            self._wsgi_resource = wsgi_resource
+            # Явно вказуємо дочірній ресурс, який обробляється Twisted
+            self.putChild(b"signal-stream", SignalStreamResource())
+
+        def getChild(self, path, request):
+            # Якщо шлях - це наш нативний ресурс, віддаємо його
+            if path in self.children:
+                return self.children[path]
+            # Всі інші запити (/api/get_pairs, /api/scanner/status)
+            # повертаємо назад у Flask
+            return self._wsgi_resource
+
+    # NEW: Головний ресурс-диспетчер
     class Root(Resource):
         def __init__(self, wsgi_resource):
             Resource.__init__(self)
-            self.wsgi_resource = wsgi_resource
-            api = Resource()
-            api.putChild(b"signal-stream", SignalStreamResource())
-            self.putChild(b"api", api)
+            self._wsgi_resource = wsgi_resource
+            # Всі запити на /api/* будуть оброблятися нашим новим ApiResource
+            self.putChild(b"api", ApiResource(self._wsgi_resource))
 
         def getChild(self, path, request):
+            # Якщо шлях - 'api', передаємо керування нашому ApiResource
             if path in self.children:
                 return self.children[path]
-            return self.wsgi_resource
+            # Всі інші шляхи (наприклад, '/style.css', '/debug') віддаємо Flask
+            return self._wsgi_resource
         
         def render(self, request):
-            return self.wsgi_resource.render(request)
+            # Запити на корінь ('/') також віддаємо Flask
+            return self._wsgi_resource.render(request)
 
     site = Site(Root(wsgi_resource))
     
