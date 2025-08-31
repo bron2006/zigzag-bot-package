@@ -16,7 +16,6 @@ from twisted.web.wsgi import WSGIResource
 
 # Flask imports
 from flask import Flask, jsonify, send_from_directory, Response, request
-# NEW: Імпортуємо ProxyFix для коректної роботи за проксі-сервером
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 # Telegram imports
@@ -43,9 +42,6 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 app.config['JSON_AS_ASCII'] = False
-
-# FIX: Додаємо ProxyFix, щоб Flask "розумів", що він працює за проксі (Fly.io)
-# Це виправляє цикл нескінченних HTTPS-перенаправлень.
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
 WEBAPP_DIR = os.path.join(os.path.dirname(__file__), "webapp")
@@ -179,6 +175,21 @@ def home():
         return Response(content, mimetype='text/html')
     except Exception as e:
         return "Internal Server Error", 500
+
+# NEW: Діагностичний маршрут
+@app.route("/debug")
+def debug_request_info():
+    headers = {k: v for k, v in request.headers}
+    environ = {k: str(v) for k, v in request.environ.items()}
+    
+    response_html = f"""
+    <h1>Request Debug Information</h1>
+    <h2>Headers</h2>
+    <pre>{json.dumps(headers, indent=2)}</pre>
+    <h2>WSGI Environ</h2>
+    <pre>{json.dumps(environ, indent=2)}</pre>
+    """
+    return Response(response_html, mimetype='text/html')
 
 @app.route("/<path:filename>")
 def static_files(filename):
