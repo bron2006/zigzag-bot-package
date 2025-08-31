@@ -1,5 +1,7 @@
 # app.py
 import logging
+import os # FIX: Додано відсутній імпорт
+import json
 import requests
 from flask import Flask, jsonify, send_from_directory, Response, request
 
@@ -55,3 +57,13 @@ def signal_stream():
     except requests.RequestException as e:
         logger.error(f"Could not connect to worker for SSE stream: {e}")
         return "Stream unavailable", 503
+
+# NEW: Додаємо маршрут для отримання списків активів, щоб UI міг їх намалювати
+@app.route("/api/get_assets")
+def get_assets():
+    try:
+        resp = requests.get(f"{WORKER_URL}/get_assets", timeout=5)
+        resp.raise_for_status()
+        return jsonify(resp.json())
+    except requests.RequestException as e:
+        return jsonify({"error": "Worker service unavailable"}), 503

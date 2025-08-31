@@ -4,6 +4,7 @@ import os
 import json
 import time
 import itertools
+import requests
 
 from twisted.internet import reactor, threads
 from twisted.internet.defer import inlineCallbacks
@@ -11,7 +12,8 @@ from twisted.internet.task import LoopingCall
 from twisted.web.server import Site, NOT_DONE_YET
 from klein import Klein
 
-from telegram.ext import Updater, CommandHandler
+# MODIFIED: Додано відсутні імпорти для обробників Telegram
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackQueryHandler
 
 import state
 import telegram_ui
@@ -70,13 +72,25 @@ def scan_assets(asset_type, asset_list):
 
     @inlineCallbacks
     def process_all_pairs():
+        current_analysis_batch = {}
         for pair in asset_list:
             norm_pair = pair.replace("/", "")
             try:
                 result = yield get_api_detailed_signal_data(state.client, state.symbol_cache, norm_pair, 0, "5m")
+                if not result.get("error"):
+                    current_analysis_batch[norm_pair] = result
                 on_analysis_done(result, norm_pair)
             except Exception as e:
                 logger.error(f"SCANNER ({asset_type.upper()}): Error analyzing {norm_pair}: {e}")
+        
+        try:
+            # Update cache file with latest results
+            with open(os.path.join(DATA_DIR, "analysis_cache.json"), 'w', encoding='utf-8') as f:
+                json.dump(current_analysis_batch, f, ensure_ascii=False, indent=4)
+            logger.info(f"SCANNER: Successfully updated analysis cache file.")
+        except IOError as e:
+            logger.error(f"SCANNER: Failed to write to analysis cache file: {e}")
+
         logger.info(f"SCANNER ({asset_type.upper()}): Scan finished.")
     threads.deferToThread(process_all_pairs)
 
@@ -101,14 +115,12 @@ def get_status(request):
     request.setHeader('Content-Type', 'application/json')
     return json.dumps(get_scanner_state())
 
-@internal_api.route("/get_assets", methods=['GET']) # NEW
+@internal_api.route("/get_assets", methods=['GET'])
 def get_assets(request):
     request.setHeader('Content-Type', 'application/json')
     return json.dumps({
-        "forex_sessions": FOREX_SESSIONS,
-        "crypto": CRYPTO_PAIRS,
-        "stocks": STOCK_TICKERS,
-        "commodities": COMMODITIES,
+        "forex_sessions": FOREX_SESSIONS, "crypto": CRYPTO_PAIRS,
+        "stocks": STOCK_TICKERS, "commodities": COMMODITIES,
         "trading_hours": TRADING_HOURS
     })
 
@@ -131,10 +143,8 @@ def toggle_scanner(request):
 def analyze_on_demand(request):
     pair_list = request.args.get(b"pair")
     pair = pair_list[0].decode('utf-8') if pair_list else None
-    
     timeframe_list = request.args.get(b"timeframe")
     timeframe = timeframe_list[0].decode('utf-8') if timeframe_list else "5m"
-
     request.setHeader('Content-Type', 'application/json; charset=utf-8')
     if not pair:
         request.setResponseCode(400); return json.dumps({"error": "pair is required"})
@@ -165,7 +175,6 @@ if __name__ == "__main__":
     updater = Updater(token=TELEGRAM_BOT_TOKEN, use_context=True)
     state.updater = updater
     dp = updater.dispatcher
-    # MODIFIED: Додаємо всі ваші обробники сюди
     dp.add_handler(CommandHandler("start", telegram_ui.start))
     dp.add_handler(CommandHandler("symbols", telegram_ui.symbols_command))
     dp.add_handler(MessageHandler(Filters.text("МЕНЮ"), telegram_ui.menu))
