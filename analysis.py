@@ -1,3 +1,4 @@
+# analysis.py
 import logging
 import pandas as pd
 import pandas_ta as ta
@@ -233,7 +234,7 @@ def _calculate_core_signal(df, daily_df, current_price):
         elif is_daily_uptrend and score < 50:
             critical_warning = "❗️ Сигнал суперечить денному аптренду"
             score = 50
-                
+            
     score = int(np.clip(score, 0, 100))
     
     support_candidates = [s for s in long_term_support if s < current_price]
@@ -276,7 +277,12 @@ def _generate_verdict(score):
     if score < 35: return "↘️ Moderate SELL"
     return "🟡 NEUTRAL"
 
+# MODIFIED: Повністю перероблена функція для коректної роботи з Deferred
 def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int, timeframe: str = "15m") -> Deferred:
+    # NEW: Створюємо фінальний Deferred, який буде повернуто.
+    # Він буде "виконаний" (fired), коли всі дані будуть готові.
+    final_deferred = Deferred()
+
     def on_data_ready(results):
         try:
             success1, df = results[0]
@@ -284,7 +290,10 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int
             success3, live_price = results[2]
 
             if not (success1 and success2) or df.empty or len(df) < 50 or daily_df.empty:
-                return {"error": f"Not enough historical data for {timeframe} analysis."}
+                # MODIFIED: Виконуємо Deferred з результатом-помилкою
+                if not final_deferred.called:
+                    final_deferred.callback({"error": f"Not enough historical data for {timeframe} analysis."})
+                return
 
             current_price = live_price if success3 and live_price is not None else df.iloc[-1]['Close']
             
@@ -315,11 +324,15 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int
                 "volume_info": analysis.get('volume_info'),
                 "special_warning": final_warning
             }
-            return response_data
+            # MODIFIED: Виконуємо Deferred з успішним результатом
+            if not final_deferred.called:
+                final_deferred.callback(response_data)
             
         except Exception as e:
             logger.exception(f"Critical analysis error for {symbol}: {e}")
-            return {"error": "Internal data processing error."}
+            # MODIFIED: Повідомляємо Deferred про помилку
+            if not final_deferred.called:
+                final_deferred.errback(e)
 
     d1 = get_market_data(client, symbol_cache, symbol, timeframe, 200)
     d2 = get_market_data(client, symbol_cache, symbol, '1day', 100)
@@ -327,4 +340,6 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int
     
     d_list = DeferredList([d1, d2, d3], consumeErrors=True)
     d_list.addCallback(on_data_ready)
-    return d_list
+    
+    # MODIFIED: Повертаємо наш новий фінальний Deferred, а не DeferredList
+    return final_deferred
