@@ -4,7 +4,6 @@ import os
 import json
 import time
 import itertools
-import requests
 
 from twisted.internet import reactor, threads
 from twisted.internet.defer import inlineCallbacks
@@ -12,7 +11,6 @@ from twisted.internet.task import LoopingCall
 from twisted.web.server import Site, NOT_DONE_YET
 from klein import Klein
 
-# MODIFIED: Додано відсутні імпорти для обробників Telegram
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackQueryHandler
 
 import state
@@ -84,7 +82,6 @@ def scan_assets(asset_type, asset_list):
                 logger.error(f"SCANNER ({asset_type.upper()}): Error analyzing {norm_pair}: {e}")
         
         try:
-            # Update cache file with latest results
             with open(os.path.join(DATA_DIR, "analysis_cache.json"), 'w', encoding='utf-8') as f:
                 json.dump(current_analysis_batch, f, ensure_ascii=False, indent=4)
             logger.info(f"SCANNER: Successfully updated analysis cache file.")
@@ -115,9 +112,11 @@ def get_status(request):
     request.setHeader('Content-Type', 'application/json')
     return json.dumps(get_scanner_state())
 
-@internal_api.route("/get_assets", methods=['GET'])
-def get_assets(request):
+# MODIFIED: Renamed from /get_assets to /get_pairs
+@internal_api.route("/get_pairs", methods=['GET'])
+def get_pairs(request):
     request.setHeader('Content-Type', 'application/json')
+    # This data is needed by the web UI to build the asset lists
     return json.dumps({
         "forex_sessions": FOREX_SESSIONS, "crypto": CRYPTO_PAIRS,
         "stocks": STOCK_TICKERS, "commodities": COMMODITIES,
