@@ -3,14 +3,12 @@ import logging
 import os
 import json
 import time
-from queue import Queue
+from gevent.queue import Queue as GeventQueue
 
 from flask import Flask, jsonify, send_from_directory, Response, request
 from gevent.pywsgi import WSGIServer
-from gevent.queue import Queue as GeventQueue
 
 # Local imports
-import state
 from auth import is_valid_init_data, get_user_id_from_init_data
 from db import get_watchlist, toggle_watchlist
 from config import (
@@ -26,11 +24,13 @@ app = Flask(__name__)
 app.config['JSON_AS_ASCII'] = False
 WEBAPP_DIR = os.path.join(os.path.dirname(__file__), "webapp")
 
-# This is a simple in-memory queue for SSE
-# A more robust solution for multiple workers would be Redis Pub/Sub
 signal_queue = GeventQueue()
-
 INTERNAL_API_SECRET = os.getenv("INTERNAL_API_SECRET", "default-secret-for-local-dev")
+
+# NEW: Paths for file-based communication
+DATA_DIR = "/data"
+SCANNER_ENABLED_FLAG_FILE = os.path.join(DATA_DIR, "scanner.enabled")
+ANALYSIS_CACHE_FILE = os.path.join(DATA_DIR, "analysis_cache.json")
 
 # --- Routes ---
 
@@ -56,14 +56,13 @@ def static_files(filename):
 
 @app.route("/api/get_pairs")
 def get_pairs():
-    # Note: Authentication logic might need to be re-verified if it depends on the worker
-    user_id = 1 # Dummy user_id for now, as auth context is complex
+    # This remains simplified as auth logic needs deeper integration if required
+    user_id = 1 
     watchlist = get_watchlist(user_id) if user_id else []
     forex_data = [{"title": f"{name} {TRADING_HOURS.get(name, '')}".strip(), "pairs": pairs} for name, pairs in FOREX_SESSIONS.items()]
     response_data = {"forex": forex_data, "crypto": CRYPTO_PAIRS, "stocks": STOCK_TICKERS, "commodities": COMMODITIES, "watchlist": watchlist}
     return jsonify(response_data)
 
-# NEW: Internal route for the worker to post signals to
 @app.route("/internal/notify_signal", methods=['POST'])
 def notify_signal():
     if request.headers.get("X-Internal-Secret") != INTERNAL_API_SECRET:
@@ -79,7 +78,6 @@ def notify_signal():
 def signal_stream():
     def generate():
         while True:
-            # Wait for a signal from the queue
             signal = signal_queue.get()
             yield f"data: {json.dumps(signal, ensure_ascii=False)}\n\n"
 
@@ -87,13 +85,48 @@ def signal_stream():
     response.headers['Cache-Control'] = 'no-cache'
     return response
 
-# Note: The scanner toggle and other routes that modify state now need
-# to communicate with the worker process, e.g., via a database flag or another internal API call.
-# This is a simplification for now to get the core functionality working.
+# RE-IMPLEMENTED: Scanner control and manual signal endpoints
+@app.route("/api/scanner/status")
+def get_scanner_status():
+    is_enabled = os.path.exists(SCANNER_ENABLED_FLAG_FILE)
+    return jsonify({"enabled": is_enabled})
+
+@app.route("/api/scanner/toggle")
+def toggle_scanner_status():
+    is_enabled = os.path.exists(SCANNER_ENABLED_FLAG_FILE)
+    try:
+        if is_enabled:
+            os.remove(SCANNER_ENABLED_FLAG_FILE)
+            logger.info("Scanner DISABLED via API.")
+            return jsonify({"enabled": False})
+        else:
+            open(SCANNER_ENABLED_FLAG_FILE, 'a').close()
+            logger.info("Scanner ENABLED via API.")
+            return jsonify({"enabled": True})
+    except IOError as e:
+        logger.error(f"Error toggling scanner status file: {e}")
+        return jsonify({"error": "Failed to change scanner state"}), 500
+
+@app.route("/api/signal")
+def api_signal():
+    pair_normalized = (request.args.get("pair") or "").replace("/", "")
+    if not pair_normalized:
+        return jsonify({"error": "pair is required"}), 400
+    
+    try:
+        with open(ANALYSIS_CACHE_FILE, 'r', encoding='utf-8') as f:
+            cache = json.load(f)
+        
+        signal_data = cache.get(pair_normalized)
+        if signal_data:
+            return jsonify(signal_data)
+        else:
+            return jsonify({"error": "Дані для цього активу ще аналізуються сканером. Спробуйте за хвилину."}), 404
+    except (IOError, json.JSONDecodeError) as e:
+        logger.error(f"Could not read or parse analysis cache file: {e}")
+        return jsonify({"error": "Сервіс аналітики тимчасово недоступний."}), 503
 
 if __name__ == '__main__':
-    # This is for local development only.
-    # In production, Gunicorn will run the app.
     http_server = WSGIServer(('0.0.0.0', 8080), app)
     logger.info("Starting Flask server with Gevent for local development...")
     http_server.serve_forever()
