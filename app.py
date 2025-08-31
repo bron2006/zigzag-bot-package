@@ -9,12 +9,12 @@ import os
 import json
 import time
 import itertools
+import threading
 from queue import Queue
-from threading import Lock, Thread # MODIFIED: Changed import to include Thread directly
-import threading # FIX: Додано відсутній імпорт
+from threading import Lock
 
 from flask import Flask, jsonify, send_from_directory, Response, request
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackQueryHandler
+from telegram.ext import Updater, CommandHandler, CallbackQueryHandler
 import crochet
 
 # Local imports
@@ -80,7 +80,6 @@ def scan_assets(asset_type, asset_list):
     
     process_all_pairs()
 
-
 @crochet.run_in_reactor
 def on_ctrader_ready():
     logger.info("cTrader client ready. Loading symbols...")
@@ -93,6 +92,10 @@ def on_symbols_loaded(raw_message):
     symbols_response.ParseFromString(raw_message.payload)
     state.symbol_cache = {s.symbolName.replace("/", ""): s for s in symbols_response.symbol}
     logger.info(f"✅ Loaded {len(state.symbol_cache)} symbols.")
+    
+    # MODIFIED: Встановлюємо прапорець, що система готова до роботи
+    state.SYSTEM_READY = True
+    logger.info("SYSTEM IS NOW READY TO ACCEPT ANALYSIS REQUESTS.")
     
     all_forex = list(set(itertools.chain.from_iterable(FOREX_SESSIONS.values())))
     
@@ -132,6 +135,10 @@ def toggle_scanner():
 
 @app.route("/api/signal")
 def api_signal():
+    # MODIFIED: Перевіряємо, чи готова система до обробки запитів
+    if not state.SYSTEM_READY:
+        return jsonify({"error": "Система ініціалізується, зачекайте 10 секунд та оновіть сторінку."}), 503
+
     pair = request.args.get("pair")
     timeframe = request.args.get("timeframe", "5m")
     if not pair:
@@ -141,8 +148,6 @@ def api_signal():
     
     @crochet.wait_for(timeout=20.0)
     def run_analysis():
-        # Since this is called from a non-reactor thread, we need to ensure
-        # the async call is properly awaited.
         return get_api_detailed_signal_data(state.client, state.symbol_cache, pair.replace('/',''), 0, timeframe)
     
     try:
@@ -151,7 +156,6 @@ def api_signal():
     except Exception as e:
         logger.error(f"On-demand analysis for {pair} failed: {e}")
         return jsonify({"error": "Analysis failed or timed out."}), 500
-
 
 @app.route("/api/signal-stream")
 def signal_stream():
@@ -165,7 +169,6 @@ def signal_stream():
 def start_background_services():
     logger.info("Starting background services...")
     
-    # 1. Initialize Telegram Bot
     updater = Updater(token=TELEGRAM_BOT_TOKEN, use_context=True)
     state.updater = updater
     dp = updater.dispatcher
@@ -177,7 +180,6 @@ def start_background_services():
     bot_thread.start()
     logger.info("Telegram bot has started.")
     
-    # 2. Initialize cTrader Client
     client = SpotwareConnect(get_ct_client_id(), get_ct_client_secret())
     state.client = client
     client.on("ready", on_ctrader_ready)
@@ -189,10 +191,8 @@ def start_background_services():
     start_ctrader_client()
     logger.info("cTrader client scheduled to start.")
 
-
-# Call the startup function when the module is imported by Gunicorn
+# Start background services when Gunicorn worker is initialized
 start_background_services()
-
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8080, debug=True)
