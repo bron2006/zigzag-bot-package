@@ -210,15 +210,14 @@ if __name__ == "__main__":
     state.updater = updater
     dp = updater.dispatcher
     dp.add_handler(CommandHandler("start", telegram_ui.start))
+    # --- ПОЧАТОК ЗМІН: Використовуємо функцію з telegram_ui ---
     dp.add_handler(CommandHandler("symbols", telegram_ui.symbols_command))
+    # --- КІНЕЦЬ ЗМІН ---
     dp.add_handler(MessageHandler(Filters.text("МЕНЮ"), telegram_ui.menu))
     dp.add_handler(MessageHandler(Filters.text & ~Filters.command, telegram_ui.reset_ui))
     dp.add_handler(CallbackQueryHandler(telegram_ui.button_handler))
     
-    # --- ПОЧАТОК ЗМІН: Запускаємо Telegram-бота у фоновому потоці ---
     reactor.callInThread(updater.start_polling)
-    # --- КІНЕЦЬ ЗМІН ---
-    
     logger.info("Telegram bot scheduled to start in a background thread.")
     
     # 2. Initialize cTrader Client
