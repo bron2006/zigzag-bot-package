@@ -5,12 +5,13 @@ primary_region = 'fra'
 
 [build]
 
+# "Обличчя" - публічний веб-сервер
 [http_service]
   internal_port = 8080
   force_https = false
   auto_stop_machines = true
   auto_start_machines = true
-  min_machines_running = 1 # MODIFIED: Веб-сервер має працювати постійно
+  min_machines_running = 1
   processes = ['app']
 
 [[vm]]
@@ -22,7 +23,11 @@ primary_region = 'fra'
   source="signals_data"
   destination="/data"
 
-# MODIFIED: Описуємо два окремі процеси
+# "Мозок" - внутрішній сервіс, який не видно ззовні
+[[services]]
+  internal_port = 8081 # Внутрішній порт для команд
+  processes = ["worker"]
+
 [processes]
-  app = "gunicorn --worker-class gevent --workers 4 --bind 0.0.0.0:8080 app:app"
+  app = "gunicorn --worker-class gevent --bind 0.0.0.0:8080 app:app"
   worker = "python worker.py"
