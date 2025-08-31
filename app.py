@@ -44,19 +44,17 @@ if not os.path.exists(DATA_DIR):
 # --- Background cTrader/Scanner/Telegram Logic ---
 
 def broadcast_sse_signal(signal_data):
-    # This queue is now thread-safe by default
     sse_queue.put(signal_data)
 
+@crochet.run_in_reactor
 def scan_assets(asset_type, asset_list):
     with scanner_state_lock:
         is_enabled = scanner_state.get(asset_type, False)
     if not is_enabled: return
 
     logger.info(f"SCANNER ({asset_type.upper()}): Starting scan...")
-    # ... (The rest of your scanning logic remains the same)
     chat_id = get_chat_id()
 
-    @crochet.run_in_reactor
     @inlineCallbacks
     def process_all_pairs():
         for pair in asset_list:
@@ -64,10 +62,11 @@ def scan_assets(asset_type, asset_list):
             try:
                 result = yield get_api_detailed_signal_data(state.client, state.symbol_cache, norm_pair, 0, "5m")
                 
+                # The rest of the analysis logic from your file
                 score = result.get('bull_percentage', 50)
                 if score >= IDEAL_ENTRY_THRESHOLD or score <= (100 - IDEAL_ENTRY_THRESHOLD):
                     now = time.time()
-                    cooldown_key = f"{pair_name}_{asset_type}"
+                    cooldown_key = f"{norm_pair}_{asset_type}"
                     if (now - state.scanner_cooldown_cache.get(cooldown_key, 0)) > SCANNER_COOLDOWN_SECONDS:
                         logger.info(f"SCANNER ({asset_type.upper()}): Ideal entry for {norm_pair}. Notifying.")
                         broadcast_sse_signal(result)
@@ -95,10 +94,15 @@ def on_symbols_loaded(raw_message):
     logger.info(f"✅ Loaded {len(state.symbol_cache)} symbols.")
     
     all_forex = list(set(itertools.chain.from_iterable(FOREX_SESSIONS.values())))
-    # Use Twisted's LoopingCall from within the reactor thread
-    LoopingCall(scan_assets, "forex", all_forex).start(90)
-    LoopingCall(scan_assets, "crypto", CRYPTO_PAIRS).start(60)
-    LoopingCall(scan_assets, "metals", COMMODITIES).start(120)
+    
+    # Use Twisted's LoopingCall from within the reactor thread, started via crochet
+    @crochet.run_in_reactor
+    def start_scanners():
+        LoopingCall(scan_assets, "forex", all_forex).start(90)
+        LoopingCall(scan_assets, "crypto", CRYPTO_PAIRS).start(60)
+        LoopingCall(scan_assets, "metals", COMMODITIES).start(120)
+
+    start_scanners()
 
 # --- Flask Routes ---
 @app.route("/")
@@ -111,7 +115,6 @@ def static_files(filename):
 
 @app.route("/api/get_pairs")
 def get_pairs():
-    # This data can be served directly as it's from config
     forex_data = [{"title": f"{name} {TRADING_HOURS.get(name, '')}".strip(), "pairs": pairs} for name, pairs in FOREX_SESSIONS.items()]
     response_data = {"forex": forex_data, "crypto": CRYPTO_PAIRS, "stocks": STOCK_TICKERS, "commodities": COMMODITIES}
     return jsonify(response_data)
@@ -132,7 +135,6 @@ def toggle_scanner():
         return jsonify({"success": True, "newState": scanner_state})
 
 @app.route("/api/signal")
-@crochet.wait_for(timeout=20.0) # Allows Flask to wait for the Twisted result
 def api_signal():
     pair = request.args.get("pair")
     timeframe = request.args.get("timeframe", "5m")
@@ -140,9 +142,19 @@ def api_signal():
         return jsonify({"error": "pair is required"}), 400
     
     logger.info(f"On-demand analysis for {pair}")
-    deferred = get_api_detailed_signal_data(state.client, state.symbol_cache, pair.replace('/',''), 0, timeframe)
-    result = yield deferred # crochet makes this work!
-    return jsonify(result)
+    
+    # Use crochet.wait_for to call the async function and wait for its result
+    @crochet.wait_for(timeout=20.0)
+    def run_analysis():
+        return get_api_detailed_signal_data(state.client, state.symbol_cache, pair.replace('/',''), 0, timeframe)
+    
+    try:
+        result = run_analysis()
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f"On-demand analysis for {pair} failed: {e}")
+        return jsonify({"error": "Analysis failed or timed out."}), 500
+
 
 @app.route("/api/signal-stream")
 def signal_stream():
@@ -155,34 +167,37 @@ def signal_stream():
 # --- Application Startup ---
 def start_background_services():
     logger.info("Starting background services...")
-    # 1. Initialize and start Telegram Bot in a separate thread
+    # 1. Initialize Telegram Bot
     updater = Updater(token=TELEGRAM_BOT_TOKEN, use_context=True)
     state.updater = updater
     dp = updater.dispatcher
     dp.add_handler(CommandHandler("start", telegram_ui.start))
-    # ... Add all your other handlers from telegram_ui.py here ...
     dp.add_handler(CallbackQueryHandler(telegram_ui.button_handler))
     
-    threads.deferToThread(updater.start_polling)
-    logger.info("Telegram bot scheduled to start.")
+    # Run the bot in a separate, non-blocking thread
+    bot_thread = threading.Thread(target=updater.start_polling)
+    bot_thread.daemon = True
+    bot_thread.start()
+    logger.info("Telegram bot has started.")
     
-    # 2. Initialize and start cTrader Client in the Crochet/Twisted background thread
+    # 2. Initialize cTrader Client in the Crochet/Twisted background thread
     client = SpotwareConnect(get_ct_client_id(), get_ct_client_secret())
     state.client = client
     client.on("ready", on_ctrader_ready)
     
     @crochet.run_in_reactor
-    def start_client():
+    def start_ctrader_client():
         client.start()
-
-    start_client()
+    
+    start_ctrader_client()
     logger.info("cTrader client scheduled to start.")
 
-# Start everything when the first request comes in
-@app.before_first_request
-def before_first_request():
-    start_background_services()
+
+# MODIFIED: Removed @app.before_first_request and call the startup function directly.
+# This code runs once when the Gunicorn worker process is initialized.
+start_background_services()
+
 
 if __name__ == '__main__':
-    # This is for local development only
-    app.run(host='0.0.0.0', port=8080, threaded=True)
+    # This block is for local development only and is not used by Gunicorn
+    app.run(host='0.0.0.0', port=8080, debug=True)
