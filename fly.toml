@@ -7,7 +7,9 @@ primary_region = 'fra'
 
 [http_service]
   internal_port = 8080
-  force_https = true
+  # FIX: Вимикаємо примусове перенаправлення, щоб розірвати цикл.
+  # З'єднання з клієнтом все одно буде захищене стандартними сертифікатами Fly.io.
+  force_https = false
   auto_stop_machines = true
   auto_start_machines = true
   min_machines_running = 0
