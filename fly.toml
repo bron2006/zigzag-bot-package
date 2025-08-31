@@ -1,11 +1,9 @@
 # fly.toml
-
 app = 'zigzag-bot-package'
 primary_region = 'fra'
 
 [build]
 
-# "Обличчя" - публічний веб-сервер
 [http_service]
   internal_port = 8080
   force_https = false
@@ -20,14 +18,9 @@ primary_region = 'fra'
   cpus = 1
 
 [mounts]
-  source="signals_data"
-  destination="/data"
+  source = "signals_data"
+  destination = "/data"
 
-# "Мозок" - внутрішній сервіс, який не видно ззовні
-[[services]]
-  internal_port = 8081 # Внутрішній порт для команд
-  processes = ["worker"]
-
+# MODIFIED: Залишаємо лише один процес app
 [processes]
   app = "gunicorn --worker-class gevent --bind 0.0.0.0:8080 app:app"
-  worker = "python worker.py"
