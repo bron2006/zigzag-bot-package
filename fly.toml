@@ -4,6 +4,7 @@ primary_region = 'fra'
 
 [build]
 
+# "Обличчя" - публічний веб-сервер
 [http_service]
   internal_port = 8080
   force_https = false
@@ -21,10 +22,16 @@ primary_region = 'fra'
   source = "signals_data"
   destination = "/data"
 
-# Внутрішній сервіс для worker'а, недоступний ззовні
+# "Мозок" - внутрішній сервіс
 [[services]]
   internal_port = 8081
   processes = ["worker"]
+  
+  # FIX: Явно вказуємо, що має бути запущена ЗАВЖДИ РІВНО ОДНА машина.
+  # Це офіційний спосіб уникнути масштабування для унікальних процесів.
+  min_machines_running = 1
+  max_machines_running = 1
+  auto_stop_machines = false # Гарантує, що воркер не буде зупинено
 
 [processes]
   app = "gunicorn --worker-class gevent --bind 0.0.0.0:8080 app:app"
