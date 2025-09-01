@@ -1,3 +1,4 @@
+# assets.json
 {
   "forex_sessions": {
     "Європейська": ["EUR/USD", "GBP/USD", "USD/CHF", "EUR/GBP", "EUR/CHF"],

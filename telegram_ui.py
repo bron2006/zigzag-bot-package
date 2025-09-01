@@ -17,6 +17,7 @@ def get_reply_keyboard() -> ReplyKeyboardMarkup:
     keyboard = [[KeyboardButton("МЕНЮ")]]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
+# --- ПОЧАТОК ЗМІН: Оновлено функцію створення головного меню ---
 def get_main_menu_kb() -> InlineKeyboardMarkup:
     keyboard = [
         [InlineKeyboardButton("💹 Валютні пари (Forex)", callback_data="category_forex")],
@@ -25,13 +26,22 @@ def get_main_menu_kb() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("🥇 Сировина", callback_data="category_commodities")]
     ]
     
-    if state.SCANNER_ENABLED:
-        scanner_button_text = "✅ Сканер УВІМКНЕНО (вимкнути)"
-    else:
-        scanner_button_text = "❌ Сканер ВИМКНЕНО (увімкнути)"
-    keyboard.append([InlineKeyboardButton(scanner_button_text, callback_data="toggle_scanner")])
-    
+    # Створення кнопок для керування сканерами
+    scanner_map = {
+        "forex": "💹 Forex",
+        "crypto": "💎 Crypto",
+        "commodities": "🥇 Сировина"
+    }
+
+    for key, text in scanner_map.items():
+        is_enabled = state.SCANNER_STATE.get(key, False)
+        status_icon = "✅" if is_enabled else "❌"
+        button_text = f"{status_icon} Сканер {text}"
+        callback_data = f"toggle_scanner_{key}"
+        keyboard.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
+        
     return InlineKeyboardMarkup(keyboard)
+# --- КІНЕЦЬ ЗМІН ---
 
 def get_timeframe_kb(category: str) -> InlineKeyboardMarkup:
     keyboard = []
@@ -112,7 +122,6 @@ def symbols_command(update: Update, context: CallbackContext):
     for i in range(0, len(message), 4096):
         update.message.reply_text(message[i:i + 4096], parse_mode='Markdown')
 
-# --- ПОЧАТОК ЗМІН: Повністю переписана функція форматування повідомлень ---
 def _format_signal_message(result: dict, timeframe: str) -> str:
     if result.get("error"):
         return f"❌ Помилка аналізу: {result['error']}"
@@ -161,7 +170,6 @@ def _format_signal_message(result: dict, timeframe: str) -> str:
         message_parts.append(f"\n📑 **Ключові фактори аналізу:**\n{reason_text}")
         
     return "\n".join(message_parts)
-# --- КІНЕЦЬ ЗМІН ---
 
 def button_handler(update: Update, context: CallbackContext) -> None:
     query = update.callback_query
@@ -172,13 +180,18 @@ def button_handler(update: Update, context: CallbackContext) -> None:
     parts = data.split('_')
     action = parts[0]
 
-    if action == "toggle":
-        if len(parts) > 1 and parts[1] == "scanner":
-            state.SCANNER_ENABLED = not state.SCANNER_ENABLED
-            status_text = "увімкнено" if state.SCANNER_ENABLED else "вимкнено"
-            query.answer(text=f"Сканер ринку {status_text}")
+    # --- ПОЧАТОК ЗМІН: Оновлено логіку обробника кнопок сканера ---
+    if action == "toggle" and parts[1] == "scanner":
+        category_to_toggle = parts[2] # forex, crypto, etc.
+        if category_to_toggle in state.SCANNER_STATE:
+            # Перемикаємо стан
+            state.SCANNER_STATE[category_to_toggle] = not state.SCANNER_STATE[category_to_toggle]
+            status_text = "увімкнено" if state.SCANNER_STATE[category_to_toggle] else "вимкнено"
+            query.answer(text=f"Сканер для '{category_to_toggle}' {status_text}")
+            # Оновлюємо меню, щоб показати новий стан
             query.edit_message_text("🏠 Головне меню:", reply_markup=get_main_menu_kb())
-            return
+        return
+    # --- КІНЕЦЬ ЗМІН ---
 
     if action == "main":
         query.edit_message_text("🏠 Головне меню:", reply_markup=get_main_menu_kb())

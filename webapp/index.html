@@ -15,13 +15,19 @@
         <h1>Термінал</h1>
         <div class="controls-panel">
             <input type="search" id="searchInput" class="search-input" placeholder="🔍 Пошук...">
+            
             <div id="timeframeSelector" class="timeframe-selector">
                 <button class="tf-button active" data-tf="1m">1m</button>
                 <button class="tf-button" data-tf="5m">5m</button>
                 <button class="tf-button" data-tf="15m">15m</button>
             </div>
-            <button id="scannerToggleButton" class="scanner-button"></button>
-        </div>
+            
+            <div id="scannerControls" class="scanner-controls">
+                <button class="scanner-button" data-cat="forex"></button>
+                <button class="scanner-button" data-cat="crypto"></button>
+                <button class="scanner-button" data-cat="commodities"></button>
+            </div>
+            </div>
 
         <div id="liveSignalsContainer"></div>
 
