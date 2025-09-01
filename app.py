@@ -5,7 +5,9 @@ from flask import Flask, jsonify, send_from_directory, Response, request
 logging.basicConfig(level=logging.INFO)
 app = Flask(__name__)
 WEBAPP_DIR = os.path.join(app.root_path, "webapp")
-WORKER_URL = "http://localhost:8081"
+
+# FIX: Замінено localhost на правильну внутрішню адресу Fly.io
+WORKER_URL = "http://zigzag-bot-package.internal:8081"
 
 @app.route("/")
 def home(): return send_from_directory(WEBAPP_DIR, 'index.html')
@@ -15,6 +17,11 @@ def static_files(filename): return send_from_directory(WEBAPP_DIR, filename)
 
 def proxy(path, **kwargs):
     try:
+        # Перенаправляємо initData, якщо він є
+        if 'initData' in request.args:
+            if 'params' not in kwargs: kwargs['params'] = {}
+            kwargs['params']['initData'] = request.args.get('initData')
+
         resp = requests.request(request.method, f"{WORKER_URL}{path}", **kwargs)
         resp.raise_for_status()
         if 'text/event-stream' in resp.headers.get('Content-Type', ''):

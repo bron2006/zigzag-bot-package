@@ -24,9 +24,22 @@ primary_region = 'fra'
 [[services]]
   internal_port = 8081
   processes = ["worker"]
+  protocol = "tcp" # Явно вказуємо протокол
   min_machines_running = 1
   max_machines_running = 1
   auto_stop_machines = false
+
+  # Health check, щоб Fly знав, що воркер живий і працює
+  [[services.http_checks]]
+    interval = "15s"
+    method = "GET"
+    path = "/status"
+    protocol = "http"
+    timeout = "5s"
+
+# FIX: Змінюємо стратегію розгортання, щоб уникнути конфлікту Telegram-ботів
+[deploy]
+  strategy = "immediate"
 
 [processes]
   app = "gunicorn --worker-class gevent --bind 0.0.0.0:8080 app:app"
