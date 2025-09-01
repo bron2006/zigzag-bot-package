@@ -262,14 +262,12 @@ def signal_stream():
     return response
 
 # --------------- Startup (Twisted reactor integrates Flask WSGI) ---------------
-# --- ПОЧАТОК ЗМІН: Додано діагностичне логування в start_services ---
 def start_services():
-    logger.info("DIAGNOSTIC: start_services() started.")
     # 1) Start Telegram bot (in background thread via reactor)
     if not TELEGRAM_BOT_TOKEN:
         logger.warning("TELEGRAM_BOT_TOKEN not set — Telegram bot disabled.")
     else:
-        logger.info("DIAGNOSTIC: Starting Telegram bot...")
+        logger.info("Starting Telegram Updater (background thread).")
         updater = Updater(token=TELEGRAM_BOT_TOKEN, use_context=True)
         state.updater = updater
         dp = updater.dispatcher
@@ -281,36 +279,28 @@ def start_services():
         dp.add_handler(CallbackQueryHandler(telegram_ui.button_handler))
         # start polling in separate thread so Twisted reactor remains primary loop
         reactor.callInThread(updater.start_polling)
-        logger.info("DIAGNOSTIC: Telegram updater scheduled in background thread.")
+        logger.info("Telegram updater scheduled in background thread.")
 
     # 2) Start cTrader client (Twisted-based)
     try:
-        logger.info("DIAGNOSTIC: Starting cTrader client...")
         client = SpotwareConnect(get_ct_client_id(), get_ct_client_secret())
         state.client = client
         client.on("ready", on_ctrader_ready)
         reactor.callWhenRunning(client.start)
-        logger.info("DIAGNOSTIC: cTrader client scheduled to start.")
+        logger.info("cTrader client scheduled to start.")
     except Exception:
         logger.exception("Failed to initialize cTrader client")
-    logger.info("DIAGNOSTIC: start_services() finished.")
-# --- КІНЕЦЬ ЗМІН ---
 
-# --- ПОЧАТОК ЗМІН: Додано діагностичне логування в main ---
 def main():
-    logger.info("DIAGNOSTIC: main() started.")
     # Create WSGI resource for Flask and run under Twisted
     resource = WSGIResource(reactor, reactor.getThreadPool(), app)
-    logger.info("DIAGNOSTIC: Step 1 - WSGIResource created.")
     site = Site(resource)
-    logger.info("DIAGNOSTIC: Step 2 - Site created.")
     port = int(os.environ.get("PORT", "8080"))
     reactor.listenTCP(port, site, interface="0.0.0.0")
-    logger.info(f"DIAGNOSTIC: Step 3 - Twisted WSGI server now listening on port {port}.")
+    logger.info(f"Twisted WSGI server listening on {port}")
 
     # Start background services
     start_services()
-    logger.info("DIAGNOSTIC: Step 4 - start_services() has been called.")
 
     # Optionally start periodic pings for SSE clients (keeps connections alive)
     def send_pings():
@@ -323,12 +313,10 @@ def main():
         except Exception:
             logger.exception("Error sending sse ping")
     LoopingCall(send_pings).start(20)
-    logger.info("DIAGNOSTIC: Step 5 - SSE ping loop scheduled.")
 
     # Run reactor (blocking)
-    logger.info("DIAGNOSTIC: Step 6 - Starting Twisted reactor...")
+    logger.info("Starting Twisted reactor.")
     reactor.run()
-# --- КІНЕЦЬ ЗМІН ---
 
 if __name__ == "__main__":
     main()
