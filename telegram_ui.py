@@ -112,24 +112,56 @@ def symbols_command(update: Update, context: CallbackContext):
     for i in range(0, len(message), 4096):
         update.message.reply_text(message[i:i + 4096], parse_mode='Markdown')
 
+# --- ПОЧАТОК ЗМІН: Повністю переписана функція форматування повідомлень ---
 def _format_signal_message(result: dict, timeframe: str) -> str:
-    if result.get("error"): return f"❌ Помилка аналізу: {result['error']}"
+    if result.get("error"):
+        return f"❌ Помилка аналізу: {result['error']}"
 
-    message = ""
+    message_parts = []
+    
     if result.get("special_warning"):
-        message += f"**{result.get('special_warning')}**\n\n"
+        message_parts.append(f"**{result.get('special_warning')}**\n")
 
     pair = result.get('pair', 'N/A')
-    price = result.get('price', 0)
+    price = result.get('price')
     verdict = result.get('verdict_text', 'Не вдалося визначити.')
     score = result.get('bull_percentage', 50)
+
+    confidence_text = "Низька (ринок невизначений)"
+    if score > 75 or score < 25: confidence_text = "Висока"
+    elif score > 55 or score < 45: confidence_text = "Помірна (є суперечливі фактори)"
     
     price_str = f"{price:.5f}" if price else "N/A"
-    message += f"📈 **Сигнал Сканера: {pair} ({timeframe})**\n"
-    message += f"**Напрямок:** {verdict} (Бики: {score}%)\n"
-    message += f"**Ціна:** `{price_str}`"
+    
+    message_parts.append(f"📈 *Аналіз для {pair} ({timeframe})*")
+    message_parts.append(f"**Сигнал:** {verdict}")
+    message_parts.append(f"**Впевненість:** {confidence_text}")
+    message_parts.append(f"**Поточна ціна:** `{price_str}`")
+    message_parts.append(f"\n**Баланс сил:**\n🐂 Бики: {score}% ⬆️ | 🐃 Ведмеді: {100-score}% ⬇️\n")
+
+    candle_pattern = result.get('candle_pattern')
+    if candle_pattern and candle_pattern.get('text'):
+        message_parts.append(f"**🕯️ Свічковий патерн:**\n_{candle_pattern['text']}_")
+    
+    support = result.get('support')
+    resistance = result.get('resistance')
+    if support or resistance:
+        levels = []
+        if support: levels.append(f"Підтримка: `{support:.5f}`")
+        if resistance: levels.append(f"Опір: `{resistance:.5f}`")
+        message_parts.append(f"🔑 **Ключові рівні:** " + " | ".join(levels))
+
+    volume_analysis = result.get('volume_info')
+    if volume_analysis:
+        message_parts.append(f"**📊 Аналіз об'єму:**\n_{volume_analysis}_")
+
+    reasons = result.get('reasons', [])
+    if reasons:
+        reason_text = "\n".join([f"• _{reason}_" for reason in reasons])
+        message_parts.append(f"\n📑 **Ключові фактори аналізу:**\n{reason_text}")
         
-    return message
+    return "\n".join(message_parts)
+# --- КІНЕЦЬ ЗМІН ---
 
 def button_handler(update: Update, context: CallbackContext) -> None:
     query = update.callback_query
@@ -159,7 +191,7 @@ def button_handler(update: Update, context: CallbackContext) -> None:
         _, category, timeframe = parts
         if category == 'forex':
             query.edit_message_text("💹 Виберіть торгову сесію:", reply_markup=get_forex_sessions_kb(timeframe))
-        else: # Об'єднуємо логіку для інших категорій
+        else: 
             asset_map = {'crypto': CRYPTO_PAIRS, 'stocks': STOCK_TICKERS, 'commodities': COMMODITIES}
             query.edit_message_text(f"Виберіть актив:", reply_markup=get_assets_kb(asset_map.get(category,[]), category, timeframe))
 
@@ -176,14 +208,13 @@ def button_handler(update: Update, context: CallbackContext) -> None:
         query.edit_message_text(text=f"⏳ Обрано {symbol} ({timeframe}). Роблю запит...")
         
         def on_success(result):
-            # Форматуємо відповідь для Telegram
-            message_text = "Some formatted text based on result" # Placeholder
+            message_text = _format_signal_message(result, timeframe)
             query.edit_message_text(text=message_text, parse_mode='Markdown', reply_markup=get_main_menu_kb())
 
         def on_error(failure):
-            error_message = failure.getErrorMessage()
+            error_message = failure.getErrorMessage() if hasattr(failure, 'getErrorMessage') else str(failure)
             logger.error(f"❌ Помилка при отриманні сигналу для {symbol}: {error_message}")
-            query.edit_message_text(text=f"❌ Помилка: {error_message}", reply_markup=get_main_menu_kb())
+            query.edit_message_text(text=f"❌ Виникла помилка: {error_message}", reply_markup=get_main_menu_kb())
 
         def do_analysis():
             d = get_api_detailed_signal_data(state.client, state.symbol_cache, symbol, query.from_user.id, timeframe)

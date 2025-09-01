@@ -230,7 +230,12 @@ function fetchSignal(pair) {
         });
 }
 
+// --- ПОЧАТОК ЗМІН: Повністю переписана функція форматування ---
 function formatSignalAsHtml(signalData) {
+    if (!signalData || Object.keys(signalData).length === 0) {
+        return "Немає даних для відображення.";
+    }
+
     let html = '';
     if (signalData.special_warning) {
         html += `<div class="special-warning">${signalData.special_warning}</div>`;
@@ -241,7 +246,12 @@ function formatSignalAsHtml(signalData) {
     const verdict = signalData.verdict_text || 'Не вдалося визначити.';
     const score = signalData.bull_percentage || 50;
     
-    const priceStr = price.toFixed(5);
+    let confidence_text = "Низька (ринок невизначений)";
+    if (score > 75 || score < 25) confidence_text = "Висока";
+    else if (score > 55 || score < 45) confidence_text = "Помірна (є суперечливі фактори)";
+
+    const priceStr = price ? price.toFixed(5) : "N/A";
+    
     html += `
         <div class="signal-header">
             <strong>${pair} (${currentTimeframe})</strong> | Ціна: <code>${priceStr}</code>
@@ -251,15 +261,39 @@ function formatSignalAsHtml(signalData) {
             <span>🐂 Бики: ${score}%</span>
             <span>🐃 Ведмеді: ${100 - score}%</span>
         </div>
+        <div class="signal-details">
+            <div class="detail-item">
+                <span class="detail-label">Впевненість:</span>
+                <span class="detail-value">${confidence_text}</span>
+            </div>
     `;
+
+    if (signalData.support || signalData.resistance) {
+        html += '<div class="detail-item"><span class="detail-label">Ключові рівні:</span><span class="detail-value">';
+        if (signalData.support) html += ` S: <code>${signalData.support.toFixed(5)}</code>`;
+        if (signalData.resistance) html += ` R: <code>${signalData.resistance.toFixed(5)}</code>`;
+        html += '</span></div>';
+    }
+
+    html += `</div>`; // Close signal-details
+
+    if (signalData.candle_pattern && signalData.candle_pattern.text) {
+        html += `<div class="extra-info candle-pattern"><strong>🕯️ Свічковий патерн:</strong> ${signalData.candle_pattern.text}</div>`;
+    }
+
+    if (signalData.volume_info) {
+        html += `<div class="extra-info volume-analysis"><strong>📊 Аналіз об'єму:</strong> ${signalData.volume_info}</div>`;
+    }
 
     if (signalData.reasons && signalData.reasons.length > 0) {
         html += '<div class="reasons"><strong>Ключові фактори:</strong><ul>';
         signalData.reasons.forEach(r => { html += `<li>${r}</li>`; });
         html += '</ul></div>';
     }
+
     return html;
 }
+// --- КІНЕЦЬ ЗМІН ---
 
 function showLoader(visible) {
     loader.className = visible ? '' : 'hidden';
