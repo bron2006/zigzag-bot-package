@@ -8,8 +8,7 @@ import traceback
 from functools import wraps
 
 # Twisted + WSGI
-# MODIFIED: Додаємо 'defer' для виправлення запуску
-from twisted.internet import reactor, threads, defer
+from twisted.internet import reactor, threads
 from twisted.internet.task import LoopingCall
 from twisted.web.server import Site
 from twisted.web.wsgi import WSGIResource
@@ -21,7 +20,7 @@ from flask import Flask, jsonify, send_from_directory, Response, request, stream
 from telegram import Update
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackQueryHandler, CallbackContext
 
-# Local modules
+# Local modules — ваші існуючі модулі
 import state
 import telegram_ui
 from auth import is_valid_init_data, get_user_id_from_init_data
@@ -89,11 +88,13 @@ def scan_markets_once():
                 last = state.scanner_cooldown_cache.get(pair_name, 0)
                 if (now - last) > SCANNER_COOLDOWN_SECONDS:
                     logger.info(f"SCANNER: Signal for {pair_name} (score {score}). Notifying.")
+                    # send to web SSE
                     state.latest_analysis_cache[pair_name] = result
                     try:
                         state.sse_queue.put(result, block=False)
                     except queue.Full:
                         logger.warning("SSE queue full, dropping signal")
+                    # send to telegram (if chat configured)
                     if chat_id and getattr(state, "updater", None):
                         try:
                             message = telegram_ui._format_signal_message(result, "5m")
@@ -107,14 +108,23 @@ def scan_markets_once():
         except Exception:
             logger.exception("SCANNER: error in _on_done")
 
+    # Iterate pairs sequentially on Twisted thread pool to avoid blocking reactor
     def worker():
         for pair in all_forex_pairs:
             norm = pair.replace("/", "")
             try:
                 d = get_api_detailed_signal_data(state.client, state.symbol_cache, norm, 0, "5m")
+                # Wait for deferred synchronously by blocking in thread (safe since running in threadpool)
+                result = d.result if hasattr(d, "result") else None
+                # The analysis.get_api_detailed_signal_data returns a Deferred — use addBoth callback instead:
                 done_q = queue.Queue()
-                def cb_success(res): done_q.put(res)
-                def cb_err(f): done_q.put({"error": str(f)})
+                def cb_success(res):
+                    done_q.put(res)
+                def cb_err(f):
+                    try:
+                        done_q.put({"error": str(f)})
+                    except Exception:
+                        done_q.put({"error": "unknown"})
                 d.addCallbacks(cb_success, cb_err)
                 res = done_q.get(timeout=65)
                 _on_done(res, norm)
@@ -137,6 +147,7 @@ def on_symbols_loaded(raw_message):
         state.SYMBOLS_LOADED = True
         logger.info(f"Loaded {len(state.symbol_cache)} symbols.")
         _client_ready["ready"] = True
+        # Start scanner loop
         scanner_loop = LoopingCall(scan_markets_once)
         scanner_loop.start(60, now=False)
     except Exception:
@@ -149,6 +160,7 @@ def on_symbols_error(failure):
 # --------------- Flask routes ---------------
 @app.route("/")
 def home():
+    # Serve SPA index
     try:
         with open(os.path.join(WEBAPP_DIR, "index.html"), "r", encoding="utf-8") as f:
             content = f.read()
@@ -167,47 +179,139 @@ def home():
 def static_files(filename):
     return send_from_directory(WEBAPP_DIR, filename)
 
-# ... (інші Flask-маршрути залишаються без змін)
+@app.route("/api/get_pairs")
+@protected_route
+def get_pairs():
+    user_id = get_user_id_from_init_data(request.args.get("initData"))
+    watchlist = get_watchlist(user_id) if user_id else []
+    forex_data = [
+        {"title": f"{name} {TRADING_HOURS.get(name, '')}".strip(), "pairs": pairs}
+        for name, pairs in FOREX_SESSIONS.items()
+    ]
+    return jsonify({
+        "forex": forex_data, "crypto": CRYPTO_PAIRS, "stocks": STOCK_TICKERS,
+        "commodities": COMMODITIES, "watchlist": watchlist
+    })
+
+@app.route("/api/toggle_watchlist")
+@protected_route
+def toggle_watchlist_route():
+    user_id = get_user_id_from_init_data(request.args.get("initData"))
+    pair = request.args.get("pair")
+    if not user_id or not pair:
+        return jsonify({"success": False, "error": "Missing parameters"}), 400
+    try:
+        pair_normalized = pair.replace("/", "")
+        success = toggle_watchlist(user_id, pair_normalized)
+        return jsonify({"success": success})
+    except Exception:
+        logger.exception("toggle_watchlist failed")
+        return jsonify({"success": False, "error": "Internal server error"}), 500
+
+@app.route("/api/signal")
+@protected_route
+def api_signal():
+    pair = request.args.get("pair")
+    timeframe = request.args.get("timeframe", "15m")
+    if timeframe not in PERIOD_MAP:
+        return jsonify({"error": "Invalid timeframe"}), 400
+    if not pair:
+        return jsonify({"error": "pair is required"}), 400
+    pair_normalized = pair.replace("/", "")
+    user_id = get_user_id_from_init_data(request.args.get("initData"))
+    logger.info(f"Signal request for {pair_normalized} timeframe {timeframe}")
+    # If cached from scanner, return quickly
+    cached = state.latest_analysis_cache.get(pair_normalized)
+    if cached:
+        return jsonify(cached)
+    # Otherwise return not ready (or you can perform on-demand analysis — omitted for speed)
+    return jsonify({"error": "Дані для цього активу ще аналізуються сканером. Спробуйте за хвилину."}), 404
+
+@app.route("/api/scanner/status")
+@protected_route
+def scanner_status():
+    return jsonify({"enabled": getattr(state, "SCANNER_ENABLED", False)})
+
+@app.route("/api/scanner/toggle", methods=['POST'])
+@protected_route
+def scanner_toggle():
+    state.SCANNER_ENABLED = not getattr(state, "SCANNER_ENABLED", False)
+    logger.info(f"Scanner toggled: {state.SCANNER_ENABLED}")
+    return jsonify({"enabled": state.SCANNER_ENABLED})
+
+@app.route("/api/signal-stream")
+@protected_route
+def signal_stream():
+    def generate():
+        # SSE generator reading from queue
+        while True:
+            try:
+                data = state.sse_queue.get(timeout=20)
+                yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+            except queue.Empty:
+                # send ping to keep connection alive
+                yield ": ping\n\n"
+    response = Response(stream_with_context(generate()), mimetype='text/event-stream')
+    response.headers['Cache-Control'] = 'no-cache'
+    response.headers['Connection'] = 'keep-alive'
+    # Helpful for some proxies
+    response.headers['X-Accel-Buffering'] = 'no'
+    return response
 
 # --------------- Startup (Twisted reactor integrates Flask WSGI) ---------------
 def start_services():
+    # 1) Start Telegram bot (in background thread via reactor)
     if not TELEGRAM_BOT_TOKEN:
         logger.warning("TELEGRAM_BOT_TOKEN not set — Telegram bot disabled.")
     else:
-        logger.info("Starting Telegram Updater.")
+        logger.info("Starting Telegram Updater (background thread).")
         updater = Updater(token=TELEGRAM_BOT_TOKEN, use_context=True)
         state.updater = updater
         dp = updater.dispatcher
+        # Register handlers from telegram_ui
         dp.add_handler(CommandHandler("start", telegram_ui.start))
         dp.add_handler(CommandHandler("symbols", telegram_ui.symbols_command))
         dp.add_handler(MessageHandler(Filters.text("МЕНЮ"), telegram_ui.menu))
         dp.add_handler(MessageHandler(Filters.text & ~Filters.command, telegram_ui.reset_ui))
         dp.add_handler(CallbackQueryHandler(telegram_ui.button_handler))
-        
-        # FIX 1: Запускаємо Telegram-бота напряму, без reactor.callInThread
-        updater.start_polling(drop_pending_updates=True)
-        logger.info("Telegram updater started in its own thread.")
+        # start polling in separate thread so Twisted reactor remains primary loop
+        reactor.callInThread(updater.start_polling)
+        logger.info("Telegram updater scheduled in background thread.")
 
+    # 2) Start cTrader client (Twisted-based)
     try:
         client = SpotwareConnect(get_ct_client_id(), get_ct_client_secret())
         state.client = client
         client.on("ready", on_ctrader_ready)
-        
-        # FIX 2: Використовуємо defer.ensureDeferred для безпечного запуску cTrader-клієнта
-        reactor.callWhenRunning(lambda: defer.ensureDeferred(client.start()))
+        reactor.callWhenRunning(client.start)
         logger.info("cTrader client scheduled to start.")
     except Exception:
         logger.exception("Failed to initialize cTrader client")
 
 def main():
+    # Create WSGI resource for Flask and run under Twisted
     resource = WSGIResource(reactor, reactor.getThreadPool(), app)
     site = Site(resource)
     port = int(os.environ.get("PORT", "8080"))
     reactor.listenTCP(port, site, interface="0.0.0.0")
     logger.info(f"Twisted WSGI server listening on {port}")
 
+    # Start background services
     start_services()
 
+    # Optionally start periodic pings for SSE clients (keeps connections alive)
+    def send_pings():
+        try:
+            # put a keepalive ping into SSE queue (non-blocking)
+            try:
+                state.sse_queue.put_nowait({"_ping": int(time.time())})
+            except Exception:
+                pass
+        except Exception:
+            logger.exception("Error sending sse ping")
+    LoopingCall(send_pings).start(20)
+
+    # Run reactor (blocking)
     logger.info("Starting Twisted reactor.")
     reactor.run()
 
