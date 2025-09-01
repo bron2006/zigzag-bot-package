@@ -50,8 +50,10 @@ if not hasattr(state, "scanner_cooldown_cache"):
     state.scanner_cooldown_cache = {}
 if not hasattr(state, "latest_analysis_cache"):
     state.latest_analysis_cache = {}
-if not hasattr(state, "SCANNER_ENABLED"):
-    state.SCANNER_ENABLED = True
+# --- ПОЧАТОК ЗМІН: Видалено стару перевірку для SCANNER_ENABLED ---
+# if not hasattr(state, "SCANNER_ENABLED"):
+#     state.SCANNER_ENABLED = True
+# --- КІНЕЦЬ ЗМІН ---
 
 # Twisted-ready deferred flag for cTrader readiness
 _client_ready = {"ready": False}
@@ -67,7 +69,6 @@ def protected_route(f):
     return decorated_function
 
 # --------------- Scanner (uses analysis.get_api_detailed_signal_data) ---------------
-# --- ПОЧАТОК ЗМІН: Оновлено логіку сканера для роботи з SCANNER_STATE ---
 def scan_markets_once():
     # Перевіряємо, чи увімкнений хоча б один сканер у новій структурі
     if not any(state.SCANNER_STATE.values()):
@@ -147,7 +148,6 @@ def scan_markets_once():
             except Exception:
                 logger.exception(f"SCANNER: Failed processing {norm}")
     threads.deferToThread(worker)
-# --- КІНЕЦЬ ЗМІН ---
 
 # --------------- cTrader event handlers ---------------
 def on_ctrader_ready():
@@ -244,17 +244,25 @@ def api_signal():
     # Otherwise return not ready (or you can perform on-demand analysis — omitted for speed)
     return jsonify({"error": "Дані для цього активу ще аналізуються сканером. Спробуйте за хвилину."}), 404
 
+# --- ПОЧАТОК ЗМІН: Оновлено API ендпоінти для керування сканерами ---
 @app.route("/api/scanner/status")
 @protected_route
 def scanner_status():
-    return jsonify({"enabled": getattr(state, "SCANNER_ENABLED", False)})
+    # Повертаємо новий словник станів
+    return jsonify(state.SCANNER_STATE)
 
 @app.route("/api/scanner/toggle", methods=['POST'])
 @protected_route
 def scanner_toggle():
-    state.SCANNER_ENABLED = not getattr(state, "SCANNER_ENABLED", False)
-    logger.info(f"Scanner toggled: {state.SCANNER_ENABLED}")
-    return jsonify({"enabled": state.SCANNER_ENABLED})
+    # Отримуємо категорію з параметрів запиту (напр. /api/scanner/toggle?category=forex)
+    category = request.args.get("category")
+    if category and category in state.SCANNER_STATE:
+        # Перемикаємо стан для вказаної категорії
+        state.SCANNER_STATE[category] = not state.SCANNER_STATE[category]
+        logger.info(f"Scanner for '{category}' toggled via API to: {state.SCANNER_STATE[category]}")
+    # Повертаємо оновлений повний словник станів
+    return jsonify(state.SCANNER_STATE)
+# --- КІНЕЦЬ ЗМІН ---
 
 @app.route("/api/signal-stream")
 @protected_route
