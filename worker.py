@@ -5,7 +5,8 @@ from twisted.internet.defer import inlineCallbacks
 from twisted.internet.task import LoopingCall
 from twisted.web.server import Site, NOT_DONE_YET
 from klein import Klein
-from telegram.ext import Updater, CommandHandler, CallbackQueryHandler
+# MODIFIED: Telegram-бот тимчасово вимкнено для діагностики
+# from telegram.ext import Updater, CommandHandler, CallbackQueryHandler
 
 import state, telegram_ui
 from spotware_connect import SpotwareConnect
@@ -39,29 +40,24 @@ def broadcast_sse_signal(signal_data):
 def scan_assets(asset_type, asset_list):
     if not get_scanner_state().get(asset_type, False): return
     logger.info(f"SCANNER ({asset_type.upper()}): Starting...")
-    
+    chat_id = get_chat_id()
+
     def on_analysis_done(result, pair_name):
         try:
-            if result and not result.get("error"):
-                score = result.get('bull_percentage', 50)
-                if score >= IDEAL_ENTRY_THRESHOLD or score <= (100 - IDEAL_ENTRY_THRESHOLD):
-                    broadcast_sse_signal(result)
-        except Exception as e:
-            logger.error(f"SCANNER Error in on_analysis_done: {e}", exc_info=True)
+            score = result.get('bull_percentage', 50)
+            if not result.get("error") and (score >= IDEAL_ENTRY_THRESHOLD or score <= (100 - IDEAL_ENTRY_THRESHOLD)):
+                broadcast_sse_signal(result)
+                # ... інша логіка сповіщень (Telegram вимкнено)
+        except Exception as e: logger.error(f"SCANNER Error in on_analysis_done: {e}", exc_info=True)
 
     @inlineCallbacks
     def process_all_pairs():
         for pair in asset_list:
-            try:
-                result = yield get_api_detailed_signal_data(state.client, state.symbol_cache, pair.replace('/',''), 0, "5m")
-                on_analysis_done(result, pair)
-            except Exception as e:
-                logger.error(f"Error analyzing {pair}: {e}")
-    
+            result = yield get_api_detailed_signal_data(state.client, state.symbol_cache, pair.replace('/',''), 0, "5m")
+            on_analysis_done(result, pair)
     threads.deferToThread(process_all_pairs)
 
 def on_ctrader_ready():
-    logger.info("cTrader client ready. Loading symbols...")
     d = state.client.get_all_symbols()
     d.addCallbacks(on_symbols_loaded, lambda f: logger.error(f"Failed symbols load: {f}"))
 
@@ -80,15 +76,15 @@ def get_status(request):
 
 @internal_api.route("/get_pairs")
 def get_pairs(request):
-    request.setHeader('Content-Type', 'application/json'); 
-    return json.dumps({"forex_sessions": FOREX_SESSIONS, "crypto": CRYPTO_PAIRS, "commodities": COMMODITIES, "trading_hours": TRADING_HOURS}, ensure_ascii=False)
+    request.setHeader('Content-Type', 'application/json');
+    return json.dumps({"forex_sessions": FOREX_SESSIONS, "crypto": CRYPTO_PAIRS, "commodities": COMMODITIES}, ensure_ascii=False)
 
 @internal_api.route("/toggle_scanner", methods=['POST'])
 def toggle_scanner(request):
     content = json.loads(request.content.read()); stype = content.get('type')
-    state = get_scanner_state(); state[stype] = not state.get(stype, False); save_scanner_state(state)
-    logger.info(f"Toggled '{stype}' to {state[stype]}"); request.setHeader('Content-Type', 'application/json')
-    return json.dumps({"success": True, "newState": state})
+    state_data = get_scanner_state(); state_data[stype] = not state_data.get(stype, False); save_scanner_state(state_data)
+    logger.info(f"Toggled '{stype}' to {state_data[stype]}"); request.setHeader('Content-Type', 'application/json')
+    return json.dumps({"success": True, "newState": state_data})
 
 @internal_api.route("/analyze")
 @inlineCallbacks
@@ -103,17 +99,25 @@ def analyze(request):
 def sse(request):
     request.setHeader(b'Content-Type', b'text/event-stream; charset=utf-8')
     sse_clients.append(request)
-    request.notifyFinish().addBoth(lambda _: sse_clients.remove(request) if request in sse_clients else None)
+    request.notifyFinish().addBoth(lambda _: sse_clients.remove(request) if req in sse_clients else None)
     return NOT_DONE_YET
 
 if __name__ == "__main__":
+    logger.info("Starting worker process (DIAGNOSTIC MODE: Telegram bot is DISABLED)...")
     site = Site(internal_api.resource())
     reactor.listenTCP(8081, site, interface="0.0.0.0")
-    updater = Updater(token=TELEGRAM_BOT_TOKEN, use_context=True); state.updater = updater
-    dp = updater.dispatcher; dp.add_handler(CommandHandler("start", telegram_ui.start))
-    dp.add_handler(CallbackQueryHandler(telegram_ui.button_handler))
-    reactor.callInThread(updater.start_polling)
+    logger.info("Internal API listening on port 8081...")
+
+    # --- MODIFIED: Telegram Bot startup is commented out ---
+    # updater = Updater(token=TELEGRAM_BOT_TOKEN, use_context=True); state.updater = updater
+    # dp = updater.dispatcher; dp.add_handler(CommandHandler("start", telegram_ui.start))
+    # dp.add_handler(CallbackQueryHandler(telegram_ui.button_handler))
+    # reactor.callInThread(updater.start_polling)
+    # logger.info("Telegram bot scheduled to start.")
+    
     client = SpotwareConnect(get_ct_client_id(), get_ct_client_secret()); state.client = client
     client.on("ready", on_ctrader_ready); reactor.callWhenRunning(client.start)
-    logger.info("Worker process started successfully.")
+    logger.info("cTrader client scheduled to start.")
+    
+    logger.info("Starting Twisted reactor...")
     reactor.run()
