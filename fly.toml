@@ -1,4 +1,5 @@
 # fly.toml
+
 app = 'zigzag-bot-package'
 primary_region = 'fra'
 
@@ -11,10 +12,6 @@ primary_region = 'fra'
   auto_start_machines = true
   min_machines_running = 0
   processes = ['app']
-  
-  # --- ПОЧАТОК ЗМІН: Додано пільговий період для запуску додатку ---
-  grace_period = "15s"
-  # --- КІНЕЦЬ ЗМІН ---
 
 [[vm]]
   memory = '1gb'

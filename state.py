@@ -18,17 +18,8 @@ SYMBOLS_LOADED = False
 # Кеш для сканера ринку
 scanner_cooldown_cache = {}
 
-# --- ПОЧАТОК ЗМІН: Замінено єдиний прапорець на словник станів сканерів ---
-# Старий варіант: SCANNER_ENABLED = True
-
-# Новий варіант для керування трьома незалежними сканерами.
-# За замовчуванням усе вимкнено.
-SCANNER_STATE = {
-    "forex": False,
-    "crypto": False,
-    "commodities": False
-}
-# --- КІНЕЦЬ ЗМІН ---
+# Прапорець стану сканера
+SCANNER_ENABLED = True
 
 # Черга для передачі сигналів у веб-додаток
 sse_queue = queue.Queue()

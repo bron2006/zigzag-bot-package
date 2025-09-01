@@ -50,6 +50,8 @@ if not hasattr(state, "scanner_cooldown_cache"):
     state.scanner_cooldown_cache = {}
 if not hasattr(state, "latest_analysis_cache"):
     state.latest_analysis_cache = {}
+if not hasattr(state, "SCANNER_ENABLED"):
+    state.SCANNER_ENABLED = True
 
 # Twisted-ready deferred flag for cTrader readiness
 _client_ready = {"ready": False}
@@ -66,27 +68,12 @@ def protected_route(f):
 
 # --------------- Scanner (uses analysis.get_api_detailed_signal_data) ---------------
 def scan_markets_once():
-    # Перевіряємо, чи увімкнений хоча б один сканер
-    if not any(state.SCANNER_STATE.values()):
-        logger.debug("All scanners are disabled, skipping run.")
+    if not getattr(state, "SCANNER_ENABLED", False):
+        logger.debug("Scanner disabled, skipping run.")
         return
 
-    logger.info(f"SCANNER: Starting market scan for enabled categories: {[cat for cat, on in state.SCANNER_STATE.items() if on]}")
-    
-    # Динамічно формуємо список активів для сканування
-    assets_to_scan = []
-    if state.SCANNER_STATE.get("forex"):
-        forex_pairs = list(set([p for sess in FOREX_SESSIONS.values() for p in sess]))
-        assets_to_scan.extend(forex_pairs)
-    if state.SCANNER_STATE.get("crypto"):
-        assets_to_scan.extend(CRYPTO_PAIRS)
-    if state.SCANNER_STATE.get("commodities"):
-        assets_to_scan.extend(COMMODITIES)
-
-    if not assets_to_scan:
-        logger.info("No assets to scan for the enabled categories.")
-        return
-
+    logger.info("SCANNER: Starting market scan...")
+    all_forex_pairs = list(set([p for sess in FOREX_SESSIONS.values() for p in sess]))
     chat_id = get_chat_id()
 
     def _on_done(result, pair_name):
@@ -101,11 +88,13 @@ def scan_markets_once():
                 last = state.scanner_cooldown_cache.get(pair_name, 0)
                 if (now - last) > SCANNER_COOLDOWN_SECONDS:
                     logger.info(f"SCANNER: Signal for {pair_name} (score {score}). Notifying.")
+                    # send to web SSE
                     state.latest_analysis_cache[pair_name] = result
                     try:
                         state.sse_queue.put(result, block=False)
                     except queue.Full:
                         logger.warning("SSE queue full, dropping signal")
+                    # send to telegram (if chat configured)
                     if chat_id and getattr(state, "updater", None):
                         try:
                             message = telegram_ui._format_signal_message(result, "5m")
@@ -119,11 +108,15 @@ def scan_markets_once():
         except Exception:
             logger.exception("SCANNER: error in _on_done")
 
+    # Iterate pairs sequentially on Twisted thread pool to avoid blocking reactor
     def worker():
-        for pair in assets_to_scan:
+        for pair in all_forex_pairs:
             norm = pair.replace("/", "")
             try:
                 d = get_api_detailed_signal_data(state.client, state.symbol_cache, norm, 0, "5m")
+                # Wait for deferred synchronously by blocking in thread (safe since running in threadpool)
+                result = d.result if hasattr(d, "result") else None
+                # The analysis.get_api_detailed_signal_data returns a Deferred — use addBoth callback instead:
                 done_q = queue.Queue()
                 def cb_success(res):
                     done_q.put(res)
@@ -167,6 +160,7 @@ def on_symbols_error(failure):
 # --------------- Flask routes ---------------
 @app.route("/")
 def home():
+    # Serve SPA index
     try:
         with open(os.path.join(WEBAPP_DIR, "index.html"), "r", encoding="utf-8") as f:
             content = f.read()
@@ -226,38 +220,41 @@ def api_signal():
     pair_normalized = pair.replace("/", "")
     user_id = get_user_id_from_init_data(request.args.get("initData"))
     logger.info(f"Signal request for {pair_normalized} timeframe {timeframe}")
+    # If cached from scanner, return quickly
     cached = state.latest_analysis_cache.get(pair_normalized)
     if cached:
         return jsonify(cached)
+    # Otherwise return not ready (or you can perform on-demand analysis — omitted for speed)
     return jsonify({"error": "Дані для цього активу ще аналізуються сканером. Спробуйте за хвилину."}), 404
 
 @app.route("/api/scanner/status")
 @protected_route
 def scanner_status():
-    return jsonify(state.SCANNER_STATE)
+    return jsonify({"enabled": getattr(state, "SCANNER_ENABLED", False)})
 
 @app.route("/api/scanner/toggle", methods=['POST'])
 @protected_route
 def scanner_toggle():
-    category = request.args.get("category")
-    if category and category in state.SCANNER_STATE:
-        state.SCANNER_STATE[category] = not state.SCANNER_STATE[category]
-        logger.info(f"Scanner for '{category}' toggled via API to: {state.SCANNER_STATE[category]}")
-    return jsonify(state.SCANNER_STATE)
+    state.SCANNER_ENABLED = not getattr(state, "SCANNER_ENABLED", False)
+    logger.info(f"Scanner toggled: {state.SCANNER_ENABLED}")
+    return jsonify({"enabled": state.SCANNER_ENABLED})
 
 @app.route("/api/signal-stream")
 @protected_route
 def signal_stream():
     def generate():
+        # SSE generator reading from queue
         while True:
             try:
                 data = state.sse_queue.get(timeout=20)
                 yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
             except queue.Empty:
+                # send ping to keep connection alive
                 yield ": ping\n\n"
     response = Response(stream_with_context(generate()), mimetype='text/event-stream')
     response.headers['Cache-Control'] = 'no-cache'
     response.headers['Connection'] = 'keep-alive'
+    # Helpful for some proxies
     response.headers['X-Accel-Buffering'] = 'no'
     return response
 

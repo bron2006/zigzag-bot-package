@@ -1,10 +1,9 @@
-// webapp/script.js
 const API_BASE_URL = window.API_BASE_URL || "https://fallback.example.com";
 
 const loader = document.getElementById("loader");
 const listsContainer = document.getElementById("listsContainer");
 const signalOutput = document.getElementById("signalOutput");
-const scannerControls = document.getElementById('scannerControls');
+const scannerToggleButton = document.getElementById('scannerToggleButton');
 const liveSignalsContainer = document.getElementById('liveSignalsContainer');
 const signalContainer = document.getElementById('signalContainer');
 
@@ -43,30 +42,12 @@ document.addEventListener('DOMContentLoaded', function() {
     
     fetch(`${API_BASE_URL}/api/scanner/status${initDataQuery}`)
         .then(res => res.json())
-        .then(data => updateScannerButtons(data));
+        .then(data => updateScannerButton(data.enabled));
 
-    scannerControls.addEventListener('click', (event) => {
-        const button = event.target.closest('.scanner-button');
-        if (!button) return;
-
-        const category = button.dataset.cat;
-        const toggleUrl = `${API_BASE_URL}/api/scanner/toggle?category=${category}${initDataQuery.replace('?','&')}`;
-        
-        const tempState = {};
-        scannerControls.querySelectorAll('.scanner-button').forEach(btn => {
-            const cat = btn.dataset.cat;
-            tempState[cat] = btn.classList.contains('enabled');
-        });
-        tempState[category] = !tempState[category];
-        updateScannerButtons(tempState);
-
-        fetch(toggleUrl, { method: 'POST' })
+    scannerToggleButton.addEventListener('click', () => {
+        fetch(`${API_BASE_URL}/api/scanner/toggle${initDataQuery}`)
             .then(res => res.json())
-            .then(newState => updateScannerButtons(newState))
-            .catch(() => {
-                tempState[category] = !tempState[category];
-                updateScannerButtons(tempState);
-            });
+            .then(data => updateScannerButton(data.enabled));
     });
 
     const eventSource = new EventSource(`${API_BASE_URL}/api/signal-stream${initDataQuery}`);
@@ -98,30 +79,17 @@ document.addEventListener('DOMContentLoaded', function() {
     }, 300));
 });
 
-function updateScannerButtons(stateDict) {
-    const textMap = {
-        forex: "💹 Forex",
-        crypto: "💎 Crypto",
-        commodities: "🥇 Сировина"
-    };
-
-    for (const category in stateDict) {
-        const button = scannerControls.querySelector(`.scanner-button[data-cat="${category}"]`);
-        if (button) {
-            const isEnabled = stateDict[category];
-            const icon = isEnabled ? '✅' : '❌';
-            button.textContent = `${icon} ${textMap[category]}`;
-            if (isEnabled) {
-                button.classList.add('enabled');
-            } else {
-                button.classList.remove('enabled');
-            }
-        }
+function updateScannerButton(isEnabled) {
+    if (isEnabled) {
+        scannerToggleButton.textContent = '✅ Сканер УВІМКНЕНО';
+        scannerToggleButton.classList.add('enabled');
+    } else {
+        scannerToggleButton.textContent = '❌ Сканер ВИМКНЕНО';
+        scannerToggleButton.classList.remove('enabled');
     }
 }
 
 function displayLiveSignal(signalData) {
-    if (signalData._ping) return;
     const signalDiv = document.createElement('div');
     signalDiv.className = 'live-signal';
     
@@ -157,7 +125,7 @@ function populateLists(data, query = '') {
     const queryLower = query.toLowerCase();
 
     function createSection(title, pairs) {
-        if (!Array.isArray(pairs) || pairs.length === 0) return '';
+        if (!Array.isArray(pairs)) return '';
         const filteredPairs = pairs.filter(p => p.toLowerCase().includes(queryLower));
         if (filteredPairs.length === 0) return '';
 
@@ -183,7 +151,6 @@ function populateLists(data, query = '') {
         html += createSection('⭐ Обране', watchlistDisplay);
     }
     
-    // --- ПОЧАТОК ЗМІН: Повернено логіку відображення ВСІХ категорій ---
     if (Array.isArray(data.forex)) {
         data.forex.forEach(session => {
             const filteredSessionPairs = session.pairs.filter(p => p.toLowerCase().includes(queryLower));
@@ -192,11 +159,6 @@ function populateLists(data, query = '') {
             }
         });
     }
-
-    html += createSection('💎 Криптовалюти', data.crypto);
-    html += createSection('🥇 Сировина', data.commodities);
-    html += createSection('📈 Акції/Індекси', data.stocks);
-    // --- КІНЕЦЬ ЗМІН ---
 
     listsContainer.innerHTML = html;
     
@@ -268,6 +230,7 @@ function fetchSignal(pair) {
         });
 }
 
+// --- ПОЧАТОК ЗМІН: Повністю переписана функція форматування ---
 function formatSignalAsHtml(signalData) {
     if (!signalData || Object.keys(signalData).length === 0) {
         return "Немає даних для відображення.";
@@ -312,20 +275,25 @@ function formatSignalAsHtml(signalData) {
         html += '</span></div>';
     }
 
-    html += `</div>`;
+    html += `</div>`; // Close signal-details
+
     if (signalData.candle_pattern && signalData.candle_pattern.text) {
         html += `<div class="extra-info candle-pattern"><strong>🕯️ Свічковий патерн:</strong> ${signalData.candle_pattern.text}</div>`;
     }
+
     if (signalData.volume_info) {
         html += `<div class="extra-info volume-analysis"><strong>📊 Аналіз об'єму:</strong> ${signalData.volume_info}</div>`;
     }
+
     if (signalData.reasons && signalData.reasons.length > 0) {
         html += '<div class="reasons"><strong>Ключові фактори:</strong><ul>';
         signalData.reasons.forEach(r => { html += `<li>${r}</li>`; });
         html += '</ul></div>';
     }
+
     return html;
 }
+// --- КІНЕЦЬ ЗМІН ---
 
 function showLoader(visible) {
     loader.className = visible ? '' : 'hidden';

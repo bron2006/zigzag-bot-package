@@ -68,16 +68,10 @@ h1 { text-align: center; color: var(--text-color); font-size: 24px; margin-top: 
     border-color: var(--button-color);
 }
 
-/* --- ПОЧАТОК ЗМІН: Стилі для контейнера та кнопок сканера --- */
-.scanner-controls {
-    display: grid;
-    grid-template-columns: 1fr 1fr 1fr;
-    gap: 10px;
-}
-
 .scanner-button {
-    padding: 10px 5px;
-    font-size: 12px;
+    width: 100%;
+    padding: 10px 15px;
+    font-size: 16px;
     font-weight: bold;
     border-radius: 8px;
     cursor: pointer;
@@ -85,13 +79,11 @@ h1 { text-align: center; color: var(--text-color); font-size: 24px; margin-top: 
     border: 1px solid var(--button-color);
     background-color: var(--secondary-bg-color);
     color: var(--hint-color);
-    white-space: nowrap; /* Щоб текст не переносився */
 }
 .scanner-button.enabled {
     background-color: var(--button-color);
     color: var(--button-text-color);
 }
-/* --- КІНЕЦЬ ЗМІН --- */
 
 #liveSignalsContainer {
     display: flex;
@@ -130,7 +122,13 @@ h1 { text-align: center; color: var(--text-color); font-size: 24px; margin-top: 
 .category { margin-bottom: 15px; }
 .category-title { font-size: 18px; font-weight: bold; margin-bottom: 10px; padding-bottom: 5px; border-bottom: 1px solid var(--secondary-bg-color); }
 .pair-list { display: flex; flex-wrap: wrap; gap: 8px; }
-.pair-item { display: flex; flex-grow: 1; min-width: 120px; }
+
+.pair-item {
+    display: flex;
+    flex-grow: 1;
+    min-width: 120px;
+}
+
 .pair-button {
     flex-grow: 1;
     padding: 10px 15px;
@@ -144,6 +142,7 @@ h1 { text-align: center; color: var(--text-color); font-size: 24px; margin-top: 
     transition: background-color 0.2s;
     text-align: center;
 }
+
 .fav-btn {
     padding: 10px 12px;
     background: var(--secondary-bg-color);
@@ -156,6 +155,7 @@ h1 { text-align: center; color: var(--text-color); font-size: 24px; margin-top: 
     border-left: 1px solid var(--bg-color);
     transition: background-color 0.2s;
 }
+
 .pair-button:hover, .fav-btn:hover {
     background-color: var(--button-color);
     color: var(--button-text-color);
@@ -166,6 +166,7 @@ h1 { text-align: center; color: var(--text-color); font-size: 24px; margin-top: 
 #loader { position: fixed; left: 50%; top: 50%; width: 50px; height: 50px; border: 5px solid var(--secondary-bg-color); border-top: 5px solid var(--button-color); border-radius: 50%; transform: translate(-50%, -50%); animation: spin 1s linear infinite; }
 .hidden { display: none; }
 @keyframes spin { 0% { transform: translate(-50%, -50%) rotate(0deg); } 100% { transform: translate(-50%, -50%) rotate(360deg); } }
+
 .special-warning {
     background-color: rgba(255, 152, 0, 0.1);
     border: 1px solid var(--warning-color);
@@ -176,21 +177,87 @@ h1 { text-align: center; color: var(--text-color); font-size: 24px; margin-top: 
     font-weight: bold;
     text-align: center;
 }
+
+/* --- ПОЧАТОК ЗМІН: Стилі для детального виводу аналізу --- */
 .signal-header {
     font-size: 1.1em;
     margin-bottom: 10px;
     border-bottom: 1px solid var(--hint-color);
     padding-bottom: 10px;
 }
-.signal-header code { background-color: var(--bg-color); padding: 2px 5px; border-radius: 4px; }
-.verdict { font-size: 1.3em; font-weight: bold; margin-bottom: 10px; padding: 10px; border-radius: 8px; text-align: center; background-color: var(--bg-color); }
-.power-balance { display: flex; justify-content: space-around; margin-bottom: 15px; padding: 10px; background-color: var(--bg-color); border-radius: 8px; }
-.signal-details { margin-bottom: 15px; padding: 10px; border: 1px solid var(--secondary-bg-color); border-radius: 8px; }
-.detail-item { display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid var(--bg-color); }
-.detail-item:last-child { border-bottom: none; }
-.detail-label { color: var(--hint-color); }
-.detail-value code { background-color: var(--bg-color); padding: 2px 5px; border-radius: 4px; }
-.extra-info { padding: 10px; background-color: var(--bg-color); border-radius: 8px; margin-bottom: 15px; border-left: 3px solid var(--button-color); }
-.reasons ul { list-style-type: none; padding-left: 0; margin: 10px 0 0 0; }
-.reasons li { margin-bottom: 5px; padding-left: 15px; position: relative; }
-.reasons li::before { content: '•'; color: var(--button-color); position: absolute; left: 0; font-weight: bold; }
+.signal-header code {
+    background-color: var(--bg-color);
+    padding: 2px 5px;
+    border-radius: 4px;
+}
+
+.verdict {
+    font-size: 1.3em;
+    font-weight: bold;
+    margin-bottom: 10px;
+    padding: 10px;
+    border-radius: 8px;
+    text-align: center;
+    background-color: var(--bg-color);
+}
+
+.power-balance {
+    display: flex;
+    justify-content: space-around;
+    margin-bottom: 15px;
+    padding: 10px;
+    background-color: var(--bg-color);
+    border-radius: 8px;
+}
+
+.signal-details {
+    margin-bottom: 15px;
+    padding: 10px;
+    border: 1px solid var(--secondary-bg-color);
+    border-radius: 8px;
+}
+
+.detail-item {
+    display: flex;
+    justify-content: space-between;
+    padding: 5px 0;
+    border-bottom: 1px solid var(--bg-color);
+}
+.detail-item:last-child {
+    border-bottom: none;
+}
+.detail-label {
+    color: var(--hint-color);
+}
+.detail-value code {
+    background-color: var(--bg-color);
+    padding: 2px 5px;
+    border-radius: 4px;
+}
+
+.extra-info {
+    padding: 10px;
+    background-color: var(--bg-color);
+    border-radius: 8px;
+    margin-bottom: 15px;
+    border-left: 3px solid var(--button-color);
+}
+
+.reasons ul {
+    list-style-type: none;
+    padding-left: 0;
+    margin: 10px 0 0 0;
+}
+.reasons li {
+    margin-bottom: 5px;
+    padding-left: 15px;
+    position: relative;
+}
+.reasons li::before {
+    content: '•';
+    color: var(--button-color);
+    position: absolute;
+    left: 0;
+    font-weight: bold;
+}
+/* --- КІНЕЦЬ ЗМІН --- */
