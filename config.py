@@ -1,3 +1,4 @@
+# config.py
 import os
 import json
 from dotenv import load_dotenv
@@ -57,6 +58,11 @@ CRYPTO_PAIRS = _assets["crypto"]
 STOCK_TICKERS = _assets["stocks"]
 COMMODITIES = _assets["commodities"]
 
+# --- ПОЧАТОК ЗМІН: Додано жорстку перевірку на випадок, якщо списки активів порожні ---
+if not FOREX_SESSIONS or not CRYPTO_PAIRS or not COMMODITIES:
+    raise RuntimeError(f"CRITICAL ERROR: Asset lists are empty after loading. Check assets.json. Content loaded: {_assets}")
+# --- КІНЕЦЬ ЗМІН ---
+
 TRADING_HOURS = {
     "Європейська": "🇪🇺 (10:00 - 19:00)",
     "Американська": "🇺🇸 (15:00 - 00:00)",
@@ -64,7 +70,5 @@ TRADING_HOURS = {
     "Тихоокеанська": "🇦🇺 (00:00 - 09:00)"
 }
 
-# --- ПОЧАТОК ЗМІН: Налаштування для сканера ринку ---
-IDEAL_ENTRY_THRESHOLD = 85 # Поріг для купівлі (для продажу буде 100 - 85 = 15)
-SCANNER_COOLDOWN_SECONDS = 300 # 5 хвилин (5 * 60)
-# --- КІНЕЦЬ ЗМІН ---
+IDEAL_ENTRY_THRESHOLD = 85 
+SCANNER_COOLDOWN_SECONDS = 300

@@ -1,11 +1,10 @@
+// webapp/script.js
 const API_BASE_URL = window.API_BASE_URL || "https://fallback.example.com";
 
 const loader = document.getElementById("loader");
 const listsContainer = document.getElementById("listsContainer");
 const signalOutput = document.getElementById("signalOutput");
-// --- ПОЧАТОК ЗМІН: Звертаємось до контейнера кнопок замість однієї кнопки ---
 const scannerControls = document.getElementById('scannerControls');
-// --- КІНЕЦЬ ЗМІН ---
 const liveSignalsContainer = document.getElementById('liveSignalsContainer');
 const signalContainer = document.getElementById('signalContainer');
 
@@ -42,7 +41,6 @@ document.addEventListener('DOMContentLoaded', function() {
             showLoader(false);
         });
     
-    // --- ПОЧАТОК ЗМІН: Оновлена логіка отримання та встановлення стану сканерів ---
     fetch(`${API_BASE_URL}/api/scanner/status${initDataQuery}`)
         .then(res => res.json())
         .then(data => updateScannerButtons(data));
@@ -54,7 +52,6 @@ document.addEventListener('DOMContentLoaded', function() {
         const category = button.dataset.cat;
         const toggleUrl = `${API_BASE_URL}/api/scanner/toggle?category=${category}${initDataQuery.replace('?','&')}`;
         
-        // Оптимістичне оновлення для миттєвої реакції
         const tempState = {};
         scannerControls.querySelectorAll('.scanner-button').forEach(btn => {
             const cat = btn.dataset.cat;
@@ -65,13 +62,12 @@ document.addEventListener('DOMContentLoaded', function() {
 
         fetch(toggleUrl, { method: 'POST' })
             .then(res => res.json())
-            .then(newState => updateScannerButtons(newState)) // Синхронізація з реальним станом сервера
-            .catch(() => { // У разі помилки повертаємо до попереднього стану
+            .then(newState => updateScannerButtons(newState))
+            .catch(() => {
                 tempState[category] = !tempState[category];
                 updateScannerButtons(tempState);
             });
     });
-    // --- КІНЕЦЬ ЗМІН ---
 
     const eventSource = new EventSource(`${API_BASE_URL}/api/signal-stream${initDataQuery}`);
     
@@ -102,7 +98,6 @@ document.addEventListener('DOMContentLoaded', function() {
     }, 300));
 });
 
-// --- ПОЧАТОК ЗМІН: Нова функція для оновлення трьох кнопок ---
 function updateScannerButtons(stateDict) {
     const textMap = {
         forex: "💹 Forex",
@@ -124,7 +119,6 @@ function updateScannerButtons(stateDict) {
         }
     }
 }
-// --- КІНЕЦЬ ЗМІН ---
 
 function displayLiveSignal(signalData) {
     if (signalData._ping) return;
@@ -163,7 +157,7 @@ function populateLists(data, query = '') {
     const queryLower = query.toLowerCase();
 
     function createSection(title, pairs) {
-        if (!Array.isArray(pairs)) return '';
+        if (!Array.isArray(pairs) || pairs.length === 0) return '';
         const filteredPairs = pairs.filter(p => p.toLowerCase().includes(queryLower));
         if (filteredPairs.length === 0) return '';
 
@@ -189,6 +183,7 @@ function populateLists(data, query = '') {
         html += createSection('⭐ Обране', watchlistDisplay);
     }
     
+    // --- ПОЧАТОК ЗМІН: Повернено логіку відображення ВСІХ категорій ---
     if (Array.isArray(data.forex)) {
         data.forex.forEach(session => {
             const filteredSessionPairs = session.pairs.filter(p => p.toLowerCase().includes(queryLower));
@@ -197,6 +192,11 @@ function populateLists(data, query = '') {
             }
         });
     }
+
+    html += createSection('💎 Криптовалюти', data.crypto);
+    html += createSection('🥇 Сировина', data.commodities);
+    html += createSection('📈 Акції/Індекси', data.stocks);
+    // --- КІНЕЦЬ ЗМІН ---
 
     listsContainer.innerHTML = html;
     
