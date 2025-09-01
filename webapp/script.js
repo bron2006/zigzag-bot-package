@@ -4,11 +4,9 @@ const API_BASE_URL = window.API_BASE_URL || "https://fallback.example.com";
 const loader = document.getElementById("loader");
 const listsContainer = document.getElementById("listsContainer");
 const signalOutput = document.getElementById("signalOutput");
+const scannerControls = document.getElementById('scannerControls');
 const liveSignalsContainer = document.getElementById('liveSignalsContainer');
 const signalContainer = document.getElementById('signalContainer');
-// --- ПОЧАТОК ЗМІН: Звертаємось до контейнера кнопок замість однієї кнопки ---
-const scannerControls = document.getElementById('scannerControls');
-// --- КІНЕЦЬ ЗМІН ---
 
 let tg = window.Telegram.WebApp;
 tg.ready();
@@ -43,7 +41,6 @@ document.addEventListener('DOMContentLoaded', function() {
             showLoader(false);
         });
     
-    // --- ПОЧАТОК ЗМІН: Оновлена логіка отримання та встановлення стану сканерів ---
     fetch(`${API_BASE_URL}/api/scanner/status${initDataQuery}`)
         .then(res => res.json())
         .then(data => updateScannerButtons(data));
@@ -55,7 +52,6 @@ document.addEventListener('DOMContentLoaded', function() {
         const category = button.dataset.cat;
         const toggleUrl = `${API_BASE_URL}/api/scanner/toggle?category=${category}${initDataQuery.replace('?','&')}`;
         
-        // Оптимістичне оновлення для миттєвої реакції
         const tempState = {};
         scannerControls.querySelectorAll('.scanner-button').forEach(btn => {
             const cat = btn.dataset.cat;
@@ -66,13 +62,12 @@ document.addEventListener('DOMContentLoaded', function() {
 
         fetch(toggleUrl, { method: 'POST' })
             .then(res => res.json())
-            .then(newState => updateScannerButtons(newState)) // Синхронізація з реальним станом сервера
-            .catch(() => { // У разі помилки повертаємо до попереднього стану
+            .then(newState => updateScannerButtons(newState))
+            .catch(() => {
                 tempState[category] = !tempState[category];
                 updateScannerButtons(tempState);
             });
     });
-    // --- КІНЕЦЬ ЗМІН ---
 
     const eventSource = new EventSource(`${API_BASE_URL}/api/signal-stream${initDataQuery}`);
     
@@ -104,7 +99,6 @@ document.addEventListener('DOMContentLoaded', function() {
     }, 300));
 });
 
-// --- ПОЧАТОК ЗМІН: Нова функція для оновлення трьох кнопок ---
 function updateScannerButtons(stateDict) {
     const textMap = {
         forex: "💹 Forex",
@@ -126,10 +120,12 @@ function updateScannerButtons(stateDict) {
         }
     }
 }
-// --- КІНЕЦЬ ЗМІН ---
 
+// --- ПОЧАТОК ЗМІН: Оновлено логіку відображення та видалення сигналів ---
 function displayLiveSignal(signalData) {
+    const signalId = `signal-${signalData.pair.replace('/', '')}-${Date.now()}`;
     const signalDiv = document.createElement('div');
+    signalDiv.id = signalId;
     signalDiv.className = 'live-signal';
     
     const verdict = signalData.verdict_text || '...';
@@ -142,15 +138,24 @@ function displayLiveSignal(signalData) {
     
     signalDiv.classList.add(signalClass);
 
-    signalDiv.innerHTML = `<strong>${verdict}</strong> по ${pair} (Бики: ${score}%)`;
+    signalDiv.innerHTML = `
+        <div class="live-signal-content"><strong>${verdict}</strong> по ${pair} (Бики: ${score}%)</div>
+        <button class="live-signal-close" onclick="this.parentElement.remove()">×</button>
+    `;
     
     liveSignalsContainer.prepend(signalDiv);
     
+    // Сигнал зникає через 5 хвилин
     setTimeout(() => {
-        signalDiv.classList.add('fade-out');
-        setTimeout(() => signalDiv.remove(), 500);
-    }, 15000);
+        const el = document.getElementById(signalId);
+        if (el) {
+            el.classList.add('fade-out');
+            setTimeout(() => el.remove(), 500);
+        }
+    }, 300000); // 5 хвилин = 300 * 1000
 }
+// --- КІНЕЦЬ ЗМІН ---
+
 
 function createPairButton(pair) {
     return `<div class="pair-item">

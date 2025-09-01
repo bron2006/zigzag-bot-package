@@ -69,7 +69,6 @@ h1 { text-align: center; color: var(--text-color); font-size: 24px; margin-top: 
     border-color: var(--button-color);
 }
 
-/* --- ПОЧАТОК ЗМІН: Стилі для контейнера та кнопок сканера --- */
 .scanner-controls {
     display: grid;
     grid-template-columns: 1fr 1fr 1fr;
@@ -92,7 +91,6 @@ h1 { text-align: center; color: var(--text-color); font-size: 24px; margin-top: 
     background-color: var(--button-color);
     color: var(--button-text-color);
 }
-/* --- КІНЕЦЬ ЗМІН --- */
 
 #liveSignalsContainer {
     display: flex;
@@ -101,13 +99,18 @@ h1 { text-align: center; color: var(--text-color); font-size: 24px; margin-top: 
     margin-bottom: 15px;
 }
 
+/* --- ПОЧАТОК ЗМІН: Оновлено стилі для "живих" сигналів --- */
 .live-signal {
-    padding: 12px;
+    padding: 8px 12px;
     border-radius: 8px;
     font-size: 15px;
-    text-align: center;
     animation: fade-in 0.5s ease-in-out;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
 }
+/* --- КІНЕЦЬ ЗМІН --- */
+
 .live-signal.buy {
     background-color: rgba(38, 166, 154, 0.2);
     border-left: 4px solid var(--buy-color);
@@ -122,6 +125,25 @@ h1 { text-align: center; color: var(--text-color); font-size: 24px; margin-top: 
     opacity: 0;
     transition: opacity 0.5s ease-out;
 }
+
+/* --- ПОЧАТОК ЗМІН: Додано стилі для кнопки закриття сигналу --- */
+.live-signal-content {
+    flex-grow: 1;
+    text-align: center;
+}
+.live-signal-close {
+    background: none;
+    border: none;
+    color: var(--hint-color);
+    font-size: 20px;
+    cursor: pointer;
+    padding: 0 5px;
+    line-height: 1;
+}
+.live-signal-close:hover {
+    color: var(--text-color);
+}
+/* --- КІНЕЦЬ ЗМІН --- */
 
 @keyframes fade-in {
     from { opacity: 0; transform: translateY(-10px); }
