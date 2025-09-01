@@ -50,9 +50,6 @@ if not hasattr(state, "scanner_cooldown_cache"):
     state.scanner_cooldown_cache = {}
 if not hasattr(state, "latest_analysis_cache"):
     state.latest_analysis_cache = {}
-# --- ПОЧАТОК ЗМІН: видалено старий прапорець SCANNER_ENABLED ---
-# if hasattr(state, "SCANNER_ENABLED") ...
-# --- КІНЕЦЬ ЗМІН ---
 
 # Twisted-ready deferred flag for cTrader readiness
 _client_ready = {"ready": False}
@@ -68,7 +65,6 @@ def protected_route(f):
     return decorated_function
 
 # --------------- Scanner (uses analysis.get_api_detailed_signal_data) ---------------
-# --- ПОЧАТОК ЗМІН: Повністю оновлена логіка сканера ---
 def scan_markets_once():
     # Перевіряємо, чи увімкнений хоча б один сканер
     if not any(state.SCANNER_STATE.values()):
@@ -142,7 +138,6 @@ def scan_markets_once():
             except Exception:
                 logger.exception(f"SCANNER: Failed processing {norm}")
     threads.deferToThread(worker)
-# --- КІНЕЦЬ ЗМІН ---
 
 # --------------- cTrader event handlers ---------------
 def on_ctrader_ready():
@@ -236,7 +231,6 @@ def api_signal():
         return jsonify(cached)
     return jsonify({"error": "Дані для цього активу ще аналізуються сканером. Спробуйте за хвилину."}), 404
 
-# --- ПОЧАТОК ЗМІН: Оновлено API ендпоінти для керування сканерами ---
 @app.route("/api/scanner/status")
 @protected_route
 def scanner_status():
@@ -250,7 +244,6 @@ def scanner_toggle():
         state.SCANNER_STATE[category] = not state.SCANNER_STATE[category]
         logger.info(f"Scanner for '{category}' toggled via API to: {state.SCANNER_STATE[category]}")
     return jsonify(state.SCANNER_STATE)
-# --- КІНЕЦЬ ЗМІН ---
 
 @app.route("/api/signal-stream")
 @protected_route
@@ -269,42 +262,60 @@ def signal_stream():
     return response
 
 # --------------- Startup (Twisted reactor integrates Flask WSGI) ---------------
+# --- ПОЧАТОК ЗМІН: Додано діагностичне логування в start_services ---
 def start_services():
+    logger.info("DIAGNOSTIC: start_services() started.")
+    # 1) Start Telegram bot (in background thread via reactor)
     if not TELEGRAM_BOT_TOKEN:
         logger.warning("TELEGRAM_BOT_TOKEN not set — Telegram bot disabled.")
     else:
-        logger.info("Starting Telegram Updater (background thread).")
+        logger.info("DIAGNOSTIC: Starting Telegram bot...")
         updater = Updater(token=TELEGRAM_BOT_TOKEN, use_context=True)
         state.updater = updater
         dp = updater.dispatcher
+        # Register handlers from telegram_ui
         dp.add_handler(CommandHandler("start", telegram_ui.start))
         dp.add_handler(CommandHandler("symbols", telegram_ui.symbols_command))
         dp.add_handler(MessageHandler(Filters.text("МЕНЮ"), telegram_ui.menu))
         dp.add_handler(MessageHandler(Filters.text & ~Filters.command, telegram_ui.reset_ui))
         dp.add_handler(CallbackQueryHandler(telegram_ui.button_handler))
+        # start polling in separate thread so Twisted reactor remains primary loop
         reactor.callInThread(updater.start_polling)
-        logger.info("Telegram updater scheduled in background thread.")
+        logger.info("DIAGNOSTIC: Telegram updater scheduled in background thread.")
 
+    # 2) Start cTrader client (Twisted-based)
     try:
+        logger.info("DIAGNOSTIC: Starting cTrader client...")
         client = SpotwareConnect(get_ct_client_id(), get_ct_client_secret())
         state.client = client
         client.on("ready", on_ctrader_ready)
         reactor.callWhenRunning(client.start)
-        logger.info("cTrader client scheduled to start.")
+        logger.info("DIAGNOSTIC: cTrader client scheduled to start.")
     except Exception:
         logger.exception("Failed to initialize cTrader client")
+    logger.info("DIAGNOSTIC: start_services() finished.")
+# --- КІНЕЦЬ ЗМІН ---
 
+# --- ПОЧАТОК ЗМІН: Додано діагностичне логування в main ---
 def main():
+    logger.info("DIAGNOSTIC: main() started.")
+    # Create WSGI resource for Flask and run under Twisted
     resource = WSGIResource(reactor, reactor.getThreadPool(), app)
+    logger.info("DIAGNOSTIC: Step 1 - WSGIResource created.")
     site = Site(resource)
+    logger.info("DIAGNOSTIC: Step 2 - Site created.")
     port = int(os.environ.get("PORT", "8080"))
     reactor.listenTCP(port, site, interface="0.0.0.0")
-    logger.info(f"Twisted WSGI server listening on {port}")
+    logger.info(f"DIAGNOSTIC: Step 3 - Twisted WSGI server now listening on port {port}.")
 
+    # Start background services
     start_services()
+    logger.info("DIAGNOSTIC: Step 4 - start_services() has been called.")
 
+    # Optionally start periodic pings for SSE clients (keeps connections alive)
     def send_pings():
         try:
+            # put a keepalive ping into SSE queue (non-blocking)
             try:
                 state.sse_queue.put_nowait({"_ping": int(time.time())})
             except Exception:
@@ -312,9 +323,12 @@ def main():
         except Exception:
             logger.exception("Error sending sse ping")
     LoopingCall(send_pings).start(20)
+    logger.info("DIAGNOSTIC: Step 5 - SSE ping loop scheduled.")
 
-    logger.info("Starting Twisted reactor.")
+    # Run reactor (blocking)
+    logger.info("DIAGNOSTIC: Step 6 - Starting Twisted reactor...")
     reactor.run()
+# --- КІНЕЦЬ ЗМІН ---
 
 if __name__ == "__main__":
     main()
