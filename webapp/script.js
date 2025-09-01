@@ -1,3 +1,4 @@
+// webapp/script.js
 const API_BASE_URL = window.API_BASE_URL || "https://fallback.example.com";
 
 const loader = document.getElementById("loader");
@@ -45,7 +46,7 @@ document.addEventListener('DOMContentLoaded', function() {
         .then(data => updateScannerButton(data.enabled));
 
     scannerToggleButton.addEventListener('click', () => {
-        fetch(`${API_BASE_URL}/api/scanner/toggle${initDataQuery}`)
+        fetch(`${API_BASE_URL}/api/scanner/toggle${initDataQuery}`, { method: 'POST' })
             .then(res => res.json())
             .then(data => updateScannerButton(data.enabled));
     });
@@ -90,6 +91,7 @@ function updateScannerButton(isEnabled) {
 }
 
 function displayLiveSignal(signalData) {
+    if (signalData._ping) return;
     const signalDiv = document.createElement('div');
     signalDiv.className = 'live-signal';
     
@@ -125,7 +127,7 @@ function populateLists(data, query = '') {
     const queryLower = query.toLowerCase();
 
     function createSection(title, pairs) {
-        if (!Array.isArray(pairs)) return '';
+        if (!Array.isArray(pairs) || pairs.length === 0) return '';
         const filteredPairs = pairs.filter(p => p.toLowerCase().includes(queryLower));
         if (filteredPairs.length === 0) return '';
 
@@ -159,6 +161,12 @@ function populateLists(data, query = '') {
             }
         });
     }
+
+    // --- ПОЧАТОК ЗМІН: Додано відображення інших категорій ---
+    html += createSection('💎 Криптовалюти', data.crypto);
+    html += createSection('🥇 Сировина', data.commodities);
+    html += createSection('📈 Акції/Індекси', data.stocks);
+    // --- КІНЕЦЬ ЗМІН ---
 
     listsContainer.innerHTML = html;
     
@@ -230,7 +238,6 @@ function fetchSignal(pair) {
         });
 }
 
-// --- ПОЧАТОК ЗМІН: Повністю переписана функція форматування ---
 function formatSignalAsHtml(signalData) {
     if (!signalData || Object.keys(signalData).length === 0) {
         return "Немає даних для відображення.";
@@ -275,25 +282,20 @@ function formatSignalAsHtml(signalData) {
         html += '</span></div>';
     }
 
-    html += `</div>`; // Close signal-details
-
+    html += `</div>`;
     if (signalData.candle_pattern && signalData.candle_pattern.text) {
         html += `<div class="extra-info candle-pattern"><strong>🕯️ Свічковий патерн:</strong> ${signalData.candle_pattern.text}</div>`;
     }
-
     if (signalData.volume_info) {
         html += `<div class="extra-info volume-analysis"><strong>📊 Аналіз об'єму:</strong> ${signalData.volume_info}</div>`;
     }
-
     if (signalData.reasons && signalData.reasons.length > 0) {
         html += '<div class="reasons"><strong>Ключові фактори:</strong><ul>';
         signalData.reasons.forEach(r => { html += `<li>${r}</li>`; });
         html += '</ul></div>';
     }
-
     return html;
 }
-// --- КІНЕЦЬ ЗМІН ---
 
 function showLoader(visible) {
     loader.className = visible ? '' : 'hidden';
