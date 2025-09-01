@@ -1,3 +1,4 @@
+# analysis.py
 import logging
 import pandas as pd
 import pandas_ta as ta
@@ -201,9 +202,10 @@ def _calculate_core_signal(df, daily_df, current_price):
          else:
              score -= 15; reasons.append("Тренд: Ціна під Хмарою")
     
-    neutral_patterns = ["SPINNINGTOP", "DOJI", "DOJISTAR"]
+    neutral_patterns = ["SPINNINGTOP", "DOJI", "DOJISTAR", "SHORTLINE", "HIGHWAVE", "HARAMI"]
     if candle_pattern:
-        if candle_pattern['name'] in neutral_patterns:
+        pattern_name = candle_pattern['name'].upper()
+        if any(neutral in pattern_name for neutral in neutral_patterns):
             reasons.append(f"Нейтральний патерн: {candle_pattern['name']}")
         elif candle_pattern['type'] == 'bullish':
             score += 20; reasons.append(f"Бичачий патерн: {candle_pattern['name']}")
@@ -213,7 +215,7 @@ def _calculate_core_signal(df, daily_df, current_price):
     rsi = last.get('RSI_14')
     if pd.notna(rsi):
         if rsi < 30: score += 10; reasons.append("Ознаки перепроданості (RSI)")
-        elif rsi > 70: score -= 10; reasons.append("Ознаки перекупленості (RSI)")
+        elif rsi > 70: reasons.append("Ознаки перекупленості (RSI)")
 
     last_atr = last.get('ATRr_14')
     if last_atr and pd.notna(last_atr):
@@ -226,13 +228,13 @@ def _calculate_core_signal(df, daily_df, current_price):
             score += 20; reasons.append("⚠️ Ціна біля сильної денної підтримки")
 
     if is_daily_uptrend is not None:
-        if not is_daily_uptrend and score > 65:
-            score = 65
-            critical_warning = "❗️ Сигнал обмежений через денний даунтренд"
-        elif is_daily_uptrend and score < 35:
-            score = 35
-            critical_warning = "❗️ Сигнал обмежений через денний аптренд"
-                
+        if not is_daily_uptrend and score > 50:
+            critical_warning = "❗️ Сигнал суперечить денному даунтренду"
+            score = 50
+        elif is_daily_uptrend and score < 50:
+            critical_warning = "❗️ Сигнал суперечить денному аптренду"
+            score = 50
+            
     score = int(np.clip(score, 0, 100))
     
     support_candidates = [s for s in long_term_support if s < current_price]
@@ -240,17 +242,28 @@ def _calculate_core_signal(df, daily_df, current_price):
     resistance_candidates = [r for r in long_term_resistance if r > current_price]
     resistance = min(resistance_candidates) if resistance_candidates else None
     
-    # --- ДОДАНО: перевірка на конфлікт ---
     if candle_pattern:
         if candle_pattern['type'] == 'bullish':
             if "MACD падає" in reasons or "Тренд: Ціна під Хмарою" in reasons:
                 score = 50
-                critical_warning = "❗️ Конфлікт сигналів: бичачий патерн суперечить тренду/індикаторам"
+                critical_warning = "❗️ Конфлікт: бичачий патерн проти ведмежих індикаторів"
         elif candle_pattern['type'] == 'bearish':
             if "MACD росте" in reasons or "Тренд: Ціна над Хмарою" in reasons:
                 score = 50
-                critical_warning = "❗️ Конфлікт сигналів: ведмежий патерн суперечить тренду/індикаторам"
-    
+                critical_warning = "❗️ Конфлікт: ведмежий патерн проти бичачих індикаторів"
+
+    # --- ПОЧАТОК ЗМІН: Фінальний VETO-фільтр для RSI ---
+    if pd.notna(rsi):
+        if score > 80 and rsi > 75:
+            score = 50 # Нейтралізуємо сигнал
+            critical_warning = "❗️ Сигнал скасовано: сильна перекупленість (RSI > 75)!"
+            reasons.append(critical_warning)
+        elif score < 20 and rsi < 25:
+            score = 50 # Нейтралізуємо сигнал
+            critical_warning = "❗️ Сигнал скасовано: сильна перепроданість (RSI < 25)!"
+            reasons.append(critical_warning)
+    # --- КІНЕЦЬ ЗМІН ---
+
     return {
         "score": score, "reasons": reasons, "support": support, "resistance": resistance,
         "candle_pattern": candle_pattern, "volume_info": analyze_volume(df),
@@ -264,7 +277,12 @@ def _generate_verdict(score):
     if score < 35: return "↘️ Moderate SELL"
     return "🟡 NEUTRAL"
 
+# MODIFIED: Повністю перероблена функція для коректної роботи з Deferred
 def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int, timeframe: str = "15m") -> Deferred:
+    # NEW: Створюємо фінальний Deferred, який буде повернуто.
+    # Він буде "виконаний" (fired), коли всі дані будуть готові.
+    final_deferred = Deferred()
+
     def on_data_ready(results):
         try:
             success1, df = results[0]
@@ -272,7 +290,10 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int
             success3, live_price = results[2]
 
             if not (success1 and success2) or df.empty or len(df) < 50 or daily_df.empty:
-                return {"error": f"Not enough historical data for {timeframe} analysis."}
+                # MODIFIED: Виконуємо Deferred з результатом-помилкою
+                if not final_deferred.called:
+                    final_deferred.callback({"error": f"Not enough historical data for {timeframe} analysis."})
+                return
 
             current_price = live_price if success3 and live_price is not None else df.iloc[-1]['Close']
             
@@ -303,11 +324,15 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int
                 "volume_info": analysis.get('volume_info'),
                 "special_warning": final_warning
             }
-            return response_data
+            # MODIFIED: Виконуємо Deferred з успішним результатом
+            if not final_deferred.called:
+                final_deferred.callback(response_data)
             
         except Exception as e:
             logger.exception(f"Critical analysis error for {symbol}: {e}")
-            return {"error": "Internal data processing error."}
+            # MODIFIED: Повідомляємо Deferred про помилку
+            if not final_deferred.called:
+                final_deferred.errback(e)
 
     d1 = get_market_data(client, symbol_cache, symbol, timeframe, 200)
     d2 = get_market_data(client, symbol_cache, symbol, '1day', 100)
@@ -315,4 +340,6 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int
     
     d_list = DeferredList([d1, d2, d3], consumeErrors=True)
     d_list.addCallback(on_data_ready)
-    return d_list
+    
+    # MODIFIED: Повертаємо наш новий фінальний Deferred, а не DeferredList
+    return final_deferred

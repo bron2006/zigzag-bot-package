@@ -1,5 +1,4 @@
-# fly.toml file generated for zigzag-bot-package on 2025-08-26T19:35:46+03:00
-
+# fly.toml
 app = 'zigzag-bot-package'
 primary_region = 'fra'
 
@@ -7,10 +6,10 @@ primary_region = 'fra'
 
 [http_service]
   internal_port = 8080
-  force_https = true
+  force_https = false
   auto_stop_machines = true
   auto_start_machines = true
-  min_machines_running = 0
+  min_machines_running = 1
   processes = ['app']
 
 [[vm]]
@@ -19,10 +18,16 @@ primary_region = 'fra'
   cpus = 1
 
 [mounts]
-  source="signals_data"
-  destination="/data"
+  source = "signals_data"
+  destination = "/data"
 
-# --- ПОЧАТОК ЗМІН: Змінюємо команду запуску ---
+[[services]]
+  internal_port = 8081
+  processes = ["worker"]
+  min_machines_running = 1
+  max_machines_running = 1
+  auto_stop_machines = false
+
 [processes]
-  app = "python app.py"
-# --- КІНЕЦЬ ЗМІН ---
+  app = "gunicorn --worker-class gevent --bind 0.0.0.0:8080 app:app"
+  worker = "python worker.py"

@@ -1,3 +1,4 @@
+# Dockerfile
 FROM python:3.11-bullseye
 WORKDIR /app
 
@@ -21,15 +22,9 @@ RUN wget 'http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz' && 
     cd .. && \
     rm -rf ta-lib ta-lib-0.4.0-src.tar.gz
 
-# Встановлюємо Python-залежності з файлу
+# Встановлюємо Python-залежності
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Копіюємо весь код додатку
 COPY . .
-EXPOSE 8080
-
-# --- ПОЧАТОК ЗМІН: Повністю змінено команду запуску ---
-# Замість Gunicorn, тепер ми запускаємо додаток напряму через Python,
-# оскільки він буде використовувати вбудований сервер Twisted.
-CMD ["python", "app.py"]
-# --- КІНЕЦЬ ЗМІН ---
