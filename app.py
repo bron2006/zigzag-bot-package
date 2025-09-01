@@ -67,13 +67,29 @@ def protected_route(f):
     return decorated_function
 
 # --------------- Scanner (uses analysis.get_api_detailed_signal_data) ---------------
+# --- ПОЧАТОК ЗМІН: Оновлено логіку сканера для роботи з SCANNER_STATE ---
 def scan_markets_once():
-    if not getattr(state, "SCANNER_ENABLED", False):
-        logger.debug("Scanner disabled, skipping run.")
+    # Перевіряємо, чи увімкнений хоча б один сканер у новій структурі
+    if not any(state.SCANNER_STATE.values()):
+        logger.debug("All scanners are disabled, skipping run.")
         return
 
-    logger.info("SCANNER: Starting market scan...")
-    all_forex_pairs = list(set([p for sess in FOREX_SESSIONS.values() for p in sess]))
+    logger.info(f"SCANNER: Starting market scan for enabled categories: {[cat for cat, on in state.SCANNER_STATE.items() if on]}")
+    
+    # Динамічно формуємо список активів для сканування
+    assets_to_scan = []
+    if state.SCANNER_STATE.get("forex"):
+        forex_pairs = list(set([p for sess in FOREX_SESSIONS.values() for p in sess]))
+        assets_to_scan.extend(forex_pairs)
+    if state.SCANNER_STATE.get("crypto"):
+        assets_to_scan.extend(CRYPTO_PAIRS)
+    if state.SCANNER_STATE.get("commodities"):
+        assets_to_scan.extend(COMMODITIES)
+
+    if not assets_to_scan:
+        logger.info("No assets to scan for the enabled categories.")
+        return
+
     chat_id = get_chat_id()
 
     def _on_done(result, pair_name):
@@ -110,7 +126,7 @@ def scan_markets_once():
 
     # Iterate pairs sequentially on Twisted thread pool to avoid blocking reactor
     def worker():
-        for pair in all_forex_pairs:
+        for pair in assets_to_scan:
             norm = pair.replace("/", "")
             try:
                 d = get_api_detailed_signal_data(state.client, state.symbol_cache, norm, 0, "5m")
@@ -131,6 +147,7 @@ def scan_markets_once():
             except Exception:
                 logger.exception(f"SCANNER: Failed processing {norm}")
     threads.deferToThread(worker)
+# --- КІНЕЦЬ ЗМІН ---
 
 # --------------- cTrader event handlers ---------------
 def on_ctrader_ready():
