@@ -4,9 +4,11 @@ const API_BASE_URL = window.API_BASE_URL || "https://fallback.example.com";
 const loader = document.getElementById("loader");
 const listsContainer = document.getElementById("listsContainer");
 const signalOutput = document.getElementById("signalOutput");
-const scannerToggleButton = document.getElementById('scannerToggleButton');
 const liveSignalsContainer = document.getElementById('liveSignalsContainer');
 const signalContainer = document.getElementById('signalContainer');
+// --- ПОЧАТОК ЗМІН: Звертаємось до контейнера кнопок замість однієї кнопки ---
+const scannerControls = document.getElementById('scannerControls');
+// --- КІНЕЦЬ ЗМІН ---
 
 let tg = window.Telegram.WebApp;
 tg.ready();
@@ -41,20 +43,42 @@ document.addEventListener('DOMContentLoaded', function() {
             showLoader(false);
         });
     
+    // --- ПОЧАТОК ЗМІН: Оновлена логіка отримання та встановлення стану сканерів ---
     fetch(`${API_BASE_URL}/api/scanner/status${initDataQuery}`)
         .then(res => res.json())
-        .then(data => updateScannerButton(data.enabled));
+        .then(data => updateScannerButtons(data));
 
-    scannerToggleButton.addEventListener('click', () => {
-        fetch(`${API_BASE_URL}/api/scanner/toggle${initDataQuery}`, { method: 'POST' })
+    scannerControls.addEventListener('click', (event) => {
+        const button = event.target.closest('.scanner-button');
+        if (!button) return;
+
+        const category = button.dataset.cat;
+        const toggleUrl = `${API_BASE_URL}/api/scanner/toggle?category=${category}${initDataQuery.replace('?','&')}`;
+        
+        // Оптимістичне оновлення для миттєвої реакції
+        const tempState = {};
+        scannerControls.querySelectorAll('.scanner-button').forEach(btn => {
+            const cat = btn.dataset.cat;
+            tempState[cat] = btn.classList.contains('enabled');
+        });
+        tempState[category] = !tempState[category];
+        updateScannerButtons(tempState);
+
+        fetch(toggleUrl, { method: 'POST' })
             .then(res => res.json())
-            .then(data => updateScannerButton(data.enabled));
+            .then(newState => updateScannerButtons(newState)) // Синхронізація з реальним станом сервера
+            .catch(() => { // У разі помилки повертаємо до попереднього стану
+                tempState[category] = !tempState[category];
+                updateScannerButtons(tempState);
+            });
     });
+    // --- КІНЕЦЬ ЗМІН ---
 
     const eventSource = new EventSource(`${API_BASE_URL}/api/signal-stream${initDataQuery}`);
     
     eventSource.onmessage = function(event) {
         const signalData = JSON.parse(event.data);
+        if (signalData._ping) return;
         displayLiveSignal(signalData);
     };
     
@@ -80,18 +104,31 @@ document.addEventListener('DOMContentLoaded', function() {
     }, 300));
 });
 
-function updateScannerButton(isEnabled) {
-    if (isEnabled) {
-        scannerToggleButton.textContent = '✅ Сканер УВІМКНЕНО';
-        scannerToggleButton.classList.add('enabled');
-    } else {
-        scannerToggleButton.textContent = '❌ Сканер ВИМКНЕНО';
-        scannerToggleButton.classList.remove('enabled');
+// --- ПОЧАТОК ЗМІН: Нова функція для оновлення трьох кнопок ---
+function updateScannerButtons(stateDict) {
+    const textMap = {
+        forex: "💹 Forex",
+        crypto: "💎 Crypto",
+        commodities: "🥇 Сировина"
+    };
+
+    for (const category in stateDict) {
+        const button = scannerControls.querySelector(`.scanner-button[data-cat="${category}"]`);
+        if (button) {
+            const isEnabled = stateDict[category];
+            const icon = isEnabled ? '✅' : '❌';
+            button.textContent = `${icon} ${textMap[category]}`;
+            if (isEnabled) {
+                button.classList.add('enabled');
+            } else {
+                button.classList.remove('enabled');
+            }
+        }
     }
 }
+// --- КІНЕЦЬ ЗМІН ---
 
 function displayLiveSignal(signalData) {
-    if (signalData._ping) return;
     const signalDiv = document.createElement('div');
     signalDiv.className = 'live-signal';
     
@@ -162,11 +199,9 @@ function populateLists(data, query = '') {
         });
     }
 
-    // --- ПОЧАТОК ЗМІН: Додано відображення інших категорій ---
     html += createSection('💎 Криптовалюти', data.crypto);
     html += createSection('🥇 Сировина', data.commodities);
     html += createSection('📈 Акції/Індекси', data.stocks);
-    // --- КІНЕЦЬ ЗМІН ---
 
     listsContainer.innerHTML = html;
     
