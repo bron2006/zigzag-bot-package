@@ -1,4 +1,5 @@
 # fly.toml
+
 app = 'zigzag-bot-package'
 primary_region = 'fra'
 
@@ -6,10 +7,10 @@ primary_region = 'fra'
 
 [http_service]
   internal_port = 8080
-  force_https = false
+  force_https = true
   auto_stop_machines = true
   auto_start_machines = true
-  min_machines_running = 1
+  min_machines_running = 0
   processes = ['app']
 
 [[vm]]
@@ -18,29 +19,8 @@ primary_region = 'fra'
   cpus = 1
 
 [mounts]
-  source = "signals_data"
-  destination = "/data"
-
-[[services]]
-  internal_port = 8081
-  processes = ["worker"]
-  protocol = "tcp" # Явно вказуємо протокол
-  min_machines_running = 1
-  max_machines_running = 1
-  auto_stop_machines = false
-
-  # Health check, щоб Fly знав, що воркер живий і працює
-  [[services.http_checks]]
-    interval = "15s"
-    method = "GET"
-    path = "/status"
-    protocol = "http"
-    timeout = "5s"
-
-# FIX: Змінюємо стратегію розгортання, щоб уникнути конфлікту Telegram-ботів
-[deploy]
-  strategy = "immediate"
+  source="signals_data"
+  destination="/data"
 
 [processes]
-  app = "gunicorn --worker-class gevent --bind 0.0.0.0:8080 app:app"
-  worker = "python worker.py"
+  app = "python app.py"

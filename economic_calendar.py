@@ -14,9 +14,8 @@ def check_for_imminent_news(pair: str) -> Tuple[bool, Optional[str]]:
     """
     Перевіряє наявність важливих новин для валют у парі через API Finnhub.
     """
-    # --- ПОЧАТОК ЗМІН: Функцію вимкнено, оскільки вона вимагає платної підписки Finnhub ---
+    # Функцію вимкнено, оскільки вона вимагає платної підписки Finnhub
     return False, None
-    # --- КІНЕЦЬ ЗМІН ---
 
     # Весь код нижче більше не буде виконуватися
     if not API_KEY:
@@ -25,7 +24,6 @@ def check_for_imminent_news(pair: str) -> Tuple[bool, Optional[str]]:
 
     try:
         base_currency = pair[:3].upper()
-        quote_currency = pair[3:].upper()
         
         today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
         
@@ -45,7 +43,7 @@ def check_for_imminent_news(pair: str) -> Tuple[bool, Optional[str]]:
             event_time_utc = datetime.fromtimestamp(event['time'], tz=timezone.utc)
 
             if now < event_time_utc < imminent_window:
-                if event['impact'] == 'high' and event['currency'] in [base_currency, quote_currency]:
+                if event['impact'] == 'high' and event['currency'] == base_currency:
                     news_text = (
                         f"❗️УВАГА: СКОРО ВАЖЛИВІ НОВИНИ ({event['currency']})❗️\n"
                         f"Подія: {event['event']}"

@@ -1,49 +1,192 @@
 # telegram_ui.py
 import logging
-import requests
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import CallbackContext
+from twisted.internet import reactor
+from telegram.error import BadRequest
 
-from config import FOREX_SESSIONS, CRYPTO_PAIRS, COMMODITIES
+import state
+from config import FOREX_SESSIONS, CRYPTO_PAIRS, STOCK_TICKERS, COMMODITIES, TRADING_HOURS
+from analysis import get_api_detailed_signal_data
 
 logger = logging.getLogger(__name__)
 
-# FIX: Замінено localhost на правильну внутрішню адресу
-WORKER_URL = "http://zigzag-bot-package.internal:8081"
+TIMEFRAMES = ["1m", "5m", "15m"]
 
-# ... (решта коду telegram_ui.py без змін) ...
-def get_reply_keyboard():
-    return ReplyKeyboardMarkup([[KeyboardButton("МЕНЮ")]], resize_keyboard=True)
-def get_main_menu_kb(scanner_status: dict) -> InlineKeyboardMarkup:
-    # ...
+def get_reply_keyboard() -> ReplyKeyboardMarkup:
+    keyboard = [[KeyboardButton("МЕНЮ")]]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+def get_main_menu_kb() -> InlineKeyboardMarkup:
+    keyboard = [
+        [InlineKeyboardButton("💹 Валютні пари (Forex)", callback_data="category_forex")],
+        [InlineKeyboardButton("💎 Криптовалюти", callback_data="category_crypto")],
+        [InlineKeyboardButton("📈 Акції/Індекси", callback_data="category_stocks")],
+        [InlineKeyboardButton("🥇 Сировина", callback_data="category_commodities")]
+    ]
+    
+    if state.SCANNER_ENABLED:
+        scanner_button_text = "✅ Сканер УВІМКНЕНО (вимкнути)"
+    else:
+        scanner_button_text = "❌ Сканер ВИМКНЕНО (увімкнути)"
+    keyboard.append([InlineKeyboardButton(scanner_button_text, callback_data="toggle_scanner")])
+    
     return InlineKeyboardMarkup(keyboard)
-def start(update: Update, context: CallbackContext):
-    update.message.reply_text("👋 Вітаю! Натисніть «МЕНЮ».", reply_markup=get_reply_keyboard())
-def menu(update: Update, context: CallbackContext):
-    try:
-        response = requests.get(f"{WORKER_URL}/status")
-        update.message.reply_text("🏠 Головне меню:", reply_markup=get_main_menu_kb(response.json()))
-    except requests.RequestException:
-        update.message.reply_text("Помилка: сервіс тимчасово недоступний.")
-def _format_signal_message(result: dict, timeframe: str) -> str:
-    # ...
-    return f"Сигнал..."
-def button_handler(update: Update, context: CallbackContext):
-    query = update.callback_query; query.answer(); data = query.data; parts = data.split('_'); action = parts[0]
-    if action == "toggle":
-        scanner_type = parts[1]
+
+def get_timeframe_kb(category: str) -> InlineKeyboardMarkup:
+    keyboard = []
+    row = []
+    for tf in TIMEFRAMES:
+        row.append(InlineKeyboardButton(tf, callback_data=f"tf_{category}_{tf}"))
+    keyboard.append(row)
+    keyboard.append([InlineKeyboardButton("⬅️ Назад до категорій", callback_data="main_menu")])
+    return InlineKeyboardMarkup(keyboard)
+
+def get_forex_sessions_kb(timeframe: str) -> InlineKeyboardMarkup:
+    keyboard = []
+    for session_name in FOREX_SESSIONS:
+        display_text = f"{TRADING_HOURS.get(session_name, '')} {session_name}".strip()
+        keyboard.append([InlineKeyboardButton(display_text, callback_data=f"session_forex_{timeframe}_{session_name}")])
+    keyboard.append([InlineKeyboardButton("⬅️ Назад до таймфреймів", callback_data="category_forex")])
+    return InlineKeyboardMarkup(keyboard)
+
+def get_assets_kb(asset_list: list, category: str, timeframe: str) -> InlineKeyboardMarkup:
+    keyboard = []
+    row = []
+    for asset in asset_list:
+        callback_data = f"analyze_{timeframe}_{asset.replace('/', '')}"
+        row.append(InlineKeyboardButton(asset, callback_data=callback_data))
+        if len(row) == 2:
+            keyboard.append(row)
+            row = []
+    if row:
+        keyboard.append(row)
+    keyboard.append([InlineKeyboardButton("⬅️ Назад до таймфреймів", callback_data=f"category_{category}")])
+    return InlineKeyboardMarkup(keyboard)
+
+def start(update: Update, context: CallbackContext) -> None:
+    update.message.reply_text(
+        "👋 Вітаю! Натисніть «МЕНЮ» для вибору активів.",
+        reply_markup=get_reply_keyboard()
+    )
+
+def menu(update: Update, context: CallbackContext) -> None:
+    if 'last_menu_id' in context.user_data:
         try:
-            response = requests.post(f"{WORKER_URL}/toggle_scanner", json={"type": scanner_type})
-            query.edit_message_text("🏠 Головне меню:", reply_markup=get_main_menu_kb(response.json().get("newState", {})))
-        except: query.answer("Помилка.", show_alert=True)
+            context.bot.delete_message(chat_id=update.effective_chat.id, message_id=context.user_data['last_menu_id'])
+        except BadRequest:
+            pass
+
+    sent_message = update.message.reply_text(
+        "🏠 Головне меню:",
+        reply_markup=get_main_menu_kb()
+    )
+    context.user_data['last_menu_id'] = sent_message.message_id
+
+    context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text=".",
+        disable_notification=True,
+        reply_markup=get_reply_keyboard()
+    )
+
+def reset_ui(update: Update, context: CallbackContext) -> None:
+    update.message.reply_text(f"Невідома команда: '{update.message.text}'. Використовуйте кнопки.", reply_markup=get_reply_keyboard())
+
+def symbols_command(update: Update, context: CallbackContext):
+    if not state.SYMBOLS_LOADED or not hasattr(state, 'all_symbol_names'):
+        update.message.reply_text("Список символів ще не завантажено. Спробуйте за хвилину.")
+        return
+    
+    forex = sorted([s for s in state.all_symbol_names if "/" in s and len(s) < 8 and "USD" not in s.upper()])
+    crypto_usd = sorted([s for s in state.all_symbol_names if "/USD" in s.upper()])
+    crypto_usdt = sorted([s for s in state.all_symbol_names if "/USDT" in s.upper()])
+    others = sorted([s for s in state.all_symbol_names if "/" not in s])
+
+    message = "**Доступні символи від брокера:**\n\n"
+    if forex: message += f"**Forex:**\n`{', '.join(forex)}`\n\n"
+    if crypto_usd: message += f"**Crypto (USD):**\n`{', '.join(crypto_usd)}`\n\n"
+    if crypto_usdt: message += f"**Crypto (USDT):**\n`{', '.join(crypto_usdt)}`\n\n"
+    if others: message += f"**Indices/Stocks/Commodities:**\n`{', '.join(others)}`"
+    
+    for i in range(0, len(message), 4096):
+        update.message.reply_text(message[i:i + 4096], parse_mode='Markdown')
+
+def _format_signal_message(result: dict, timeframe: str) -> str:
+    if result.get("error"): return f"❌ Помилка аналізу: {result['error']}"
+
+    message = ""
+    if result.get("special_warning"):
+        message += f"**{result.get('special_warning')}**\n\n"
+
+    pair = result.get('pair', 'N/A')
+    price = result.get('price', 0)
+    verdict = result.get('verdict_text', 'Не вдалося визначити.')
+    score = result.get('bull_percentage', 50)
+    
+    price_str = f"{price:.5f}" if price else "N/A"
+    message += f"📈 **Сигнал Сканера: {pair} ({timeframe})**\n"
+    message += f"**Напрямок:** {verdict} (Бики: {score}%)\n"
+    message += f"**Ціна:** `{price_str}`"
+        
+    return message
+
+def button_handler(update: Update, context: CallbackContext) -> None:
+    query = update.callback_query
+    query.answer()
+    data = query.data
+    context.user_data['last_menu_id'] = query.message.message_id
+
+    parts = data.split('_')
+    action = parts[0]
+
+    if action == "toggle":
+        if len(parts) > 1 and parts[1] == "scanner":
+            state.SCANNER_ENABLED = not state.SCANNER_ENABLED
+            status_text = "увімкнено" if state.SCANNER_ENABLED else "вимкнено"
+            query.answer(text=f"Сканер ринку {status_text}")
+            query.edit_message_text("🏠 Головне меню:", reply_markup=get_main_menu_kb())
+            return
+
+    if action == "main":
+        query.edit_message_text("🏠 Головне меню:", reply_markup=get_main_menu_kb())
+
+    elif action == "category":
+        category = parts[1]
+        query.edit_message_text(f"Виберіть таймфрейм для '{category}':", reply_markup=get_timeframe_kb(category))
+
+    elif action == "tf":
+        _, category, timeframe = parts
+        if category == 'forex':
+            query.edit_message_text("💹 Виберіть торгову сесію:", reply_markup=get_forex_sessions_kb(timeframe))
+        else: # Об'єднуємо логіку для інших категорій
+            asset_map = {'crypto': CRYPTO_PAIRS, 'stocks': STOCK_TICKERS, 'commodities': COMMODITIES}
+            query.edit_message_text(f"Виберіть актив:", reply_markup=get_assets_kb(asset_map.get(category,[]), category, timeframe))
+
+    elif action == "session":
+        _, category, timeframe, session_name = parts
+        pairs = FOREX_SESSIONS.get(session_name, [])
+        query.edit_message_text(f"Виберіть пару для сесії '{session_name}':", reply_markup=get_assets_kb(pairs, category, timeframe))
+
     elif action == "analyze":
         _, timeframe, symbol = parts
-        query.edit_message_text(text=f"⏳ Аналізую {symbol} ({timeframe})...")
-        try:
-            params = {"pair": symbol, "timeframe": timeframe}
-            response = requests.get(f"{WORKER_URL}/analyze", params=params, timeout=30)
-            message_text = _format_signal_message(response.json(), timeframe)
-            status_resp = requests.get(f"{WORKER_URL}/status")
-            query.edit_message_text(text=message_text, parse_mode='Markdown', reply_markup=get_main_menu_kb(status_resp.json()))
-        except: query.edit_message_text(text=f"❌ Помилка аналізу {symbol}.")
-    # ...
+        if not state.client or not state.SYMBOLS_LOADED:
+            query.answer(text="❌ Сервіс ще завантажується, спробуйте за мить.", show_alert=True); return
+        
+        query.edit_message_text(text=f"⏳ Обрано {symbol} ({timeframe}). Роблю запит...")
+        
+        def on_success(result):
+            # Форматуємо відповідь для Telegram
+            message_text = "Some formatted text based on result" # Placeholder
+            query.edit_message_text(text=message_text, parse_mode='Markdown', reply_markup=get_main_menu_kb())
+
+        def on_error(failure):
+            error_message = failure.getErrorMessage()
+            logger.error(f"❌ Помилка при отриманні сигналу для {symbol}: {error_message}")
+            query.edit_message_text(text=f"❌ Помилка: {error_message}", reply_markup=get_main_menu_kb())
+
+        def do_analysis():
+            d = get_api_detailed_signal_data(state.client, state.symbol_cache, symbol, query.from_user.id, timeframe)
+            d.addCallbacks(on_success, on_error)
+            
+        reactor.callInThread(do_analysis)

@@ -22,9 +22,12 @@ RUN wget 'http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz' && 
     cd .. && \
     rm -rf ta-lib ta-lib-0.4.0-src.tar.gz
 
-# Встановлюємо Python-залежності
+# Встановлюємо Python-залежності з файлу
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Копіюємо весь код додатку
 COPY . .
+EXPOSE 8080
+
+# Запускаємо додаток напряму через Python, оскільки він використовує вбудований сервер Twisted.
+CMD ["python", "app.py"]
