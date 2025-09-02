@@ -1,109 +1,124 @@
 # spotware_connect.py
 import logging
 from twisted.internet import reactor
-from twisted.internet.defer import Deferred, TimeoutError
-from ctrader_open_api.client import Client as SpotwareClientBase
-from ctrader_open_api.tcpProtocol import TcpProtocol
-from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import ProtoMessage
-from ctrader_open_api.messages.OpenApiMessages_pb2 import (
-    ProtoOAApplicationAuthReq, ProtoOAApplicationAuthRes,
-    ProtoOAAccountAuthReq, ProtoOAAccountAuthRes,
-    ProtoOASymbolsListReq,
-    ProtoOAErrorRes,
-    ProtoOASpotEvent # <-- НОВИЙ ІМПОРТ
-)
-from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOAPayloadType
-from config import get_ctrader_access_token, get_demo_account_id
+from ctrader_open_api.client import Client
+from ctrader_open_api.factory import Factory
+from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import ProtoOAPayloadType
+from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoMessage
+from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import ProtoErrorRes
+from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOAApplicationAuthReq, ProtoOAAccountAuthReq, ProtoOAGetAccountListByAccessTokenReq
+import state
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("spotware_connect")
 
-class EventEmitter:
-    def __init__(self): self._events = {}
-    def on(self, event, func):
-        if event not in self._events: self._events[event] = []
-        self._events[event].append(func)
-    def emit(self, event, *args, **kwargs):
-        if event in self._events:
-            for func in self._events[event]: reactor.callFromThread(func, *args, **kwargs)
-    # --- ПОЧАТОК ЗМІН: Додаємо метод для видалення слухача ---
-    def remove_listener(self, event, func):
-        if event in self._events:
-            if func in self._events[event]:
-                self._events[event].remove(func)
-    # --- КІНЕЦЬ ЗМІН ---
-
-class SpotwareConnect(EventEmitter):
+class SpotwareConnect(Client):
     def __init__(self, client_id, client_secret):
-        super().__init__()
-        self.host = "demo.ctraderapi.com"; self.port = 5035
-        self._client_id = client_id; self._client_secret = client_secret
-        self.is_authorized = False
-        self._client = SpotwareClientBase(self.host, self.port, TcpProtocol)
-        self._client.setConnectedCallback(self._on_connected)
-        self._client.setMessageReceivedCallback(self._on_message_received)
-        self._client.setDisconnectedCallback(self._on_disconnected)
-        self._client.account_id = None
-
-    def start(self): self._client.startService()
-
-    def send(self, message, client_msg_id=None, timeout=30):
-        deferred = self._client.send(message, clientMsgId=client_msg_id)
-        timeout_deferred = Deferred()
-        timeout_call = reactor.callLater(timeout, lambda: deferred.cancel() if not deferred.called else None)
-        def on_success(result):
-            if not timeout_call.called: timeout_call.cancel()
-            if not timeout_deferred.called: timeout_deferred.callback(result)
-        def on_error(failure):
-            if not timeout_call.called: timeout_call.cancel()
-            if not timeout_deferred.called:
-                if failure.check(TimeoutError):
-                    err_msg = f"Таймаут ({timeout}s) для {type(message).__name__}"
-                    logger.error(err_msg)
-                    timeout_deferred.errback(Exception(err_msg))
-                else: timeout_deferred.errback(failure)
-        deferred.addCallbacks(on_success, on_error)
-        return timeout_deferred
-
-    def _on_connected(self, client):
-        logger.info("Connection successful. Authorizing application...")
-        self.send(ProtoOAApplicationAuthReq(clientId=self._client_id, clientSecret=self._client_secret))
-
-    def _on_disconnected(self, client, reason):
-        self.is_authorized = False
-        logger.warning(f"Disconnected. Reason: {reason.getErrorMessage()}")
-        self.emit("error", f"Disconnected: {reason.getErrorMessage()}")
-
-    def _on_message_received(self, client, message: ProtoMessage):
-        pt = message.payloadType
-        if pt == ProtoOAPayloadType.PROTO_OA_APPLICATION_AUTH_RES:
-            logger.info("Application authorized. Authorizing account...")
-            self._authorize_account()
-        elif pt == ProtoOAPayloadType.PROTO_OA_ACCOUNT_AUTH_RES:
-            res = ProtoOAAccountAuthRes(); res.ParseFromString(message.payload)
-            self._client.account_id = res.ctidTraderAccountId
-            self.is_authorized = True
-            logger.info(f"✅ Account {res.ctidTraderAccountId} authorized.")
-            self.emit("ready")
-        elif pt == ProtoOAPayloadType.PROTO_OA_ERROR_RES:
-            res = ProtoOAErrorRes(); res.ParseFromString(message.payload)
-            logger.error(f"API Error: {res.errorCode} - {res.description}")
-        # --- ПОЧАТОК ЗМІН: Обробляємо спотові події ---
-        elif pt == ProtoOAPayloadType.PROTO_OA_SPOT_EVENT:
-            spot_event = ProtoOASpotEvent()
-            spot_event.ParseFromString(message.payload)
-            # Генеруємо унікальну подію для конкретного символу
-            event_name = f"spot_event_{spot_event.symbolId}"
-            logger.info(f"Spot event received for symbol {spot_event.symbolId}. Emitting '{event_name}'")
-            self.emit(event_name, spot_event)
+        # --- ПОЧАТОК ЗМІН: Винесено конфігурацію в app.py ---
+        # Тепер ці значення будуть встановлюватися з app.py, а не жорстко прописані тут
+        self.host = None
+        self.port = None
+        self.client_id = client_id
+        self.client_secret = client_secret
+        self.access_token = None
+        self.account_id = None
+        self.listeners = {}
+        # Ми більше не викликаємо super().__init__ тут, це буде зроблено в app.py
         # --- КІНЕЦЬ ЗМІН ---
 
-    def _authorize_account(self):
-        acc_id = get_demo_account_id(); token = get_ctrader_access_token()
-        logger.info(f"Authorizing account ID: {acc_id}...")
-        if not acc_id or not token:
-            logger.error("CRITICAL: Account ID or Access Token is missing."); return
-        self.send(ProtoOAAccountAuthReq(ctidTraderAccountId=acc_id, accessToken=token))
+    def start(self, host, port, access_token, account_id):
+        # --- ПОЧАТОК ЗМІН: Метод start тепер приймає конфігурацію ---
+        self.host = host
+        self.port = port
+        self.access_token = access_token
+        self.account_id = account_id
+        super().__init__(self.host, self.port, ssl=True)
+        reactor.connectSSL(self.host, self.port, Factory(self))
+        logger.info(f"Connecting to {host}:{port}...")
+        # --- КІНЕЦЬ ЗМІН ---
 
-    def get_all_symbols(self):
-        logger.info("Requesting light symbol list...")
-        return self.send(ProtoOASymbolsListReq(ctidTraderAccountId=self._client.account_id))
+    def on(self, event, listener):
+        if event not in self.listeners:
+            self.listeners[event] = []
+        self.listeners[event].append(listener)
+
+    def remove_listener(self, event, listener):
+        if event in self.listeners:
+            self.listeners[event].remove(listener)
+
+    def emit(self, event, *args):
+        if event in self.listeners:
+            for listener in self.listeners[event]:
+                listener(*args)
+
+    def on_connect(self):
+        logger.info("Connection successful. Authorizing application...")
+        self.authorize_app()
+
+    def on_error(self, reason):
+        logger.error(f"Connection error: {reason.getErrorMessage()}")
+
+    def on_close(self, reason):
+        logger.warning(f"Disconnected. Reason: {reason.getErrorMessage()}")
+
+    def on_message(self, message: ProtoMessage):
+        if message.payloadType == ProtoOAPayloadType.ERROR_RES:
+            error_res = ProtoErrorRes()
+            error_res.ParseFromString(message.payload)
+            logger.error(f"API Error: {error_res.errorCode} | Description: {error_res.description}")
+            return
+        
+        # --- ПОЧАТОК ЗМІН: Централізований обробник тікових даних ---
+        if message.payloadType == ProtoOAPayloadType.PROTO_OA_SPOT_EVENT:
+            self.emit("spot_event", message)
+        # --- КІНЕЦЬ ЗМІН ---
+
+        if message.clientMsgId:
+            self.emit(message.clientMsgId, message)
+
+    def authorize_app(self):
+        request = ProtoOAApplicationAuthReq(clientId=self.client_id, clientSecret=self.client_secret)
+        deferred = self.send(request)
+        deferred.addCallback(self.on_app_authorized)
+        
+    def on_app_authorized(self, message):
+        logger.info("Application authorized. Authorizing account...")
+        self.authorize_account()
+
+    def authorize_account(self):
+        request = ProtoOAAccountAuthReq(ctidTraderAccountId=self.account_id, accessToken=self.access_token)
+        deferred = self.send(request)
+        deferred.addCallback(self.on_account_authorized)
+
+    def on_account_authorized(self, message):
+        logger.info(f"✅ Account {self.account_id} authorized.")
+        self.emit("ready")
+
+# --- ПОЧАТОК ЗМІН: Новий централізований обробник, який кладе ціни в кеш ---
+def central_spot_event_handler(message):
+    try:
+        from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOASpotEvent
+        spot_event = ProtoOASpotEvent()
+        spot_event.ParseFromString(message.payload)
+        
+        symbol_id = spot_event.symbolId
+        symbol_name = state.symbol_id_to_name_map.get(symbol_id)
+
+        if not symbol_name:
+            return # Невідомий символ, ігноруємо
+
+        # Розраховуємо середню ціну
+        price = 0
+        if spot_event.HasField('bid') and spot_event.HasField('ask'):
+            price = (spot_event.bid + spot_event.ask) / 2
+        elif spot_event.HasField('bid'):
+            price = spot_event.bid
+        elif spot_event.HasField('ask'):
+            price = spot_event.ask
+        
+        if price > 0:
+            # Важливо: cTrader надсилає ціни як цілі числа, треба ділити на 10^5
+            state.live_price_cache[symbol_name] = price / (10**5)
+
+    except Exception:
+        logger.exception("Error in central_spot_event_handler")
+# --- КІНЕЦЬ ЗМІН ---
