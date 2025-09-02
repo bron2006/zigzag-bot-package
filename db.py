@@ -1,8 +1,11 @@
 # db.py
 import sqlite3
+import logging
 from config import DB_PATH
 
-# --- ПОЧАТОК ЗМІН: Повністю переписано логіку з'єднань на просту і надійну ---
+# --- ПОЧАТОК ЗМІН: Додано логер ---
+logger = logging.getLogger(__name__)
+# --- КІНЕЦЬ ЗМІН ---
 
 def get_db_connection():
     """Створює НОВЕ з'єднання з БД з правильними параметрами."""
@@ -35,8 +38,10 @@ def init_db():
             )
         ''')
         conn.commit()
-    except Exception as e:
-        print(f"DB Error during init: {e}")
+    # --- ПОЧАТОК ЗМІН: Покращено логування помилок ---
+    except Exception:
+        logger.exception("DB Error during init_db")
+    # --- КІНЕЦЬ ЗМІН ---
     finally:
         if conn:
             conn.close()
@@ -51,8 +56,10 @@ def add_signal_to_history(data):
             (data['user_id'], data['pair'], data['price'], data['bull_percentage'])
         )
         conn.commit()
-    except Exception as e:
-        print(f"DB Error: Failed to add signal to history. {e}")
+    # --- ПОЧАТОК ЗМІН: Покращено логування помилок ---
+    except Exception:
+        logger.exception("DB Error: Failed to add signal to history")
+    # --- КІНЕЦЬ ЗМІН ---
     finally:
         if conn:
             conn.close()
@@ -65,9 +72,11 @@ def get_watchlist(user_id: int) -> list:
         cursor.execute("SELECT pair FROM watchlist WHERE user_id = ?", (user_id,))
         rows = cursor.fetchall()
         return [row['pair'] for row in rows]
-    except Exception as e:
-        print(f"DB Error: Failed to get watchlist. {e}")
+    # --- ПОЧАТОК ЗМІН: Покращено логування помилок ---
+    except Exception:
+        logger.exception("DB Error: Failed to get watchlist for user_id: %s", user_id)
         return []
+    # --- КІНЕЦЬ ЗМІН ---
     finally:
         if conn:
             conn.close()
@@ -90,11 +99,11 @@ def toggle_watchlist(user_id: int, pair: str) -> bool:
         
         conn.commit()
         return True
-    except Exception as e:
-        print(f"DB Error: Failed to toggle watchlist. {e}")
+    # --- ПОЧАТОК ЗМІН: Покращено логування помилок ---
+    except Exception:
+        logger.exception("DB Error: Failed to toggle watchlist for user_id: %s, pair: %s", user_id, pair)
         return False
+    # --- КІНЕЦЬ ЗМІН ---
     finally:
         if conn:
             conn.close()
-
-# --- КІНЕЦЬ ЗМІН ---
