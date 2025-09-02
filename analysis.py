@@ -13,7 +13,9 @@ from ctrader_open_api.messages.OpenApiMessages_pb2 import (
 )
 from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOATrendbarPeriod as TrendbarPeriod
 from db import add_signal_to_history
-from economic_calendar import check_for_imminent_news
+# --- ПОЧАТОК ЗМІН: Видалено імпорт economic_calendar ---
+# from economic_calendar import check_for_imminent_news
+# --- КІНЕЦЬ ЗМІН ---
 
 logger = logging.getLogger(__name__)
 
@@ -268,14 +270,12 @@ def _calculate_core_signal(df, daily_df, current_price):
         "critical_warning": critical_warning
     }
 
-# --- ПОЧАТОК ЗМІН: Перекладено вердикти на українську мову ---
 def _generate_verdict(score):
     if score > 80: return "⬆️ Сильна ПОКУПКА"
     if score > 65: return "↗️ Помірна ПОКУПКА"
     if score < 20: return "⬇️ Сильний ПРОДАЖ"
     if score < 35: return "↘️ Помірний ПРОДАЖ"
     return "🟡 НЕЙТРАЛЬНО"
-# --- КІНЕЦЬ ЗМІН ---
 
 def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int, timeframe: str = "15m") -> Deferred:
     final_deferred = Deferred()
@@ -293,17 +293,11 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int
 
             current_price = live_price if success3 and live_price is not None else df.iloc[-1]['Close']
             
-            has_news, news_text = check_for_imminent_news(symbol)
-            
+            # --- ПОЧАТОК ЗМІН: Видалено блок перевірки новин ---
             analysis = _calculate_core_signal(df, daily_df, current_price)
 
-            final_warning = None
-            if has_news:
-                analysis['score'] = 50
-                analysis['reasons'] = [f"❗️ {news_text}"]
-                final_warning = news_text
-            else:
-                final_warning = analysis.get("critical_warning")
+            final_warning = analysis.get("critical_warning")
+            # --- КІНЕЦЬ ЗМІН ---
             
             verdict = _generate_verdict(analysis['score'])
 
