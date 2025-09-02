@@ -252,17 +252,15 @@ def _calculate_core_signal(df, daily_df, current_price):
                 score = 50
                 critical_warning = "❗️ Конфлікт: ведмежий патерн проти бичачих індикаторів"
 
-    # --- ПОЧАТОК ЗМІН: Фінальний VETO-фільтр для RSI ---
     if pd.notna(rsi):
         if score > 80 and rsi > 75:
-            score = 50 # Нейтралізуємо сигнал
+            score = 50
             critical_warning = "❗️ Сигнал скасовано: сильна перекупленість (RSI > 75)!"
             reasons.append(critical_warning)
         elif score < 20 and rsi < 25:
-            score = 50 # Нейтралізуємо сигнал
+            score = 50
             critical_warning = "❗️ Сигнал скасовано: сильна перепроданість (RSI < 25)!"
             reasons.append(critical_warning)
-    # --- КІНЕЦЬ ЗМІН ---
 
     return {
         "score": score, "reasons": reasons, "support": support, "resistance": resistance,
@@ -270,17 +268,16 @@ def _calculate_core_signal(df, daily_df, current_price):
         "critical_warning": critical_warning
     }
 
+# --- ПОЧАТОК ЗМІН: Перекладено вердикти на українську мову ---
 def _generate_verdict(score):
-    if score > 80: return "⬆️ Strong BUY"
-    if score > 65: return "↗️ Moderate BUY"
-    if score < 20: return "⬇️ Strong SELL"
-    if score < 35: return "↘️ Moderate SELL"
-    return "🟡 NEUTRAL"
+    if score > 80: return "⬆️ Сильна ПОКУПКА"
+    if score > 65: return "↗️ Помірна ПОКУПКА"
+    if score < 20: return "⬇️ Сильний ПРОДАЖ"
+    if score < 35: return "↘️ Помірний ПРОДАЖ"
+    return "🟡 НЕЙТРАЛЬНО"
+# --- КІНЕЦЬ ЗМІН ---
 
-# MODIFIED: Повністю перероблена функція для коректної роботи з Deferred
 def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int, timeframe: str = "15m") -> Deferred:
-    # NEW: Створюємо фінальний Deferred, який буде повернуто.
-    # Він буде "виконаний" (fired), коли всі дані будуть готові.
     final_deferred = Deferred()
 
     def on_data_ready(results):
@@ -290,7 +287,6 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int
             success3, live_price = results[2]
 
             if not (success1 and success2) or df.empty or len(df) < 50 or daily_df.empty:
-                # MODIFIED: Виконуємо Deferred з результатом-помилкою
                 if not final_deferred.called:
                     final_deferred.callback({"error": f"Not enough historical data for {timeframe} analysis."})
                 return
@@ -324,13 +320,11 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int
                 "volume_info": analysis.get('volume_info'),
                 "special_warning": final_warning
             }
-            # MODIFIED: Виконуємо Deferred з успішним результатом
             if not final_deferred.called:
                 final_deferred.callback(response_data)
             
         except Exception as e:
             logger.exception(f"Critical analysis error for {symbol}: {e}")
-            # MODIFIED: Повідомляємо Deferred про помилку
             if not final_deferred.called:
                 final_deferred.errback(e)
 
@@ -341,5 +335,4 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int
     d_list = DeferredList([d1, d2, d3], consumeErrors=True)
     d_list.addCallback(on_data_ready)
     
-    # MODIFIED: Повертаємо наш новий фінальний Deferred, а не DeferredList
     return final_deferred
