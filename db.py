@@ -1,88 +1,91 @@
+# db.py
 import sqlite3
-import logging
-from config import DB_NAME
+import threading
+from config import DB_PATH
 
-logger = logging.getLogger(__name__)
+# Створюємо локальний для потоку об'єкт для зберігання з'єднань
+_local = threading.local()
 
-def initialize_database():
-    try:
-        with sqlite3.connect(DB_NAME) as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS signal_history (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    user_id INTEGER,
-                    pair TEXT,
-                    price REAL,
-                    bull_percentage INTEGER
-                )
-            ''')
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS user_settings (
-                    user_id INTEGER PRIMARY KEY,
-                    subscribed_pairs TEXT
-                )
-            ''')
-            conn.commit()
-            logger.info("База даних успішно ініціалізована.")
-    except Exception as e:
-        logger.error(f"Помилка ініціалізації бази даних: {e}")
+def get_db_connection():
+    """Створює або отримує існуюче з'єднання з БД для поточного потоку."""
+    conn = getattr(_local, 'conn', None)
+    if conn is None:
+        # --- ПОЧАТОК ЗМІН: Додано параметр check_same_thread=False ---
+        # Це виправлення, рекомендоване аудитором для стабільності в багатопоточному середовищі
+        conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+        # --- КІНЕЦЬ ЗМІН ---
+        conn.row_factory = sqlite3.Row
+        _local.conn = conn
+    return conn
+
+def init_db():
+    """Ініціалізує таблиці в базі даних, якщо вони не існують."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    # Історія сигналів (для майбутнього аналізу)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS signal_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+            user_id INTEGER NOT NULL,
+            pair TEXT NOT NULL,
+            price REAL NOT NULL,
+            bull_percentage INTEGER NOT NULL
+        )
+    ''')
+    # Список обраного для кожного користувача
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS watchlist (
+            user_id INTEGER NOT NULL,
+            pair TEXT NOT NULL,
+            PRIMARY KEY (user_id, pair)
+        )
+    ''')
+    conn.commit()
 
 def add_signal_to_history(data):
+    """Додає запис про сигнал до історії."""
     try:
-        with sqlite3.connect(DB_NAME) as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                INSERT INTO signal_history (user_id, pair, price, bull_percentage)
-                VALUES (?, ?, ?, ?)
-            ''', (data['user_id'], data['pair'], data['price'], data['bull_percentage']))
-            conn.commit()
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO signal_history (user_id, pair, price, bull_percentage) VALUES (?, ?, ?, ?)",
+            (data['user_id'], data['pair'], data['price'], data['bull_percentage'])
+        )
+        conn.commit()
     except Exception as e:
-        logger.error(f"Помилка додавання сигналу в історію: {e}")
+        print(f"DB Error: Failed to add signal to history. {e}")
 
 def get_watchlist(user_id: int) -> list:
-    if not user_id:
-        return []
+    """Отримує список обраних пар для користувача."""
     try:
-        with sqlite3.connect(DB_NAME) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT subscribed_pairs FROM user_settings WHERE user_id = ?", (user_id,))
-            result = cursor.fetchone()
-            if result and result[0]:
-                return result[0].split(',')
-            return []
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT pair FROM watchlist WHERE user_id = ?", (user_id,))
+        rows = cursor.fetchall()
+        return [row['pair'] for row in rows]
     except Exception as e:
-        logger.error(f"Помилка отримання списку обраного для user_id {user_id}: {e}")
+        print(f"DB Error: Failed to get watchlist. {e}")
         return []
 
-# --- ПОЧАТОК ЗМІН: Функція тепер повертає True/False ---
 def toggle_watchlist(user_id: int, pair: str) -> bool:
-    """Додає або видаляє пару зі списку обраного. Повертає True при успіху, False при невдачі."""
-    if not user_id or not pair:
-        return False
+    """Додає або видаляє пару зі списку обраного."""
     try:
-        current_list = get_watchlist(user_id)
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        # Перевіряємо, чи існує пара в списку
+        cursor.execute("SELECT 1 FROM watchlist WHERE user_id = ? AND pair = ?", (user_id, pair))
+        exists = cursor.fetchone()
         
-        if pair in current_list:
-            current_list.remove(pair)
+        if exists:
+            # Видаляємо
+            cursor.execute("DELETE FROM watchlist WHERE user_id = ? AND pair = ?", (user_id, pair))
         else:
-            current_list.append(pair)
+            # Додаємо
+            cursor.execute("INSERT INTO watchlist (user_id, pair) VALUES (?, ?)", (user_id, pair))
         
-        new_list_str = ",".join(sorted(list(set(current_list)))) # Сортуємо для порядку
-        
-        with sqlite3.connect(DB_NAME) as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                INSERT INTO user_settings (user_id, subscribed_pairs) VALUES (?, ?)
-                ON CONFLICT(user_id) DO UPDATE SET subscribed_pairs = excluded.subscribed_pairs
-            ''', (user_id, new_list_str))
-            conn.commit()
-            logger.info(f"Оновлено список обраного для user_id {user_id}: {new_list_str}")
+        conn.commit()
         return True
     except Exception as e:
-        logger.error(f"Помилка оновлення списку обраного для user_id {user_id}: {e}", exc_info=True)
+        print(f"DB Error: Failed to toggle watchlist. {e}")
         return False
-# --- КІНЕЦЬ ЗМІН ---
-
-initialize_database()
