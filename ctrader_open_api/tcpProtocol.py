@@ -5,9 +5,6 @@ from twisted.protocols.basic import Int32StringReceiver
 from twisted.internet import task
 from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import ProtoMessage, ProtoHeartbeatEvent
 import datetime
-import logging # <-- Додано імпорт
-
-logger = logging.getLogger(__name__) # <-- Додано ініціалізацію логера
 
 class TcpProtocol(Int32StringReceiver):
     MAX_LENGTH = 15000000
@@ -30,8 +27,6 @@ class TcpProtocol(Int32StringReceiver):
         self.factory.disconnected(reason)
 
     def heartbeat(self):
-        # --- ДІАГНОСТИКА: Логуємо відправку heartbeat ---
-        logger.debug("TcpProtocol: Відправляю Heartbeat")
         self.send(ProtoHeartbeatEvent(), True)
 
     def send(self, message, instant=False, clientMsgId=None, isCanceled = None):
@@ -75,8 +70,6 @@ class TcpProtocol(Int32StringReceiver):
         msg.ParseFromString(data)
 
         if msg.payloadType == ProtoHeartbeatEvent().payloadType:
-            # --- ДІАГНОСТИКА: Логуємо отримання heartbeat ---
-            logger.debug("TcpProtocol: Отримано Heartbeat у відповідь")
             self.heartbeat()
         self.factory.received(msg)
         return data
