@@ -1,4 +1,3 @@
-# config.py
 import os
 import json
 from dotenv import load_dotenv
@@ -9,11 +8,9 @@ load_dotenv()
 IS_DEV_MODE = os.getenv("NORD", "off").lower() == "on"
 DEV_USER_ID = 123456789
 
-# --- ПОЧАТОК ЗМІН: Видалено аварійну зупинку, якщо токен відсутній ---
-# Тепер app.py сам перевірятиме наявність токена,
-# а інші сервіси (як streamer) зможуть запускатись без нього.
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-# --- КІНЕЦЬ ЗМІН ---
+if not TELEGRAM_BOT_TOKEN:
+    raise RuntimeError("CRITICAL: TELEGRAM_BOT_TOKEN is not set in the environment!")
 
 DB_NAME = os.getenv("DB_NAME", "/data/signals.db")
 DB_PATH = Path(os.getenv("DB_PATH", DB_NAME))
@@ -40,27 +37,19 @@ def get_finnhub_api_key() -> str:
     return os.getenv("FINNHUB_API_KEY")
 
 def load_assets_from_json():
-    assets_path = Path(__file__).parent / "assets.json"
-    if not assets_path.is_file():
-        raise RuntimeError(f"CRITICAL ERROR: assets.json not found at path: {assets_path}")
-        
     try:
+        assets_path = Path(__file__).parent / "assets.json"
         with open(assets_path, "r", encoding="utf-8") as f:
             assets = json.load(f)
-        
-        if not assets.get("forex_sessions") or not assets.get("crypto_pairs") or not assets.get("commodities"):
-             raise ValueError("CRITICAL ERROR: assets.json is missing key fields.")
-
-        return {
-            "forex": assets.get("forex_sessions", {}),
-            "crypto": assets.get("crypto_pairs", []),
-            "stocks": assets.get("stock_tickers", []),
-            "commodities": assets.get("commodities", [])
-        }
-    except json.JSONDecodeError as e:
-        raise RuntimeError(f"CRITICAL ERROR: Failed to decode assets.json. Details: {e}")
+            return {
+                "forex": assets.get("forex_sessions", {}),
+                "crypto": assets.get("crypto_pairs", []),
+                "stocks": assets.get("stock_tickers", []),
+                "commodities": assets.get("commodities", [])
+            }
     except Exception as e:
-        raise RuntimeError(f"CRITICAL ERROR: An unexpected error occurred loading assets.json. Details: {e}")
+        print(f"CRITICAL: Could not load assets.json. Error: {e}")
+        return {"forex": {}, "crypto": [], "stocks": [], "commodities": []}
 
 _assets = load_assets_from_json()
 FOREX_SESSIONS = _assets["forex"]
@@ -75,5 +64,7 @@ TRADING_HOURS = {
     "Тихоокеанська": "🇦🇺 (00:00 - 09:00)"
 }
 
-IDEAL_ENTRY_THRESHOLD = 85
-SCANNER_COOLDOWN_SECONDS = 300
+# --- ПОЧАТОК ЗМІН: Налаштування для сканера ринку ---
+IDEAL_ENTRY_THRESHOLD = 85 # Поріг для купівлі (для продажу буде 100 - 85 = 15)
+SCANNER_COOLDOWN_SECONDS = 300 # 5 хвилин (5 * 60)
+# --- КІНЕЦЬ ЗМІН ---

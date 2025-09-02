@@ -4,17 +4,17 @@ import pandas as pd
 import pandas_ta as ta
 import numpy as np
 import time
-import json
 from twisted.internet.defer import Deferred, DeferredList
-from twisted.internet import reactor, error as terror, threads
+from twisted.internet import reactor, error as terror
 
 from ctrader_open_api.messages.OpenApiMessages_pb2 import (
     ProtoOAGetTrendbarsReq, ProtoOAGetTrendbarsRes,
+    ProtoOASubscribeSpotsReq, ProtoOAUnsubscribeSpotsReq
 )
 from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOATrendbarPeriod as TrendbarPeriod
 from db import add_signal_to_history
-# --- ПОЧАТОК ЗМІН: Імпортуємо Redis клієнт ---
-from redis_client import get_redis
+# --- ПОЧАТОК ЗМІН: Видалено імпорт economic_calendar ---
+# from economic_calendar import check_for_imminent_news
 # --- КІНЕЦЬ ЗМІН ---
 
 logger = logging.getLogger(__name__)
@@ -40,6 +40,41 @@ def _send_with_retry(client, request, timeout=60, retries=1):
     _attempt(retries)
     return d
 
+def get_live_price(client, symbol_cache, norm_pair: str) -> Deferred:
+    d = Deferred()
+    symbol_details = symbol_cache.get(norm_pair)
+    if not symbol_details:
+        reactor.callLater(0, d.errback, Exception(f"Символ '{norm_pair}' не знайдено для live price."))
+        return d
+    symbol_id = symbol_details.symbolId
+    account_id = client._client.account_id
+    event_name = f"spot_event_{symbol_id}"
+    timeout_call = None
+    def cleanup():
+        unsubscribe_req = ProtoOAUnsubscribeSpotsReq(ctidTraderAccountId=account_id, symbolId=[symbol_id])
+        client.send(unsubscribe_req)
+        client.remove_listener(event_name, on_spot_event)
+        if timeout_call and not timeout_call.called:
+            timeout_call.cancel()
+    def on_spot_event(spot_event):
+        logger.info(f"Live price received for {norm_pair}. Unsubscribing...")
+        cleanup()
+        if spot_event.HasField('bid') and spot_event.HasField('ask'):
+            price = (spot_event.bid + spot_event.ask) / 2
+            if not d.called: d.callback(price / (10**5))
+        else:
+            if not d.called: d.callback(None)
+    def on_timeout():
+        logger.warning(f"Live price request for {norm_pair} timed out. Market might be closed.")
+        cleanup()
+        if not d.called: d.callback(None)
+    client.on(event_name, on_spot_event)
+    timeout_call = reactor.callLater(10, on_timeout)
+    logger.info(f"Subscribing to live price for {norm_pair} (symbolId: {symbol_id})")
+    subscribe_req = ProtoOASubscribeSpotsReq(ctidTraderAccountId=account_id, symbolId=[symbol_id])
+    client.send(subscribe_req)
+    return d
+
 def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: int) -> Deferred:
     d = Deferred()
     symbol_details = symbol_cache.get(norm_pair)
@@ -54,7 +89,7 @@ def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: in
     seconds_per_bar = {'1m': 60, '5m': 300, '15m': 900, '1h': 3600, '4h': 14400, '1day': 86400}
     from_ts = now - (count * seconds_per_bar[period] * 1000)
     request = ProtoOAGetTrendbarsReq(
-        ctidTraderAccountId=client.account_id,
+        ctidTraderAccountId=client._client.account_id,
         symbolId=symbol_details.symbolId,
         period=tf_proto,
         fromTimestamp=from_ts,
@@ -67,7 +102,8 @@ def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: in
         response.ParseFromString(message.payload)
         logger.info(f"✅ Received {len(response.trendbar)} candles for {norm_pair} ({period}).")
         if not response.trendbar:
-            d.callback(pd.DataFrame()); return
+            d.callback(pd.DataFrame())
+            return
         divisor = 10**5
         bars = [{'ts': pd.to_datetime(bar.utcTimestampInMinutes * 60, unit='s', utc=True),
                  'Open': (bar.low + bar.deltaOpen) / divisor, 'High': (bar.low + bar.deltaHigh) / divisor,
@@ -81,41 +117,6 @@ def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: in
         d.errback(failure)
     deferred.addCallbacks(process_response, on_error)
     return d
-
-# --- ПОЧАТОК ЗМІН: Нова функція для отримання ціни з Redis ---
-def get_price_from_redis(norm_pair: str, stale_sec: int = 15) -> Deferred:
-    """
-    Читає останній тік з Redis (ключ: tick:<SYMBOL>).
-    Повертає Deferred, який поверне float (ціну) або None.
-    """
-    def _fetch():
-        try:
-            r = get_redis()
-            raw = r.get(f"tick:{norm_pair}")
-            if not raw: return None
-            
-            data = json.loads(raw)
-            ts_ms = data.get("ts_ms")
-            
-            # Перевірка, чи не застаріли дані
-            if ts_ms and (time.time() * 1000 - ts_ms) > stale_sec * 1000:
-                logger.warning(f"Stale price data for {norm_pair}")
-                return None
-
-            mid = data.get("mid")
-            if mid is not None: return float(mid)
-            
-            bid = data.get("bid")
-            ask = data.get("ask")
-            if bid is not None and ask is not None:
-                return (float(bid) + float(ask)) / 2.0
-            return None
-        except Exception:
-            logger.exception(f"Failed to get price from Redis for {norm_pair}")
-            return None
-            
-    return threads.deferToThread(_fetch)
-# --- КІНЕЦЬ ЗМІН ---
 
 def group_close_values(values, threshold=0.01):
     if not len(values): return []
@@ -198,10 +199,10 @@ def _calculate_core_signal(df, daily_df, current_price):
         else: score -= 15; reasons.append("MACD падає")
 
     if pd.notna(last.get('ISA_9')) and pd.notna(last.get('ISB_26')):
-        if current_price > max(last['ISA_9'], last['ISB_26']):
-            score += 15; reasons.append("Тренд: Ціна над Хмарою")
-        else:
-            score -= 15; reasons.append("Тренд: Ціна під Хмарою")
+         if current_price > max(last['ISA_9'], last['ISB_26']):
+             score += 15; reasons.append("Тренд: Ціна над Хмарою")
+         else:
+             score -= 15; reasons.append("Тренд: Ціна під Хмарою")
     
     neutral_patterns = ["SPINNINGTOP", "DOJI", "DOJISTAR", "SHORTLINE", "HIGHWAVE", "HARAMI"]
     if candle_pattern:
@@ -291,9 +292,13 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int
                 return
 
             current_price = live_price if success3 and live_price is not None else df.iloc[-1]['Close']
-
+            
+            # --- ПОЧАТОК ЗМІН: Видалено блок перевірки новин ---
             analysis = _calculate_core_signal(df, daily_df, current_price)
+
             final_warning = analysis.get("critical_warning")
+            # --- КІНЕЦЬ ЗМІН ---
+            
             verdict = _generate_verdict(analysis['score'])
 
             add_signal_to_history({
@@ -319,9 +324,7 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int
 
     d1 = get_market_data(client, symbol_cache, symbol, timeframe, 200)
     d2 = get_market_data(client, symbol_cache, symbol, '1day', 100)
-    # --- ПОЧАТОК ЗМІН: Замінюємо старий виклик на новий з Redis ---
-    d3 = get_price_from_redis(symbol)
-    # --- КІНЕЦЬ ЗМІН ---
+    d3 = get_live_price(client, symbol_cache, symbol)
     
     d_list = DeferredList([d1, d2, d3], consumeErrors=True)
     d_list.addCallback(on_data_ready)
