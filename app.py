@@ -50,10 +50,6 @@ if not hasattr(state, "scanner_cooldown_cache"):
     state.scanner_cooldown_cache = {}
 if not hasattr(state, "latest_analysis_cache"):
     state.latest_analysis_cache = {}
-# --- ПОЧАТОК ЗМІН: Видалено стару перевірку для SCANNER_ENABLED ---
-# if not hasattr(state, "SCANNER_ENABLED"):
-#     state.SCANNER_ENABLED = True
-# --- КІНЕЦЬ ЗМІН ---
 
 # Twisted-ready deferred flag for cTrader readiness
 _client_ready = {"ready": False}
@@ -225,6 +221,7 @@ def toggle_watchlist_route():
         logger.exception("toggle_watchlist failed")
         return jsonify({"success": False, "error": "Internal server error"}), 500
 
+# --- ПОЧАТОК ЗМІН: Повністю переписано ендпоінт для ручного аналізу ---
 @app.route("/api/signal")
 @protected_route
 def api_signal():
@@ -234,17 +231,47 @@ def api_signal():
         return jsonify({"error": "Invalid timeframe"}), 400
     if not pair:
         return jsonify({"error": "pair is required"}), 400
+    
     pair_normalized = pair.replace("/", "")
     user_id = get_user_id_from_init_data(request.args.get("initData"))
-    logger.info(f"Signal request for {pair_normalized} timeframe {timeframe}")
-    # If cached from scanner, return quickly
-    cached = state.latest_analysis_cache.get(pair_normalized)
-    if cached:
-        return jsonify(cached)
-    # Otherwise return not ready (or you can perform on-demand analysis — omitted for speed)
-    return jsonify({"error": "Дані для цього активу ще аналізуються сканером. Спробуйте за хвилину."}), 404
+    logger.info(f"Signal request [FORCED FRESH] for {pair_normalized} timeframe {timeframe}")
 
-# --- ПОЧАТОК ЗМІН: Оновлено API ендпоінти для керування сканерами ---
+    # Завжди виконуємо новий аналіз "на вимогу", ігноруючи кеш
+    try:
+        # Цей патерн дозволяє дочекатися асинхронного результату в синхронному потоці Flask
+        d = get_api_detailed_signal_data(state.client, state.symbol_cache, pair_normalized, user_id, timeframe)
+        
+        done_q = queue.Queue()
+
+        def cb_success(res):
+            done_q.put(res)
+
+        def cb_err(f):
+            try:
+                error_message = f.getErrorMessage() if hasattr(f, 'getErrorMessage') else str(f.value)
+                done_q.put({"error": error_message})
+            except Exception as e:
+                done_q.put({"error": f"Unknown error during analysis: {e}"})
+
+        d.addCallbacks(cb_success, cb_err)
+        
+        # Блокуємо і чекаємо на результат з потоку Twisted
+        result = done_q.get(timeout=25) # Таймаут 25 секунд
+
+        if result.get("error"):
+             logger.error(f"On-demand analysis failed for {pair_normalized}: {result['error']}")
+             return jsonify(result), 500 # Повертаємо помилку сервера
+
+        return jsonify(result)
+
+    except queue.Empty:
+        logger.error(f"On-demand analysis for {pair_normalized} timed out.")
+        return jsonify({"error": "Запит тривав занадто довго і був перерваний."}), 504 # Gateway Timeout
+    except Exception as e:
+        logger.exception(f"Critical error in on-demand analysis for {pair_normalized}")
+        return jsonify({"error": f"Критична помилка сервера: {e}"}), 500
+# --- КІНЕЦЬ ЗМІН ---
+
 @app.route("/api/scanner/status")
 @protected_route
 def scanner_status():
@@ -262,7 +289,6 @@ def scanner_toggle():
         logger.info(f"Scanner for '{category}' toggled via API to: {state.SCANNER_STATE[category]}")
     # Повертаємо оновлений повний словник станів
     return jsonify(state.SCANNER_STATE)
-# --- КІНЕЦЬ ЗМІН ---
 
 @app.route("/api/signal-stream")
 @protected_route
