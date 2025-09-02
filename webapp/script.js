@@ -121,7 +121,6 @@ function updateScannerButtons(stateDict) {
     }
 }
 
-// --- ПОЧАТОК ЗМІН: Оновлено логіку відображення та видалення сигналів ---
 function displayLiveSignal(signalData) {
     const signalId = `signal-${signalData.pair.replace('/', '')}-${Date.now()}`;
     const signalDiv = document.createElement('div');
@@ -145,17 +144,14 @@ function displayLiveSignal(signalData) {
     
     liveSignalsContainer.prepend(signalDiv);
     
-    // Сигнал зникає через 5 хвилин
     setTimeout(() => {
         const el = document.getElementById(signalId);
         if (el) {
             el.classList.add('fade-out');
             setTimeout(() => el.remove(), 500);
         }
-    }, 300000); // 5 хвилин = 300 * 1000
+    }, 300000);
 }
-// --- КІНЕЦЬ ЗМІН ---
-
 
 function createPairButton(pair) {
     return `<div class="pair-item">
@@ -245,6 +241,10 @@ function toggleFavorite(event, button, pair) {
                 } else {
                     currentWatchlist.push(pairNormalized);
                 }
+                // --- ПОЧАТОК ЗМІН: Додано примусове оновлення списків ---
+                const currentQuery = document.getElementById('searchInput').value;
+                populateLists(allData, currentQuery);
+                // --- КІНЕЦЬ ЗМІН ---
             }
         });
 }
