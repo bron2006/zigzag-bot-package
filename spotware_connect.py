@@ -1,17 +1,30 @@
 # spotware_connect.py
 import logging
+import sys
+import os
+
+# --- ПОЧАТОК ЗМІН: Додано логіку для ручної зміни шляхів пошуку модулів ---
+# Це спроба змусити Python використовувати локальну папку ctrader_open_api
+try:
+    project_root = os.path.dirname(os.path.abspath(__file__))
+    sys.path.insert(0, project_root)
+    # Ініціалізуємо логер вже після зміни шляху
+    logger = logging.getLogger("spotware_connect")
+    logger.info(f"Patched sys.path to include: {project_root}")
+except Exception as e:
+    logging.basicConfig()
+    logging.critical(f"Failed to patch sys.path: {e}")
+# --- КІНЕЦЬ ЗМІН ---
+
 from twisted.internet import reactor
 from ctrader_open_api.client import Client
 from ctrader_open_api.factory import Factory
-# --- ПОЧАТОК ЗМІН: Виправлено неправильний імпорт ---
 from ctrader_open_api.messages.OpenApiPayloadType_pb2 import ProtoOAPayloadType
-# --- КІНЕЦЬ ЗМІН ---
 from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoMessage
 from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import ProtoErrorRes
 from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOAApplicationAuthReq, ProtoOAAccountAuthReq
 import state
 
-logger = logging.getLogger("spotware_connect")
 
 class SpotwareConnect(Client):
     def __init__(self, client_id, client_secret):
