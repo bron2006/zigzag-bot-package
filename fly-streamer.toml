@@ -1,0 +1,16 @@
+# fly-streamer.toml
+app = "zigzag-bot-streamer"
+primary_region = "fra"
+
+[build]
+
+# --- ПОЧАТОК ЗМІН: Додано відсутній блок [env] ---
+# Цей блок критично важливий для завантаження секретів
+[env]
+  PYTHONUNBUFFERED = "1"
+# --- КІНЕЦЬ ЗМІН ---
+
+[processes]
+  streamer = "python price_streamer.py"
+
+# Мережевий сервіс для стрімера не потрібен, тому секція [[services]] видалена
