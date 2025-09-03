@@ -3,7 +3,7 @@ name: Fly Deploy
 on:
   push:
     branches:
-      - main # Або master, залежно від назви вашої основної гілки
+      - main
 
 jobs:
   deploy:
@@ -17,7 +17,6 @@ jobs:
       - name: Install flyctl
         run: |
           curl -L https://fly.io/install.sh | sh
-          echo "$HOME/.fly/bin" >> $GITHUB_PATH
       
       - name: Deploy to Fly
-        run: flyctl deploy --remote-only
+        run: $HOME/.fly/bin/flyctl deploy --remote-only
