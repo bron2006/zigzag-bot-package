@@ -2,8 +2,8 @@
 Flask==2.3.3
 python-telegram-bot==13.15
 python-dotenv==1.0.1
-pandas==2.2.2
-pandas_ta==0.3.14b
+pandas==2.1.4
+pandas-ta
 ctrader-open-api @ git+https://github.com/spotware/OpenApiPy.git
 protobuf==3.20.1
 requests
@@ -11,8 +11,6 @@ cachetools
 service-identity
 pyOpenSSL
 cryptography
-numpy==1.26.4
+numpy
 TA-Lib
 klein
-redis>=5.0.0
-twisted>=22.0.0
