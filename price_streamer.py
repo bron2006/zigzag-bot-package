@@ -6,8 +6,10 @@ import signal
 import sys
 import time
 from typing import Dict, List
+from datetime import datetime, timezone
 
 from twisted.internet import reactor
+from twisted.internet.task import LoopingCall # --- ПОЧАТОК ЗМІН ---
 from ctrader_open_api.messages.OpenApiMessages_pb2 import (
     ProtoOASubscribeSpotsReq, ProtoOAUnsubscribeSpotsReq, ProtoOASymbolsListRes
 )
@@ -38,6 +40,11 @@ class PriceStreamer:
         self.subscribed_ids: List[int] = []
         self.redis = get_redis()
         self._stopping = False
+        # --- ПОЧАТОК ЗМІН: Кеш для M1 свічок ---
+        self.current_m1_candles: Dict[str, dict] = {}
+        self.candle_publisher = LoopingCall(self._close_and_publish_candles)
+        # --- КІНЕЦЬ ЗМІН ---
+
 
     def start(self):
         self.client.on("ready", self._on_ready)
@@ -100,11 +107,74 @@ class PriceStreamer:
                 self.client.on(event_name, self._make_spot_handler(name_norm))
 
         reactor.callLater(0, self._heartbeat)
+        
+        # --- ПОЧАТОК ЗМІН: Запуск таймера для закриття свічок ---
+        # Вирівнюємо запуск по початку наступної хвилини
+        now = datetime.now(timezone.utc)
+        delay_to_next_minute = 60 - now.second
+        log.info(f"Candle publisher will start in {delay_to_next_minute} seconds.")
+        reactor.callLater(delay_to_next_minute, self.candle_publisher.start, 60.0)
+        # --- КІНЕЦЬ ЗМІН ---
 
     def _on_symbols_error(self, failure):
         msg = failure.getErrorMessage() if hasattr(failure, "getErrorMessage") else str(failure)
         log.error(f"Failed to load symbols: {msg}")
         reactor.stop()
+        
+    # --- ПОЧАТОК ЗМІН: Логіка агрегації M1 свічок ---
+    def _update_m1_candle(self, symbol: str, price: float, ts_sec: int):
+        """Оновлює або створює M1 свічку на основі нового тіку."""
+        candle_start_ts = (ts_sec // 60) * 60
+        
+        if symbol not in self.current_m1_candles:
+            self.current_m1_candles[symbol] = {
+                "symbol": symbol,
+                "ts": candle_start_ts,
+                "open": price,
+                "high": price,
+                "low": price,
+                "close": price,
+                "volume": 1, # Рахуємо кількість тіків
+            }
+        else:
+            candle = self.current_m1_candles[symbol]
+            # Якщо тік прийшов для нової хвилини, закриваємо стару і починаємо нову
+            if candle_start_ts > candle['ts']:
+                self._publish_candle(candle)
+                self.current_m1_candles[symbol] = {
+                    "symbol": symbol,
+                    "ts": candle_start_ts,
+                    "open": price,
+                    "high": price,
+                    "low": price,
+                    "close": price,
+                    "volume": 1,
+                }
+            else: # Оновлюємо поточну
+                candle['high'] = max(candle['high'], price)
+                candle['low'] = min(candle['low'], price)
+                candle['close'] = price
+                candle['volume'] += 1
+
+    def _publish_candle(self, candle: dict):
+        """Публікує готову свічку в Redis."""
+        try:
+            channel = "candles:M1"
+            payload = json.dumps(candle)
+            self.redis.publish(channel, payload)
+        except Exception:
+            log.exception(f"Failed to publish M1 candle for {candle['symbol']}")
+
+    def _close_and_publish_candles(self):
+        """Закриває всі поточні M1 свічки та публікує їх."""
+        log.debug(f"Closing M1 candles for publishing. Found {len(self.current_m1_candles)} active candles.")
+        candles_to_publish = list(self.current_m1_candles.values())
+        self.current_m1_candles = {} # Очищуємо для наступної хвилини
+
+        for candle in candles_to_publish:
+            self._publish_candle(candle)
+    # --- КІНЕЦЬ ЗМІН ---
+
 
     def _make_spot_handler(self, norm_symbol: str):
         key = f"tick:{norm_symbol}"
@@ -118,18 +188,23 @@ class PriceStreamer:
                 mid = None
                 if bid is not None and ask is not None:
                     mid = (bid + ask) / 2.0
+                
+                if mid is None: # Немає ціни - немає оновлення
+                    return
+
+                # --- ПОЧАТОК ЗМІН: Виклик агрегатора та оновлення публікації ---
+                # Оновлюємо M1 свічку
+                self._update_m1_candle(norm_symbol, mid, ts_ms // 1000)
 
                 payload = {
-                    "symbol": norm_symbol,
-                    "bid": bid,
-                    "ask": ask,
-                    "mid": mid,
-                    "ts_ms": ts_ms,
+                    "symbol": norm_symbol, "bid": bid, "ask": ask,
+                    "mid": mid, "ts_ms": ts_ms,
                 }
-
-                # save last tick and publish
+                
+                # Зберігаємо останній тік і публікуємо (стара логіка залишається)
                 self.redis.set(key, json.dumps(payload), ex=60)
                 self.redis.publish(channel, json.dumps(payload))
+                # --- КІНЕЦЬ ЗМІН ---
             except Exception:
                 log.exception(f"Spot handler error for {norm_symbol}")
 
