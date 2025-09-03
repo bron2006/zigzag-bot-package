@@ -9,6 +9,7 @@ from collections import deque
 
 import pandas as pd
 from twisted.internet import reactor, threads, defer
+from twisted.internet.defer import DeferredQueue # --- ПОЧАТОК ЗМІН: Правильний імпорт ---
 from twisted.internet.task import LoopingCall
 
 from spotware_connect import SpotwareConnect
@@ -35,7 +36,9 @@ class IndicatorProcessor:
         self.agg_candles = {tf: {} for tf in SUPPORTED_TIMEFRAMES}
         self.candle_buffers = {tf: {} for tf in SUPPORTED_TIMEFRAMES}
         self.priming_in_progress = set()
-        self.priming_queue = defer.Queue()
+        # --- ПОЧАТОК ЗМІН: Використано правильний клас DeferredQueue ---
+        self.priming_queue = DeferredQueue()
+        # --- КІНЕЦЬ ЗМІН ---
 
     def start(self):
         logger.info("Starting Indicator Processor...")
@@ -142,9 +145,7 @@ class IndicatorProcessor:
                 finally:
                     if (symbol, tf) in self.priming_in_progress:
                         self.priming_in_progress.remove((symbol, tf))
-                # --- ПОЧАТОК ЗМІН: Додано паузу між запитами ---
                 yield self._sleep(1) 
-                # --- КІНЕЦЬ ЗМІН ---
             except Exception as e:
                 logger.exception(f"Critical error in priming worker loop: {e}")
 
@@ -195,14 +196,10 @@ class IndicatorProcessor:
             divisor = 10**5
             bars = [{'ts': bar.utcTimestampInMinutes * 60, 'Open': (bar.low + bar.deltaOpen) / divisor, 'High': (bar.low + bar.deltaHigh) / divisor, 'Low': bar.low / divisor, 'Close': (bar.low + bar.deltaClose) / divisor, 'Volume': bar.volume} for bar in res.trendbar]
             df = pd.DataFrame(bars)
-            # --- ПОЧАТОК ЗМІН: Виправлення помилки KeyError ---
             if df.empty:
                 d.callback(df)
                 return
-            # --- КІНЕЦЬ ЗМІН ---
-            # --- ПОЧАТОК ЗМІН: Виправлення синтаксичної помилки ---
             d.callback(df.sort_values(by='ts').reset_index(drop=True))
-            # --- КІНЕЦЬ ЗМІН ---
         
         def on_err(f):
             d.errback(f)
