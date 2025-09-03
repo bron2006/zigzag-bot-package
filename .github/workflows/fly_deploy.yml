@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      - uses: superfly/flyctl-action@master
+      - uses: superfly/flyctl-action@master # <-- Ось тут виправлення, я додав @master
         with:
           args: "deploy"
         env:
