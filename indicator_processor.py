@@ -71,16 +71,52 @@ class IndicatorProcessor:
                 self.priming_queue.put((symbol, tf))
 
     def stop(self, *args):
-        # ... (код без змін) ...
+        logger.info("Stopping Indicator Processor...")
+        self._stopping = True
+        if reactor.running:
+            reactor.stop()
+        sys.exit(0)
 
     def _heartbeat(self):
-        # ... (код без змін) ...
+        try:
+            self.redis.set("processor:heartbeat", int(time.time()), ex=60)
+        except Exception:
+            pass
 
     def _listen_for_candles(self):
-        # ... (код без змін) ...
+        pubsub = self.redis.pubsub()
+        pubsub.subscribe("candles:M1")
+        logger.info("Subscribed to 'candles:M1' channel.")
+        for message in pubsub.listen():
+            if self._stopping: break
+            if message['type'] != 'message': continue
+            try:
+                self._process_m1_candle(json.loads(message['data']))
+            except Exception:
+                logger.exception("Error processing M1 candle")
 
     def _process_m1_candle(self, m1_candle: dict):
-        # ... (код без змін) ...
+        symbol = m1_candle['symbol']
+        ts = int(m1_candle['ts'])
+        for tf in SUPPORTED_TIMEFRAMES:
+            period = PERIOD_SECONDS[tf]
+            candle_start_ts = (ts // period) * period
+            if candle_start_ts > self.agg_candles[tf].get(symbol, {}).get('ts', 0):
+                if symbol in self.agg_candles[tf]:
+                    closed_candle = self.agg_candles[tf][symbol]
+                    if symbol not in self.candle_buffers[tf]:
+                        self.candle_buffers[tf][symbol] = deque(maxlen=200)
+                    self.candle_buffers[tf][symbol].append(closed_candle)
+                    reactor.callFromThread(self._analyze_timeframe, symbol, tf)
+                self.agg_candles[tf][symbol] = {k: v for k, v in m1_candle.items() if k != 'symbol'}
+                self.agg_candles[tf][symbol]['ts'] = candle_start_ts
+            else:
+                if symbol in self.agg_candles[tf]:
+                    current = self.agg_candles[tf][symbol]
+                    current['High'] = max(current.get('High', 0), m1_candle['High'])
+                    current['Low'] = min(current.get('Low', 999999), m1_candle['Low'])
+                    current['Close'] = m1_candle['Close']
+                    current['Volume'] += m1_candle.get('Volume', 0)
 
     def _sleep(self, seconds):
         d = defer.Deferred()
@@ -89,7 +125,28 @@ class IndicatorProcessor:
 
     @defer.inlineCallbacks
     def _priming_worker(self):
-        # ... (код без змін) ...
+        logger.info("Starting priming worker...")
+        while not self._stopping:
+            try:
+                symbol, tf = yield self.priming_queue.get()
+                if self.candle_buffers[tf].get(symbol) and len(self.candle_buffers[tf][symbol]) >= 21:
+                    continue
+                
+                logger.info(f"WORKER: Processing priming task for {symbol}:{tf}")
+                try:
+                    df = yield self._get_historical_data(symbol, tf, 200)
+                    if df is None or len(df) < 21:
+                        logger.error(f"WORKER: Not enough data for {symbol}:{tf}. Skipping.")
+                        continue
+                    self.candle_buffers[tf][symbol] = deque(df.to_dict('records'), maxlen=200)
+                    logger.info(f"WORKER: Priming successful for {symbol}:{tf}")
+                    reactor.callFromThread(self._analyze_timeframe, symbol, tf)
+                except Exception as e:
+                    logger.error(f"WORKER: Failed to prime {symbol}:{tf}: {e}")
+                
+                yield self._sleep(0.5)
+            except Exception as e:
+                logger.exception(f"Critical error in priming worker: {e}")
 
     @defer.inlineCallbacks
     def _analyze_timeframe(self, symbol: str, tf: str):
@@ -127,7 +184,33 @@ class IndicatorProcessor:
             logger.exception(f"Failed to analyze {symbol}:{tf}: {e}")
     
     def _get_historical_data(self, symbol, timeframe, count) -> defer.Deferred:
-        # ... (код без змін) ...
+        d = defer.Deferred()
+        symbol_details = self.symbol_cache.get(symbol)
+        if not symbol_details:
+            d.errback(Exception(f"Symbol {symbol} not in cache"))
+            return d
+        
+        now = int(time.time() * 1000)
+        from_ts = now - (count * PERIOD_SECONDS[timeframe] * 2000)
+        request = ProtoOAGetTrendbarsReq(
+            ctidTraderAccountId=self.client._client.account_id,
+            symbolId=symbol_details.symbolId, period=PERIOD_MAP[timeframe],
+            fromTimestamp=from_ts, toTimestamp=now
+        )
+        api_call = self.client.send(request, timeout=60)
+        def on_ok(msg):
+            res = ProtoOAGetTrendbarsRes(); res.ParseFromString(msg.payload)
+            divisor = 10**5
+            bars = [{'ts': bar.utcTimestampInMinutes * 60, 'Open': (bar.low + bar.deltaOpen) / divisor, 'High': (bar.low + bar.deltaHigh) / divisor, 'Low': bar.low / divisor, 'Close': (bar.low + bar.deltaClose) / divisor, 'Volume': bar.volume} for bar in res.trendbar]
+            df = pd.DataFrame(bars)
+            if df.empty:
+                d.callback(df)
+                return
+            d.callback(df.sort_values(by='ts').reset_index(drop=True))
+        def on_err(f):
+            d.errback(f)
+        api_call.addCallbacks(on_ok, on_err)
+        return d
 
 def main():
     processor = IndicatorProcessor()
