@@ -136,6 +136,9 @@ def get_pairs():
 @app.route("/api/signal")
 @protected_route
 def api_signal():
+    if not state.ready or not state.spotware_client or not state.symbol_cache:
+        return jsonify({"error": "Сервіс ще завантажується. Будь ласка, зачекайте кілька секунд."}), 503
+
     pair = request.args.get("pair")
     timeframe = request.args.get("timeframe", "15m")
     if not pair:
@@ -144,9 +147,7 @@ def api_signal():
     pair_normalized = pair.replace("/", "")
     user_id = get_user_id_from_init_data(request.args.get("initData"))
     
-    # --- ПОЧАТОК ЗМІН: Виправлено виклик функції ---
     d = get_api_detailed_signal_data(state.spotware_client, state.symbol_cache, pair_normalized, user_id, timeframe)
-    # --- КІНЕЦЬ ЗМІН ---
     
     done_q = queue.Queue()
     d.addCallbacks(lambda res: done_q.put(res), lambda f: done_q.put({"error": str(f.value)}))
@@ -154,7 +155,7 @@ def api_signal():
         result = done_q.get(timeout=8)
         return jsonify(result)
     except queue.Empty:
-        return jsonify({"error": "Request timed out."}), 504
+        return jsonify({"error": "Запит тривав занадто довго."}), 504
 
 @app.route("/api/scanner/status")
 @protected_route
@@ -225,7 +226,6 @@ def _start_ctrader():
 # ---------------------------
 def _scanner_tick():
     if not state.ready or not state.assets:
-        logger.info("Scanner waiting for symbols...")
         return
 
     timeframe = "5m"
@@ -236,9 +236,7 @@ def _scanner_tick():
         if not _scanner_enabled(cat):
             return
 
-        # --- ПОЧАТОК ЗМІН: Виправлено виклик функції ---
         d = get_api_detailed_signal_data(state.spotware_client, state.symbol_cache, pair, 0, timeframe)
-        # --- КІНЕЦЬ ЗМІН ---
 
         def on_ok(res):
             if not isinstance(res, dict) or "bull_percentage" not in res:
@@ -262,7 +260,7 @@ def _scanner_tick():
 
     batch = state.assets[:80]
     for p in batch:
-        reactor.callLater(0, _handle_pair, p)
+        reactor.callLater(0.1, _handle_pair, p)
 
 # ---------------------------
 # Старт програми
