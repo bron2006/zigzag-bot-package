@@ -1,4 +1,4 @@
-# app.py — монолітна стабільна версія
+# app.py
 import logging
 import os
 import json
@@ -143,8 +143,11 @@ def api_signal():
 
     pair_normalized = pair.replace("/", "")
     user_id = get_user_id_from_init_data(request.args.get("initData"))
-
-    d = get_api_detailed_signal_data(pair_normalized, user_id, timeframe)
+    
+    # --- ПОЧАТОК ЗМІН: Виправлено виклик функції ---
+    d = get_api_detailed_signal_data(state.spotware_client, state.symbol_cache, pair_normalized, user_id, timeframe)
+    # --- КІНЕЦЬ ЗМІН ---
+    
     done_q = queue.Queue()
     d.addCallbacks(lambda res: done_q.put(res), lambda f: done_q.put({"error": str(f.value)}))
     try:
@@ -233,7 +236,9 @@ def _scanner_tick():
         if not _scanner_enabled(cat):
             return
 
-        d = get_api_detailed_signal_data(pair, None, timeframe)
+        # --- ПОЧАТОК ЗМІН: Виправлено виклик функції ---
+        d = get_api_detailed_signal_data(state.spotware_client, state.symbol_cache, pair, 0, timeframe)
+        # --- КІНЕЦЬ ЗМІН ---
 
         def on_ok(res):
             if not isinstance(res, dict) or "bull_percentage" not in res:
