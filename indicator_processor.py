@@ -6,6 +6,7 @@ import signal
 import sys
 from datetime import datetime, timezone
 from collections import deque
+import itertools
 
 import pandas as pd
 from twisted.internet import reactor, threads, defer
@@ -13,7 +14,7 @@ from twisted.internet.defer import DeferredQueue
 from twisted.internet.task import LoopingCall
 
 from spotware_connect import SpotwareConnect
-from config import get_ct_client_id, get_ct_client_secret
+from config import get_ct_client_id, get_ct_client_secret, FOREX_SESSIONS, CRYPTO_PAIRS, COMMODITIES
 from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOAGetTrendbarsReq, ProtoOAGetTrendbarsRes
 from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOATrendbarPeriod as TrendbarPeriod
 from redis_client import get_redis
@@ -26,6 +27,14 @@ SUPPORTED_TIMEFRAMES = ["5m", "15m", "1h", "4h", "1day"]
 PERIOD_SECONDS = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1day": 86400}
 PERIOD_MAP = {"5m": TrendbarPeriod.M5, "15m": TrendbarPeriod.M15, "1h": TrendbarPeriod.H1, "4h": TrendbarPeriod.H4, "1day": TrendbarPeriod.D1}
 
+def _get_all_assets():
+    assets = list(itertools.chain(
+        *[p for p in FOREX_SESSIONS.values()],
+        CRYPTO_PAIRS,
+        COMMODITIES
+    ))
+    return sorted({a.replace("/", "") for a in assets})
+
 class IndicatorProcessor:
     def __init__(self):
         self.redis = get_redis()
@@ -35,6 +44,7 @@ class IndicatorProcessor:
         self.symbol_cache = {}
         self.agg_candles = {tf: {} for tf in SUPPORTED_TIMEFRAMES}
         self.candle_buffers = {tf: {} for tf in SUPPORTED_TIMEFRAMES}
+        self.priming_queue = DeferredQueue()
 
     def start(self):
         logger.info("Starting Indicator Processor...")
@@ -53,8 +63,18 @@ class IndicatorProcessor:
         res.ParseFromString(raw_message.payload)
         self.symbol_cache = {s.symbolName.replace("/", ""): s for s in res.symbol}
         logger.info(f"Loaded {len(self.symbol_cache)} symbols.")
+        
+        # Запускаємо слухача та воркера
         self.pubsub_thread = threads.deferToThread(self._listen_for_candles)
         LoopingCall(self._heartbeat).start(10, now=True)
+        reactor.callLater(1, self._priming_worker)
+
+        # Ставимо всі завдання на праймінг в чергу
+        all_assets = _get_all_assets()
+        for symbol in all_assets:
+            for tf in SUPPORTED_TIMEFRAMES:
+                self.priming_queue.put((symbol, tf))
+        logger.info(f"Queued {self.priming_queue.size} priming tasks for {len(all_assets)} assets.")
 
     def stop(self, *args):
         logger.info("Stopping Indicator Processor...")
@@ -67,7 +87,7 @@ class IndicatorProcessor:
         try:
             self.redis.set("processor:heartbeat", int(time.time()), ex=60)
         except Exception:
-            logger.exception("Heartbeat failed")
+            pass
 
     def _listen_for_candles(self):
         pubsub = self.redis.pubsub()
@@ -99,44 +119,60 @@ class IndicatorProcessor:
             else:
                 if symbol in self.agg_candles[tf]:
                     current = self.agg_candles[tf][symbol]
-                    current['High'] = max(current.get('High', m1_candle['High']), m1_candle['High'])
-                    current['Low'] = min(current.get('Low', m1_candle['Low']), m1_candle['Low'])
+                    current['High'] = max(current.get('High', 0), m1_candle['High'])
+                    current['Low'] = min(current.get('Low', 999999), m1_candle['Low'])
                     current['Close'] = m1_candle['Close']
                     current['Volume'] += m1_candle.get('Volume', 0)
 
+    def _sleep(self, seconds):
+        d = defer.Deferred()
+        reactor.callLater(seconds, d.callback, None)
+        return d
+
+    @defer.inlineCallbacks
+    def _priming_worker(self):
+        logger.info("Starting priming worker...")
+        while not self._stopping:
+            try:
+                symbol, tf = yield self.priming_queue.get()
+                if self.candle_buffers[tf].get(symbol) and len(self.candle_buffers[tf][symbol]) >= 21:
+                    continue
+                
+                logger.info(f"WORKER: Processing priming task for {symbol}:{tf}")
+                try:
+                    df = yield self._get_historical_data(symbol, tf, 200)
+                    if df is None or len(df) < 21:
+                        logger.error(f"WORKER: Not enough data for {symbol}:{tf}. Skipping.")
+                        continue
+                    self.candle_buffers[tf][symbol] = deque(df.to_dict('records'), maxlen=200)
+                    logger.info(f"WORKER: Priming successful for {symbol}:{tf}")
+                    reactor.callFromThread(self._analyze_timeframe, symbol, tf)
+                except Exception as e:
+                    logger.error(f"WORKER: Failed to prime {symbol}:{tf}: {e}")
+                
+                yield self._sleep(0.5) # RATE LIMIT: 2 запити на секунду
+            except Exception as e:
+                logger.exception(f"Critical error in priming worker: {e}")
+
     @defer.inlineCallbacks
     def _analyze_timeframe(self, symbol: str, tf: str):
-        state_key, result_key = f"state:{symbol}:{tf}", f"analysis:result:{symbol}:{tf}"
+        result_key = f"analysis:result:{symbol}:{tf}"
         try:
             df = pd.DataFrame(list(self.candle_buffers[tf].get(symbol, [])))
-            
             if len(df) < 21:
-                logger.info(f"LAZY LOAD: Not enough data for {symbol}:{tf}. Fetching history...")
-                priming_lock_key = f"priming_lock:{symbol}:{tf}"
-                if (yield threads.deferToThread(self.redis.set, priming_lock_key, "1", ex=120, nx=True)) is False:
-                    return
-                try:
-                    hist_df = yield self._get_historical_data(symbol, tf, 200)
-                    if hist_df is None or len(hist_df) < 21:
-                        return
-                    self.candle_buffers[tf][symbol] = deque(hist_df.to_dict('records'), maxlen=200)
-                    df = pd.DataFrame(list(self.candle_buffers[tf][symbol]))
-                finally:
-                    yield threads.deferToThread(self.redis.delete, priming_lock_key)
+                return # Просто чекаємо, доки праймер завантажить дані
             
             if tf != '1day':
                 daily_df = pd.DataFrame(list(self.candle_buffers['1day'].get(symbol, [])))
                 if len(daily_df) < 21:
-                    reactor.callFromThread(self._analyze_timeframe, symbol, '1day')
-                    return
+                    return # Чекаємо, доки праймер завантажить денні дані
             else:
                 daily_df = df
 
             state = prime_indicators(df)
-            yield threads.deferToThread(self.redis.set, state_key, json.dumps(state))
-            
             current_price = df.iloc[-1]['Close']
             final_result = calculate_final_signal(state, df, daily_df, current_price)
+            
             if final_result.get("error"):
                 logger.error(f"Analysis for {symbol}:{tf} failed: {final_result.get('error')}")
                 return
