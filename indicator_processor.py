@@ -119,6 +119,10 @@ class IndicatorProcessor:
             try:
                 symbol, tf = yield self.priming_queue.get()
                 state_key = f"state:{symbol}:{tf}"
+                blacklist_key = f"blacklist:{symbol}:{tf}"
+                is_blacklisted = yield threads.deferToThread(self.redis.exists, blacklist_key)
+                if is_blacklisted:
+                    continue
                 is_primed = yield threads.deferToThread(self.redis.exists, state_key)
                 if is_primed:
                     continue
@@ -127,7 +131,8 @@ class IndicatorProcessor:
                 try:
                     df = yield self._get_historical_data(symbol, tf, 200)
                     if df is None or df.empty or len(df) < 21:
-                        logger.error(f"WORKER: Not enough data for {symbol}:{tf} ({len(df) if df is not None else 0} candles)")
+                        logger.error(f"WORKER: Not enough data for {symbol}:{tf}. Blacklisting for 1 hour.")
+                        yield threads.deferToThread(self.redis.set, blacklist_key, "1", ex=3600)
                         continue
                     self.candle_buffers[tf][symbol] = deque(df.to_dict('records'), maxlen=200)
                     state = prime_indicators(df)
