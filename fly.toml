@@ -1,4 +1,5 @@
 # fly.toml
+
 app = 'zigzag-bot-package'
 primary_region = 'fra'
 

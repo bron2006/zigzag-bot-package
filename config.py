@@ -1,4 +1,3 @@
-# config.py
 import os
 import json
 from dotenv import load_dotenv
@@ -65,7 +64,7 @@ TRADING_HOURS = {
     "Тихоокеанська": "🇦🇺 (00:00 - 09:00)"
 }
 
-# --- ПОЧАТОК ЗМІН: Знижено поріг для тестування ---
-IDEAL_ENTRY_THRESHOLD = 5 # Було 85
+# --- ПОЧАТОК ЗМІН: Налаштування для сканера ринку ---
+IDEAL_ENTRY_THRESHOLD = 85 # Поріг для купівлі (для продажу буде 100 - 85 = 15)
+SCANNER_COOLDOWN_SECONDS = 300 # 5 хвилин (5 * 60)
 # --- КІНЕЦЬ ЗМІН ---
-SCANNER_COOLDOWN_SECONDS = 300

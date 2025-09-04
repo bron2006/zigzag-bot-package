@@ -19,26 +19,10 @@ services:
       - CT_CLIENT_SECRET=${CT_CLIENT_SECRET}
       - CTRADER_ACCESS_TOKEN=${CTRADER_ACCESS_TOKEN}
       - DEMO_ACCOUNT_ID=${DEMO_ACCOUNT_ID}
-      - FLY_APP_NAME=${FLY_APP_NAME}
+      - FLY_APP_NAME: ${FLY_APP_NAME}
     depends_on:
       - redis
     restart: unless-stopped
-
-  # --- ПОЧАТОК ЗМІН: Додано новий сервіс для обробки індикаторів ---
-  processor:
-    build: .
-    command: python indicator_processor.py
-    environment:
-      - REDIS_URL=redis://redis:6379/0
-      # Процесору також потрібен доступ до cTrader для "праймінгу"
-      - CT_CLIENT_ID=${CT_CLIENT_ID}
-      - CT_CLIENT_SECRET=${CT_CLIENT_SECRET}
-      - CTRADER_ACCESS_TOKEN=${CTRADER_ACCESS_TOKEN}
-      - DEMO_ACCOUNT_ID=${DEMO_ACCOUNT_ID}
-    depends_on:
-      - redis
-    restart: unless-stopped
-  # --- КІНЕЦЬ ЗМІН ---
 
   api:
     build: .
@@ -55,5 +39,5 @@ services:
       - "8080:8080"
     depends_on:
       - redis
-      - streamer # API залежить від стрімера (хоча і непрямо)
+      - streamer
     restart: unless-stopped

@@ -6,9 +6,8 @@ from twisted.internet import reactor
 from telegram.error import BadRequest
 
 import state
-from config import FOREX_SESSIONS, CRYPTO_PAIRS, STOCK_TICKERS, COMMODITIES, TRADING_HOURS, get_chat_id, get_fly_app_name
-from analysis import get_analysis_from_redis
-from redis_client import get_redis
+from config import FOREX_SESSIONS, CRYPTO_PAIRS, STOCK_TICKERS, COMMODITIES, TRADING_HOURS
+from analysis import get_api_detailed_signal_data
 
 logger = logging.getLogger(__name__)
 
@@ -18,36 +17,31 @@ def get_reply_keyboard() -> ReplyKeyboardMarkup:
     keyboard = [[KeyboardButton("МЕНЮ")]]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
+# --- ПОЧАТОК ЗМІН: Оновлено функцію створення головного меню ---
 def get_main_menu_kb() -> InlineKeyboardMarkup:
-    app_name = get_fly_app_name() or "zigzag-bot-package"
-    web_app_url = f"https://{app_name}.fly.dev"
-    
     keyboard = [
-        [InlineKeyboardButton("🚀 Відкрити термінал", web_app={"url": web_app_url})],
         [InlineKeyboardButton("💹 Валютні пари (Forex)", callback_data="category_forex")],
         [InlineKeyboardButton("💎 Криптовалюти", callback_data="category_crypto")],
         [InlineKeyboardButton("📈 Акції/Індекси", callback_data="category_stocks")],
         [InlineKeyboardButton("🥇 Сировина", callback_data="category_commodities")]
     ]
     
+    # Створення кнопок для керування сканерами
     scanner_map = {
         "forex": "💹 Forex",
         "crypto": "💎 Crypto",
         "commodities": "🥇 Сировина"
     }
-    
-    try:
-        r = get_redis()
-        for key, text in scanner_map.items():
-            is_enabled = r.get(f"scanner_state:{key}") == 'true'
-            status_icon = "✅" if is_enabled else "❌"
-            button_text = f"{status_icon} Сканер {text}"
-            callback_data = f"toggle_scanner_{key}"
-            keyboard.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
-    except Exception as e:
-        logger.error(f"Could not read scanner state from Redis: {e}")
 
+    for key, text in scanner_map.items():
+        is_enabled = state.SCANNER_STATE.get(key, False)
+        status_icon = "✅" if is_enabled else "❌"
+        button_text = f"{status_icon} Сканер {text}"
+        callback_data = f"toggle_scanner_{key}"
+        keyboard.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
+        
     return InlineKeyboardMarkup(keyboard)
+# --- КІНЕЦЬ ЗМІН ---
 
 def get_timeframe_kb(category: str) -> InlineKeyboardMarkup:
     keyboard = []
@@ -186,24 +180,20 @@ def button_handler(update: Update, context: CallbackContext) -> None:
     parts = data.split('_')
     action = parts[0]
 
+    # --- ПОЧАТОК ЗМІН: Оновлено логіку обробника кнопок сканера ---
     if action == "toggle" and parts[1] == "scanner":
-        category_to_toggle = parts[2]
-        try:
-            r = get_redis()
-            key = f"scanner_state:{category_to_toggle}"
-            current_state = r.get(key) == 'true'
-            new_state = not current_state
-            r.set(key, 'true' if new_state else 'false')
-            
-            logger.info(f"Scanner for '{category_to_toggle}' toggled via BOT to: {new_state}")
-            
-            status_text = "увімкнено" if new_state else "вимкнено"
-            query.answer(text=f"Сканер для '{category_to_toggle}' {status_text}")
-            query.edit_message_text("🏠 Головне меню:", reply_markup=get_main_menu_kb())
-        except Exception as e:
-            logger.error(f"Failed to toggle scanner state in Redis: {e}")
-            query.answer(text="Помилка з'єднання з сервісом.", show_alert=True)
-        return
+        # Тепер callback_data має вигляд "toggle_scanner_forex"
+        if len(parts) > 2:
+            category_to_toggle = parts[2] # forex, crypto, commodities
+            if category_to_toggle in state.SCANNER_STATE:
+                # Перемикаємо стан
+                state.SCANNER_STATE[category_to_toggle] = not state.SCANNER_STATE[category_to_toggle]
+                status_text = "увімкнено" if state.SCANNER_STATE[category_to_toggle] else "вимкнено"
+                query.answer(text=f"Сканер для '{category_to_toggle}' {status_text}")
+                # Оновлюємо меню, щоб показати новий стан
+                query.edit_message_text("🏠 Головне меню:", reply_markup=get_main_menu_kb())
+            return
+    # --- КІНЕЦЬ ЗМІН ---
 
     if action == "main":
         query.edit_message_text("🏠 Головне меню:", reply_markup=get_main_menu_kb())
@@ -216,7 +206,7 @@ def button_handler(update: Update, context: CallbackContext) -> None:
         _, category, timeframe = parts
         if category == 'forex':
             query.edit_message_text("💹 Виберіть торгову сесію:", reply_markup=get_forex_sessions_kb(timeframe))
-        else:  
+        else: 
             asset_map = {'crypto': CRYPTO_PAIRS, 'stocks': STOCK_TICKERS, 'commodities': COMMODITIES}
             query.edit_message_text(f"Виберіть актив:", reply_markup=get_assets_kb(asset_map.get(category,[]), category, timeframe))
 
@@ -227,53 +217,22 @@ def button_handler(update: Update, context: CallbackContext) -> None:
 
     elif action == "analyze":
         _, timeframe, symbol = parts
-        query.edit_message_text(text=f"⏳ Отримую аналіз для {symbol} ({timeframe})...")
+        if not state.client or not state.SYMBOLS_LOADED:
+            query.answer(text="❌ Сервіс ще завантажується, спробуйте за мить.", show_alert=True); return
+        
+        query.edit_message_text(text=f"⏳ Обрано {symbol} ({timeframe}). Роблю запит...")
         
         def on_success(result):
-            if not result:
-                result = {"error": f"Аналіз для {symbol} на таймфреймі {timeframe} ще не готовий."}
             message_text = _format_signal_message(result, timeframe)
-            back_button = InlineKeyboardButton("⬅️ Назад до меню", callback_data="main_menu")
-            keyboard = InlineKeyboardMarkup([[back_button]])
-            query.edit_message_text(text=message_text, parse_mode='Markdown', reply_markup=keyboard)
+            query.edit_message_text(text=message_text, parse_mode='Markdown', reply_markup=get_main_menu_kb())
 
         def on_error(failure):
-            logger.error(f"❌ Помилка при отриманні сигналу для {symbol} (з Redis): {failure}")
-            query.edit_message_text(text=f"❌ Виникла помилка отримання даних.", reply_markup=get_main_menu_kb())
+            error_message = failure.getErrorMessage() if hasattr(failure, 'getErrorMessage') else str(failure)
+            logger.error(f"❌ Помилка при отриманні сигналу для {symbol}: {error_message}")
+            query.edit_message_text(text=f"❌ Виникла помилка: {error_message}", reply_markup=get_main_menu_kb())
 
-        d = get_analysis_from_redis(symbol, timeframe)
-        d.addCallbacks(on_success, on_error)
-
-def _format_scanner_notification(data):
-    pair = data.get('pair')
-    verdict = data.get('verdict_text', 'N/A')
-    score = data.get('bull_percentage', 50)
-    price = data.get('price', 0)
-    
-    header = f"🚨 *Сигнал Сканера: {pair} (5m)* 🚨"
-    main_info = f"*{verdict}* (Рахунок: {score}%)"
-    price_info = f"Ціна: `{price:.5f}`"
-    
-    return f"{header}\n\n{main_info}\n{price_info}"
-
-def send_scanner_notification(bot, data):
-    chat_id = get_chat_id()
-    if not chat_id:
-        logger.warning("CHAT_ID not set, cannot send notification.")
-        return
-        
-    try:
-        message = _format_scanner_notification(data)
-        app_name = get_fly_app_name() or "zigzag-bot-package"
-        web_app_url = f"https://{app_name}.fly.dev"
-        kb = [[InlineKeyboardButton("🚀 Відкрити термінал", web_app={"url": web_app_url})]]
-        reply_markup = InlineKeyboardMarkup(kb)
-        
-        bot.send_message(
-            chat_id=chat_id,
-            text=message,
-            parse_mode='Markdown',
-            reply_markup=reply_markup
-        )
-    except Exception as e:
-        logger.exception(f"Failed to send scanner notification: {e}")
+        def do_analysis():
+            d = get_api_detailed_signal_data(state.client, state.symbol_cache, symbol, query.from_user.id, timeframe)
+            d.addCallbacks(on_success, on_error)
+            
+        reactor.callInThread(do_analysis)
