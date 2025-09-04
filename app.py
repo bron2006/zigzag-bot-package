@@ -22,7 +22,7 @@ from config import (
     TELEGRAM_BOT_TOKEN, FOREX_SESSIONS, get_fly_app_name, CRYPTO_PAIRS, STOCK_TICKERS,
     COMMODITIES, TRADING_HOURS
 )
-from analysis import PERIOD_MAP
+from analysis import get_api_detailed_signal_data
 from redis_client import get_redis
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -91,7 +91,6 @@ def get_pairs():
 @app.route("/api/signal")
 @protected_route
 def api_signal():
-    from analysis import get_api_detailed_signal_data
     pair = request.args.get("pair")
     timeframe = request.args.get("timeframe", "15m")
     if not pair: return jsonify({"error": "pair is required"}), 400
@@ -99,7 +98,7 @@ def api_signal():
     pair_normalized = pair.replace("/", "")
     user_id = get_user_id_from_init_data(request.args.get("initData"))
     
-    d = get_api_detailed_signal_data(None, None, pair_normalized, user_id, timeframe)
+    d = get_api_detailed_signal_data(pair_normalized, user_id, timeframe)
     done_q = queue.Queue()
     def cb_success(res): done_q.put(res)
     def cb_err(f): done_q.put({"error": str(f.value)})
@@ -128,6 +127,7 @@ def scanner_toggle():
     current_state = r.get(key) == 'true'
     new_state = not current_state
     r.set(key, 'true' if new_state else 'false')
+    
     logger.info(f"Scanner for '{category}' toggled via WEB APP to: {new_state}")
     
     keys = ["scanner_state:forex", "scanner_state:crypto", "scanner_state:commodities"]
