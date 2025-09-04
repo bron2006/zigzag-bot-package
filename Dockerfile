@@ -24,10 +24,16 @@ RUN wget 'http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz' && 
 
 # Встановлюємо Python-залежності з файлу
 COPY requirements.txt .
+# Force cache rebuild to ensure all dependencies are installed
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
+
 EXPOSE 8080
+
+# Кожні 15 секунд перевіряємо, чи відповідає веб-сервер. Якщо 3 спроби невдалі - контейнер буде перезапущено.
+HEALTHCHECK --interval=15s --timeout=3s --start-period=5s --retries=3 \
+  CMD curl -f http://localhost:8080/ || exit 1
 
 # Запускаємо додаток напряму через Python, оскільки він використовує вбудований сервер Twisted.
 CMD ["python", "app.py"]
