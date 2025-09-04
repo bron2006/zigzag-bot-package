@@ -57,7 +57,6 @@ class IndicatorProcessor:
         logger.info(f"Loaded {len(self.symbol_cache)} symbols.")
         self.pubsub_thread = threads.deferToThread(self._listen_for_candles)
         LoopingCall(self._heartbeat).start(10, now=True)
-        reactor.callLater(1, self._priming_worker)
 
     def stop(self, *args):
         logger.info("Stopping Indicator Processor...")
@@ -107,89 +106,55 @@ class IndicatorProcessor:
                     current['close'] = m1_candle['close']
                     current['volume'] += m1_candle.get('volume', 0)
 
-    def _sleep(self, seconds):
-        d = defer.Deferred()
-        reactor.callLater(seconds, d.callback, None)
-        return d
-
-    @defer.inlineCallbacks
-    def _priming_worker(self):
-        logger.info("Starting priming worker...")
-        while not self._stopping:
-            try:
-                symbol, tf = yield self.priming_queue.get()
-                state_key = f"state:{symbol}:{tf}"
-                blacklist_key = f"blacklist:{symbol}:{tf}"
-                is_blacklisted = yield threads.deferToThread(self.redis.exists, blacklist_key)
-                if is_blacklisted:
-                    continue
-                is_primed = yield threads.deferToThread(self.redis.exists, state_key)
-                if is_primed:
-                    continue
-                logger.info(f"WORKER: Got priming task for {symbol}:{tf}")
-                self.priming_in_progress.add((symbol, tf))
-                try:
-                    df = yield self._get_historical_data(symbol, tf, 200)
-                    if df is None or df.empty or len(df) < 21:
-                        logger.error(f"WORKER: Not enough data for {symbol}:{tf}. Blacklisting for 1 hour.")
-                        yield threads.deferToThread(self.redis.set, blacklist_key, "1", ex=3600)
-                        continue
-                    self.candle_buffers[tf][symbol] = deque(df.to_dict('records'), maxlen=200)
-                    state = prime_indicators(df)
-                    if not state:
-                        logger.error(f"WORKER: Failed to generate state for {symbol}:{tf}")
-                        continue
-                    yield threads.deferToThread(self.redis.set, state_key, json.dumps(state))
-                    logger.info(f"WORKER: Priming successful for {symbol}:{tf}")
-                    reactor.callFromThread(self._analyze_timeframe, symbol, tf)
-                except Exception as e:
-                    logger.error(f"WORKER: Failed to prime {symbol}:{tf}: {e}")
-                finally:
-                    if (symbol, tf) in self.priming_in_progress:
-                        self.priming_in_progress.remove((symbol, tf))
-                yield self._sleep(1) 
-            except Exception as e:
-                logger.exception(f"Critical error in priming worker: {e}")
-
     @defer.inlineCallbacks
     def _analyze_timeframe(self, symbol: str, tf: str):
         state_key, result_key = f"state:{symbol}:{tf}", f"analysis:result:{symbol}:{tf}"
         try:
-            state_raw = yield threads.deferToThread(self.redis.get, state_key)
-            if not state_raw:
-                if (symbol, tf) not in self.priming_in_progress:
-                    yield self.priming_queue.put((symbol, tf))
-                return
-            
-            daily_state_raw = yield threads.deferToThread(self.redis.get, f"state:{symbol}:1day")
-            
-            if not daily_state_raw and tf != '1day':
-                logger.warning(f"Daily data for {symbol} not ready. Re-queueing analysis for {tf}.")
-                yield self.priming_queue.put((symbol, '1day'))
-                reactor.callLater(10, self._analyze_timeframe, symbol, tf)
-                return
-
             df = pd.DataFrame(list(self.candle_buffers[tf].get(symbol, [])))
-            if df.empty: return
+            
+            if len(df) < 21:
+                logger.info(f"LAZY LOAD: Not enough data for {symbol}:{tf} ({len(df)} candles). Fetching history...")
+                
+                priming_lock_key = f"priming_lock:{symbol}:{tf}"
+                if (yield threads.deferToThread(self.redis.set, priming_lock_key, "1", ex=120, nx=True)) is False:
+                    logger.warning(f"LAZY LOAD: Priming for {symbol}:{tf} is already in progress. Skipping.")
+                    return
+                
+                try:
+                    hist_df = yield self._get_historical_data(symbol, tf, 200)
+                    if hist_df is None or len(hist_df) < 21:
+                        logger.error(f"LAZY LOAD: Failed to fetch enough history for {symbol}:{tf}. Aborting analysis.")
+                        return
+                    
+                    self.candle_buffers[tf][symbol] = deque(hist_df.to_dict('records'), maxlen=200)
+                    df = pd.DataFrame(list(self.candle_buffers[tf][symbol]))
+                    logger.info(f"LAZY LOAD: Successfully loaded {len(df)} candles for {symbol}:{tf}.")
+                finally:
+                    yield threads.deferToThread(self.redis.delete, priming_lock_key)
+            
+            if tf != '1day':
+                daily_df = pd.DataFrame(list(self.candle_buffers['1day'].get(symbol, [])))
+                if len(daily_df) < 21:
+                    logger.warning(f"Daily data for {symbol} not ready. Triggering lazy load for 1day.")
+                    reactor.callFromThread(self._analyze_timeframe, symbol, '1day')
+                    return
+            else:
+                daily_df = df
 
             state = prime_indicators(df)
             yield threads.deferToThread(self.redis.set, state_key, json.dumps(state))
             
-            if tf != '1day':
-                daily_df = pd.DataFrame(list(self.candle_buffers['1day'].get(symbol, [])))
-                if daily_df.empty: return
-                
-                current_price = df.iloc[-1]['close']
-                final_result = calculate_final_signal(state, df, daily_df, current_price)
-                if final_result.get("error"):
-                    logger.error(f"Analysis error for {symbol}:{tf} - {final_result.get('error')}")
-                    return
+            current_price = df.iloc[-1]['close']
+            final_result = calculate_final_signal(state, df, daily_df, current_price)
+            if final_result.get("error"):
+                logger.error(f"Analysis error for {symbol}:{tf} - {final_result.get('error')}")
+                return
 
-                final_result['pair'] = symbol
-                final_result['timestamp'] = int(time.time())
-                
-                yield threads.deferToThread(self.redis.set, result_key, json.dumps(final_result), ex=3600*6)
-                logger.info(f"SUCCESS: Analysis for {symbol}:{tf} saved. Score: {final_result.get('bull_percentage')}")
+            final_result['pair'] = symbol
+            final_result['timestamp'] = int(time.time())
+            
+            yield threads.deferToThread(self.redis.set, result_key, json.dumps(final_result), ex=3600*6)
+            logger.info(f"SUCCESS: Analysis for {symbol}:{tf} saved. Score: {final_result.get('bull_percentage')}")
         except Exception as e:
             logger.exception(f"Failed to analyze {symbol}:{tf}: {e}")
     
@@ -201,7 +166,7 @@ class IndicatorProcessor:
             return d
         
         now = int(time.time() * 1000)
-        from_ts = now - (count * PERIOD_SECONDS[timeframe] * 2000) 
+        from_ts = now - (count * PERIOD_SECONDS[timeframe] * 2000)
         request = ProtoOAGetTrendbarsReq(
             ctidTraderAccountId=self.client._client.account_id,
             symbolId=symbol_details.symbolId, period=PERIOD_MAP[timeframe],
