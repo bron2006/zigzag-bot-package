@@ -332,10 +332,7 @@ def _calculate_core_signal(df: pd.DataFrame, daily_df: pd.DataFrame, current_pri
     support = max([s for s in long_term_support if s < current_price], default=None) if long_term_support else None
     resistance = min([r for r in long_term_resistance if r > current_price], default=None) if long_term_resistance else None
 
-    # Decision rules: require at least two confirming factors for a strong signal,
-    # and respect daily EMA200 as primary trend filter.
-
-    # If daily trend bullish
+    # Decision rules
     if is_daily_uptrend is True:
         if bullish_factors >= 2:
             score = 90
@@ -349,12 +346,8 @@ def _calculate_core_signal(df: pd.DataFrame, daily_df: pd.DataFrame, current_pri
         else:
             score = 50
             verdict = "🟡 НЕЙТРАЛЬНО"
-
-    # If daily trend bearish
     elif is_daily_uptrend is False:
-        # do not allow single hammer to make a strong buy
         if bullish_factors >= 2:
-            # bullish signs but against daily trend -> weaker
             score = 60
             verdict = "↗️ Помірна ПОКУПКА (проти денного тренду)"
             critical_warning = "❗️ Сигнал проти денного даунтренду"
@@ -368,8 +361,6 @@ def _calculate_core_signal(df: pd.DataFrame, daily_df: pd.DataFrame, current_pri
         else:
             score = 50
             verdict = "🟡 НЕЙТРАЛЬНО"
-
-    # If daily trend unknown
     else:
         if bullish_factors >= 2:
             score = 75
@@ -382,7 +373,6 @@ def _calculate_core_signal(df: pd.DataFrame, daily_df: pd.DataFrame, current_pri
             verdict = "🟡 НЕЙТРАЛЬНО"
 
     # Final safety checks
-    # If RSI extreme cancels strong signal
     try:
         if score >= 80 and not np.isnan(rsi_last) and rsi_last > 75:
             score = 50
@@ -409,87 +399,58 @@ def _calculate_core_signal(df: pd.DataFrame, daily_df: pd.DataFrame, current_pri
     }
 
 # ----------------- public API -----------------
-def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int, timeframe: str = "15m") -> Deferred:
+def get_api_detailed_signal_data(client, symbol_cache, norm_pair: str, period: str, count: int = 500) -> Deferred:
     """
-    Основна точка входу. Повертає Deferred, який callback дасть dict у форматі:
-    {
-      "pair": symbol,
-      "price": current_price,
-      "verdict_text": "...",
-      "reasons": [...],
-      "support": ...,
-      "resistance": ...,
-      "bull_percentage": int,
-      "bear_percentage": int,
-      "candle_pattern": {...},
-      "volume_info": "...",
-      "special_warning": "..."  # optional
-    }
+    API-метод, який повертає Deferred -> dict з результатом аналізу.
     """
-    final_deferred = Deferred()
+    d = Deferred()
 
-    def on_data_ready(results):
+    # Отримати price з redis
+    price_d = get_price_from_redis(norm_pair)
+    df_d = get_market_data(client, symbol_cache, norm_pair, period, count)
+    df_daily_d = get_market_data(client, symbol_cache, norm_pair, "1day", 400)
+
+    all_d = DeferredList([price_d, df_d, df_daily_d], consumeErrors=True)
+
+    def _process(results):
         try:
-            success1, df = results[0]
-            success2, daily_df = results[1]
-            success3, live_price = results[2]
-
-            if not (success1 and success2) or df.empty or len(df) < 50 or daily_df.empty:
-                if not final_deferred.called:
-                    final_deferred.callback({"error": f"Not enough historical data for {timeframe} analysis."})
+            price_val, df_res, df_daily_res = results[0][1], results[1][1], results[2][1]
+            if price_val is None or df_res.empty or df_daily_res.empty:
+                d.callback({"error": "Немає даних для аналізу"})
                 return
-
-            current_price = live_price if success3 and live_price is not None else float(df.iloc[-1]['Close'])
-
-            analysis = _calculate_core_signal(df, daily_df, current_price)
-            special_warning = analysis.get("critical_warning")
-
-            verdict = analysis.get("verdict_text", _generate_verdict(analysis.get("score", 50)))
-            score = analysis.get("score", 50)
-
-            # persist minimal history
-            try:
-                add_signal_to_history({
-                    'user_id': user_id, 'pair': symbol,
-                    'price': current_price, 'bull_percentage': score
-                })
-            except Exception:
-                logger.exception("Failed to add signal to history")
+            res = _calculate_core_signal(df_res, df_daily_res, price_val)
 
             response_data = {
-                "pair": symbol,
-                "price": current_price,
-                "verdict_text": verdict,
-                "reasons": analysis.get("reasons", []),
-                "support": analysis.get("support"),
-                "resistance": analysis.get("resistance"),
-                "bull_percentage": score,
-                "bear_percentage": 100 - score,
-                "candle_pattern": analysis.get("candle_pattern"),
-                "volume_info": analysis.get("volume_info"),
-                "special_warning": special_warning
+                "pair": norm_pair,
+                "period": period,
+                "price": price_val,
+                "score": res.get("score"),
+                "reasons": res.get("reasons", []),
+                "support": res.get("support"),
+                "resistance": res.get("resistance"),
+                "candle_pattern": res.get("candle_pattern"),
+                "volume_info": res.get("volume_info"),
+                "critical_warning": res.get("critical_warning"),
+                "verdict_text": res.get("verdict_text")
             }
 
-            if not final_deferred.called:
-                final_deferred.callback(response_data)
+            # Зберігаємо в SQLite
+            try:
+                add_signal_to_history(norm_pair, period, response_data)
+            except Exception as e:
+                logger.error(f"DB save error: {e}")
 
+            # Зберігаємо також у Redis (signal:<PAIR>)
+            try:
+                r = get_redis()
+                r.set(f"signal:{norm_pair}", json.dumps(response_data))
+            except Exception as e:
+                logger.error(f"Redis save error: {e}")
+
+            d.callback(response_data)
         except Exception as e:
-            logger.exception(f"Critical analysis error for {symbol}: {e}")
-            if not final_deferred.called:
-                final_deferred.errback(e)
+            logger.exception(f"get_api_detailed_signal_data error: {e}")
+            d.callback({"error": str(e)})
 
-    # Start async requests
-    d1 = get_market_data(client, symbol_cache, symbol, timeframe, 200)
-    d2 = get_market_data(client, symbol_cache, symbol, '1day', 100)
-    d3 = get_price_from_redis(symbol)
-
-    dl = DeferredList([d1, d2, d3], consumeErrors=True)
-    dl.addCallback(on_data_ready)
-    return final_deferred
-
-def _generate_verdict(score: int) -> str:
-    if score > 80: return "⬆️ Сильна ПОКУПКА"
-    if score > 65: return "↗️ Помірна ПОКУПКА"
-    if score < 20: return "⬇️ Сильний ПРОДАЖ"
-    if score < 35: return "↘️ Помірний ПРОДАЖ"
-    return "🟡 НЕЙТРАЛЬНО"
+    all_d.addCallback(_process)
+    return d
