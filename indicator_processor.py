@@ -126,8 +126,8 @@ class IndicatorProcessor:
                 self.priming_in_progress.add((symbol, tf))
                 try:
                     df = yield self._get_historical_data(symbol, tf, 200)
-                    if df is None or df.empty or len(df) < 200:
-                        logger.error(f"WORKER: Not enough data for {symbol}:{tf}")
+                    if df is None or df.empty or len(df) < 21:
+                        logger.error(f"WORKER: Not enough data for {symbol}:{tf} ({len(df) if df is not None else 0} candles)")
                         continue
                     self.candle_buffers[tf][symbol] = deque(df.to_dict('records'), maxlen=200)
                     state = prime_indicators(df)
@@ -176,6 +176,10 @@ class IndicatorProcessor:
                 
                 current_price = df.iloc[-1]['close']
                 final_result = calculate_final_signal(state, df, daily_df, current_price)
+                if final_result.get("error"):
+                    logger.error(f"Analysis error for {symbol}:{tf} - {final_result.get('error')}")
+                    return
+
                 final_result['pair'] = symbol
                 final_result['timestamp'] = int(time.time())
                 
@@ -192,7 +196,7 @@ class IndicatorProcessor:
             return d
         
         now = int(time.time() * 1000)
-        from_ts = now - (count * PERIOD_SECONDS[timeframe] * 1500)
+        from_ts = now - (count * PERIOD_SECONDS[timeframe] * 2000) 
         request = ProtoOAGetTrendbarsReq(
             ctidTraderAccountId=self.client._client.account_id,
             symbolId=symbol_details.symbolId, period=PERIOD_MAP[timeframe],
