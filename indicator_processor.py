@@ -35,8 +35,6 @@ class IndicatorProcessor:
         self.symbol_cache = {}
         self.agg_candles = {tf: {} for tf in SUPPORTED_TIMEFRAMES}
         self.candle_buffers = {tf: {} for tf in SUPPORTED_TIMEFRAMES}
-        self.priming_in_progress = set()
-        self.priming_queue = DeferredQueue()
 
     def start(self):
         logger.info("Starting Indicator Processor...")
@@ -101,10 +99,10 @@ class IndicatorProcessor:
             else:
                 if symbol in self.agg_candles[tf]:
                     current = self.agg_candles[tf][symbol]
-                    current['high'] = max(current.get('high', m1_candle['high']), m1_candle['high'])
-                    current['low'] = min(current.get('low', m1_candle['low']), m1_candle['low'])
-                    current['close'] = m1_candle['close']
-                    current['volume'] += m1_candle.get('volume', 0)
+                    current['High'] = max(current.get('High', m1_candle['High']), m1_candle['High'])
+                    current['Low'] = min(current.get('Low', m1_candle['Low']), m1_candle['Low'])
+                    current['Close'] = m1_candle['Close']
+                    current['Volume'] += m1_candle.get('Volume', 0)
 
     @defer.inlineCallbacks
     def _analyze_timeframe(self, symbol: str, tf: str):
@@ -113,29 +111,22 @@ class IndicatorProcessor:
             df = pd.DataFrame(list(self.candle_buffers[tf].get(symbol, [])))
             
             if len(df) < 21:
-                logger.info(f"LAZY LOAD: Not enough data for {symbol}:{tf} ({len(df)} candles). Fetching history...")
-                
+                logger.info(f"LAZY LOAD: Not enough data for {symbol}:{tf}. Fetching history...")
                 priming_lock_key = f"priming_lock:{symbol}:{tf}"
                 if (yield threads.deferToThread(self.redis.set, priming_lock_key, "1", ex=120, nx=True)) is False:
-                    logger.warning(f"LAZY LOAD: Priming for {symbol}:{tf} is already in progress. Skipping.")
                     return
-                
                 try:
                     hist_df = yield self._get_historical_data(symbol, tf, 200)
                     if hist_df is None or len(hist_df) < 21:
-                        logger.error(f"LAZY LOAD: Failed to fetch enough history for {symbol}:{tf}. Aborting analysis.")
                         return
-                    
                     self.candle_buffers[tf][symbol] = deque(hist_df.to_dict('records'), maxlen=200)
                     df = pd.DataFrame(list(self.candle_buffers[tf][symbol]))
-                    logger.info(f"LAZY LOAD: Successfully loaded {len(df)} candles for {symbol}:{tf}.")
                 finally:
                     yield threads.deferToThread(self.redis.delete, priming_lock_key)
             
             if tf != '1day':
                 daily_df = pd.DataFrame(list(self.candle_buffers['1day'].get(symbol, [])))
                 if len(daily_df) < 21:
-                    logger.warning(f"Daily data for {symbol} not ready. Triggering lazy load for 1day.")
                     reactor.callFromThread(self._analyze_timeframe, symbol, '1day')
                     return
             else:
@@ -144,10 +135,10 @@ class IndicatorProcessor:
             state = prime_indicators(df)
             yield threads.deferToThread(self.redis.set, state_key, json.dumps(state))
             
-            current_price = df.iloc[-1]['close']
+            current_price = df.iloc[-1]['Close']
             final_result = calculate_final_signal(state, df, daily_df, current_price)
             if final_result.get("error"):
-                logger.error(f"Analysis error for {symbol}:{tf} - {final_result.get('error')}")
+                logger.error(f"Analysis for {symbol}:{tf} failed: {final_result.get('error')}")
                 return
 
             final_result['pair'] = symbol

@@ -105,17 +105,33 @@ class PriceStreamer:
     def _update_m1_candle(self, symbol: str, price: float, ts_sec: int):
         candle_start_ts = (ts_sec // 60) * 60
         if symbol not in self.current_m1_candles:
-            self.current_m1_candles[symbol] = {"symbol": symbol, "ts": candle_start_ts, "open": price, "high": price, "low": price, "close": price, "volume": 1}
+            self.current_m1_candles[symbol] = {
+                "symbol": symbol,
+                "ts": candle_start_ts,
+                "Open": price,
+                "High": price,
+                "Low": price,
+                "Close": price,
+                "Volume": 1,
+            }
         else:
             candle = self.current_m1_candles[symbol]
             if candle_start_ts > candle['ts']:
                 self._publish_candle(candle)
-                self.current_m1_candles[symbol] = {"symbol": symbol, "ts": candle_start_ts, "open": price, "high": price, "low": price, "close": price, "volume": 1}
+                self.current_m1_candles[symbol] = {
+                    "symbol": symbol,
+                    "ts": candle_start_ts,
+                    "Open": price,
+                    "High": price,
+                    "Low": price,
+                    "Close": price,
+                    "Volume": 1,
+                }
             else:
-                candle['high'] = max(candle['high'], price)
-                candle['low'] = min(candle['low'], price)
-                candle['close'] = price
-                candle['volume'] += 1
+                candle['High'] = max(candle['High'], price)
+                candle['Low'] = min(candle['Low'], price)
+                candle['Close'] = price
+                candle['Volume'] += 1
 
     def _publish_candle(self, candle: dict):
         try:
@@ -126,7 +142,7 @@ class PriceStreamer:
             log.exception(f"Failed to publish M1 candle for {candle['symbol']}")
 
     def _close_and_publish_candles(self):
-        log.debug(f"Closing M1 candles for publishing. Found {len(self.current_m1_candles)} active candles.")
+        log.debug(f"Closing M1 candles for publishing...")
         candles_to_publish = list(self.current_m1_candles.values())
         self.current_m1_candles = {}
         for candle in candles_to_publish:
@@ -141,21 +157,7 @@ class PriceStreamer:
                 mid = (bid + ask) / 2.0 if bid is not None and ask is not None else None
                 if mid is None:
                     return
-                
-                # Оновлюємо M1 свічку в пам'яті
                 self._update_m1_candle(norm_symbol, mid, ts_ms // 1000)
-
-                # --- ПОЧАТОК ЗМІН: Видалено надлишкові команди Redis ---
-                # Наступні рядки коду генерували тисячі запитів і більше не потрібні
-                # для нової архітектури.
-                #
-                # key = f"tick:{norm_symbol}"
-                # channel = "ticks"
-                # payload = {"symbol": norm_symbol, "bid": bid, "ask": ask, "mid": mid, "ts_ms": ts_ms}
-                # self.redis.set(key, json.dumps(payload), ex=60)
-                # self.redis.publish(channel, json.dumps(payload))
-                # --- КІНЕЦЬ ЗМІН ---
-
             except Exception:
                 log.exception(f"Spot handler error for {norm_symbol}")
         return handler
