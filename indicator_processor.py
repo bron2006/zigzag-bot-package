@@ -14,7 +14,7 @@ from twisted.internet.defer import DeferredQueue
 from twisted.internet.task import LoopingCall
 
 from spotware_connect import SpotwareConnect
-from config import get_ct_client_id, get_ct_client_secret, FOREX_SESSIONS, CRYPTO_PAIRS, COMMODITIES
+from config import get_ct_client_id, get_ct_client_secret, FOREX_SESSIONS, CRYPTO_PAIRS, COMMODITIES, IDEAL_ENTRY_THRESHOLD
 from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOAGetTrendbarsReq, ProtoOAGetTrendbarsRes
 from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOATrendbarPeriod as TrendbarPeriod
 from redis_client import get_redis
@@ -27,13 +27,14 @@ SUPPORTED_TIMEFRAMES = ["5m", "15m", "1h", "4h", "1day"]
 PERIOD_SECONDS = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1day": 86400}
 PERIOD_MAP = {"5m": TrendbarPeriod.M5, "15m": TrendbarPeriod.M15, "1h": TrendbarPeriod.H1, "4h": TrendbarPeriod.H4, "1day": TrendbarPeriod.D1}
 
-def _get_all_assets():
-    assets = list(itertools.chain(
-        *[p for p in FOREX_SESSIONS.values()],
-        CRYPTO_PAIRS,
-        COMMODITIES
-    ))
-    return sorted({a.replace("/", "") for a in assets})
+ALL_ASSETS = sorted({a.replace("/", "") for a in list(itertools.chain(*[p for p in FOREX_SESSIONS.values()], CRYPTO_PAIRS, COMMODITIES))})
+ASSET_TO_CATEGORY = {}
+for session in FOREX_SESSIONS.values():
+    for asset in session:
+        ASSET_TO_CATEGORY[asset.replace("/", "")] = 'forex'
+ASSET_TO_CATEGORY.update({asset.replace("/", ""): 'crypto' for asset in CRYPTO_PAIRS})
+ASSET_TO_CATEGORY.update({asset.replace("/", ""): 'commodities' for asset in COMMODITIES})
+
 
 class IndicatorProcessor:
     def __init__(self):
@@ -62,19 +63,12 @@ class IndicatorProcessor:
         res = ProtoOASymbolsListRes()
         res.ParseFromString(raw_message.payload)
         self.symbol_cache = {s.symbolName.replace("/", ""): s for s in res.symbol}
-        logger.info(f"Loaded {len(self.symbol_cache)} symbols.")
-        
-        # Запускаємо слухача та воркера
         self.pubsub_thread = threads.deferToThread(self._listen_for_candles)
         LoopingCall(self._heartbeat).start(10, now=True)
         reactor.callLater(1, self._priming_worker)
-
-        # Ставимо всі завдання на праймінг в чергу
-        all_assets = _get_all_assets()
-        for symbol in all_assets:
+        for symbol in ALL_ASSETS:
             for tf in SUPPORTED_TIMEFRAMES:
                 self.priming_queue.put((symbol, tf))
-        logger.info(f"Queued {self.priming_queue.size} priming tasks for {len(all_assets)} assets.")
 
     def stop(self, *args):
         logger.info("Stopping Indicator Processor...")
@@ -150,7 +144,7 @@ class IndicatorProcessor:
                 except Exception as e:
                     logger.error(f"WORKER: Failed to prime {symbol}:{tf}: {e}")
                 
-                yield self._sleep(0.5) # RATE LIMIT: 2 запити на секунду
+                yield self._sleep(0.5)
             except Exception as e:
                 logger.exception(f"Critical error in priming worker: {e}")
 
@@ -160,28 +154,32 @@ class IndicatorProcessor:
         try:
             df = pd.DataFrame(list(self.candle_buffers[tf].get(symbol, [])))
             if len(df) < 21:
-                return # Просто чекаємо, доки праймер завантажить дані
+                yield self.priming_queue.put((symbol, tf)); return
             
-            if tf != '1day':
-                daily_df = pd.DataFrame(list(self.candle_buffers['1day'].get(symbol, [])))
-                if len(daily_df) < 21:
-                    return # Чекаємо, доки праймер завантажить денні дані
-            else:
-                daily_df = df
-
+            daily_df = pd.DataFrame(list(self.candle_buffers['1day'].get(symbol, [])))
+            if len(daily_df) < 21:
+                yield self.priming_queue.put((symbol, '1day'))
+                reactor.callLater(10, self._analyze_timeframe, symbol, tf); return
+            
             state = prime_indicators(df)
             current_price = df.iloc[-1]['Close']
             final_result = calculate_final_signal(state, df, daily_df, current_price)
-            
-            if final_result.get("error"):
-                logger.error(f"Analysis for {symbol}:{tf} failed: {final_result.get('error')}")
-                return
+            if final_result.get("error"): return
 
             final_result['pair'] = symbol
             final_result['timestamp'] = int(time.time())
             
             yield threads.deferToThread(self.redis.set, result_key, json.dumps(final_result), ex=3600*6)
             logger.info(f"SUCCESS: Analysis for {symbol}:{tf} saved. Score: {final_result.get('bull_percentage')}")
+            
+            score = final_result.get('bull_percentage', 50)
+            if tf == "5m" and (score >= IDEAL_ENTRY_THRESHOLD or score <= (100 - IDEAL_ENTRY_THRESHOLD)):
+                category = ASSET_TO_CATEGORY.get(symbol.replace("/", ""))
+                if category:
+                    scanner_state = yield threads.deferToThread(self.redis.get, f"scanner_state:{category}")
+                    if scanner_state == 'true':
+                        logger.info(f"SCANNER TRIGGER for {symbol}. Sending notification.")
+                        yield threads.deferToThread(self.redis.publish, "telegram_notifications", json.dumps(final_result))
         except Exception as e:
             logger.exception(f"Failed to analyze {symbol}:{tf}: {e}")
     
