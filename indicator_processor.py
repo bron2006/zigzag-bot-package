@@ -9,7 +9,7 @@ from collections import deque
 
 import pandas as pd
 from twisted.internet import reactor, threads, defer
-from twisted.internet.defer import DeferredQueue # --- ПОЧАТОК ЗМІН: Правильний імпорт ---
+from twisted.internet.defer import DeferredQueue
 from twisted.internet.task import LoopingCall
 
 from spotware_connect import SpotwareConnect
@@ -36,9 +36,7 @@ class IndicatorProcessor:
         self.agg_candles = {tf: {} for tf in SUPPORTED_TIMEFRAMES}
         self.candle_buffers = {tf: {} for tf in SUPPORTED_TIMEFRAMES}
         self.priming_in_progress = set()
-        # --- ПОЧАТОК ЗМІН: Використано правильний клас DeferredQueue ---
         self.priming_queue = DeferredQueue()
-        # --- КІНЕЦЬ ЗМІН ---
 
     def start(self):
         logger.info("Starting Indicator Processor...")
@@ -123,19 +121,18 @@ class IndicatorProcessor:
                 state_key = f"state:{symbol}:{tf}"
                 is_primed = yield threads.deferToThread(self.redis.exists, state_key)
                 if is_primed:
-                    logger.info(f"WORKER: State for {symbol}:{tf} already exists. Skipping.")
                     continue
                 logger.info(f"WORKER: Got priming task for {symbol}:{tf}")
                 self.priming_in_progress.add((symbol, tf))
                 try:
                     df = yield self._get_historical_data(symbol, tf, 200)
                     if df is None or df.empty or len(df) < 200:
-                        logger.error(f"WORKER: Not enough data to prime {symbol}:{tf} ({len(df) if df is not None else 0} candles)")
+                        logger.error(f"WORKER: Not enough data for {symbol}:{tf}")
                         continue
                     self.candle_buffers[tf][symbol] = deque(df.to_dict('records'), maxlen=200)
                     state = prime_indicators(df)
                     if not state:
-                        logger.error(f"WORKER: Failed to generate initial state for {symbol}:{tf}")
+                        logger.error(f"WORKER: Failed to generate state for {symbol}:{tf}")
                         continue
                     yield threads.deferToThread(self.redis.set, state_key, json.dumps(state))
                     logger.info(f"WORKER: Priming successful for {symbol}:{tf}")
@@ -147,7 +144,7 @@ class IndicatorProcessor:
                         self.priming_in_progress.remove((symbol, tf))
                 yield self._sleep(1) 
             except Exception as e:
-                logger.exception(f"Critical error in priming worker loop: {e}")
+                logger.exception(f"Critical error in priming worker: {e}")
 
     @defer.inlineCallbacks
     def _analyze_timeframe(self, symbol: str, tf: str):
@@ -156,20 +153,32 @@ class IndicatorProcessor:
             state_raw = yield threads.deferToThread(self.redis.get, state_key)
             if not state_raw:
                 if (symbol, tf) not in self.priming_in_progress:
-                    logger.debug(f"Adding priming task for {symbol}:{tf} to the queue.")
                     yield self.priming_queue.put((symbol, tf))
                 return
-            state = json.loads(state_raw)
-            if not self.candle_buffers[tf].get(symbol): return
-            df = pd.DataFrame(list(self.candle_buffers[tf][symbol]))
+            
+            daily_state_raw = yield threads.deferToThread(self.redis.get, f"state:{symbol}:1day")
+            
+            if not daily_state_raw and tf != '1day':
+                logger.warning(f"Daily data for {symbol} not ready. Re-queueing analysis for {tf}.")
+                yield self.priming_queue.put((symbol, '1day'))
+                reactor.callLater(10, self._analyze_timeframe, symbol, tf)
+                return
+
+            df = pd.DataFrame(list(self.candle_buffers[tf].get(symbol, [])))
+            if df.empty: return
+
             state = prime_indicators(df)
             yield threads.deferToThread(self.redis.set, state_key, json.dumps(state))
-            if tf != '1day' and self.candle_buffers['1day'].get(symbol):
-                daily_df = pd.DataFrame(list(self.candle_buffers['1day'][symbol]))
-                current_price = self.candle_buffers[tf][symbol][-1]['close']
+            
+            if tf != '1day':
+                daily_df = pd.DataFrame(list(self.candle_buffers['1day'].get(symbol, [])))
+                if daily_df.empty: return
+                
+                current_price = df.iloc[-1]['close']
                 final_result = calculate_final_signal(state, df, daily_df, current_price)
                 final_result['pair'] = symbol
                 final_result['timestamp'] = int(time.time())
+                
                 yield threads.deferToThread(self.redis.set, result_key, json.dumps(final_result), ex=3600*6)
                 logger.info(f"SUCCESS: Analysis for {symbol}:{tf} saved. Score: {final_result.get('bull_percentage')}")
         except Exception as e:
@@ -190,7 +199,6 @@ class IndicatorProcessor:
             fromTimestamp=from_ts, toTimestamp=now
         )
         api_call = self.client.send(request, timeout=60)
-
         def on_ok(msg):
             res = ProtoOAGetTrendbarsRes(); res.ParseFromString(msg.payload)
             divisor = 10**5
@@ -200,10 +208,8 @@ class IndicatorProcessor:
                 d.callback(df)
                 return
             d.callback(df.sort_values(by='ts').reset_index(drop=True))
-        
         def on_err(f):
             d.errback(f)
-        
         api_call.addCallbacks(on_ok, on_err)
         return d
 
