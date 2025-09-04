@@ -1,19 +1,16 @@
 # fly.toml
-
 app = 'zigzag-bot-package'
 primary_region = 'fra'
 
 [build]
 
-# --- ПОЧАТОК ЗМІН: HTTP сервіс тепер прив'язаний тільки до процесу 'app' ---
 [http_service]
   internal_port = 8080
   force_https = true
   auto_stop_machines = false
   auto_start_machines = true
   min_machines_running = 1
-  processes = ['app'] # Тільки 'app' обробляє HTTP трафік
-# --- КІНЕЦЬ ЗМІН ---
+  processes = ['app']
 
 [[vm]]
   memory = '1gb'
@@ -24,9 +21,5 @@ primary_region = 'fra'
   source="signals_data"
   destination="/data"
 
-# --- ПОЧАТОК ЗМІН: Додано всі три процеси для запуску ---
 [processes]
   app = "python app.py"
-  streamer = "python price_streamer.py"
-  processor = "python indicator_processor.py"
-# --- КІНЕЦЬ ЗМІН ---
