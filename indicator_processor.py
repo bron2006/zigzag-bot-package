@@ -65,6 +65,7 @@ class IndicatorProcessor:
         self.symbol_cache = {s.symbolName.replace("/", ""): s for s in res.symbol}
         self.pubsub_thread = threads.deferToThread(self._listen_for_candles)
         LoopingCall(self._heartbeat).start(10, now=True)
+        LoopingCall(self._log_scanner_status).start(30)
         reactor.callLater(1, self._priming_worker)
         for symbol in ALL_ASSETS:
             for tf in SUPPORTED_TIMEFRAMES:
@@ -80,6 +81,18 @@ class IndicatorProcessor:
     def _heartbeat(self):
         try:
             self.redis.set("processor:heartbeat", int(time.time()), ex=60)
+        except Exception:
+            pass
+
+    def _log_scanner_status(self):
+        try:
+            r = get_redis()
+            keys = r.keys("scanner_state:*")
+            active_scanners = [k.split(":")[-1] for k in keys if r.get(k) == 'true']
+            if active_scanners:
+                logger.info(f"SCANNER ACTIVE for: {', '.join(active_scanners)}. Awaiting strong signals...")
+            else:
+                logger.info("All scanners are disabled.")
         except Exception:
             pass
 
