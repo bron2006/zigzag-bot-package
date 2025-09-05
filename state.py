@@ -26,7 +26,7 @@ SIGNAL_CACHE: Dict[str, Dict[str, Any]] = {}
 
 # --- СТАН СКАНЕРІВ (керується з UI) ---
 SCANNER_STATE: Dict[str, bool] = {
-    "forex": True,
+    "forex": False, # <-- ОСЬ ЦЯ ЗМІНА. Тепер за замовчуванням вимкнено.
     "crypto": False,
     "commodities": False
 }
