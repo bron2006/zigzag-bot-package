@@ -32,11 +32,9 @@ from auth import is_valid_init_data, get_user_id_from_init_data
 import analysis as analysis_module
 from redis_client import get_redis
 from spotware_connect import SpotwareConnect
-# --- ПОЧАТОК ЗМІН: Імпортуємо необхідні повідомлення для підписки на ціни ---
 from ctrader_open_api.messages.OpenApiMessages_pb2 import (
     ProtoOASymbolsListRes, ProtoOASubscribeSpotsReq, ProtoOASpotEvent
 )
-# --- КІНЕЦЬ ЗМІН ---
 from config import (
     TELEGRAM_BOT_TOKEN, get_ct_client_id, get_ct_client_secret,
     FOREX_SESSIONS, get_fly_app_name, CRYPTO_PAIRS, STOCK_TICKERS,
@@ -52,11 +50,6 @@ app = Flask(__name__)
 app.config['JSON_AS_ASCII'] = False
 WEBAPP_DIR = os.path.join(os.path.dirname(__file__), "webapp")
 
-# --- ПОЧАТОК ЗМІН: Видаляємо блок динамічної ініціалізації state ---
-# Тепер усі змінні стану оголошені безпосередньо у файлі state.py,
-# що робить код чистішим і надійнішим.
-# --- КІНЕЦЬ ЗМІН ---
-
 # helper: protected route for Telegram WebApp initData
 def protected_route(f):
     @wraps(f)
@@ -68,9 +61,6 @@ def protected_route(f):
         return f(*args, **kwargs)
     return decorated_function
 
-# --- ПОЧАТОК ЗМІН: Видаляємо адаптивний wrapper, він більше не потрібен ---
-# Ми стандартизували виклик get_api_detailed_signal_data і він більше не потрібен.
-# --- КІНЕЦЬ ЗМІН ---
 get_api_detailed_signal_data = analysis_module.get_api_detailed_signal_data
 
 # --------------------------
@@ -85,7 +75,6 @@ def _collect_assets_to_scan():
         assets.extend(CRYPTO_PAIRS)
     if state.SCANNER_STATE.get("commodities"):
         assets.extend(COMMODITIES)
-    # dedupe preserving order
     seen = set()
     out = [a for a in assets if not (a in seen or seen.add(a))]
     return out
@@ -106,7 +95,10 @@ def _handle_analysis_result(pair_norm, result):
             return
 
         try:
+            # --- ПОЧАТОК ЗМІН: Діагностичне логування ---
             state.sse_queue.put_nowait(result)
+            logger.info(f"DEBUG: Signal for {pair_norm} PUT into SSE queue. Queue size is now: {state.sse_queue.qsize()}")
+            # --- КІНЕЦЬ ЗМІН ---
         except queue.Full:
             logger.warning("SSE queue full - dropping")
 
@@ -164,27 +156,20 @@ def scan_markets_once():
     except Exception:
         logger.exception("scan_markets_once error")
 
-# --- ПОЧАТОК ЗМІН: Логіка для отримання живих цін (замість price_streamer.py) ---
 def _on_spot_event(event: ProtoOASpotEvent):
-    """
-    Обробляє тікові дані, що надходять від cTrader, і записує їх у state.live_prices.
-    """
     try:
         if not (event.HasField("bid") or event.HasField("ask")):
             return
 
-        # Знаходимо ім'я символу за його ID
         symbol_name = state.symbol_id_map.get(event.symbolId)
         if not symbol_name:
             return
 
-        # cTrader надсилає ціни як цілі числа, тому ділимо на 10^5
         divisor = 10**5
         bid = event.bid / divisor if event.HasField("bid") else None
         ask = event.ask / divisor if event.HasField("ask") else None
         mid = (bid + ask) / 2.0 if bid and ask else None
 
-        # Оновлюємо наш кеш цін в оперативній пам'яті
         state.live_prices[symbol_name] = {
             "bid": bid, "ask": ask, "mid": mid, "ts": time.time()
         }
@@ -193,16 +178,11 @@ def _on_spot_event(event: ProtoOASpotEvent):
     except Exception:
         logger.exception("Error processing spot event")
 
-
 def start_price_subscriptions():
-    """
-    Підписується на потік цін для всіх активів, що скануються.
-    """
     logger.info("Starting price subscriptions for all scannable assets...")
     assets_to_subscribe = _collect_assets_to_scan()
-    # Додамо також інші активи, які не скануються, але можуть бути в UI
     assets_to_subscribe.extend(STOCK_TICKERS)
-    assets_to_subscribe = sorted(list(set(assets_to_subscribe))) # дедуплікація
+    assets_to_subscribe = sorted(list(set(assets_to_subscribe)))
 
     for i, pair in enumerate(assets_to_subscribe):
         def subscribe_pair(p):
@@ -213,7 +193,6 @@ def start_price_subscriptions():
                     logger.warning(f"Cannot subscribe to {pair_norm}: not found in symbol cache.")
                     return
 
-                # Підписуємось на сповіщення від cTrader
                 req = ProtoOASubscribeSpotsReq(
                     ctidTraderAccountId=state.client._client.account_id,
                     symbolId=[symbol_details.symbolId]
@@ -223,16 +202,12 @@ def start_price_subscriptions():
                     lambda _, p=pair_norm: logger.info(f"✅ Subscribed to price stream for {p}"),
                     lambda err, p=pair_norm: logger.error(f"❌ Failed to subscribe to {p}: {err.getErrorMessage()}")
                 )
-                # Реєструємо наш обробник для подій цього символу
                 state.client.on(f"spot_event_{symbol_details.symbolId}", _on_spot_event)
 
             except Exception:
                 logger.exception(f"Error during subscription schedule for {p}")
 
-        # Розносимо запити в часі, щоб не перевантажити API
         reactor.callLater(i * 0.2, subscribe_pair, pair)
-
-# --- КІНЕЦЬ ЗМІН ---
 
 # --------------------------
 # cTrader handlers
@@ -242,15 +217,11 @@ def _on_symbols_loaded(raw_message):
         res = ProtoOASymbolsListRes()
         res.ParseFromString(raw_message.payload)
         state.symbol_cache = {s.symbolName.replace("/", ""): s for s in res.symbol}
-        # --- ПОЧАТОК ЗМІН: Створюємо зворотний кеш для швидкого пошуку імені за ID ---
         state.symbol_id_map = {s.symbolId: s.symbolName.replace("/", "") for s in res.symbol}
-        # --- КІНЕЦЬ ЗМІН ---
         state.all_symbol_names = [s.symbolName for s in res.symbol]
         state.SYMBOLS_LOADED = True
         logger.info(f"Loaded {len(state.symbol_cache)} symbols from cTrader.")
-        # --- ПОЧАТОК ЗМІН: Запускаємо підписку на ціни після завантаження символів ---
         start_price_subscriptions()
-        # --- КІНЕЦЬ ЗМІН ---
     except Exception:
         logger.exception("on_symbols_loaded error")
 
@@ -354,9 +325,15 @@ def scanner_toggle():
 @protected_route
 def signal_stream():
     def generate():
+        # --- ПОЧАТОК ЗМІН: Діагностичне логування ---
+        logger.info("DEBUG: Web client connected to SSE stream. Waiting for signals...")
+        # --- КІНЕЦЬ ЗМІН ---
         while True:
             try:
                 data = state.sse_queue.get(timeout=20)
+                # --- ПОЧАТОК ЗМІН: Діагностичне логування ---
+                logger.info(f"DEBUG: Signal for {data.get('pair')} GOT from SSE queue. Sending to web client.")
+                # --- КІНЕЦЬ ЗМІН ---
                 yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
             except queue.Empty:
                 yield ": ping\n\n"
