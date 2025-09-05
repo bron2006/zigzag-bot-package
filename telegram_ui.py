@@ -17,7 +17,6 @@ def get_reply_keyboard() -> ReplyKeyboardMarkup:
     keyboard = [[KeyboardButton("МЕНЮ")]]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-# --- ПОЧАТОК ЗМІН: Оновлено функцію створення головного меню ---
 def get_main_menu_kb() -> InlineKeyboardMarkup:
     keyboard = [
         [InlineKeyboardButton("💹 Валютні пари (Forex)", callback_data="category_forex")],
@@ -26,29 +25,23 @@ def get_main_menu_kb() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("🥇 Сировина", callback_data="category_commodities")]
     ]
     
-    # Створення кнопок для керування сканерами
+    # Кнопки керування сканерами
     scanner_map = {
         "forex": "💹 Forex",
         "crypto": "💎 Crypto",
         "commodities": "🥇 Сировина"
     }
-
     for key, text in scanner_map.items():
-        is_enabled = state.SCANNER_STATE.get(key, False)
+        is_enabled = state.get_scanner_state(key)
         status_icon = "✅" if is_enabled else "❌"
         button_text = f"{status_icon} Сканер {text}"
         callback_data = f"toggle_scanner_{key}"
         keyboard.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
         
     return InlineKeyboardMarkup(keyboard)
-# --- КІНЕЦЬ ЗМІН ---
 
 def get_timeframe_kb(category: str) -> InlineKeyboardMarkup:
-    keyboard = []
-    row = []
-    for tf in TIMEFRAMES:
-        row.append(InlineKeyboardButton(tf, callback_data=f"tf_{category}_{tf}"))
-    keyboard.append(row)
+    keyboard = [[InlineKeyboardButton(tf, callback_data=f"tf_{category}_{tf}") for tf in TIMEFRAMES]]
     keyboard.append([InlineKeyboardButton("⬅️ Назад до категорій", callback_data="main_menu")])
     return InlineKeyboardMarkup(keyboard)
 
@@ -61,16 +54,14 @@ def get_forex_sessions_kb(timeframe: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(keyboard)
 
 def get_assets_kb(asset_list: list, category: str, timeframe: str) -> InlineKeyboardMarkup:
-    keyboard = []
-    row = []
+    keyboard, row = [], []
     for asset in asset_list:
         callback_data = f"analyze_{timeframe}_{asset.replace('/', '')}"
         row.append(InlineKeyboardButton(asset, callback_data=callback_data))
         if len(row) == 2:
             keyboard.append(row)
             row = []
-    if row:
-        keyboard.append(row)
+    if row: keyboard.append(row)
     keyboard.append([InlineKeyboardButton("⬅️ Назад до таймфреймів", callback_data=f"category_{category}")])
     return InlineKeyboardMarkup(keyboard)
 
@@ -87,10 +78,7 @@ def menu(update: Update, context: CallbackContext) -> None:
         except BadRequest:
             pass
 
-    sent_message = update.message.reply_text(
-        "🏠 Головне меню:",
-        reply_markup=get_main_menu_kb()
-    )
+    sent_message = update.message.reply_text("🏠 Головне меню:", reply_markup=get_main_menu_kb())
     context.user_data['last_menu_id'] = sent_message.message_id
 
     context.bot.send_message(
@@ -101,7 +89,10 @@ def menu(update: Update, context: CallbackContext) -> None:
     )
 
 def reset_ui(update: Update, context: CallbackContext) -> None:
-    update.message.reply_text(f"Невідома команда: '{update.message.text}'. Використовуйте кнопки.", reply_markup=get_reply_keyboard())
+    update.message.reply_text(
+        f"Невідома команда: '{update.message.text}'. Використовуйте кнопки.",
+        reply_markup=get_reply_keyboard()
+    )
 
 def symbols_command(update: Update, context: CallbackContext):
     if not state.SYMBOLS_LOADED or not hasattr(state, 'all_symbol_names'):
@@ -126,50 +117,43 @@ def _format_signal_message(result: dict, timeframe: str) -> str:
     if result.get("error"):
         return f"❌ Помилка аналізу: {result['error']}"
 
-    message_parts = []
-    
+    parts = []
     if result.get("special_warning"):
-        message_parts.append(f"**{result.get('special_warning')}**\n")
+        parts.append(f"**{result['special_warning']}**\n")
 
     pair = result.get('pair', 'N/A')
     price = result.get('price')
     verdict = result.get('verdict_text', 'Не вдалося визначити.')
     score = result.get('bull_percentage', 50)
 
-    confidence_text = "Низька (ринок невизначений)"
-    if score > 75 or score < 25: confidence_text = "Висока"
-    elif score > 55 or score < 45: confidence_text = "Помірна (є суперечливі фактори)"
+    confidence = "Низька (ринок невизначений)"
+    if score > 75 or score < 25: confidence = "Висока"
+    elif score > 55 or score < 45: confidence = "Помірна (є суперечливі фактори)"
     
     price_str = f"{price:.5f}" if price else "N/A"
     
-    message_parts.append(f"📈 *Аналіз для {pair} ({timeframe})*")
-    message_parts.append(f"**Сигнал:** {verdict}")
-    message_parts.append(f"**Впевненість:** {confidence_text}")
-    message_parts.append(f"**Поточна ціна:** `{price_str}`")
-    message_parts.append(f"\n**Баланс сил:**\n🐂 Бики: {score}% ⬆️ | 🐃 Ведмеді: {100-score}% ⬇️\n")
+    parts.append(f"📈 *Аналіз для {pair} ({timeframe})*")
+    parts.append(f"**Сигнал:** {verdict}")
+    parts.append(f"**Впевненість:** {confidence}")
+    parts.append(f"**Поточна ціна:** `{price_str}`")
+    parts.append(f"\n**Баланс сил:**\n🐂 Бики: {score}% ⬆️ | 🐃 Ведмеді: {100-score}% ⬇️\n")
 
-    candle_pattern = result.get('candle_pattern')
-    if candle_pattern and candle_pattern.get('text'):
-        message_parts.append(f"**🕯️ Свічковий патерн:**\n_{candle_pattern['text']}_")
+    if result.get('candle_pattern', {}).get('text'):
+        parts.append(f"**🕯️ Свічковий патерн:**\n_{result['candle_pattern']['text']}_")
     
-    support = result.get('support')
-    resistance = result.get('resistance')
-    if support or resistance:
-        levels = []
-        if support: levels.append(f"Підтримка: `{support:.5f}`")
-        if resistance: levels.append(f"Опір: `{resistance:.5f}`")
-        message_parts.append(f"🔑 **Ключові рівні:** " + " | ".join(levels))
+    levels = []
+    if result.get('support'): levels.append(f"Підтримка: `{result['support']:.5f}`")
+    if result.get('resistance'): levels.append(f"Опір: `{result['resistance']:.5f}`")
+    if levels: parts.append(f"🔑 **Ключові рівні:** " + " | ".join(levels))
 
-    volume_analysis = result.get('volume_info')
-    if volume_analysis:
-        message_parts.append(f"**📊 Аналіз об'єму:**\n_{volume_analysis}_")
+    if result.get('volume_info'):
+        parts.append(f"**📊 Аналіз об'єму:**\n_{result['volume_info']}_")
 
     reasons = result.get('reasons', [])
     if reasons:
-        reason_text = "\n".join([f"• _{reason}_" for reason in reasons])
-        message_parts.append(f"\n📑 **Ключові фактори аналізу:**\n{reason_text}")
+        parts.append(f"\n📑 **Ключові фактори аналізу:**\n" + "\n".join([f"• _{r}_" for r in reasons]))
         
-    return "\n".join(message_parts)
+    return "\n".join(parts)
 
 def button_handler(update: Update, context: CallbackContext) -> None:
     query = update.callback_query
@@ -180,20 +164,17 @@ def button_handler(update: Update, context: CallbackContext) -> None:
     parts = data.split('_')
     action = parts[0]
 
-    # --- ПОЧАТОК ЗМІН: Оновлено логіку обробника кнопок сканера ---
+    # --- toggle scanner ---
     if action == "toggle" and parts[1] == "scanner":
-        # Тепер callback_data має вигляд "toggle_scanner_forex"
         if len(parts) > 2:
-            category_to_toggle = parts[2] # forex, crypto, commodities
-            if category_to_toggle in state.SCANNER_STATE:
-                # Перемикаємо стан
-                state.SCANNER_STATE[category_to_toggle] = not state.SCANNER_STATE[category_to_toggle]
-                status_text = "увімкнено" if state.SCANNER_STATE[category_to_toggle] else "вимкнено"
-                query.answer(text=f"Сканер для '{category_to_toggle}' {status_text}")
-                # Оновлюємо меню, щоб показати новий стан
+            category = parts[2]
+            if category in state.SCANNER_STATE:
+                new_state = not state.get_scanner_state(category)
+                state.set_scanner_state(category, new_state)
+                status_text = "увімкнено" if new_state else "вимкнено"
+                query.answer(text=f"Сканер '{category}' {status_text}")
                 query.edit_message_text("🏠 Головне меню:", reply_markup=get_main_menu_kb())
             return
-    # --- КІНЕЦЬ ЗМІН ---
 
     if action == "main":
         query.edit_message_text("🏠 Головне меню:", reply_markup=get_main_menu_kb())
@@ -206,9 +187,9 @@ def button_handler(update: Update, context: CallbackContext) -> None:
         _, category, timeframe = parts
         if category == 'forex':
             query.edit_message_text("💹 Виберіть торгову сесію:", reply_markup=get_forex_sessions_kb(timeframe))
-        else: 
+        else:
             asset_map = {'crypto': CRYPTO_PAIRS, 'stocks': STOCK_TICKERS, 'commodities': COMMODITIES}
-            query.edit_message_text(f"Виберіть актив:", reply_markup=get_assets_kb(asset_map.get(category,[]), category, timeframe))
+            query.edit_message_text(f"Виберіть актив:", reply_markup=get_assets_kb(asset_map.get(category, []), category, timeframe))
 
     elif action == "session":
         _, category, timeframe, session_name = parts
@@ -218,18 +199,20 @@ def button_handler(update: Update, context: CallbackContext) -> None:
     elif action == "analyze":
         _, timeframe, symbol = parts
         if not state.client or not state.SYMBOLS_LOADED:
-            query.answer(text="❌ Сервіс ще завантажується, спробуйте за мить.", show_alert=True); return
+            query.answer(text="❌ Сервіс ще завантажується, спробуйте пізніше.", show_alert=True)
+            return
         
         query.edit_message_text(text=f"⏳ Обрано {symbol} ({timeframe}). Роблю запит...")
-        
+
         def on_success(result):
-            message_text = _format_signal_message(result, timeframe)
-            query.edit_message_text(text=message_text, parse_mode='Markdown', reply_markup=get_main_menu_kb())
+            state.cache_signal(symbol, timeframe, result)
+            msg = _format_signal_message(result, timeframe)
+            query.edit_message_text(text=msg, parse_mode='Markdown', reply_markup=get_main_menu_kb())
 
         def on_error(failure):
-            error_message = failure.getErrorMessage() if hasattr(failure, 'getErrorMessage') else str(failure)
-            logger.error(f"❌ Помилка при отриманні сигналу для {symbol}: {error_message}")
-            query.edit_message_text(text=f"❌ Виникла помилка: {error_message}", reply_markup=get_main_menu_kb())
+            error = failure.getErrorMessage() if hasattr(failure, 'getErrorMessage') else str(failure)
+            logger.error(f"❌ Помилка при отриманні сигналу для {symbol}: {error}")
+            query.edit_message_text(text=f"❌ Виникла помилка: {error}", reply_markup=get_main_menu_kb())
 
         def do_analysis():
             d = get_api_detailed_signal_data(state.client, state.symbol_cache, symbol, query.from_user.id, timeframe)
