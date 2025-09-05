@@ -83,9 +83,18 @@ def _handle_analysis_result(pair_norm, result):
     try:
         if not result or result.get("error"):
             return
+        
         score = result.get("bull_percentage", 50)
-        is_signal = score >= IDEAL_ENTRY_THRESHOLD or score <= (100 - IDEAL_ENTRY_THRESHOLD)
+        
+        # --- ПОЧАТОК ЗМІН: Діагностичне логування для сканера ---
+        lower_bound = 100 - IDEAL_ENTRY_THRESHOLD
+        logger.info(f"[SCANNER_DIAG] Pair: {pair_norm}, Score: {score}%. Checking against threshold: >= {IDEAL_ENTRY_THRESHOLD}% or <= {lower_bound}%.")
+        # --- КІНЕЦЬ ЗМІН ---
+
+        is_signal = score >= IDEAL_ENTRY_THRESHOLD or score <= lower_bound
+        
         if not is_signal:
+            logger.info(f"[SCANNER_DIAG] Signal for {pair_norm} IGNORED due to low score.")
             return
 
         now = time.time()
@@ -93,12 +102,11 @@ def _handle_analysis_result(pair_norm, result):
         if (now - last_ts) < SCANNER_COOLDOWN_SECONDS:
             logger.debug(f"{pair_norm} on cooldown, skip notify")
             return
+        
+        logger.info(f"[SCANNER_DIAG] Signal for {pair_norm} PASSED filter. Notifying.")
 
         try:
-            # --- ПОЧАТОК ЗМІН: Діагностичне логування ---
             state.sse_queue.put_nowait(result)
-            logger.info(f"DEBUG: Signal for {pair_norm} PUT into SSE queue. Queue size is now: {state.sse_queue.qsize()}")
-            # --- КІНЕЦЬ ЗМІН ---
         except queue.Full:
             logger.warning("SSE queue full - dropping")
 
@@ -325,15 +333,11 @@ def scanner_toggle():
 @protected_route
 def signal_stream():
     def generate():
-        # --- ПОЧАТОК ЗМІН: Діагностичне логування ---
         logger.info("DEBUG: Web client connected to SSE stream. Waiting for signals...")
-        # --- КІНЕЦЬ ЗМІН ---
         while True:
             try:
                 data = state.sse_queue.get(timeout=20)
-                # --- ПОЧАТОК ЗМІН: Діагностичне логування ---
                 logger.info(f"DEBUG: Signal for {data.get('pair')} GOT from SSE queue. Sending to web client.")
-                # --- КІНЕЦЬ ЗМІН ---
                 yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
             except queue.Empty:
                 yield ": ping\n\n"
