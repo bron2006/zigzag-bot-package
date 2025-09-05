@@ -171,7 +171,6 @@ def _calculate_core_signal(df: pd.DataFrame, daily_df: pd.DataFrame, current_pri
         close, high, low = df['Close'].values, df['High'].values, df['Low'].values
         close_daily = daily_df['Close'].values
 
-        # --- Індикатори ---
         ema200_daily = talib.EMA(close_daily, timeperiod=200)
         rsi = talib.RSI(close, timeperiod=14)
         macd, macdsignal, macdhist = talib.MACD(close, fastperiod=12, slowperiod=26, signalperiod=9)
@@ -188,83 +187,69 @@ def _calculate_core_signal(df: pd.DataFrame, daily_df: pd.DataFrame, current_pri
         return {"score": 50, "reasons": ["Помилка розрахунку індикаторів"], "verdict_text": "🟡 НЕЙТРАЛЬНО"}
 
     reasons = []
-    bullish_factors = 0
-    bearish_factors = 0
+    bullish_factors, bearish_factors = 0, 0
 
-    # --- Збір факторів ---
     if last_macd_hist > 0:
-        bullish_factors += 1
-        reasons.append("MACD росте")
+        bullish_factors += 1; reasons.append("MACD росте")
     else:
-        bearish_factors += 1
-        reasons.append("MACD падає")
+        bearish_factors += 1; reasons.append("MACD падає")
 
     if candle_pattern:
         pname = candle_pattern.get('name', 'N/A')
         if candle_pattern.get('type') == 'bullish':
-            bullish_factors += 1
-            reasons.append(f"Бичачий патерн: {pname}")
+            bullish_factors += 1; reasons.append(f"Бичачий патерн: {pname}")
         elif candle_pattern.get('type') == 'bearish':
-            bearish_factors += 1
-            reasons.append(f"Ведмежий патерн: {pname}")
+            bearish_factors += 1; reasons.append(f"Ведмежий патерн: {pname}")
 
     if last_rsi < 30:
-        bullish_factors += 1
-        reasons.append("Ознаки перепроданості (RSI < 30)")
+        bullish_factors += 1; reasons.append("Ознаки перепроданості (RSI < 30)")
     elif last_rsi > 70:
-        bearish_factors += 1
-        reasons.append("Ознаки перекупленості (RSI > 70)")
+        bearish_factors += 1; reasons.append("Ознаки перекупленості (RSI > 70)")
 
-    # --- Фільтр денного тренду ---
     is_daily_uptrend = None
     if last_ema200_daily is not None:
         is_daily_uptrend = current_price > last_ema200_daily
 
-    # --- Нова логіка прийняття рішень ---
-    verdict = "🟡 НЕЙТРАЛЬНО"
-    score = 50
-    critical_warning = None
+    verdict, score, critical_warning = "🟡 НЕЙТРАЛЬНО", 50, None
 
     if is_daily_uptrend is True:
         reasons.append("📈 Глобальний тренд: Бичачий (D1)")
-        if bullish_factors >= 2:
-            score, verdict = 85, "⬆️ Сильна ПОКУПКА"
-        elif bullish_factors == 1:
-            score, verdict = 65, "↗️ Помірна ПОКУПКА"
-        
-        if bearish_factors >= 1: # Будь-який сигнал на продаж проти тренду є ризикованим
-            critical_warning = "❗️ Сигнал на продаж проти сильного денного тренду"
-            reasons.append(critical_warning)
-
+        if bullish_factors >= 2: score, verdict = 85, "⬆️ Сильна ПОКУПКА"
+        elif bullish_factors == 1: score, verdict = 65, "↗️ Помірна ПОКУПКА"
+        if bearish_factors >= 1: critical_warning = "❗️ Сигнал на продаж проти сильного денного тренду"; reasons.append(critical_warning)
     elif is_daily_uptrend is False:
         reasons.append("📉 Глобальний тренд: Ведмежий (D1)")
-        if bearish_factors >= 2:
-            score, verdict = 15, "⬇️ Сильний ПРОДАЖ"
-        elif bearish_factors == 1:
-            score, verdict = 35, "↘️ Помірний ПРОДАЖ"
-        
-        if bullish_factors >= 1:
-            critical_warning = "❗️ Сигнал на покупку проти сильного денного тренду"
-            reasons.append(critical_warning)
-            
-    else: # Денний тренд не визначений
+        if bearish_factors >= 2: score, verdict = 15, "⬇️ Сильний ПРОДАЖ"
+        elif bearish_factors == 1: score, verdict = 35, "↘️ Помірний ПРОДАЖ"
+        if bullish_factors >= 1: critical_warning = "❗️ Сигнал на покупку проти сильного денного тренду"; reasons.append(critical_warning)
+    else:
         reasons.append("↔️ Глобальний тренд: Боковий/Невизначений (D1)")
-        if bullish_factors >= 2:
-            score, verdict = 75, "↗️ Помірна ПОКУПКА"
-        elif bearish_factors >= 2:
-            score, verdict = 25, "↘️ Помірний ПРОДАЖ"
+        if bullish_factors >= 2: score, verdict = 75, "↗️ Помірна ПОКУПКА"
+        elif bearish_factors >= 2: score, verdict = 25, "↘️ Помірний ПРОДАЖ"
 
-    # --- Рівні та фінальні перевірки ---
     s_levels, r_levels = identify_support_resistance_levels(daily_df)
     support = max([s for s in s_levels if s < current_price], default=None)
     resistance = min([r for r in r_levels if r > current_price], default=None)
 
-    # Перевірка близькості до рівнів
-    if resistance and (resistance - current_price) / current_price < 0.005 and score > 50: # 0.5%
-        reasons.append("⚠️ Ціна близько до сильного опору")
-    if support and (current_price - support) / current_price < 0.005 and score < 50: # 0.5%
-        reasons.append("⚠️ Ціна близько до сильної підтримки")
+    # --- ПОЧАТОК ЗМІН: Нова логіка для коригування вердикту ---
+    # Перевіряємо, чи не суперечить сигнал ключовим рівням
+    is_near_resistance = resistance and (resistance - current_price) / current_price < 0.005 # поріг 0.5%
+    is_near_support = support and (current_price - support) / current_price < 0.005 # поріг 0.5%
 
+    if is_near_resistance and score > 60: # Якщо є будь-який сигнал на покупку біля сильного опору
+        verdict = "⚠️ Ризикована ПОКУПКА"
+        # Додаємо причину, якщо її ще немає
+        if not any("Ціна впритул до сильного денного опору" in r for r in reasons):
+            reasons.append("❗️ Ціна впритул до сильного денного опору")
+        score = 60 # Знижуємо впевненість до помірної/нейтральної
+
+    if is_near_support and score < 40: # Якщо є будь-який сигнал на продаж біля сильної підтримки
+        verdict = "⚠️ Ризикований ПРОДАЖ"
+        if not any("Ціна впритул до сильної денної підтримки" in r for r in reasons):
+            reasons.append("❗️ Ціна впритул до сильної денної підтримки")
+        score = 40 # Знижуємо впевненість до помірної/нейтральної
+    # --- КІНЕЦЬ ЗМІН ---
+    
     return {
         "score": int(np.clip(score, 0, 100)),
         "reasons": reasons,
