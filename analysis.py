@@ -2,7 +2,7 @@
 import logging
 import time
 import json
-from typing import Tuple, List
+from typing import Tuple, List, Optional
 
 import pandas as pd
 import numpy as np
@@ -17,9 +17,10 @@ from ctrader_open_api.messages.OpenApiMessages_pb2 import (
 from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOATrendbarPeriod as TrendbarPeriod
 
 from db import add_signal_to_history
-from redis_client import get_redis
+from redis_client import get_redis, set_tick, get_tick
 
 logger = logging.getLogger("analysis")
+logger.setLevel(logging.INFO)
 
 PERIOD_MAP = {
     "1m": TrendbarPeriod.M1,
@@ -112,34 +113,36 @@ def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: in
     deferred.addCallbacks(process_response, on_error)
     return d
 
-def get_price_from_redis(norm_pair: str, stale_sec: int = 15) -> Deferred:
+def _get_price_from_redis_sync(norm_pair: str, stale_sec: int = 30) -> Optional[float]:
     """
-    Читає останній тік з Redis: key = tick:<SYMBOL>.
-    Повертає Deferred, що дасть float (mid) або None.
-    Запускається у threadpool щоб не блокувати reactor.
+    Синхронна версія для запуску в threadpool
     """
-    def _fetch():
-        try:
-            r = get_redis()
-            raw = r.get(f"tick:{norm_pair}")
-            if not raw:
-                return None
-            data = json.loads(raw)
-            ts_ms = data.get("ts_ms")
-            if ts_ms and (time.time() * 1000 - ts_ms) > stale_sec * 1000:
-                return None
-            bid = data.get("bid")
-            ask = data.get("ask")
-            mid = data.get("mid")
-            if mid is not None:
-                return float(mid)
-            if bid is not None and ask is not None:
-                return (float(bid) + float(ask)) / 2.0
+    try:
+        r = get_redis()
+        raw = r.get(f"tick:{norm_pair}")
+        if not raw:
             return None
-        except Exception as e:
-            logger.exception(f"get_price_from_redis error for {norm_pair}: {e}")
+        data = json.loads(raw)
+        ts_ms = data.get("ts_ms")
+        if ts_ms and (time.time() * 1000 - ts_ms) > stale_sec * 1000:
             return None
-    return threads.deferToThread(_fetch)
+        bid = data.get("bid")
+        ask = data.get("ask")
+        mid = data.get("mid")
+        if mid is not None:
+            return float(mid)
+        if bid is not None and ask is not None:
+            return (float(bid) + float(ask)) / 2.0
+        return None
+    except Exception as e:
+        logger.exception(f"_get_price_from_redis_sync error for {norm_pair}: {e}")
+        return None
+
+def get_price_from_redis(norm_pair: str, stale_sec: int = 30) -> Deferred:
+    """
+    Повертає Deferred (через threadpool) з float або None
+    """
+    return threads.deferToThread(_get_price_from_redis_sync, norm_pair, stale_sec)
 
 # ----------------- analysis helpers -----------------
 def group_close_values(values: List[float], threshold=0.01) -> List[float]:
@@ -158,6 +161,8 @@ def identify_support_resistance_levels(df: pd.DataFrame, window=20, threshold=0.
     Повертає (supports, resistances).
     """
     try:
+        if df.empty:
+            return [], []
         lows = df['Low'].rolling(window=window, center=True, min_periods=3).min()
         highs = df['High'].rolling(window=window, center=True, min_periods=3).max()
         support_levels = group_close_values(df.loc[df['Low'] == lows, 'Low'].tolist(), threshold)
@@ -170,10 +175,10 @@ def identify_support_resistance_levels(df: pd.DataFrame, window=20, threshold=0.
 def analyze_candle_patterns(df: pd.DataFrame):
     """
     Повертає словник з полями 'name','type','text' або None.
-    Використовує TA-Lib для HAMMER та DOJI та ENGULF.
     """
     try:
-        last = df.iloc[-1]
+        if df.empty or len(df) < 5:
+            return None
         open_v = df['Open'].values
         high_v = df['High'].values
         low_v = df['Low'].values
@@ -220,59 +225,40 @@ def analyze_volume(df: pd.DataFrame):
         logger.exception(f"analyze_volume error: {e}")
         return "Помилка аналізу об'єму"
 
+# ----------------- core signal logic -----------------
 def _calculate_core_signal(df: pd.DataFrame, daily_df: pd.DataFrame, current_price: float):
     """
-    Основна логіка сигналу.
-    Повертає dict з ключами:
-    score (0..100), reasons(list), support, resistance, candle_pattern, volume_info, critical_warning
+    Повертає словник з ключами score (0..100), reasons(list), support, resistance, candle_pattern, volume_info, critical_warning, verdict_text
     """
     try:
-        # Перевірки вхідних даних
         if df.empty or daily_df.empty or len(df) < 50:
-            return {"score": 50, "reasons": ["Недостатньо даних для аналізу"]}
+            return {"score": 50, "reasons": ["Недостатньо даних для аналізу"], "verdict_text": "🟡 НЕЙТРАЛЬНО"}
 
-        # Підготовка series
         close = df['Close'].values
         high = df['High'].values
         low = df['Low'].values
-        open_v = df['Open'].values
-        vol = df['Volume'].values
 
         close_daily = daily_df['Close'].values
-        high_daily = daily_df['High'].values
-        low_daily = daily_df['Low'].values
 
-        # Індикатори (на останніх значеннях)
-        ema50 = talib.EMA(close, timeperiod=50)
-        ema200 = talib.EMA(close, timeperiod=200)
         ema200_daily = talib.EMA(close_daily, timeperiod=200)
 
         rsi = talib.RSI(close, timeperiod=14)
         rsi_last = float(rsi[-1]) if len(rsi) else np.nan
 
         macd, macdsignal, macdhist = talib.MACD(close, fastperiod=12, slowperiod=26, signalperiod=9)
-        macd_last = float(macd[-1]) if len(macd) else np.nan
-        macd_sig_last = float(macdsignal[-1]) if len(macdsignal) else np.nan
         macd_hist_last = float(macdhist[-1]) if len(macdhist) else np.nan
-
-        atr = talib.ATR(high, low, close, timeperiod=14)
-        atr_last = float(atr[-1]) if len(atr) else np.nan
-
-        adx = talib.ADX(high, low, close, timeperiod=14)
-        adx_last = float(adx[-1]) if len(adx) else np.nan
 
         candle_pattern = analyze_candle_patterns(df)
         volume_info = analyze_volume(df)
-
     except Exception as e:
         logger.exception(f"Indicator calculation failed: {e}")
-        return {"score": 50, "reasons": ["Помилка розрахунку індикаторів"]}
+        return {"score": 50, "reasons": ["Помилка розрахунку індикаторів"], "verdict_text": "🟡 НЕЙТРАЛЬНО"}
 
     reasons = []
-    critical_warning = None
     score = 50
+    critical_warning = None
+    verdict = "🟡 НЕЙТРАЛЬНО"
 
-    # Global trend by daily EMA200
     try:
         ema200_daily_last = float(ema200_daily[-1]) if len(ema200_daily) else None
         is_daily_uptrend = None
@@ -281,11 +267,9 @@ def _calculate_core_signal(df: pd.DataFrame, daily_df: pd.DataFrame, current_pri
     except Exception:
         is_daily_uptrend = None
 
-    # Factors
     bullish_factors = 0
     bearish_factors = 0
 
-    # MACD
     if not np.isnan(macd_hist_last):
         if macd_hist_last > 0:
             bullish_factors += 1
@@ -294,7 +278,6 @@ def _calculate_core_signal(df: pd.DataFrame, daily_df: pd.DataFrame, current_pri
             bearish_factors += 1
             reasons.append("MACD падає")
 
-    # Candle pattern
     if candle_pattern:
         pname = candle_pattern.get('name', '').upper()
         if candle_pattern.get('type') == 'bullish':
@@ -306,7 +289,6 @@ def _calculate_core_signal(df: pd.DataFrame, daily_df: pd.DataFrame, current_pri
         else:
             reasons.append(f"Нейтральний патерн: {pname}")
 
-    # RSI
     if not np.isnan(rsi_last):
         if rsi_last < 30:
             bullish_factors += 1
@@ -315,19 +297,6 @@ def _calculate_core_signal(df: pd.DataFrame, daily_df: pd.DataFrame, current_pri
             bearish_factors += 1
             reasons.append("Ознаки перекупленості (RSI)")
 
-    # ADX strength
-    if not np.isnan(adx_last):
-        if adx_last > 25:
-            reasons.append("Сильний тренд (ADX>25)")
-
-    # Volume signal
-    if volume_info == "🟢 Підвищений об'єм":
-        bullish_factors += 1
-        reasons.append("Підвищений об'єм підтверджує рух")
-    elif volume_info == "🧊 Аномально низький об'єм":
-        reasons.append("Мало об'єму")
-
-    # Support/resistance (daily)
     long_term_support, long_term_resistance = identify_support_resistance_levels(daily_df)
     support = max([s for s in long_term_support if s < current_price], default=None) if long_term_support else None
     resistance = min([r for r in long_term_resistance if r > current_price], default=None) if long_term_resistance else None
@@ -335,44 +304,23 @@ def _calculate_core_signal(df: pd.DataFrame, daily_df: pd.DataFrame, current_pri
     # Decision rules
     if is_daily_uptrend is True:
         if bullish_factors >= 2:
-            score = 90
-            verdict = "⬆️ Сильна ПОКУПКА"
+            score = 90; verdict = "⬆️ Сильна ПОКУПКА"
         elif bullish_factors == 1:
-            score = 65
-            verdict = "↗️ Помірна ПОКУПКА"
+            score = 65; verdict = "↗️ Помірна ПОКУПКА"
         elif bearish_factors >= 2:
-            score = 25
-            verdict = "↘️ Помірний ПРОДАЖ"
-        else:
-            score = 50
-            verdict = "🟡 НЕЙТРАЛЬНО"
+            score = 25; verdict = "↘️ Помірний ПРОДАЖ"
     elif is_daily_uptrend is False:
-        if bullish_factors >= 2:
-            score = 60
-            verdict = "↗️ Помірна ПОКУПКА (проти денного тренду)"
-            critical_warning = "❗️ Сигнал проти денного даунтренду"
-        elif bullish_factors == 1 and "Бичачий патерн: HAMMER" in reasons:
-            score = 55
-            verdict = "⚠️ Можливий відскок (HAMMER), але денний тренд ведмежий"
-            critical_warning = "❗️ HAMMER без підтвердження від індикаторів"
-        elif bearish_factors >= 2:
-            score = 10
-            verdict = "⬇️ Сильний ПРОДАЖ"
-        else:
-            score = 50
-            verdict = "🟡 НЕЙТРАЛЬНО"
+        if bearish_factors >= 2:
+            score = 10; verdict = "⬇️ Сильний ПРОДАЖ"
+        elif bullish_factors >= 2:
+            score = 60; verdict = "↗️ Помірна ПОКУПКА (проти денного тренду)"; critical_warning = "❗️ Сигнал проти денного даунтренду"
     else:
         if bullish_factors >= 2:
-            score = 75
-            verdict = "↗️ Помірна ПОКУПКА"
+            score = 75; verdict = "↗️ Помірна ПОКУПКА"
         elif bearish_factors >= 2:
-            score = 25
-            verdict = "↘️ Помірний ПРОДАЖ"
-        else:
-            score = 50
-            verdict = "🟡 НЕЙТРАЛЬНО"
+            score = 25; verdict = "↘️ Помірний ПРОДАЖ"
 
-    # Final safety checks
+    # Safety adjustments
     try:
         if score >= 80 and not np.isnan(rsi_last) and rsi_last > 75:
             score = 50
@@ -399,58 +347,91 @@ def _calculate_core_signal(df: pd.DataFrame, daily_df: pd.DataFrame, current_pri
     }
 
 # ----------------- public API -----------------
-def get_api_detailed_signal_data(client, symbol_cache, norm_pair: str, period: str, count: int = 500) -> Deferred:
+def get_api_detailed_signal_data(client, symbol_cache, norm_pair: str, user_id: int, period: str = "15m", count: int = 500) -> Deferred:
     """
-    API-метод, який повертає Deferred -> dict з результатом аналізу.
+    Основна точка входу. Повертає Deferred -> dict
+    Робить fallback: якщо немає тіка в Redis — використовує останню Close зі свічок.
+    Зберігає результат в Redis під ключем signal:<PAIR> і в базу через add_signal_to_history.
     """
-    d = Deferred()
+    final_deferred = Deferred()
 
-    # Отримати price з redis
-    price_d = get_price_from_redis(norm_pair)
-    df_d = get_market_data(client, symbol_cache, norm_pair, period, count)
-    df_daily_d = get_market_data(client, symbol_cache, norm_pair, "1day", 400)
+    # prepare deferreds
+    d1 = get_market_data(client, symbol_cache, norm_pair, period, count)
+    d2 = get_market_data(client, symbol_cache, norm_pair, "1day", max(200, int(count/2)))
+    d3 = get_price_from_redis(norm_pair)
 
-    all_d = DeferredList([price_d, df_d, df_daily_d], consumeErrors=True)
+    dl = DeferredList([d1, d2, d3], consumeErrors=True)
 
-    def _process(results):
+    def on_ready(results):
         try:
-            price_val, df_res, df_daily_res = results[0][1], results[1][1], results[2][1]
-            if price_val is None or df_res.empty or df_daily_res.empty:
-                d.callback({"error": "Немає даних для аналізу"})
+            # results: [(success, val), ...]
+            success_df, df = results[0]
+            success_daily, daily_df = results[1]
+            success_price, price_val = results[2]
+
+            if not success_df or df is None or df.empty:
+                logger.warning(f"get_api_detailed_signal_data: not enough intraday data for {norm_pair}")
+                # still try to respond with error payload
+                final_deferred.callback({"error": "Немає даних для аналізу"})
                 return
-            res = _calculate_core_signal(df_res, df_daily_res, price_val)
+
+            if not success_daily or daily_df is None or daily_df.empty:
+                logger.warning(f"get_api_detailed_signal_data: not enough daily data for {norm_pair}")
+                final_deferred.callback({"error": "Немає денних даних для аналізу"})
+                return
+
+            # If redis price not available, fallback to last close from df
+            current_price = None
+            if success_price and price_val is not None:
+                current_price = float(price_val)
+            else:
+                try:
+                    current_price = float(df.iloc[-1]['Close'])
+                    logger.debug(f"Fallback to last Close for {norm_pair}: {current_price}")
+                except Exception:
+                    logger.warning(f"Could not determine price for {norm_pair}")
+                    final_deferred.callback({"error": "Немає даних для аналізу"})
+                    return
+
+            analysis = _calculate_core_signal(df, daily_df, current_price)
+            score = analysis.get("score", 50)
 
             response_data = {
                 "pair": norm_pair,
-                "period": period,
-                "price": price_val,
-                "score": res.get("score"),
-                "reasons": res.get("reasons", []),
-                "support": res.get("support"),
-                "resistance": res.get("resistance"),
-                "candle_pattern": res.get("candle_pattern"),
-                "volume_info": res.get("volume_info"),
-                "critical_warning": res.get("critical_warning"),
-                "verdict_text": res.get("verdict_text")
+                "price": current_price,
+                "verdict_text": analysis.get("verdict_text"),
+                "reasons": analysis.get("reasons", []),
+                "support": analysis.get("support"),
+                "resistance": analysis.get("resistance"),
+                "bull_percentage": int(score),
+                "bear_percentage": 100 - int(score),
+                "candle_pattern": analysis.get("candle_pattern"),
+                "volume_info": analysis.get("volume_info"),
+                "special_warning": analysis.get("critical_warning")
             }
 
-            # Зберігаємо в SQLite
+            # persist minimal history
             try:
-                add_signal_to_history(norm_pair, period, response_data)
-            except Exception as e:
-                logger.error(f"DB save error: {e}")
+                add_signal_to_history({
+                    'user_id': user_id, 'pair': norm_pair,
+                    'price': current_price, 'bull_percentage': int(score)
+                })
+            except Exception:
+                logger.exception("Failed to add signal to history")
 
-            # Зберігаємо також у Redis (signal:<PAIR>)
+            # save to redis for web UI / Data Browser
             try:
                 r = get_redis()
-                r.set(f"signal:{norm_pair}", json.dumps(response_data))
-            except Exception as e:
-                logger.error(f"Redis save error: {e}")
+                r.set(f"signal:{norm_pair}", json.dumps(response_data, ensure_ascii=False))
+                # also keep a short TTL so stale signals expire
+                r.expire(f"signal:{norm_pair}", 60 * 60 * 6)
+            except Exception:
+                logger.exception("Failed to save signal to Redis")
 
-            d.callback(response_data)
+            final_deferred.callback(response_data)
         except Exception as e:
-            logger.exception(f"get_api_detailed_signal_data error: {e}")
-            d.callback({"error": str(e)})
+            logger.exception(f"Critical analysis error for {norm_pair}: {e}")
+            final_deferred.errback(e)
 
-    all_d.addCallback(_process)
-    return d
+    dl.addCallback(on_ready)
+    return final_deferred
