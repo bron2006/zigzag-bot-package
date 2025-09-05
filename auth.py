@@ -1,3 +1,4 @@
+# auth.py
 import hmac
 import hashlib
 import json
