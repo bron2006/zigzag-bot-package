@@ -15,6 +15,11 @@ try:
 except Exception:
     pass
 
+# --- ПОЧАТОК ЗМІН: Повертаємо відсутні параметри ---
+IS_DEV_MODE = os.getenv("NORD", "off").lower() == "on"
+DEV_USER_ID = 123456789
+# --- КІНЕЦЬ ЗМІН ---
+
 def get_chat_id() -> int: return int(os.getenv("CHAT_ID")) if os.getenv("CHAT_ID") else None
 def get_ct_client_id() -> str: return os.getenv("CT_CLIENT_ID")
 def get_ct_client_secret() -> str: return os.getenv("CT_CLIENT_SECRET")
