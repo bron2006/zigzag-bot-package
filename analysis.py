@@ -17,7 +17,10 @@ from ctrader_open_api.messages.OpenApiMessages_pb2 import (
 from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOATrendbarPeriod as TrendbarPeriod
 
 from db import add_signal_to_history
-from redis_client import get_redis, set_tick, get_tick
+# --- ПОЧАТОК ЗМІН: Імпортуємо наш глобальний стан ---
+import state
+# --- КІНЕЦЬ ЗМІН ---
+from redis_client import get_redis
 
 logger = logging.getLogger("analysis")
 logger.setLevel(logging.INFO)
@@ -40,7 +43,6 @@ def _send_with_retry(client, request, timeout=60, retries=1) -> Deferred:
             if not d.called:
                 d.callback(msg)
         def err(f):
-            # retry on timeout
             if f.check(terror.TimeoutError) and remaining > 0:
                 logger.warning(f"Request {type(request).__name__} timed out, retrying ({remaining} left)...")
                 reactor.callLater(0.2, _attempt, remaining - 1)
@@ -113,36 +115,9 @@ def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: in
     deferred.addCallbacks(process_response, on_error)
     return d
 
-def _get_price_from_redis_sync(norm_pair: str, stale_sec: int = 30) -> Optional[float]:
-    """
-    Синхронна версія для запуску в threadpool
-    """
-    try:
-        r = get_redis()
-        raw = r.get(f"tick:{norm_pair}")
-        if not raw:
-            return None
-        data = json.loads(raw)
-        ts_ms = data.get("ts_ms")
-        if ts_ms and (time.time() * 1000 - ts_ms) > stale_sec * 1000:
-            return None
-        bid = data.get("bid")
-        ask = data.get("ask")
-        mid = data.get("mid")
-        if mid is not None:
-            return float(mid)
-        if bid is not None and ask is not None:
-            return (float(bid) + float(ask)) / 2.0
-        return None
-    except Exception as e:
-        logger.exception(f"_get_price_from_redis_sync error for {norm_pair}: {e}")
-        return None
-
-def get_price_from_redis(norm_pair: str, stale_sec: int = 30) -> Deferred:
-    """
-    Повертає Deferred (через threadpool) з float або None
-    """
-    return threads.deferToThread(_get_price_from_redis_sync, norm_pair, stale_sec)
+# --- ПОЧАТОК ЗМІН: Видаляємо функції get_price_from_redis та _get_price_from_redis_sync ---
+# Вони більше не потрібні, оскільки ми будемо брати ціну напряму з state.live_prices
+# --- КІНЕЦЬ ЗМІН ---
 
 # ----------------- analysis helpers -----------------
 def group_close_values(values: List[float], threshold=0.01) -> List[float]:
@@ -350,28 +325,24 @@ def _calculate_core_signal(df: pd.DataFrame, daily_df: pd.DataFrame, current_pri
 def get_api_detailed_signal_data(client, symbol_cache, norm_pair: str, user_id: int, period: str = "15m", count: int = 500) -> Deferred:
     """
     Основна точка входу. Повертає Deferred -> dict
-    Робить fallback: якщо немає тіка в Redis — використовує останню Close зі свічок.
-    Зберігає результат в Redis під ключем signal:<PAIR> і в базу через add_signal_to_history.
+    Бере ціну з state.live_prices, а якщо її немає — використовує останню Close.
+    Зберігає результат в Redis і в базу через add_signal_to_history.
     """
     final_deferred = Deferred()
 
-    # prepare deferreds
     d1 = get_market_data(client, symbol_cache, norm_pair, period, count)
     d2 = get_market_data(client, symbol_cache, norm_pair, "1day", max(200, int(count/2)))
-    d3 = get_price_from_redis(norm_pair)
-
-    dl = DeferredList([d1, d2, d3], consumeErrors=True)
+    # --- ПОЧАТОК ЗМІН: видаляємо Deferred для Redis, він більше не потрібен ---
+    dl = DeferredList([d1, d2], consumeErrors=True)
+    # --- КІНЕЦЬ ЗМІН ---
 
     def on_ready(results):
         try:
-            # results: [(success, val), ...]
             success_df, df = results[0]
             success_daily, daily_df = results[1]
-            success_price, price_val = results[2]
 
             if not success_df or df is None or df.empty:
                 logger.warning(f"get_api_detailed_signal_data: not enough intraday data for {norm_pair}")
-                # still try to respond with error payload
                 final_deferred.callback({"error": "Немає даних для аналізу"})
                 return
 
@@ -379,19 +350,27 @@ def get_api_detailed_signal_data(client, symbol_cache, norm_pair: str, user_id: 
                 logger.warning(f"get_api_detailed_signal_data: not enough daily data for {norm_pair}")
                 final_deferred.callback({"error": "Немає денних даних для аналізу"})
                 return
-
-            # If redis price not available, fallback to last close from df
+                
+            # --- ПОЧАТОК ЗМІН: Логіка отримання ціни ---
             current_price = None
-            if success_price and price_val is not None:
-                current_price = float(price_val)
-            else:
+            # 1. Пріоритет: спробувати отримати живу ціну з state
+            live_price_data = state.live_prices.get(norm_pair)
+            if live_price_data and live_price_data.get("mid"):
+                # Перевіряємо, чи ціна не застаріла (напр. > 30 секунд)
+                if (time.time() - live_price_data.get("ts", 0)) < 30:
+                    current_price = float(live_price_data["mid"])
+                    logger.debug(f"Using live price for {norm_pair}: {current_price}")
+
+            # 2. Fallback: якщо живої ціни немає, беремо останню ціну закриття
+            if current_price is None:
                 try:
                     current_price = float(df.iloc[-1]['Close'])
                     logger.debug(f"Fallback to last Close for {norm_pair}: {current_price}")
-                except Exception:
+                except (IndexError, KeyError):
                     logger.warning(f"Could not determine price for {norm_pair}")
-                    final_deferred.callback({"error": "Немає даних для аналізу"})
+                    final_deferred.callback({"error": "Не вдалося визначити поточну ціну"})
                     return
+            # --- КІНЕЦЬ ЗМІН ---
 
             analysis = _calculate_core_signal(df, daily_df, current_price)
             score = analysis.get("score", 50)
@@ -410,7 +389,6 @@ def get_api_detailed_signal_data(client, symbol_cache, norm_pair: str, user_id: 
                 "special_warning": analysis.get("critical_warning")
             }
 
-            # persist minimal history
             try:
                 add_signal_to_history({
                     'user_id': user_id, 'pair': norm_pair,
@@ -419,11 +397,9 @@ def get_api_detailed_signal_data(client, symbol_cache, norm_pair: str, user_id: 
             except Exception:
                 logger.exception("Failed to add signal to history")
 
-            # save to redis for web UI / Data Browser
             try:
                 r = get_redis()
                 r.set(f"signal:{norm_pair}", json.dumps(response_data, ensure_ascii=False))
-                # also keep a short TTL so stale signals expire
                 r.expire(f"signal:{norm_pair}", 60 * 60 * 6)
             except Exception:
                 logger.exception("Failed to save signal to Redis")
