@@ -1,59 +1,69 @@
 # app.py
-import logging
 import os
+import sys
 import json
 import time
 import queue
+import signal
+import logging
 import traceback
-from functools import wraps
+import inspect
 
-# Twisted + WSGI
+from functools import wraps
+from pathlib import Path
+
+# Twisted + Flask WSGI
 from twisted.internet import reactor, threads
 from twisted.internet.task import LoopingCall
-from twisted.web.server import Site
 from twisted.web.wsgi import WSGIResource
+from twisted.web.server import Site
 
-# Flask
 from flask import Flask, jsonify, send_from_directory, Response, request, stream_with_context
 
 # Telegram
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackQueryHandler, CallbackContext
 
-# Local modules — ваші існуючі модулі
+# Local modules (project files you already have)
 import state
 import telegram_ui
+import db
 from auth import is_valid_init_data, get_user_id_from_init_data
-from db import get_watchlist, toggle_watchlist
+import analysis as analysis_module
+from redis_client import get_redis
 from spotware_connect import SpotwareConnect
+from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOASymbolsListRes
 from config import (
     TELEGRAM_BOT_TOKEN, get_ct_client_id, get_ct_client_secret,
     FOREX_SESSIONS, get_fly_app_name, CRYPTO_PAIRS, STOCK_TICKERS,
     COMMODITIES, TRADING_HOURS, IDEAL_ENTRY_THRESHOLD, SCANNER_COOLDOWN_SECONDS, get_chat_id
 )
-from analysis import get_api_detailed_signal_data, PERIOD_MAP
-from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOASymbolsListRes
 
 # Logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("app")
 
-# Flask app
+# Flask app config
 app = Flask(__name__)
 app.config['JSON_AS_ASCII'] = False
 WEBAPP_DIR = os.path.join(os.path.dirname(__file__), "webapp")
 
 # Ensure state has required attributes
 if not hasattr(state, "sse_queue"):
-    state.sse_queue = queue.Queue()
+    state.sse_queue = queue.Queue(maxsize=100)
 if not hasattr(state, "scanner_cooldown_cache"):
     state.scanner_cooldown_cache = {}
 if not hasattr(state, "latest_analysis_cache"):
     state.latest_analysis_cache = {}
+if not hasattr(state, "SYMBOLS_LOADED"):
+    state.SYMBOLS_LOADED = False
+if not hasattr(state, "symbol_cache"):
+    state.symbol_cache = {}
+if not hasattr(state, "SCANNER_STATE"):
+    # default scanner states
+    state.SCANNER_STATE = {"forex": True, "crypto": False, "commodities": False}
 
-# Twisted-ready deferred flag for cTrader readiness
-_client_ready = {"ready": False}
-
+# helper: protected route for Telegram WebApp initData
 def protected_route(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
@@ -64,128 +74,232 @@ def protected_route(f):
         return f(*args, **kwargs)
     return decorated_function
 
-# --------------- Scanner (uses analysis.get_api_detailed_signal_data) ---------------
-def scan_markets_once():
-    # Перевіряємо, чи увімкнений хоча б один сканер у новій структурі
-    if not any(state.SCANNER_STATE.values()):
-        logger.debug("All scanners are disabled, skipping run.")
-        return
+# --------------------------
+# Adaptive wrapper for analysis.get_api_detailed_signal_data
+# This makes the rest of the code robust to different signatures of analysis.get_api_detailed_signal_data
+# (some versions had: (client, symbol_cache, symbol, user_id, timeframe)
+# others had: (client, symbol_cache, symbol, period, count=...)
+# others: (client, symbol_cache, symbol, timeframe))
+# --------------------------
+_orig_get_api = getattr(analysis_module, "get_api_detailed_signal_data", None)
+if _orig_get_api is None:
+    raise RuntimeError("analysis.get_api_detailed_signal_data not found")
 
-    logger.info(f"SCANNER: Starting market scan for enabled categories: {[cat for cat, on in state.SCANNER_STATE.items() if on]}")
-    
-    # Динамічно формуємо список активів для сканування
-    assets_to_scan = []
-    if state.SCANNER_STATE.get("forex"):
-        forex_pairs = list(set([p for sess in FOREX_SESSIONS.values() for p in sess]))
-        assets_to_scan.extend(forex_pairs)
-    if state.SCANNER_STATE.get("crypto"):
-        assets_to_scan.extend(CRYPTO_PAIRS)
-    if state.SCANNER_STATE.get("commodities"):
-        assets_to_scan.extend(COMMODITIES)
-
-    if not assets_to_scan:
-        logger.info("No assets to scan for the enabled categories.")
-        return
-
-    chat_id = get_chat_id()
-
-    def _on_done(result, pair_name):
-        try:
-            if result.get("error"):
-                logger.debug(f"SCANNER: analysis error for {pair_name}: {result.get('error')}")
-                return
-            score = result.get("bull_percentage", 50)
-            is_signal = score >= IDEAL_ENTRY_THRESHOLD or score <= (100 - IDEAL_ENTRY_THRESHOLD)
-            if is_signal:
-                now = time.time()
-                last = state.scanner_cooldown_cache.get(pair_name, 0)
-                if (now - last) > SCANNER_COOLDOWN_SECONDS:
-                    logger.info(f"SCANNER: Signal for {pair_name} (score {score}). Notifying.")
-                    # send to web SSE
-                    state.latest_analysis_cache[pair_name] = result
-                    try:
-                        state.sse_queue.put(result, block=False)
-                    except queue.Full:
-                        logger.warning("SSE queue full, dropping signal")
-                    # send to telegram (if chat configured)
-                    if chat_id and getattr(state, "updater", None):
-                        try:
-                            message = telegram_ui._format_signal_message(result, "5m")
-                            keyboard = telegram_ui.get_main_menu_kb()
-                            state.updater.bot.send_message(chat_id=chat_id, text=message, parse_mode='Markdown', reply_markup=keyboard)
-                        except Exception as e:
-                            logger.exception(f"Failed to send telegram notification: {e}")
-                    state.scanner_cooldown_cache[pair_name] = now
-                else:
-                    logger.debug(f"SCANNER: {pair_name} on cooldown.")
-        except Exception:
-            logger.exception("SCANNER: error in _on_done")
-
-    # Iterate pairs sequentially on Twisted thread pool to avoid blocking reactor
-    def worker():
-        for pair in assets_to_scan:
-            norm = pair.replace("/", "")
-            try:
-                d = get_api_detailed_signal_data(state.client, state.symbol_cache, norm, 0, "5m")
-                # Wait for deferred synchronously by blocking in thread (safe since running in threadpool)
-                result = d.result if hasattr(d, "result") else None
-                # The analysis.get_api_detailed_signal_data returns a Deferred — use addBoth callback instead:
-                done_q = queue.Queue()
-                def cb_success(res):
-                    done_q.put(res)
-                def cb_err(f):
-                    try:
-                        done_q.put({"error": str(f)})
-                    except Exception:
-                        done_q.put({"error": "unknown"})
-                d.addCallbacks(cb_success, cb_err)
-                res = done_q.get(timeout=65)
-                _on_done(res, norm)
-            except Exception:
-                logger.exception(f"SCANNER: Failed processing {norm}")
-    threads.deferToThread(worker)
-
-# --------------- cTrader event handlers ---------------
-def on_ctrader_ready():
-    logger.info("cTrader client ready — loading symbols")
-    d = state.client.get_all_symbols()
-    d.addCallbacks(on_symbols_loaded, on_symbols_error)
-
-def on_symbols_loaded(raw_message):
+def _unified_get_api_detailed_signal_data(client, symbol_cache, symbol, *args, **kwargs):
+    """
+    Try to call original with best-fit signature.
+    Returns a Twisted Deferred (whatever the original returns) or raises.
+    """
+    sig = inspect.signature(_orig_get_api)
+    params = list(sig.parameters.keys())
+    # heuristics:
+    # if 'user' or 'user_id' exists -> assume signature (client, symbol_cache, symbol, user_id, timeframe)
+    if len(params) >= 4 and any(p in params[3] for p in ('user', 'user_id', 'uid')):
+        # args might be (user_id, timeframe) or just (timeframe) depending on callers.
+        # prefer: user_id from args if int, else 0
+        user_id = 0
+        timeframe = kwargs.get('timeframe') or (args[1] if len(args) >= 2 else (args[0] if len(args) == 1 and isinstance(args[0], int) else '15m'))
+        if len(args) >= 1 and isinstance(args[0], int):
+            user_id = args[0]
+            if len(args) >= 2:
+                timeframe = args[1]
+        return _orig_get_api(client, symbol_cache, symbol, user_id, timeframe)
+    # else assume period/timeframe is the 4th positional param
     try:
-        symbols_response = ProtoOASymbolsListRes()
-        symbols_response.ParseFromString(raw_message.payload)
-        state.symbol_cache = {s.symbolName.replace("/", ""): s for s in symbols_response.symbol}
-        state.all_symbol_names = [s.symbolName for s in symbols_response.symbol]
+        # if caller passed timeframe in args, use it; else default '15m'
+        if len(args) >= 1:
+            return _orig_get_api(client, symbol_cache, symbol, args[0])
+        return _orig_get_api(client, symbol_cache, symbol, kwargs.get('timeframe', '15m'))
+    except TypeError:
+        # fallback: try (client, symbol_cache, symbol, timeframe, count)
+        try:
+            timeframe = args[0] if len(args) >= 1 else kwargs.get('timeframe', '15m')
+            count = args[1] if len(args) >= 2 else kwargs.get('count', 500)
+            return _orig_get_api(client, symbol_cache, symbol, timeframe, count)
+        except Exception:
+            raise
+
+# Monkeypatch analysis module so other modules (telegram_ui) calling it also use unified version
+analysis_module.get_api_detailed_signal_data = _unified_get_api_detailed_signal_data
+
+# Local alias
+get_api_detailed_signal_data = analysis_module.get_api_detailed_signal_data
+
+# --------------------------
+# Scanner logic
+# --------------------------
+def _collect_assets_to_scan():
+    assets = []
+    if state.SCANNER_STATE.get("forex"):
+        # flatten all FOREX_SESSIONS lists
+        for session_pairs in FOREX_SESSIONS.values():
+            assets.extend(session_pairs)
+    if state.SCANNER_STATE.get("crypto"):
+        assets.extend(CRYPTO_PAIRS)
+    if state.SCANNER_STATE.get("commodities"):
+        assets.extend(COMMODITIES)
+    # dedupe preserving order
+    seen = set()
+    out = []
+    for a in assets:
+        if a not in seen:
+            seen.add(a)
+            out.append(a)
+    return out
+
+def _handle_analysis_result(pair_norm, result):
+    """
+    Called when analysis result is ready (dict).
+    Publishes to SSE queue, saves to state cache and sends telegram if configured.
+    """
+    try:
+        if not result or result.get("error"):
+            return
+        # unify keys: some versions use 'score' or 'bull_percentage'
+        score = result.get("bull_percentage") or result.get("score") or 50
+        bull = int(score)
+        is_signal = bull >= IDEAL_ENTRY_THRESHOLD or bull <= (100 - IDEAL_ENTRY_THRESHOLD)
+        if not is_signal:
+            return
+
+        now = time.time()
+        last_ts = state.scanner_cooldown_cache.get(pair_norm, 0)
+        if (now - last_ts) < SCANNER_COOLDOWN_SECONDS:
+            logger.debug(f"{pair_norm} on cooldown, skip notify")
+            return
+
+        # add to SSE queue (non-blocking)
+        try:
+            state.sse_queue.put_nowait(result)
+        except Exception:
+            logger.warning("SSE queue full - dropping")
+
+        # store latest analysis
+        state.latest_analysis_cache[pair_norm] = result
+
+        # send Telegram notification if chat configured and bot present
+        chat_id = get_chat_id()
+        if chat_id and getattr(state, "updater", None):
+            try:
+                message = telegram_ui._format_signal_message(result, "5m") if hasattr(telegram_ui, "_format_signal_message") else json.dumps(result, ensure_ascii=False)
+                kb = telegram_ui.get_main_menu_kb() if hasattr(telegram_ui, "get_main_menu_kb") else None
+                if kb:
+                    state.updater.bot.send_message(chat_id=chat_id, text=message, parse_mode='Markdown', reply_markup=kb)
+                else:
+                    state.updater.bot.send_message(chat_id=chat_id, text=message, parse_mode='Markdown')
+            except Exception:
+                logger.exception("Failed to send telegram notification")
+
+        state.scanner_cooldown_cache[pair_norm] = now
+        logger.info(f"SCANNER: Notified for {pair_norm} (score {bull})")
+    except Exception:
+        logger.exception("Error handling analysis result")
+
+def _scan_worker(assets_to_scan):
+    """
+    Runs in a threadpool (threads.deferToThread). For each asset does analysis and handles result.
+    Blocks waiting for each Deferred using a threading.Queue that Deferred callbacks fill.
+    """
+    for pair in assets_to_scan:
+        try:
+            pair_norm = pair.replace("/", "")
+            # ensure symbols loaded
+            if not state.SYMBOLS_LOADED:
+                logger.debug("Symbols not loaded yet, skipping scan")
+                return
+            # call analysis (Deferred)
+            d = get_api_detailed_signal_data(state.client, state.symbol_cache, pair_norm, "5m")
+            done_q = queue.Queue(maxsize=1)
+            def on_success(res):
+                try:
+                    done_q.put(res)
+                except Exception:
+                    pass
+            def on_err(f):
+                try:
+                    # try extracting message
+                    msg = f.getErrorMessage() if hasattr(f, "getErrorMessage") else str(f)
+                except Exception:
+                    msg = "Unknown analysis error"
+                done_q.put({"error": msg})
+            d.addCallbacks(on_success, on_err)
+            try:
+                res = done_q.get(timeout=70)
+            except queue.Empty:
+                logger.warning(f"Analysis timeout for {pair_norm}")
+                continue
+            # res expected to be dict
+            _handle_analysis_result(pair_norm, res)
+            # small sleep between pairs to avoid bursting API
+            time.sleep(0.1)
+        except Exception:
+            logger.exception(f"Exception in scan worker for {pair}")
+
+def scan_markets_once():
+    try:
+        if not any(state.SCANNER_STATE.values()):
+            logger.debug("All scanners disabled; skipping scan loop")
+            return
+        assets = _collect_assets_to_scan()
+        if not assets:
+            logger.info("No assets configured for scanning")
+            return
+        logger.info(f"SCANNER: Starting market scan for enabled categories: {[k for k,v in state.SCANNER_STATE.items() if v]}")
+        # run worker in threadpool so reactor isn't blocked
+        threads.deferToThread(_scan_worker, assets)
+    except Exception:
+        logger.exception("scan_markets_once error")
+
+# --------------------------
+# cTrader handlers
+# --------------------------
+def _on_symbols_loaded(raw_message):
+    try:
+        res = ProtoOASymbolsListRes()
+        res.ParseFromString(raw_message.payload)
+        state.symbol_cache = {s.symbolName.replace("/", ""): s for s in res.symbol}
+        state.all_symbol_names = [s.symbolName for s in res.symbol]
         state.SYMBOLS_LOADED = True
-        logger.info(f"Loaded {len(state.symbol_cache)} symbols.")
-        _client_ready["ready"] = True
-        # Start scanner loop
-        scanner_loop = LoopingCall(scan_markets_once)
-        scanner_loop.start(60, now=False)
+        logger.info(f"Loaded {len(state.symbol_cache)} symbols from cTrader.")
     except Exception:
         logger.exception("on_symbols_loaded error")
 
-def on_symbols_error(failure):
-    logger.error(f"Failed to load symbols: {failure.getErrorMessage()}")
-    _client_ready["ready"] = False
+def _on_symbols_error(failure):
+    try:
+        msg = failure.getErrorMessage() if hasattr(failure, "getErrorMessage") else str(failure)
+    except Exception:
+        msg = str(failure)
+    logger.error(f"Failed to load symbols: {msg}")
+    state.SYMBOLS_LOADED = False
 
-# --------------- Flask routes ---------------
+def on_ctrader_ready():
+    logger.info("cTrader client ready — requesting symbol list")
+    try:
+        d = state.client.get_all_symbols()
+        d.addCallbacks(_on_symbols_loaded, _on_symbols_error)
+    except Exception:
+        logger.exception("on_ctrader_ready error")
+
+# --------------------------
+# Flask routes (API + SSE)
+# --------------------------
 @app.route("/")
 def home():
-    # Serve SPA index
     try:
-        with open(os.path.join(WEBAPP_DIR, "index.html"), "r", encoding="utf-8") as f:
-            content = f.read()
-        app_name = get_fly_app_name() or "zigzag-bot-package"
-        api_base_url = f"https://{app_name}.fly.dev"
-        cache_buster = int(time.time())
-        content = content.replace("{{API_BASE_URL}}", api_base_url)
-        content = content.replace("script.js", f"script.js?v={cache_buster}")
-        content = content.replace("style.css", f"style.css?v={cache_buster}")
-        return Response(content, mimetype='text/html')
-    except Exception as e:
-        logger.exception("Error serving index.html")
+        index_path = os.path.join(WEBAPP_DIR, "index.html")
+        if os.path.exists(index_path):
+            with open(index_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            app_name = get_fly_app_name() or "zigzag-bot-package"
+            api_base_url = f"https://{app_name}.fly.dev"
+            content = content.replace("{{API_BASE_URL}}", api_base_url)
+            cache_buster = int(time.time())
+            content = content.replace("script.js", f"script.js?v={cache_buster}")
+            content = content.replace("style.css", f"style.css?v={cache_buster}")
+            return Response(content, mimetype='text/html')
+        return "Web UI not found", 404
+    except Exception:
+        logger.exception("Error serving index")
         return "Internal Server Error", 500
 
 @app.route("/<path:filename>")
@@ -196,7 +310,7 @@ def static_files(filename):
 @protected_route
 def get_pairs():
     user_id = get_user_id_from_init_data(request.args.get("initData"))
-    watchlist = get_watchlist(user_id) if user_id else []
+    watchlist = db.get_watchlist(user_id) if user_id else []
     forex_data = [
         {"title": f"{name} {TRADING_HOURS.get(name, '')}".strip(), "pairs": pairs}
         for name, pairs in FOREX_SESSIONS.items()
@@ -206,163 +320,152 @@ def get_pairs():
         "commodities": COMMODITIES, "watchlist": watchlist
     })
 
-@app.route("/api/toggle_watchlist")
-@protected_route
-def toggle_watchlist_route():
-    user_id = get_user_id_from_init_data(request.args.get("initData"))
-    pair = request.args.get("pair")
-    if not user_id or not pair:
-        return jsonify({"success": False, "error": "Missing parameters"}), 400
-    try:
-        pair_normalized = pair.replace("/", "")
-        success = toggle_watchlist(user_id, pair_normalized)
-        return jsonify({"success": success})
-    except Exception:
-        logger.exception("toggle_watchlist failed")
-        return jsonify({"success": False, "error": "Internal server error"}), 500
-
-# --- ПОЧАТОК ЗМІН: Повністю переписано ендпоінт для ручного аналізу ---
 @app.route("/api/signal")
 @protected_route
 def api_signal():
     pair = request.args.get("pair")
     timeframe = request.args.get("timeframe", "15m")
-    if timeframe not in PERIOD_MAP:
-        return jsonify({"error": "Invalid timeframe"}), 400
     if not pair:
         return jsonify({"error": "pair is required"}), 400
-    
     pair_normalized = pair.replace("/", "")
     user_id = get_user_id_from_init_data(request.args.get("initData"))
-    logger.info(f"Signal request [FORCED FRESH] for {pair_normalized} timeframe {timeframe}")
+    logger.info(f"On-demand analysis request for {pair_normalized} timeframe {timeframe}")
 
-    # Завжди виконуємо новий аналіз "на вимогу", ігноруючи кеш
+    # Run analysis and wait for Deferred result (safe to block in WSGI thread)
     try:
-        # Цей патерн дозволяє дочекатися асинхронного результату в синхронному потоці Flask
-        d = get_api_detailed_signal_data(state.client, state.symbol_cache, pair_normalized, user_id, timeframe)
-        
+        d = get_api_detailed_signal_data(state.client, state.symbol_cache, pair_normalized, timeframe)
         done_q = queue.Queue()
-
-        def cb_success(res):
-            done_q.put(res)
-
+        def cb_success(res): done_q.put(res)
         def cb_err(f):
             try:
-                error_message = f.getErrorMessage() if hasattr(f, 'getErrorMessage') else str(f.value)
-                done_q.put({"error": error_message})
-            except Exception as e:
-                done_q.put({"error": f"Unknown error during analysis: {e}"})
-
+                msg = f.getErrorMessage() if hasattr(f, "getErrorMessage") else str(f)
+            except Exception:
+                msg = str(f)
+            done_q.put({"error": msg})
         d.addCallbacks(cb_success, cb_err)
-        
-        # Блокуємо і чекаємо на результат з потоку Twisted
-        result = done_q.get(timeout=25) # Таймаут 25 секунд
-
+        result = done_q.get(timeout=30)
         if result.get("error"):
-             logger.error(f"On-demand analysis failed for {pair_normalized}: {result['error']}")
-             return jsonify(result), 500 # Повертаємо помилку сервера
-
+            logger.error(f"On-demand analysis failed for {pair_normalized}: {result.get('error')}")
+            return jsonify(result), 500
+        # store latest analysis in state cache
+        state.latest_analysis_cache[pair_normalized] = result
         return jsonify(result)
-
     except queue.Empty:
-        logger.error(f"On-demand analysis for {pair_normalized} timed out.")
-        return jsonify({"error": "Запит тривав занадто довго і був перерваний."}), 504 # Gateway Timeout
-    except Exception as e:
-        logger.exception(f"Critical error in on-demand analysis for {pair_normalized}")
-        return jsonify({"error": f"Критична помилка сервера: {e}"}), 500
-# --- КІНЕЦЬ ЗМІН ---
+        logger.error(f"On-demand analysis timeout for {pair_normalized}")
+        return jsonify({"error": "Request timed out."}), 504
+    except Exception:
+        logger.exception("api_signal critical error")
+        return jsonify({"error": "Internal server error"}), 500
 
 @app.route("/api/scanner/status")
 @protected_route
 def scanner_status():
-    # Повертаємо новий словник станів
     return jsonify(state.SCANNER_STATE)
 
 @app.route("/api/scanner/toggle", methods=['POST'])
 @protected_route
 def scanner_toggle():
-    # Отримуємо категорію з параметрів запиту (напр. /api/scanner/toggle?category=forex)
     category = request.args.get("category")
-    if category and category in state.SCANNER_STATE:
-        # Перемикаємо стан для вказаної категорії
-        state.SCANNER_STATE[category] = not state.SCANNER_STATE[category]
-        logger.info(f"Scanner for '{category}' toggled via API to: {state.SCANNER_STATE[category]}")
-    # Повертаємо оновлений повний словник станів
+    if not category or category not in state.SCANNER_STATE:
+        return jsonify({"error": "Invalid category"}), 400
+    state.SCANNER_STATE[category] = not state.SCANNER_STATE[category]
+    logger.info(f"Scanner for '{category}' toggled to {state.SCANNER_STATE[category]}")
     return jsonify(state.SCANNER_STATE)
 
 @app.route("/api/signal-stream")
 @protected_route
 def signal_stream():
     def generate():
-        # SSE generator reading from queue
         while True:
             try:
                 data = state.sse_queue.get(timeout=20)
                 yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
             except queue.Empty:
-                # send ping to keep connection alive
+                # keepalive
                 yield ": ping\n\n"
     response = Response(stream_with_context(generate()), mimetype='text/event-stream')
     response.headers['Cache-Control'] = 'no-cache'
     response.headers['Connection'] = 'keep-alive'
-    # Helpful for some proxies
     response.headers['X-Accel-Buffering'] = 'no'
     return response
 
-# --------------- Startup (Twisted reactor integrates Flask WSGI) ---------------
-def start_services():
-    # 1) Start Telegram bot (in background thread via reactor)
+# --------------------------
+# Startup: Telegram + cTrader + Scanner loop
+# --------------------------
+def start_telegram_bot():
     if not TELEGRAM_BOT_TOKEN:
-        logger.warning("TELEGRAM_BOT_TOKEN not set — Telegram bot disabled.")
-    else:
-        logger.info("Starting Telegram Updater (background thread).")
+        logger.warning("TELEGRAM_BOT_TOKEN not set — Telegram disabled")
+        return
+    try:
         updater = Updater(token=TELEGRAM_BOT_TOKEN, use_context=True)
         state.updater = updater
         dp = updater.dispatcher
-        # Register handlers from telegram_ui
-        dp.add_handler(CommandHandler("start", telegram_ui.start))
-        dp.add_handler(CommandHandler("symbols", telegram_ui.symbols_command))
-        dp.add_handler(MessageHandler(Filters.text("МЕНЮ"), telegram_ui.menu))
-        dp.add_handler(MessageHandler(Filters.text & ~Filters.command, telegram_ui.reset_ui))
-        dp.add_handler(CallbackQueryHandler(telegram_ui.button_handler))
-        # start polling in separate thread so Twisted reactor remains primary loop
+        # register handlers from telegram_ui if available
+        try:
+            dp.add_handler(CommandHandler("start", telegram_ui.start))
+            if hasattr(telegram_ui, "symbols_command"):
+                dp.add_handler(CommandHandler("symbols", telegram_ui.symbols_command))
+            dp.add_handler(MessageHandler(Filters.text("МЕНЮ"), telegram_ui.menu))
+            dp.add_handler(MessageHandler(Filters.text & ~Filters.command, telegram_ui.reset_ui))
+            dp.add_handler(CallbackQueryHandler(telegram_ui.button_handler))
+        except Exception:
+            logger.exception("Failed to register telegram handlers (telegram_ui mismatch?)")
         reactor.callInThread(updater.start_polling)
-        logger.info("Telegram updater scheduled in background thread.")
+        logger.info("Telegram bot started (polling in background thread).")
+    except Exception:
+        logger.exception("Failed to start Telegram bot")
 
-    # 2) Start cTrader client (Twisted-based)
+def start_ctrader_client():
     try:
         client = SpotwareConnect(get_ct_client_id(), get_ct_client_secret())
         state.client = client
         client.on("ready", on_ctrader_ready)
+        # also hook a ready-to-load-symbols handler
         reactor.callWhenRunning(client.start)
-        logger.info("cTrader client scheduled to start.")
+        logger.info("cTrader client scheduled to start")
     except Exception:
         logger.exception("Failed to initialize cTrader client")
 
+def _start_background_services():
+    # Telegram
+    start_telegram_bot()
+    # cTrader
+    start_ctrader_client()
+    # Start scanner loop (only start once symbols loaded)
+    # We start it anyway - it will skip work until symbols are loaded.
+    LoopingCall(scan_markets_once).start(60.0, now=False)
+    # SSE keepalive pings
+    LoopingCall(lambda: (state.sse_queue.put_nowait({"_ping": int(time.time())}) if not state.sse_queue.full() else None)).start(20.0, now=False)
+
+# --------------------------
+# Twisted + Flask integration and main
+# --------------------------
 def main():
-    # Create WSGI resource for Flask and run under Twisted
+    # create WSGI resource & listen
     resource = WSGIResource(reactor, reactor.getThreadPool(), app)
     site = Site(resource)
     port = int(os.environ.get("PORT", "8080"))
     reactor.listenTCP(port, site, interface="0.0.0.0")
     logger.info(f"Twisted WSGI server listening on {port}")
 
-    # Start background services
-    start_services()
+    # start background services after reactor starts
+    reactor.callWhenRunning(_start_background_services)
 
-    # Optionally start periodic pings for SSE clients (keeps connections alive)
-    def send_pings():
+    # handle SIGTERM gracefully
+    def _sigterm(signum, frame):
+        logger.info("SIGTERM received — stopping reactor")
         try:
-            # put a keepalive ping into SSE queue (non-blocking)
-            try:
-                state.sse_queue.put_nowait({"_ping": int(time.time())})
-            except Exception:
-                pass
-        except Exception:
-            logger.exception("Error sending sse ping")
-    LoopingCall(send_pings).start(20)
+            if getattr(state, "updater", None):
+                try:
+                    state.updater.stop()
+                except Exception:
+                    pass
+        finally:
+            reactor.stop()
+            sys.exit(0)
+    signal.signal(signal.SIGTERM, _sigterm)
+    signal.signal(signal.SIGINT, _sigterm)
 
-    # Run reactor (blocking)
     logger.info("Starting Twisted reactor.")
     reactor.run()
 
