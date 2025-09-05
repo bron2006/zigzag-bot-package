@@ -15,10 +15,8 @@ try:
 except Exception:
     pass
 
-# --- ПОЧАТОК ЗМІН: Повертаємо відсутні параметри ---
 IS_DEV_MODE = os.getenv("NORD", "off").lower() == "on"
 DEV_USER_ID = 123456789
-# --- КІНЕЦЬ ЗМІН ---
 
 def get_chat_id() -> int: return int(os.getenv("CHAT_ID")) if os.getenv("CHAT_ID") else None
 def get_ct_client_id() -> str: return os.getenv("CT_CLIENT_ID")
@@ -44,7 +42,9 @@ ANALYSIS_CONFIG = {
 }
 
 # --- НАЛАШТУВАННЯ СКАНЕРА ---
-IDEAL_ENTRY_THRESHOLD = 85
+# --- ПОЧАТОК ЗМІН: Тимчасово знижуємо поріг для тестування ---
+IDEAL_ENTRY_THRESHOLD = 65
+# --- КІНЕЦЬ ЗМІН ---
 SCANNER_COOLDOWN_SECONDS = 300
 
 # --- СПИСКИ АКТИВІВ ---
