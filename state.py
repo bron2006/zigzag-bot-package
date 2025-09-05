@@ -14,28 +14,26 @@ all_symbol_names: list = []
 symbol_cache: Dict[str, Any] = {}
 SYMBOLS_LOADED: bool = False
 
-# --- "ГАРЯЧИЙ" КЕШ В ПАМ'ЯТІ (замість Redis для швидкості) ---
-# Для цін реального часу
+# --- "ГАРЯЧИЙ" КЕШ В ПАМ'ЯТІ ---
 live_prices: Dict[str, Dict[str, Any]] = {}
-# Для відстеження сповіщень сканера, щоб не спамити
 scanner_cooldown_cache: Dict[str, float] = {}
-# Для кешування останнього повного аналізу
 latest_analysis_cache: Dict[str, Dict[str, Any]] = {}
-# Для кешування сигналів (використовується в telegram_ui)
 SIGNAL_CACHE: Dict[str, Dict[str, Any]] = {}
 
-# --- СТАН СКАНЕРІВ (керується з UI) ---
+# --- СТАН СКАНЕРІВ ---
 SCANNER_STATE: Dict[str, bool] = {
-    "forex": False, # <-- ОСЬ ЦЯ ЗМІНА. Тепер за замовчуванням вимкнено.
+    "forex": False,
     "crypto": False,
     "commodities": False
 }
 
-# --- ЧЕРГА ДЛЯ ВЕБ-ІНТЕРФЕЙСУ (Server-Sent Events) ---
-sse_queue: queue.Queue = queue.Queue(maxsize=100)
+# --- ЧЕРГА ДЛЯ ВЕБ-ІНТЕРФЕЙСУ ---
+# --- ПОЧАТОК ЗМІН: Прибираємо обмеження maxsize, щоб черга була безрозмірною ---
+sse_queue: queue.Queue = queue.Queue()
+# --- КІНЕЦЬ ЗМІН ---
 
 
-# --- ФУНКЦІЇ-ХЕЛПЕРИ (зберігаємо існуючий інтерфейс) ---
+# --- ФУНКЦІЇ-ХЕЛПЕРИ ---
 
 def set_scanner_state(category: str, enabled: bool):
     """Встановити стан сканера."""
