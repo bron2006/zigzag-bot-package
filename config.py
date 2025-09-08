@@ -44,7 +44,7 @@ ANALYSIS_CONFIG = {
 }
 
 # --- НАЛАШТУВАННЯ СКАНЕРА ---
-IDEAL_ENTRY_THRESHOLD = 51
+IDEAL_ENTRY_THRESHOLD = 80
 SCANNER_COOLDOWN_SECONDS = 300
 
 # --- СПИСКИ АКТИВІВ ---
