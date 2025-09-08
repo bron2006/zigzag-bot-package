@@ -3,7 +3,7 @@ import logging
 from twisted.internet import reactor
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackQueryHandler
 
-import state
+from state import app_state
 import telegram_ui
 from config import TELEGRAM_BOT_TOKEN
 
@@ -15,7 +15,7 @@ def start_telegram_bot():
         return
     try:
         updater = Updater(token=TELEGRAM_BOT_TOKEN, use_context=True)
-        state.updater = updater
+        app_state.updater = updater
         dp = updater.dispatcher
         dp.add_handler(CommandHandler("start", telegram_ui.start))
         dp.add_handler(CommandHandler("symbols", telegram_ui.symbols_command))

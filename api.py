@@ -7,7 +7,7 @@ import logging
 from functools import wraps
 from flask import jsonify, send_from_directory, Response, request, stream_with_context
 
-import state
+from state import app_state
 import db
 from auth import is_valid_init_data, get_user_id_from_init_data
 import analysis as analysis_module
@@ -81,14 +81,14 @@ def register_routes(app):
         logger.info(f"On-demand analysis for {pair_normalized} timeframe {timeframe}")
 
         try:
-            d = get_api_detailed_signal_data(state.client, state.symbol_cache, pair_normalized, user_id, timeframe)
+            d = get_api_detailed_signal_data(app_state.client, app_state.symbol_cache, pair_normalized, user_id, timeframe)
             done_q = queue.Queue()
             d.addCallbacks(lambda res: done_q.put(res), lambda f: done_q.put({"error": str(f)}))
             result = done_q.get(timeout=30)
             if result.get("error"):
                 logger.error(f"On-demand analysis failed for {pair_normalized}: {result.get('error')}")
                 return jsonify(result), 500
-            state.latest_analysis_cache[pair_normalized] = result
+            app_state.latest_analysis_cache[pair_normalized] = result
             return jsonify(result)
         except queue.Empty:
             logger.error(f"On-demand analysis timeout for {pair_normalized}")
@@ -113,17 +113,17 @@ def register_routes(app):
     @app.route("/api/scanner/status")
     @protected_route
     def scanner_status():
-        return jsonify(state.SCANNER_STATE)
+        return jsonify(app_state.SCANNER_STATE)
 
     @app.route("/api/scanner/toggle", methods=['POST'])
     @protected_route
     def scanner_toggle():
         category = request.args.get("category")
-        if not category or category not in state.SCANNER_STATE:
+        if not category or category not in app_state.SCANNER_STATE:
             return jsonify({"error": "Invalid category"}), 400
-        state.set_scanner_state(category, not state.get_scanner_state(category))
-        logger.info(f"Scanner for '{category}' toggled to {state.SCANNER_STATE[category]}")
-        return jsonify(state.SCANNER_STATE)
+        app_state.set_scanner_state(category, not app_state.get_scanner_state(category))
+        logger.info(f"Scanner for '{category}' toggled to {app_state.SCANNER_STATE[category]}")
+        return jsonify(app_state.SCANNER_STATE)
 
     @app.route("/api/signal-stream")
     @protected_route
@@ -132,7 +132,7 @@ def register_routes(app):
             logger.info("DEBUG: Web client connected to SSE stream. Waiting for signals...")
             while True:
                 try:
-                    data = state.sse_queue.get(timeout=20)
+                    data = app_state.sse_queue.get(timeout=20)
                     logger.info(f"DEBUG: Signal for {data.get('pair')} GOT from SSE queue. Sending to web client.")
                     yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
                 except queue.Empty:

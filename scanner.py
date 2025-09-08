@@ -4,7 +4,7 @@ import queue
 import logging
 from twisted.internet import reactor
 
-import state
+from state import app_state
 import telegram_ui
 import db
 import analysis as analysis_module
@@ -18,14 +18,14 @@ get_api_detailed_signal_data = analysis_module.get_api_detailed_signal_data
 
 def _collect_assets_to_scan():
     assets = []
-    if state.SCANNER_STATE.get("forex"):
+    if app_state.get_scanner_state("forex"):
         for session_pairs in FOREX_SESSIONS.values():
             assets.extend(session_pairs)
-    if state.SCANNER_STATE.get("crypto"):
+    if app_state.get_scanner_state("crypto"):
         assets.extend(CRYPTO_PAIRS)
-    if state.SCANNER_STATE.get("commodities"):
+    if app_state.get_scanner_state("commodities"):
         assets.extend(COMMODITIES)
-    if state.SCANNER_STATE.get("watchlist"):
+    if app_state.get_scanner_state("watchlist"):
         user_id = get_chat_id()
         if user_id:
             logger.info(f"Scanning watchlist for main user: {user_id}")
@@ -50,28 +50,28 @@ def _handle_analysis_result(pair_norm, result):
             return
 
         now = time.time()
-        if (now - state.scanner_cooldown_cache.get(pair_norm, 0)) < SCANNER_COOLDOWN_SECONDS:
+        if (now - app_state.scanner_cooldown_cache.get(pair_norm, 0)) < SCANNER_COOLDOWN_SECONDS:
             logger.debug(f"{pair_norm} on cooldown, skip notify")
             return
         
         logger.info(f"[SCANNER_DIAG] Signal for {pair_norm} PASSED filter. Notifying.")
         
         try:
-            state.sse_queue.put_nowait(result)
+            app_state.sse_queue.put_nowait(result)
         except queue.Full:
             logger.warning("SSE queue full - dropping")
 
-        state.latest_analysis_cache[pair_norm] = result
+        app_state.latest_analysis_cache[pair_norm] = result
         chat_id = get_chat_id()
-        if chat_id and state.updater:
+        if chat_id and app_state.updater:
             try:
                 message = telegram_ui._format_signal_message(result, "5m")
                 kb = telegram_ui.get_main_menu_kb()
-                state.updater.bot.send_message(chat_id=chat_id, text=message, parse_mode='Markdown', reply_markup=kb)
+                app_state.updater.bot.send_message(chat_id=chat_id, text=message, parse_mode='Markdown', reply_markup=kb)
             except Exception:
                 logger.exception("Failed to send telegram notification")
 
-        state.scanner_cooldown_cache[pair_norm] = now
+        app_state.scanner_cooldown_cache[pair_norm] = now
         logger.info(f"SCANNER: Notified for {pair_norm} (score {score})")
     except Exception:
         logger.exception("Error handling analysis result")
@@ -79,11 +79,11 @@ def _handle_analysis_result(pair_norm, result):
 def _process_one_asset(pair: str):
     try:
         pair_norm = pair.replace("/", "")
-        if not state.SYMBOLS_LOADED:
+        if not app_state.SYMBOLS_LOADED:
             logger.debug("Symbols not loaded yet, skipping asset processing.")
             return
         
-        d = get_api_detailed_signal_data(state.client, state.symbol_cache, pair_norm, 0, "5m")
+        d = get_api_detailed_signal_data(app_state.client, app_state.symbol_cache, pair_norm, 0, "5m")
         d.addCallback(lambda result, p=pair_norm: _handle_analysis_result(p, result))
         d.addErrback(lambda failure, p=pair_norm: logger.error(f"Critical error in analysis chain for {p}: {failure.getErrorMessage()}"))
     except Exception:
@@ -91,7 +91,7 @@ def _process_one_asset(pair: str):
 
 def scan_markets_once():
     try:
-        if not any(state.SCANNER_STATE.values()):
+        if not any(app_state.SCANNER_STATE.values()):
             logger.debug("All scanners disabled; skipping scan loop.")
             return
         

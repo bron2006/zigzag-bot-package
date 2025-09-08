@@ -11,7 +11,7 @@ from twisted.web.wsgi import WSGIResource
 from twisted.web.server import Site
 from flask import Flask
 
-import state
+from state import app_state
 import scanner
 import bot
 import ctrader
@@ -33,7 +33,7 @@ def _start_background_services():
     # Запускаємо цикл сканера
     LoopingCall(scanner.scan_markets_once).start(60.0, now=False)
     # Запускаємо цикл для SSE пінгів
-    LoopingCall(lambda: (state.sse_queue.put_nowait({"_ping": int(time.time())}) if not state.sse_queue.full() else None)).start(20.0, now=False)
+    LoopingCall(lambda: (app_state.sse_queue.put_nowait({"_ping": int(time.time())}) if not app_state.sse_queue.full() else None)).start(20.0, now=False)
 
 def main():
     # Реєструємо API маршрути
@@ -53,8 +53,8 @@ def main():
     def _sigterm(signum, frame):
         logger.info("SIGTERM received — stopping reactor")
         try:
-            if state.updater:
-                state.updater.stop()
+            if app_state.updater:
+                app_state.updater.stop()
         finally:
             reactor.stop()
             sys.exit(0)
