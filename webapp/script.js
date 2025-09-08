@@ -122,16 +122,19 @@ function updateScannerButtons(stateDict) {
     }
 }
 
-// --- ПОЧАТОК ЗМІН: Робимо сповіщення клікабельними ---
+// --- ПОЧАТОК ЗМІН: Змінюємо логіку кліку на сповіщення ---
 function displayLiveSignal(signalData) {
     const signalId = `signal-${signalData.pair.replace('/', '')}-${Date.now()}`;
     const signalDiv = document.createElement('div');
     signalDiv.id = signalId;
     signalDiv.className = 'live-signal';
-    signalDiv.style.cursor = 'pointer'; // Додаємо курсор, щоб показати, що елемент клікабельний
+    signalDiv.style.cursor = 'pointer';
     
-    // При кліку на сповіщення завантажуємо повний аналіз
-    signalDiv.onclick = () => fetchSignal(signalData.pair);
+    // При кліку на сповіщення "розгортаємо" вже існуючі дані
+    signalDiv.onclick = () => {
+        signalOutput.innerHTML = formatSignalAsHtml(signalData);
+        signalContainer.scrollIntoView({ behavior: 'smooth' });
+    };
 
     const verdict = signalData.verdict_text || '...';
     const pair = signalData.pair || 'N/A';
@@ -147,7 +150,6 @@ function displayLiveSignal(signalData) {
         <div class="live-signal-content">${verdict} по ${pair} (Бики: ${score}%)</div>
         <button class="live-signal-close" onclick="event.stopPropagation(); this.parentElement.remove()">×</button>
     `;
-    // event.stopPropagation() не дає кліку по кнопці "х" спрацювати на всьому сповіщенні
     
     liveSignalsContainer.prepend(signalDiv);
     
