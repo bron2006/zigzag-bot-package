@@ -2,7 +2,7 @@
 FROM python:3.11-bullseye
 WORKDIR /app
 
-# Встановлюємо системні залежності для збірки TA-Lib
+# Встановлюємо системні залежності
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     build-essential \
@@ -12,7 +12,7 @@ RUN apt-get update && \
     curl && \
     rm -rf /var/lib/apt/lists/*
 
-# Завантажуємо, компілюємо і встановлюємо системну бібліотеку TA-Lib
+# Встановлюємо системну бібліотеку TA-Lib
 RUN wget 'http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz' && \
     tar -xzf ta-lib-0.4.0-src.tar.gz && \
     cd ta-lib/ && \
@@ -22,6 +22,11 @@ RUN wget 'http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz' && 
     cd .. && \
     rm -rf ta-lib ta-lib-0.4.0-src.tar.gz
 
+# --- ПОЧАТОК ЗМІН: Встановлюємо проблемний пакет вручну ---
+RUN git clone https://github.com/twopirllc/pandas-ta.git /tmp/pandas-ta
+RUN pip install /tmp/pandas-ta
+# --- КІНЕЦЬ ЗМІН ---
+
 # Встановлюємо Python-залежності з файлу
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
@@ -29,5 +34,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 EXPOSE 8080
 
-# Запускаємо додаток напряму через Python, оскільки він використовує вбудований сервер Twisted.
 CMD ["python", "app.py"]
