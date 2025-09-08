@@ -2,7 +2,7 @@
 FROM python:3.11-bullseye
 WORKDIR /app
 
-# Встановлюємо системні залежності
+# Встановлюємо системні залежності (включно з git, про всяк випадок)
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     build-essential \
@@ -22,13 +22,12 @@ RUN wget 'http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz' && 
     cd .. && \
     rm -rf ta-lib ta-lib-0.4.0-src.tar.gz
 
-# --- ПОЧАТОК ЗМІН: Завантажуємо pandas-ta як ZIP-архів ---
-RUN wget https://github.com/twopirllc/pandas-ta/archive/refs/heads/main.zip -O pandas-ta.zip && \
+# Завантажуємо pandas-ta як ZIP-архів з правильної гілки
+RUN wget https://github.com/twopirllc/pandas-ta/archive/refs/heads/development.zip -O pandas-ta.zip && \
     unzip pandas-ta.zip && \
-    pip install ./pandas-ta-main && \
+    pip install ./pandas-ta-development && \
     rm pandas-ta.zip && \
-    rm -rf ./pandas-ta-main
-# --- КІНЕЦЬ ЗМІН ---
+    rm -rf ./pandas-ta-development
 
 # Встановлюємо Python-залежності з файлу
 COPY requirements.txt .
