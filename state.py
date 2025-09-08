@@ -24,13 +24,12 @@ SIGNAL_CACHE: Dict[str, Dict[str, Any]] = {}
 SCANNER_STATE: Dict[str, bool] = {
     "forex": False,
     "crypto": False,
-    "commodities": False
+    "commodities": False,
+    "watchlist": False  # <-- Додано новий стан
 }
 
 # --- ЧЕРГА ДЛЯ ВЕБ-ІНТЕРФЕЙСУ ---
-# --- ПОЧАТОК ЗМІН: Прибираємо обмеження maxsize, щоб черга була безрозмірною ---
 sse_queue: queue.Queue = queue.Queue()
-# --- КІНЕЦЬ ЗМІН ---
 
 
 # --- ФУНКЦІЇ-ХЕЛПЕРИ ---
