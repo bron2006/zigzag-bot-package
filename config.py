@@ -8,12 +8,12 @@ load_dotenv()
 
 # --- ОСНОВНІ НАЛАШТУВАННЯ ---
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-DB_NAME = os.getenv("DB_NAME", "/data/signals.db")
-DB_PATH = Path(os.getenv("DB_PATH", DB_NAME))
-try:
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-except Exception:
-    pass
+
+# --- Прибираємо SQLite, додаємо Postgres ---
+def get_database_url() -> str:
+    """Отримує URL для підключення до бази даних Postgres."""
+    return os.getenv("DATABASE_URL")
+# ----------------------------------------
 
 IS_DEV_MODE = os.getenv("NORD", "off").lower() == "on"
 DEV_USER_ID = 123456789
@@ -36,15 +36,13 @@ ANALYSIS_CONFIG = {
     "macd_signal": 9,
     "volume_spike_multiplier": 1.5,
     "volume_low_multiplier": 0.5,
-    "pivot_proximity_percent": 0.005,  # 0.5%
+    "pivot_proximity_percent": 0.005,
     "min_bars_for_analysis": 200,
-    "max_candle_staleness_seconds": 3600 * 3 # 3 години
+    "max_candle_staleness_seconds": 3600 * 3
 }
 
 # --- НАЛАШТУВАННЯ СКАНЕРА ---
-# --- ПОЧАТОК ЗМІН: Тимчасово знижуємо поріг для тестування ---
 IDEAL_ENTRY_THRESHOLD = 65
-# --- КІНЕЦЬ ЗМІН ---
 SCANNER_COOLDOWN_SECONDS = 300
 
 # --- СПИСКИ АКТИВІВ ---
