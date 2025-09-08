@@ -1,36 +1,79 @@
 # analysis.py
 import logging
-import time
-import json
-from typing import Tuple, List, Optional, Dict, Any
-
 import pandas as pd
+import pandas_ta as ta
 import numpy as np
-import talib
-
+import time
 from twisted.internet.defer import Deferred, DeferredList
 from twisted.internet import reactor, error as terror
 
 from ctrader_open_api.messages.OpenApiMessages_pb2 import (
-    ProtoOAGetTrendbarsReq, ProtoOAGetTrendbarsRes
+    ProtoOAGetTrendbarsReq, ProtoOAGetTrendbarsRes,
+    ProtoOASubscribeSpotsReq, ProtoOAUnsubscribeSpotsReq
 )
 from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOATrendbarPeriod as TrendbarPeriod
-
 from db import add_signal_to_history
 from state import app_state
-from config import ANALYSIS_CONFIG
 
-logger = logging.getLogger("analysis")
-logger.setLevel(logging.INFO)
+logger = logging.getLogger(__name__)
 
 PERIOD_MAP = {
     "1m": TrendbarPeriod.M1, "5m": TrendbarPeriod.M5, "15m": TrendbarPeriod.M15,
     "1h": TrendbarPeriod.H1, "4h": TrendbarPeriod.H4, "1day": TrendbarPeriod.D1
 }
 
-# --- Data Fetching ---
+def _send_with_retry(client, request, timeout=60, retries=1):
+    d = Deferred()
+    def _attempt(remaining):
+        inner = client.send(request, timeout=timeout)
+        def ok(msg):
+            if not d.called: d.callback(msg)
+        def err(f):
+            if f.check(terror.TimeoutError) and remaining > 0:
+                logger.warning(f"Request {type(request).__name__} timed out, retrying ({remaining} left)...")
+                reactor.callLater(0.2, _attempt, remaining - 1)
+            else:
+                if not d.called: d.errback(f)
+        inner.addCallbacks(ok, err)
+    _attempt(retries)
+    return d
+
+def get_live_price(client, symbol_cache, norm_pair: str) -> Deferred:
+    d = Deferred()
+    symbol_details = symbol_cache.get(norm_pair)
+    if not symbol_details:
+        reactor.callLater(0, d.errback, Exception(f"Символ '{norm_pair}' не знайдено для live price."))
+        return d
+    symbol_id = symbol_details.symbolId
+    account_id = client._client.account_id
+    event_name = f"spot_event_{symbol_id}"
+    timeout_call = None
+    def cleanup():
+        unsubscribe_req = ProtoOAUnsubscribeSpotsReq(ctidTraderAccountId=account_id, symbolId=[symbol_id])
+        client.send(unsubscribe_req)
+        client.remove_listener(event_name, on_spot_event)
+        if timeout_call and not timeout_call.called:
+            timeout_call.cancel()
+    def on_spot_event(spot_event):
+        logger.info(f"Live price received for {norm_pair}. Unsubscribing...")
+        cleanup()
+        if spot_event.HasField('bid') and spot_event.HasField('ask'):
+            price = (spot_event.bid + spot_event.ask) / 2
+            if not d.called: d.callback(price / (10**5))
+        else:
+            if not d.called: d.callback(None)
+    def on_timeout():
+        logger.warning(f"Live price request for {norm_pair} timed out. Market might be closed.")
+        cleanup()
+        if not d.called: d.callback(None)
+    client.on(event_name, on_spot_event)
+    timeout_call = reactor.callLater(10, on_timeout)
+    logger.info(f"Subscribing to live price for {norm_pair} (symbolId: {symbol_id})")
+    subscribe_req = ProtoOASubscribeSpotsReq(ctidTraderAccountId=account_id, symbolId=[symbol_id])
+    client.send(subscribe_req)
+    return d
+
 def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: int) -> Deferred:
-    # ... (no changes in this function)
     d = Deferred()
     symbol_details = symbol_cache.get(norm_pair)
     if not symbol_details:
@@ -43,175 +86,243 @@ def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: in
     now = int(time.time() * 1000)
     seconds_per_bar = {'1m': 60, '5m': 300, '15m': 900, '1h': 3600, '4h': 14400, '1day': 86400}
     from_ts = now - (count * seconds_per_bar[period] * 1000)
-    request = ProtoOAGetTrendbarsReq(ctidTraderAccountId=client._client.account_id, symbolId=symbol_details.symbolId, period=tf_proto, fromTimestamp=from_ts, toTimestamp=now)
+    request = ProtoOAGetTrendbarsReq(
+        ctidTraderAccountId=client._client.account_id,
+        symbolId=symbol_details.symbolId,
+        period=tf_proto,
+        fromTimestamp=from_ts,
+        toTimestamp=now
+    )
     logger.info(f"Requesting candles for {norm_pair} ({period})...")
-    deferred = client.send(request, timeout=60)
+    deferred = _send_with_retry(client, request, timeout=60, retries=1)
     def process_response(message):
-        try:
-            response = ProtoOAGetTrendbarsRes(); response.ParseFromString(message.payload)
-            logger.info(f"✅ Received {len(response.trendbar)} candles for {norm_pair} ({period}).")
-            if not response.trendbar: d.callback(pd.DataFrame()); return
-            divisor = 10**5
-            bars = [{'ts': pd.to_datetime(bar.utcTimestampInMinutes * 60, unit='s', utc=True), 'Open': (bar.low + bar.deltaOpen) / divisor, 'High': (bar.low + bar.deltaHigh) / divisor, 'Low': bar.low / divisor, 'Close': (bar.low + bar.deltaClose) / divisor, 'Volume': bar.volume} for bar in response.trendbar]
-            df = pd.DataFrame(bars)
-            d.callback(df.sort_values(by='ts').reset_index(drop=True))
-        except Exception as e: d.errback(e)
-    def on_error(failure): d.errback(failure)
+        response = ProtoOAGetTrendbarsRes()
+        response.ParseFromString(message.payload)
+        logger.info(f"✅ Received {len(response.trendbar)} candles for {norm_pair} ({period}).")
+        if not response.trendbar:
+            d.callback(pd.DataFrame())
+            return
+        divisor = 10**5
+        bars = [{'ts': pd.to_datetime(bar.utcTimestampInMinutes * 60, unit='s', utc=True),
+                 'Open': (bar.low + bar.deltaOpen) / divisor, 'High': (bar.low + bar.deltaHigh) / divisor,
+                 'Low': bar.low / divisor, 'Close': (bar.low + bar.deltaClose) / divisor,
+                 'Volume': bar.volume} for bar in response.trendbar]
+        df = pd.DataFrame(bars)
+        d.callback(df.sort_values(by='ts').reset_index(drop=True))
+    def on_error(failure):
+        err = failure.getErrorMessage() if hasattr(failure, 'getErrorMessage') else str(failure)
+        logger.error(f"❌ Data request failed for {norm_pair} ({period}): {err}")
+        d.errback(failure)
     deferred.addCallbacks(process_response, on_error)
     return d
 
-# --- Analysis Sub-functions ---
-def _validate_data(df: pd.DataFrame, df_name: str) -> Optional[str]:
-    # ... (no changes in this function)
-    if df.empty or len(df) < ANALYSIS_CONFIG["min_bars_for_analysis"]: return f"Недостатньо даних для аналізу ({df_name})"
-    if df[['Open', 'High', 'Low', 'Close']].isna().any().any(): return f"Історичні дані містять помилки ({df_name}, NaN)"
-    last_bar_time = df.iloc[-1]['ts']
-    if (pd.Timestamp.now(tz='UTC') - last_bar_time).total_seconds() > ANALYSIS_CONFIG["max_candle_staleness_seconds"]: logger.warning(f"Дані для {df_name} застарілі (остання свічка: {last_bar_time})")
-    return None
+def group_close_values(values, threshold=0.01):
+    if not len(values): return []
+    s = pd.Series(sorted(values)).dropna()
+    if s.empty: return []
+    group_starts = s.pct_change() > threshold
+    group_ids = group_starts.cumsum()
+    return s.groupby(group_ids).mean().tolist()
 
-def _get_technical_indicators(df: pd.DataFrame, trend_df: pd.DataFrame, current_price: float) -> Dict[str, Any]:
-    # ... (no changes in this function)
-    cfg = ANALYSIS_CONFIG
-    ema_trend = talib.EMA(trend_df['Close'].values, timeperiod=cfg["ema_daily_period"])
-    rsi = talib.RSI(df['Close'].values, timeperiod=cfg["rsi_period"])
-    macd, macdsignal, macdhist = talib.MACD(df['Close'].values, fastperiod=cfg["macd_fast"], slowperiod=cfg["macd_slow"], signalperiod=cfg["macd_signal"])
-    return {"last_rsi": float(rsi[-1]) if len(rsi) > 0 else 50, "last_macd_hist": float(macdhist[-1]) if len(macdhist) > 0 else 0, "is_trend_up": (current_price > ema_trend[-1]) if len(ema_trend) > 0 else None, "candle_pattern": analyze_candle_patterns(df), "volume_info": analyze_volume(df)}
-
-def _collect_signal_factors(indicators: Dict[str, Any]) -> Tuple[int, int, List[str]]:
-    # ... (no changes in this function)
-    cfg = ANALYSIS_CONFIG; reasons, bullish, bearish = [], 0, 0
-    if indicators["last_macd_hist"] > 0: bullish += 1; reasons.append("MACD росте")
-    else: bearish += 1; reasons.append("MACD падає")
-    if indicators["candle_pattern"]:
-        p_type, p_name = indicators["candle_pattern"].get('type'), indicators["candle_pattern"].get('name')
-        if p_type == 'bullish': bullish += 1; reasons.append(f"Бичачий патерн: {p_name}")
-        elif p_type == 'bearish': bearish += 1; reasons.append(f"Ведмежий патерн: {p_name}")
-    if indicators["last_rsi"] < cfg["rsi_oversold"]: bullish += 1; reasons.append(f"Ознаки перепроданості (RSI < {cfg['rsi_oversold']})")
-    elif indicators["last_rsi"] > cfg["rsi_overbought"]: bearish += 1; reasons.append(f"Ознаки перекупленості (RSI > {cfg['rsi_overbought']})")
-    return bullish, bearish, reasons
-
-def _calculate_verdict_and_score(bullish: int, bearish: int, is_trend_up: Optional[bool], reasons: List[str]) -> Dict[str, Any]:
-    # ... (no changes in this function)
-    verdict, score, warning = "🟡 НЕЙТРАЛЬНО", 50, None
-    if is_trend_up is True:
-        reasons.append("📈 Глобальний тренд: Бичачий (H4)")
-        if bullish >= 2: score, verdict = 85, "⬆️ Сильна ПОКУПКА"
-        elif bullish == 1: score, verdict = 65, "↗️ Помірна ПОКУПКА"
-        if bearish >= 1: warning = "❗️ Сигнал на продаж проти сильного тренду (H4)"; reasons.append(warning)
-    elif is_trend_up is False:
-        reasons.append("📉 Глобальний тренд: Ведмежий (H4)")
-        if bearish >= 2: score, verdict = 15, "⬇️ Сильний ПРОДАЖ"
-        elif bearish == 1: score, verdict = 35, "↘️ Помірний ПРОДАЖ"
-        if bullish >= 1: warning = "❗️ Сигнал на покупку проти сильного тренду (H4)"; reasons.append(warning)
-    else:
-        reasons.append("↔️ Глобальний тренд: Боковий/Невизначений (H4)")
-        if bullish >= 2: score, verdict = 75, "↗️ Помірна ПОКУПКА"
-        elif bearish >= 2: score, verdict = 25, "↘️ Помірний ПРОДАЖ"
-    return {"verdict": verdict, "score": score, "warning": warning, "reasons": reasons}
-
-def calculate_pivot_points(daily_df: pd.DataFrame) -> Optional[Dict[str, float]]:
-    # ... (no changes in this function)
-    if daily_df is None or len(daily_df) < 2: return None
+def identify_support_resistance_levels(df, window=20, threshold=0.01):
     try:
-        prev_day = daily_df.iloc[-2]; high, low, close = prev_day['High'], prev_day['Low'], prev_day['Close']
-        pivot = (high + low + close) / 3
-        return {'P': pivot, 'R1': (2 * pivot) - low, 'S1': (2 * pivot) - high, 'R2': pivot + (high - low), 'S2': pivot - (high - low), 'R3': high + 2 * (pivot - low), 'S3': low - 2 * (pivot - high)}
-    except (IndexError, Exception): return None
-
-def _apply_pivot_conflict_override(verdict: str, score: int, current_price: float, pivots: Dict, reasons: List[str]) -> Dict[str, Any]:
-    # ... (no changes in this function)
-    if not pivots: return {"verdict": verdict, "score": score, "support": None, "resistance": None}
-    support_levels = sorted([pivots[k] for k in ['S1', 'S2', 'S3'] if k in pivots], reverse=True)
-    resistance_levels = sorted([pivots[k] for k in ['R1', 'R2', 'R3'] if k in pivots])
-    support = next((s for s in support_levels if s < current_price), None)
-    resistance = next((r for r in resistance_levels if r > current_price), None)
-    prox_cfg = ANALYSIS_CONFIG["pivot_proximity_percent"]
-    for r_level in resistance_levels:
-        if r_level and current_price < r_level and (r_level - current_price) / current_price < prox_cfg:
-            if score > 60: verdict, score = "⚠️ Ризикована ПОКУПКА", 60; reasons.append(f"❗️ Ціна впритул до Pivot опору ({r_level:.5f})")
-            break
-    for s_level in support_levels:
-        if s_level and current_price > s_level and (current_price - s_level) / current_price < prox_cfg:
-            if score < 40: verdict, score = "⚠️ Ризикований ПРОДАЖ", 40; reasons.append(f"❗️ Ціна впритул до Pivot підтримки ({s_level:.5f})")
-            break
-    return {"verdict": verdict, "score": score, "support": support, "resistance": resistance}
-
-def _calculate_core_signal(df: pd.DataFrame, daily_df: pd.DataFrame, h4_df: pd.DataFrame, current_price: float) -> Dict[str, Any]:
-    # ... (no changes in this function)
-    for frame, name in [(df, "5m"), (daily_df, "D1"), (h4_df, "H4")]:
-        validation_error = _validate_data(frame, name)
-        if validation_error: return {"score": 50, "reasons": [validation_error], "verdict_text": "🟡 НЕЙТРАЛЬНО"}
-    try:
-        indicators = _get_technical_indicators(df, h4_df, current_price)
+        lows = df['Low'].rolling(window=window, center=True, min_periods=3).min()
+        highs = df['High'].rolling(window=window, center=True, min_periods=3).max()
+        support_levels = group_close_values(df.loc[df['Low'] == lows, 'Low'].tolist(), threshold)
+        resistance_levels = group_close_values(df.loc[df['High'] == highs, 'High'].tolist(), threshold)
+        return sorted(support_levels), sorted(resistance_levels, reverse=True)
     except Exception as e:
-        logger.exception("Indicator calculation failed")
-        return {"score": 50, "reasons": ["Помилка розрахунку індикаторів"], "verdict_text": "🟡 НЕЙТРАЛЬНО"}
-    bullish, bearish, reasons = _collect_signal_factors(indicators)
-    result = _calculate_verdict_and_score(bullish, bearish, indicators["is_trend_up"], reasons)
-    pivots = calculate_pivot_points(daily_df)
-    pivot_result = _apply_pivot_conflict_override(result["verdict"], result["score"], current_price, pivots, result["reasons"])
-    return {"score": int(np.clip(pivot_result["score"], 0, 100)), "reasons": pivot_result.get("reasons", result["reasons"]), "support": pivot_result["support"], "resistance": pivot_result["resistance"], "candle_pattern": indicators["candle_pattern"], "volume_info": indicators["volume_info"], "critical_warning": result["warning"], "verdict_text": pivot_result["verdict"]}
+        logger.error(f"Помилка в identify_support_resistance_levels: {e}")
+        return [], []
 
-def get_api_detailed_signal_data(client, symbol_cache, norm_pair: str, user_id: int, period: str = "15m", count: int = 500) -> Deferred:
-    final_deferred = Deferred()
-    d_5m = get_market_data(client, symbol_cache, norm_pair, period, count)
-    d_d1 = get_market_data(client, symbol_cache, norm_pair, "1day", max(ANALYSIS_CONFIG["min_bars_for_analysis"], count))
-    d_h4 = get_market_data(client, symbol_cache, norm_pair, "4h", max(ANALYSIS_CONFIG["min_bars_for_analysis"], count))
-    dl = DeferredList([d_5m, d_d1, d_h4], consumeErrors=True)
-
-    def on_ready(results):
-        try:
-            success_5m, df_5m = results[0]
-            success_d1, df_d1 = results[1]
-            success_h4, df_h4 = results[2]
-            if not all([success_5m, success_d1, success_h4]):
-                final_deferred.callback({"error": "Не вдалося завантажити всі необхідні ринкові дані"}); return
-            current_price = None
-            # --- ПОЧАТОК ЗМІН: Використовуємо app_state ---
-            live_price_data = app_state.live_prices.get(norm_pair)
-            # --- КІНЕЦЬ ЗМІН ---
-            if live_price_data and live_price_data.get("mid") and (time.time() - live_price_data.get("ts", 0)) < 30:
-                current_price = float(live_price_data["mid"])
-            if current_price is None and not df_5m.empty:
-                current_price = float(df_5m.iloc[-1]['Close'])
-            if current_price is None:
-                final_deferred.callback({"error": "Не вдалося визначити поточну ціну"}); return
-            analysis = _calculate_core_signal(df_5m, df_d1, df_h4, current_price)
-            score = analysis.get("score", 50)
-            response_data = {"pair": norm_pair, "price": current_price, "verdict_text": analysis.get("verdict_text"), "reasons": analysis.get("reasons", []), "support": analysis.get("support"), "resistance": analysis.get("resistance"), "bull_percentage": int(score), "bear_percentage": 100 - int(score), "candle_pattern": analysis.get("candle_pattern"), "volume_info": analysis.get("volume_info"), "special_warning": analysis.get("critical_warning")}
-            if user_id != 0: add_signal_to_history({'user_id': user_id, 'pair': norm_pair, 'price': current_price, 'bull_percentage': int(score)})
-            final_deferred.callback(response_data)
-        except Exception as e:
-            logger.exception(f"Critical analysis error for {norm_pair}: {e}")
-            final_deferred.errback(e)
-            
-    dl.addCallback(on_ready)
-    return final_deferred
-
-# --- Helper functions ---
 def analyze_candle_patterns(df: pd.DataFrame):
-    # ... (no changes in this function)
     try:
-        if df.empty or len(df) < 5: return None
-        open_v, high_v, low_v, close_v = df['Open'].values, df['High'].values, df['Low'].values, df['Close'].values
-        hammer = talib.CDLHAMMER(open_v, high_v, low_v, close_v)[-1]
-        engulfing = talib.CDLENGULFING(open_v, high_v, low_v, close_v)[-1]
-        doji = talib.CDLDOJI(open_v, high_v, low_v, close_v)[-1]
-        if hammer != 0: ptype = 'bullish' if hammer > 0 else 'bearish'; return {'name': 'HAMMER', 'type': ptype, 'text': f"{'⬆️' if ptype == 'bullish' else '⬇️'} HAMMER"}
-        if engulfing != 0: ptype = 'bullish' if engulfing > 0 else 'bearish'; return {'name': 'ENGULFING', 'type': ptype, 'text': f"{'⬆️' if ptype == 'bullish' else '⬇️'} ENGULFING"}
-        if doji != 0: return {'name': 'DOJI', 'type': 'neutral', 'text': '⚪ DOJI'}
+        patterns = df.ta.cdl_pattern(name="all")
+        if patterns.empty: return None
+        last_candle = patterns.iloc[-1]
+        found_patterns = last_candle[last_candle != 0]
+        if found_patterns.empty: return None
+        signal_strength = found_patterns.iloc[0]
+        if abs(signal_strength) < 100: return None
+        pattern_name = found_patterns.index[0].replace("CDL_", "")
+        pattern_type = 'bullish' if signal_strength > 0 else 'bearish'
+        arrow = '⬆️' if pattern_type == 'bullish' else '⬇️'
+        text = f'{arrow} {pattern_name}'
+        return {'name': pattern_name, 'type': pattern_type, 'text': text}
+    except Exception as e:
+        logger.error(f"Помилка в analyze_candle_patterns: {e}")
         return None
-    except Exception: return None
 
-def analyze_volume(df: pd.DataFrame):
-    # ... (no changes in this function)
+def analyze_volume(df):
     if df.empty or 'Volume' not in df.columns or len(df) < 21: return "Недостатньо даних"
     try:
-        cfg = ANALYSIS_CONFIG
-        df['Volume_MA20'] = df['Volume'].rolling(window=20).mean()
-        last_vol, last_ma = df.iloc[-1]['Volume'], df.iloc[-1]['Volume_MA20']
-        if pd.isna(last_ma): return "Недостатньо даних"
-        if last_vol > last_ma * cfg["volume_spike_multiplier"]: return "🟢 Підвищений об'єм"
-        if last_vol < last_ma * cfg["volume_low_multiplier"]: return "🧊 Аномально низький об'єм"
+        df['Volume_MA'] = df['Volume'].rolling(window=20).mean()
+        last = df.iloc[-1]
+        if pd.isna(last['Volume_MA']): return "Недостатньо даних"
+        if last['Volume'] > last['Volume_MA'] * 1.5: return "🟢 Підвищений об'єм"
+        elif last['Volume'] < last['Volume_MA'] * 0.5: return "🧊 Аномально низький об'єм"
         return "Об'єм нейтральний"
     except Exception: return "Помилка аналізу об'єму"
+
+def _calculate_core_signal(df, daily_df, current_price):
+    try:
+        df.ta.rsi(length=14, append=True)
+        df.ta.kama(length=14, append=True, col_names=('KAMA',))
+        df.ta.bbands(length=20, std=2, append=True)
+        df.ta.ichimoku(append=True)
+        df.ta.macd(append=True)
+        df.ta.adx(append=True)
+        df.ta.atr(length=14, append=True)
+        daily_df.ta.kama(length=14, append=True, col_names=('KAMA_14',))
+    except Exception as e:
+        logger.error(f"Критична помилка при розрахунку індикаторів: {e}")
+        return { "score": 50, "reasons": ["Помилка розрахунку індикаторів"] }
+
+    last = df.iloc[-1]
+    last_daily = daily_df.iloc[-1]
+    
+    score = 50
+    reasons = []
+    critical_warning = None
+    
+    long_term_support, long_term_resistance = identify_support_resistance_levels(daily_df)
+    candle_pattern = analyze_candle_patterns(df)
+    
+    is_daily_uptrend = None
+    if pd.notna(last_daily.get('KAMA_14')):
+        is_daily_uptrend = last_daily['Close'] > last_daily['KAMA_14']
+    
+    if pd.notna(last.get('MACDh_12_26_9')):
+        if last['MACDh_12_26_9'] > 0: score += 15; reasons.append("MACD росте")
+        else: score -= 15; reasons.append("MACD падає")
+
+    if pd.notna(last.get('ISA_9')) and pd.notna(last.get('ISB_26')):
+         if current_price > max(last['ISA_9'], last['ISB_26']):
+              score += 15; reasons.append("Тренд: Ціна над Хмарою")
+         else:
+              score -= 15; reasons.append("Тренд: Ціна під Хмарою")
+    
+    neutral_patterns = ["SPINNINGTOP", "DOJI", "DOJISTAR", "SHORTLINE", "HIGHWAVE", "HARAMI"]
+    if candle_pattern:
+        pattern_name = candle_pattern['name'].upper()
+        if any(neutral in pattern_name for neutral in neutral_patterns):
+            reasons.append(f"Нейтральний патерн: {candle_pattern['name']}")
+        elif candle_pattern['type'] == 'bullish':
+            score += 20; reasons.append(f"Бичачий патерн: {candle_pattern['name']}")
+        else:
+            score -= 20; reasons.append(f"Ведмежий патерн: {candle_pattern['name']}")
+
+    rsi = last.get('RSI_14')
+    if pd.notna(rsi):
+        if rsi < 30: score += 10; reasons.append("Ознаки перепроданості (RSI)")
+        elif rsi > 70: reasons.append("Ознаки перекупленості (RSI)")
+
+    last_atr = last.get('ATRr_14')
+    if last_atr and pd.notna(last_atr):
+        atr_threshold = last_atr * 0.5
+        resistance_candidates = [r for r in long_term_resistance if r > current_price]
+        if resistance_candidates and (min(resistance_candidates) - current_price) < atr_threshold:
+            score -= 20; reasons.append("⚠️ Ціна біля сильного денного опору")
+        support_candidates = [s for s in long_term_support if s < current_price]
+        if support_candidates and (current_price - max(support_candidates)) < atr_threshold:
+            score += 20; reasons.append("⚠️ Ціна біля сильної денної підтримки")
+
+    if is_daily_uptrend is not None:
+        if not is_daily_uptrend and score > 50:
+            critical_warning = "❗️ Сигнал суперечить денному даунтренду"
+            score = 50
+        elif is_daily_uptrend and score < 50:
+            critical_warning = "❗️ Сигнал суперечить денному аптренду"
+            score = 50
+            
+    score = int(np.clip(score, 0, 100))
+    
+    support_candidates = [s for s in long_term_support if s < current_price]
+    support = max(support_candidates) if support_candidates else None
+    resistance_candidates = [r for r in long_term_resistance if r > current_price]
+    resistance = min(resistance_candidates) if resistance_candidates else None
+    
+    if candle_pattern:
+        if candle_pattern['type'] == 'bullish':
+            if "MACD падає" in reasons or "Тренд: Ціна під Хмарою" in reasons:
+                score = 50
+                critical_warning = "❗️ Конфлікт: бичачий патерн проти ведмежих індикаторів"
+        elif candle_pattern['type'] == 'bearish':
+            if "MACD росте" in reasons or "Тренд: Ціна над Хмарою" in reasons:
+                score = 50
+                critical_warning = "❗️ Конфлікт: ведмежий патерн проти бичачих індикаторів"
+
+    if pd.notna(rsi):
+        if score > 80 and rsi > 75:
+            score = 50
+            critical_warning = "❗️ Сигнал скасовано: сильна перекупленість (RSI > 75)!"
+            reasons.append(critical_warning)
+        elif score < 20 and rsi < 25:
+            score = 50
+            critical_warning = "❗️ Сигнал скасовано: сильна перепроданість (RSI < 25)!"
+            reasons.append(critical_warning)
+
+    return {
+        "score": score, "reasons": reasons, "support": support, "resistance": resistance,
+        "candle_pattern": candle_pattern, "volume_info": analyze_volume(df),
+        "critical_warning": critical_warning
+    }
+
+def _generate_verdict(score):
+    if score > 80: return "⬆️ Strong BUY"
+    if score > 65: return "↗️ Moderate BUY"
+    if score < 20: return "⬇️ Strong SELL"
+    if score < 35: return "↘️ Moderate SELL"
+    return "🟡 NEUTRAL"
+
+def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int, timeframe: str = "15m") -> Deferred:
+    final_deferred = Deferred()
+
+    def on_data_ready(results):
+        try:
+            success1, df = results[0]
+            success2, daily_df = results[1]
+            success3, live_price = results[2]
+
+            if not (success1 and success2) or df.empty or len(df) < 50 or daily_df.empty:
+                if not final_deferred.called:
+                    final_deferred.callback({"error": f"Not enough historical data for {timeframe} analysis."})
+                return
+
+            current_price = live_price if success3 and live_price is not None else df.iloc[-1]['Close']
+            
+            analysis = _calculate_core_signal(df, daily_df, current_price)
+            
+            final_warning = analysis.get("critical_warning")
+            
+            verdict = _generate_verdict(analysis['score'])
+
+            add_signal_to_history({
+                'user_id': user_id, 'pair': symbol, 
+                'price': current_price, 'bull_percentage': analysis['score']
+            })
+            
+            response_data = {
+                "pair": symbol, "price": current_price, "verdict_text": verdict, 
+                "reasons": analysis['reasons'], "support": analysis['support'], 
+                "resistance": analysis['resistance'], "bull_percentage": analysis['score'],
+                "bear_percentage": 100 - analysis['score'], "candle_pattern": analysis.get('candle_pattern'),
+                "volume_info": analysis.get('volume_info'),
+                "special_warning": final_warning
+            }
+            if not final_deferred.called:
+                final_deferred.callback(response_data)
+            
+        except Exception as e:
+            logger.exception(f"Critical analysis error for {symbol}: {e}")
+            if not final_deferred.called:
+                final_deferred.errback(e)
+
+    d1 = get_market_data(client, symbol_cache, symbol, timeframe, 200)
+    d2 = get_market_data(client, symbol_cache, symbol, '1day', 100)
+    d3 = get_live_price(client, symbol_cache, symbol)
+    
+    d_list = DeferredList([d1, d2, d3], consumeErrors=True)
+    d_list.addCallback(on_data_ready)
+    
+    return final_deferred
