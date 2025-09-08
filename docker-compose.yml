@@ -1,30 +1,15 @@
+# docker-compose.yml
 version: "3.9"
 
 services:
-  redis:
-    image: redis:7-alpine
-    container_name: zigzag-redis
-    ports:
-      - "6379:6379"
-
   app:
     build: .
     command: python app.py
-    environment:
-      # Переконайтеся, що у вас є файл .env з усіма цими змінними
-      - REDIS_URL=redis://redis:6379/0
-      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
-      - CT_CLIENT_ID=${CT_CLIENT_ID}
-      - CT_CLIENT_SECRET=${CT_CLIENT_SECRET}
-      - CTRADER_ACCESS_TOKEN=${CTRADER_ACCESS_TOKEN}
-      - DEMO_ACCOUNT_ID=${DEMO_ACCOUNT_ID}
-      - FLY_APP_NAME=${FLY_APP_NAME}
-      - CHAT_ID=${CHAT_ID}
+    # Змінні середовища будуть підтягуватися з вашого .env файлу
+    env_file:
+      - .env
     ports:
       - "8080:8080"
     volumes:
-      # Важливо: монтуємо папку для збереження бази даних SQLite
       - ./data:/data
-    depends_on:
-      - redis
     restart: unless-stopped
