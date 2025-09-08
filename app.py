@@ -30,9 +30,6 @@ import telegram_ui
 import db
 from auth import is_valid_init_data, get_user_id_from_init_data
 import analysis as analysis_module
-# --- ПОЧАТОК ЗМІН: Видаляємо імпорт redis_client ---
-# from redis_client import get_redis 
-# --- КІНЕЦЬ ЗМІН ---
 from spotware_connect import SpotwareConnect
 from ctrader_open_api.messages.OpenApiMessages_pb2 import (
     ProtoOASymbolsListRes, ProtoOASubscribeSpotsReq, ProtoOASpotEvent
@@ -313,6 +310,24 @@ def api_signal():
     except Exception:
         logger.exception("api_signal critical error")
         return jsonify({"error": "Internal server error"}), 500
+
+# --- ПОЧАТОК ЗМІН: Додаємо відсутню функцію ---
+@app.route("/api/toggle_watchlist")
+@protected_route
+def toggle_watchlist_api():
+    pair = request.args.get("pair")
+    user_id = get_user_id_from_init_data(request.args.get("initData"))
+    
+    if not pair or not user_id:
+        return jsonify({"success": False, "error": "User ID and pair are required."}), 400
+    
+    success = db.toggle_watchlist(user_id, pair)
+    
+    if success:
+        return jsonify({"success": True})
+    else:
+        return jsonify({"success": False, "error": "Failed to update watchlist."}), 500
+# --- КІНЕЦЬ ЗМІН ---
 
 @app.route("/api/scanner/status")
 @protected_route
