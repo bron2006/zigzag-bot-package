@@ -22,9 +22,12 @@ RUN wget 'http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz' && 
     cd .. && \
     rm -rf ta-lib ta-lib-0.4.0-src.tar.gz
 
-# --- ПОЧАТОК ЗМІН: Встановлюємо проблемний пакет вручну ---
-RUN git clone https://github.com/twopirllc/pandas-ta.git /tmp/pandas-ta
-RUN pip install /tmp/pandas-ta
+# --- ПОЧАТОК ЗМІН: Завантажуємо pandas-ta як ZIP-архів ---
+RUN wget https://github.com/twopirllc/pandas-ta/archive/refs/heads/main.zip -O pandas-ta.zip && \
+    unzip pandas-ta.zip && \
+    pip install ./pandas-ta-main && \
+    rm pandas-ta.zip && \
+    rm -rf ./pandas-ta-main
 # --- КІНЕЦЬ ЗМІН ---
 
 # Встановлюємо Python-залежності з файлу
