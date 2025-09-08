@@ -1,7 +1,7 @@
 # analysis.py
 import logging
 import pandas as pd
-import pandas_ta as ta
+import pandas_ta_openbb as ta # Змінено імпорт
 import numpy as np
 import time
 from twisted.internet.defer import Deferred, DeferredList
