@@ -89,6 +89,8 @@ def _collect_assets_to_scan():
 def _handle_analysis_result(pair_norm, result):
     try:
         if not result or result.get("error"):
+            if result and result.get("error"):
+                 logger.warning(f"Analysis failed for {pair_norm}: {result.get('error')}")
             return
         
         score = result.get("bull_percentage", 50)
@@ -131,47 +133,54 @@ def _handle_analysis_result(pair_norm, result):
     except Exception:
         logger.exception("Error handling analysis result")
 
-def _scan_worker(assets_to_scan):
-    for pair in assets_to_scan:
-        try:
-            pair_norm = pair.replace("/", "")
-            if not state.SYMBOLS_LOADED:
-                logger.debug("Symbols not loaded yet, skipping scan")
-                return
+# --- ПОЧАТОК ЗМІН: Рефакторинг сканера на асинхронний підхід ---
 
-            d = get_api_detailed_signal_data(state.client, state.symbol_cache, pair_norm, 0, "5m")
-            done_q = queue.Queue(maxsize=1)
-            d.addCallbacks(lambda res: done_q.put(res), lambda err: done_q.put({"error": str(err)}))
+def _process_one_asset(pair: str):
+    """Асинхронно обробляє аналіз для однієї пари."""
+    try:
+        pair_norm = pair.replace("/", "")
+        if not state.SYMBOLS_LOADED:
+            logger.debug("Symbols not loaded yet, skipping asset processing.")
+            return
 
-            try:
-                res = done_q.get(timeout=70)
-                if not res or res.get("error"):
-                    logger.warning(f"Analysis failed or empty for {pair_norm}: {res.get('error')}")
-                    continue
-                _handle_analysis_result(pair_norm, res)
-            except queue.Empty:
-                logger.warning(f"Analysis timeout for {pair_norm}")
-            
-            # --- ПОЧАТОК ЗМІН: Збільшуємо паузу, щоб уникнути лімітів ---
-            time.sleep(2.0)
-            # --- КІНЕЦЬ ЗМІН ---
-            
-        except Exception:
-            logger.exception(f"Exception in scan worker for {pair}")
+        # get_api_detailed_signal_data повертає Deferred - об'єкт майбутнього результату
+        d = get_api_detailed_signal_data(state.client, state.symbol_cache, pair_norm, 0, "5m")
+        
+        # Ми не чекаємо на результат, а "прикріплюємо" до нього функції,
+        # які виконаються, коли результат буде готовий.
+        d.addCallback(lambda result, p=pair_norm: _handle_analysis_result(p, result))
+        d.addErrback(lambda failure, p=pair_norm: logger.error(f"Critical error in analysis chain for {p}: {failure.getErrorMessage()}"))
+
+    except Exception:
+        logger.exception(f"Exception preparing analysis for asset {pair}")
 
 def scan_markets_once():
+    """
+    Основна функція сканера, яка запускається кожну хвилину.
+    Тепер вона не блокує потік, а планує асинхронні задачі.
+    """
     try:
         if not any(state.SCANNER_STATE.values()):
-            logger.debug("All scanners disabled; skipping scan loop")
+            logger.debug("All scanners disabled; skipping scan loop.")
             return
+        
         assets = _collect_assets_to_scan()
         if not assets:
-            logger.info("No assets configured for scanning")
+            logger.info("No assets configured for scanning.")
             return
-        logger.info(f"SCANNER: Starting scan for: {[k for k,v in state.SCANNER_STATE.items() if v]}")
-        threads.deferToThread(_scan_worker, assets)
+            
+        logger.info(f"SCANNER: Scheduling scan for {len(assets)} assets...")
+
+        # Замість циклу з time.sleep, ми плануємо запуск обробки кожної пари
+        # з невеликою затримкою між ними, не блокуючи головний потік.
+        for i, pair in enumerate(assets):
+            delay = i * 2.0  # Затримка 2 секунди між запитами для кожної пари
+            reactor.callLater(delay, _process_one_asset, pair)
+
     except Exception:
-        logger.exception("scan_markets_once error")
+        logger.exception("Error in scan_markets_once scheduler")
+
+# --- КІНЕЦЬ ЗМІН ---
 
 def _on_spot_event(event: ProtoOASpotEvent):
     try:
