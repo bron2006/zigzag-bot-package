@@ -30,7 +30,9 @@ import telegram_ui
 import db
 from auth import is_valid_init_data, get_user_id_from_init_data
 import analysis as analysis_module
-from redis_client import get_redis
+# --- ПОЧАТОК ЗМІН: Видаляємо імпорт redis_client ---
+# from redis_client import get_redis 
+# --- КІНЕЦЬ ЗМІН ---
 from spotware_connect import SpotwareConnect
 from ctrader_open_api.messages.OpenApiMessages_pb2 import (
     ProtoOASymbolsListRes, ProtoOASubscribeSpotsReq, ProtoOASpotEvent
@@ -86,10 +88,8 @@ def _handle_analysis_result(pair_norm, result):
         
         score = result.get("bull_percentage", 50)
         
-        # --- ПОЧАТОК ЗМІН: Діагностичне логування для сканера ---
         lower_bound = 100 - IDEAL_ENTRY_THRESHOLD
         logger.info(f"[SCANNER_DIAG] Pair: {pair_norm}, Score: {score}%. Checking against threshold: >= {IDEAL_ENTRY_THRESHOLD}% or <= {lower_bound}%.")
-        # --- КІНЕЦЬ ЗМІН ---
 
         is_signal = score >= IDEAL_ENTRY_THRESHOLD or score <= lower_bound
         
