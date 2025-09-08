@@ -74,6 +74,16 @@ def _collect_assets_to_scan():
         assets.extend(CRYPTO_PAIRS)
     if state.SCANNER_STATE.get("commodities"):
         assets.extend(COMMODITIES)
+    
+    # --- ПОЧАТОК ЗМІН ---
+    if state.SCANNER_STATE.get("watchlist"):
+        user_id = get_chat_id()
+        if user_id:
+            logger.info(f"Scanning watchlist for main user: {user_id}")
+            watchlist_pairs = db.get_watchlist(user_id)
+            assets.extend(watchlist_pairs)
+    # --- КІНЕЦЬ ЗМІН ---
+            
     seen = set()
     out = [a for a in assets if not (a in seen or seen.add(a))]
     return out
@@ -311,7 +321,6 @@ def api_signal():
         logger.exception("api_signal critical error")
         return jsonify({"error": "Internal server error"}), 500
 
-# --- ПОЧАТОК ЗМІН: Додаємо відсутню функцію ---
 @app.route("/api/toggle_watchlist")
 @protected_route
 def toggle_watchlist_api():
@@ -327,7 +336,6 @@ def toggle_watchlist_api():
         return jsonify({"success": True})
     else:
         return jsonify({"success": False, "error": "Failed to update watchlist."}), 500
-# --- КІНЕЦЬ ЗМІН ---
 
 @app.route("/api/scanner/status")
 @protected_route
