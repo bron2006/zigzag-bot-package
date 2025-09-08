@@ -100,14 +100,12 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 function updateScannerButtons(stateDict) {
-    // --- ПОЧАТОК ЗМІН ---
     const textMap = {
         forex: "💹 Forex",
         crypto: "💎 Crypto",
         commodities: "🥇 Сировина",
         watchlist: "⭐ Обране"
     };
-    // --- КІНЕЦЬ ЗМІН ---
 
     for (const category in textMap) {
         const button = scannerControls.querySelector(`.scanner-button[data-cat="${category}"]`);
@@ -124,12 +122,17 @@ function updateScannerButtons(stateDict) {
     }
 }
 
+// --- ПОЧАТОК ЗМІН: Робимо сповіщення клікабельними ---
 function displayLiveSignal(signalData) {
     const signalId = `signal-${signalData.pair.replace('/', '')}-${Date.now()}`;
     const signalDiv = document.createElement('div');
     signalDiv.id = signalId;
     signalDiv.className = 'live-signal';
+    signalDiv.style.cursor = 'pointer'; // Додаємо курсор, щоб показати, що елемент клікабельний
     
+    // При кліку на сповіщення завантажуємо повний аналіз
+    signalDiv.onclick = () => fetchSignal(signalData.pair);
+
     const verdict = signalData.verdict_text || '...';
     const pair = signalData.pair || 'N/A';
     const score = signalData.bull_percentage || 50;
@@ -141,9 +144,10 @@ function displayLiveSignal(signalData) {
     signalDiv.classList.add(signalClass);
 
     signalDiv.innerHTML = `
-        <div class="live-signal-content"><strong>${verdict}</strong> по ${pair} (Бики: ${score}%)</div>
-        <button class="live-signal-close" onclick="this.parentElement.remove()">×</button>
+        <div class="live-signal-content">${verdict} по ${pair} (Бики: ${score}%)</div>
+        <button class="live-signal-close" onclick="event.stopPropagation(); this.parentElement.remove()">×</button>
     `;
+    // event.stopPropagation() не дає кліку по кнопці "х" спрацювати на всьому сповіщенні
     
     liveSignalsContainer.prepend(signalDiv);
     
@@ -155,6 +159,7 @@ function displayLiveSignal(signalData) {
         }
     }, 300000);
 }
+// --- КІНЕЦЬ ЗМІН ---
 
 function createPairButton(pair) {
     return `<div class="pair-item">
