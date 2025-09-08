@@ -18,7 +18,6 @@ from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOATrendbarPe
 
 from db import add_signal_to_history
 import state
-from redis_client import get_redis
 from config import ANALYSIS_CONFIG
 
 logger = logging.getLogger("analysis")
@@ -164,12 +163,10 @@ def _calculate_core_signal(df: pd.DataFrame, daily_df: pd.DataFrame, h4_df: pd.D
 # --- Public API Function ---
 def get_api_detailed_signal_data(client, symbol_cache, norm_pair: str, user_id: int, period: str = "15m", count: int = 500) -> Deferred:
     final_deferred = Deferred()
-    # --- ПОЧАТОК ЗМІН: Запитуємо три набори даних: 5m, D1 (для Pivot) та H4 (для тренду) ---
     d_5m = get_market_data(client, symbol_cache, norm_pair, period, count)
     d_d1 = get_market_data(client, symbol_cache, norm_pair, "1day", max(ANALYSIS_CONFIG["min_bars_for_analysis"], count))
     d_h4 = get_market_data(client, symbol_cache, norm_pair, "4h", max(ANALYSIS_CONFIG["min_bars_for_analysis"], count))
     dl = DeferredList([d_5m, d_d1, d_h4], consumeErrors=True)
-    # --- КІНЕЦЬ ЗМІН ---
 
     def on_ready(results):
         try:
@@ -188,20 +185,13 @@ def get_api_detailed_signal_data(client, symbol_cache, norm_pair: str, user_id: 
                 current_price = float(df_5m.iloc[-1]['Close'])
             if current_price is None:
                 final_deferred.callback({"error": "Не вдалося визначити поточну ціну"}); return
-
-            # --- ПОЧАТОК ЗМІН: Передаємо всі три датафрейми в аналіз ---
+            
             analysis = _calculate_core_signal(df_5m, df_d1, df_h4, current_price)
-            # --- КІНЕЦЬ ЗМІН ---
             
             score = analysis.get("score", 50)
             response_data = {"pair": norm_pair, "price": current_price, "verdict_text": analysis.get("verdict_text"), "reasons": analysis.get("reasons", []), "support": analysis.get("support"), "resistance": analysis.get("resistance"), "bull_percentage": int(score), "bear_percentage": 100 - int(score), "candle_pattern": analysis.get("candle_pattern"), "volume_info": analysis.get("volume_info"), "special_warning": analysis.get("critical_warning")}
             
             if user_id != 0: add_signal_to_history({'user_id': user_id, 'pair': norm_pair, 'price': current_price, 'bull_percentage': int(score)})
-            
-            try:
-                r = get_redis()
-                if r: r.set(f"signal:{norm_pair}:{period}", json.dumps(response_data, ensure_ascii=False), ex=60 * 60 * 2)
-            except Exception: logger.exception("Failed to save signal to Redis")
             
             final_deferred.callback(response_data)
         except Exception as e:
