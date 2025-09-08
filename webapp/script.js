@@ -32,7 +32,7 @@ document.addEventListener('DOMContentLoaded', function() {
         })
         .then(staticData => {
             allData = staticData;
-            currentWatchlist = staticData.watchlist || [];
+            currentWatchlist = (staticData.watchlist || []).map(p => p.replace(/\//g, ''));
             populateLists(allData);
             showLoader(false);
         })
@@ -100,13 +100,16 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 function updateScannerButtons(stateDict) {
+    // --- ПОЧАТОК ЗМІН ---
     const textMap = {
         forex: "💹 Forex",
         crypto: "💎 Crypto",
-        commodities: "🥇 Сировина"
+        commodities: "🥇 Сировина",
+        watchlist: "⭐ Обране"
     };
+    // --- КІНЕЦЬ ЗМІН ---
 
-    for (const category in stateDict) {
+    for (const category in textMap) {
         const button = scannerControls.querySelector(`.scanner-button[data-cat="${category}"]`);
         if (button) {
             const isEnabled = stateDict[category];
@@ -241,10 +244,8 @@ function toggleFavorite(event, button, pair) {
                 } else {
                     currentWatchlist.push(pairNormalized);
                 }
-                // --- ПОЧАТОК ЗМІН: Додано примусове оновлення списків ---
                 const currentQuery = document.getElementById('searchInput').value;
                 populateLists(allData, currentQuery);
-                // --- КІНЕЦЬ ЗМІН ---
             }
         });
 }

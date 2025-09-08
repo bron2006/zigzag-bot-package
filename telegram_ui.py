@@ -25,12 +25,15 @@ def get_main_menu_kb() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("🥇 Сировина", callback_data="category_commodities")]
     ]
     
-    # Кнопки керування сканерами
+    # --- ПОЧАТОК ЗМІН ---
     scanner_map = {
         "forex": "💹 Forex",
         "crypto": "💎 Crypto",
-        "commodities": "🥇 Сировина"
+        "commodities": "🥇 Сировина",
+        "watchlist": "⭐ Обране"
     }
+    # --- КІНЕЦЬ ЗМІН ---
+
     for key, text in scanner_map.items():
         is_enabled = state.get_scanner_state(key)
         status_icon = "✅" if is_enabled else "❌"
