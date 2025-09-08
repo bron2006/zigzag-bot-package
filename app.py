@@ -75,14 +75,12 @@ def _collect_assets_to_scan():
     if state.SCANNER_STATE.get("commodities"):
         assets.extend(COMMODITIES)
     
-    # --- ПОЧАТОК ЗМІН ---
     if state.SCANNER_STATE.get("watchlist"):
         user_id = get_chat_id()
         if user_id:
             logger.info(f"Scanning watchlist for main user: {user_id}")
             watchlist_pairs = db.get_watchlist(user_id)
             assets.extend(watchlist_pairs)
-    # --- КІНЕЦЬ ЗМІН ---
             
     seen = set()
     out = [a for a in assets if not (a in seen or seen.add(a))]
@@ -153,7 +151,11 @@ def _scan_worker(assets_to_scan):
                 _handle_analysis_result(pair_norm, res)
             except queue.Empty:
                 logger.warning(f"Analysis timeout for {pair_norm}")
-            time.sleep(0.1)
+            
+            # --- ПОЧАТОК ЗМІН: Збільшуємо паузу, щоб уникнути лімітів ---
+            time.sleep(2.0)
+            # --- КІНЕЦЬ ЗМІН ---
+            
         except Exception:
             logger.exception(f"Exception in scan worker for {pair}")
 
