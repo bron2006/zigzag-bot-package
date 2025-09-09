@@ -16,6 +16,7 @@ import scanner
 import bot
 import ctrader
 import api
+import ml_models # <-- Новий імпорт
 
 # Logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -30,26 +31,24 @@ def _start_background_services():
     bot.start_telegram_bot()
     ctrader.start_ctrader_client()
     
-    # Запускаємо цикл сканера
     LoopingCall(scanner.scan_markets_once).start(60.0, now=False)
-    # Запускаємо цикл для SSE пінгів
     LoopingCall(lambda: (app_state.sse_queue.put_nowait({"_ping": int(time.time())}) if not app_state.sse_queue.full() else None)).start(20.0, now=False)
 
 def main():
-    # Реєструємо API маршрути
     api.register_routes(app)
     
-    # Налаштовуємо WSGI сервер
     resource = WSGIResource(reactor, reactor.getThreadPool(), app)
     site = Site(resource)
     port = int(os.environ.get("PORT", "8080"))
     reactor.listenTCP(port, site, interface="0.0.0.0")
     logger.info(f"Twisted WSGI server listening on {port}")
 
-    # Плануємо запуск фонових сервісів
+    # --- ПОЧАТОК ЗМІН: Завантажуємо моделі ---
+    ml_models.load_models()
+    # --- КІНЕЦЬ ЗМІН ---
+
     reactor.callWhenRunning(_start_background_services)
 
-    # Обробка сигналів зупинки
     def _sigterm(signum, frame):
         logger.info("SIGTERM received — stopping reactor")
         try:

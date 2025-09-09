@@ -1,5 +1,10 @@
 # Dockerfile
 FROM python:3.11-bullseye
+
+# --- ПОЧАТОК ЗМІН: Створюємо папку для даних ---
+RUN mkdir -p /data
+# --- КІНЕЦЬ ЗМІН ---
+
 WORKDIR /app
 
 # Встановлюємо системні залежності

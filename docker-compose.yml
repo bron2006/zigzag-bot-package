@@ -5,7 +5,6 @@ services:
   app:
     build: .
     command: python app.py
-    # Змінні середовища будуть підтягуватися з вашого .env файлу
     env_file:
       - .env
     ports:
