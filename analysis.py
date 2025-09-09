@@ -88,7 +88,6 @@ def _calculate_full_analysis(signal_df: pd.DataFrame, trend_df: pd.DataFrame, da
         return {"verdict": "NEUTRAL", "reasons": ["Недостатньо даних для аналізу."]}
 
     try:
-        # --- ПОЧАТОК ЗМІН: Примусово вказуємо імена колонок ---
         signal_df.ta.bbands(length=20, std=2.0, append=True)
         signal_df.ta.stoch(k=14, d=3, smooth_k=3, append=True)
         signal_df.ta.rsi(length=14, append=True, col_names=('RSI',))
@@ -96,9 +95,12 @@ def _calculate_full_analysis(signal_df: pd.DataFrame, trend_df: pd.DataFrame, da
         signal_df.ta.atr(length=14, append=True, col_names=('ATR',))
         trend_df.ta.ema(length=50, append=True, col_names=('EMA50',))
         trend_df.ta.ema(length=200, append=True, col_names=('EMA200',))
-        # --- КІНЕЦЬ ЗМІН ---
     except Exception as e:
         return {"verdict": "NEUTRAL", "reasons": [f"Помилка розрахунку індикаторів: {e}"]}
+    
+    # --- ПОЧАТОК ЗМІН: Додаємо діагностичний лог ---
+    logger.info(f"DEBUG: DataFrame columns before regime detection: {signal_df.columns.tolist()}")
+    # --- КІНЕЦЬ ЗМІН ---
 
     last_signal = signal_df.iloc[-1]
     last_trend = trend_df.iloc[-1]
