@@ -19,7 +19,8 @@ import ml_models
 logger = logging.getLogger("analysis")
 
 PERIOD_MAP = {
-    "1m": TrendbarPeriod.M1, "5m": TrendbarPeriod.M5, "15m": TrendbarPeriod.M15, "1h": TrendbarPeriod.H1, "4h": TrendbarPeriod.H4, "1day": TrendbarPeriod.D1
+    "1m": TrendbarPeriod.M1, "5m": TrendbarPeriod.M5, "15m": TrendbarPeriod.M15, 
+    "1h": TrendbarPeriod.H1, "4h": TrendbarPeriod.H4, "1day": TrendbarPeriod.D1
 }
 
 def _sanitize(value, default=0.0):
@@ -32,9 +33,17 @@ def get_current_market_regime(df: pd.DataFrame) -> str:
         return "Not Available"
     
     try:
-        # --- ПОЧАТОК ЗМІН: Використовуємо правильні стандартні назви колонок ---
-        features = df[['ATR', 'ADX_14', 'RSI']].copy()
+        # --- ПОЧАТОК ЗМІН: Адаптуємо назви колонок до тих, що генерує бібліотека ---
+        features_to_select = ['ATR', 'ADX_14', 'RSI']
         # --- КІНЕЦЬ ЗМІН ---
+        
+        # Перевіряємо, чи всі необхідні колонки існують
+        if not all(col in df.columns for col in features_to_select):
+            missing = [col for col in features_to_select if col not in df.columns]
+            logger.warning(f"Cannot determine market regime, missing columns: {missing}")
+            return "Incomplete Data"
+
+        features = df[features_to_select].copy()
         last_features = features.iloc[[-1]]
         
         scaled_features = ml_models.SCALER.transform(last_features)
@@ -82,23 +91,22 @@ def _find_candle_pattern(df: pd.DataFrame):
         if signal_strength > 0: return f"⬆️ {pattern_name} (Бичачий)"
         if signal_strength < 0: return f"⬇️ {pattern_name} (Ведмежий)"
         return None
-    except Exception:
-        return None
+    except Exception: return None
 
 def _calculate_full_analysis(signal_df: pd.DataFrame, trend_df: pd.DataFrame, daily_df: pd.DataFrame) -> Dict:
     if any(df.empty or len(df) < 30 for df in [signal_df, trend_df, daily_df]):
         return {"verdict": "NEUTRAL", "reasons": ["Недостатньо даних для аналізу."]}
 
     try:
-        # --- ПОЧАТОК ЗМІН: Прибираємо перейменування для ADX ---
         signal_df.ta.bbands(length=20, std=2.0, append=True)
         signal_df.ta.stoch(k=14, d=3, smooth_k=3, append=True)
+        # --- ПОЧАТОК ЗМІН: Явно вказуємо назви, щоб уникнути плутанини ---
         signal_df.ta.rsi(length=14, append=True, col_names=('RSI',))
-        signal_df.ta.adx(length=14, append=True) # Дозволяємо стандартну назву ADX_14
+        signal_df.ta.adx(length=14, append=True, col_names=('ADX_14', 'DMP_14', 'DMN_14'))
         signal_df.ta.atr(length=14, append=True, col_names=('ATR',))
+        # --- КІНЕЦЬ ЗМІН ---
         trend_df.ta.ema(length=50, append=True, col_names=('EMA50',))
         trend_df.ta.ema(length=200, append=True, col_names=('EMA200',))
-        # --- КІНЕЦЬ ЗМІН ---
     except Exception as e:
         return {"verdict": "NEUTRAL", "reasons": [f"Помилка розрахунку індикаторів: {e}"]}
 
@@ -107,24 +115,15 @@ def _calculate_full_analysis(signal_df: pd.DataFrame, trend_df: pd.DataFrame, da
     prev_day = daily_df.iloc[-2] if len(daily_df) > 1 else daily_df.iloc[-1]
 
     market_regime = get_current_market_regime(signal_df)
-    
-    verdict = "NEUTRAL"
-    reasons = [f"Режим ринку: {market_regime}"]
-
-    # --- ПОЧАТОК ЗМІН: Використовуємо правильну назву ADX_14 ---
-    adx = last_signal.get('ADX_14', 0)
-    # --- КІНЕЦЬ ЗМІН ---
-    is_trending = adx > 20
+    verdict = "NEUTRAL"; reasons = [f"Режим ринку: {market_regime}"]
     
     if market_regime == "Млявий флет":
         stoch_k = last_signal.get('STOCHk_14_3_3', 50)
         bb_p = last_signal.get('BBP_20_2.0', 0.5)
         if stoch_k < 25 and bb_p < 0.1:
-            verdict = "⬆️ CALL"
-            reasons.append("Ціна в нижній зоні Боллінджера + Стохастик перепроданий")
+            verdict = "⬆️ CALL"; reasons.append("Ціна в нижній зоні Боллінджера + Стохастик перепроданий")
         elif stoch_k > 75 and bb_p > 0.9:
-            verdict = "⬇️ PUT"
-            reasons.append("Ціна в верхній зоні Боллінджера + Стохастик перекуплений")
+            verdict = "⬇️ PUT"; reasons.append("Ціна в верхній зоні Боллінджера + Стохастик перекуплений")
     
     pivot_point = (prev_day['High'] + prev_day['Low'] + prev_day['Close']) / 3
     support = (2 * pivot_point) - prev_day['High']
@@ -142,8 +141,20 @@ def _calculate_full_analysis(signal_df: pd.DataFrame, trend_df: pd.DataFrame, da
 
 def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int, timeframe: str = "5m") -> Deferred:
     final_deferred = Deferred()
-    trend_timeframe_map = {"1m": "5m", "5m": "15m"}
-    trend_timeframe = trend_timeframe_map.get(timeframe, "15m")
+    
+    # --- ПОЧАТОК ЗМІН: Розширюємо логіку для всіх таймфреймів ---
+    trend_timeframe_map = {"1m": "5m", "5m": "15m", "15m": "1h"}
+    trend_timeframe = trend_timeframe_map.get(timeframe) # Немає значення за замовчуванням
+    # --- КІНЕЦЬ ЗМІН ---
+
+    # --- ПОЧАТОК ЗМІН: Перевіряємо, чи підтримується таймфрейм ---
+    if not trend_timeframe:
+        err_msg = f"Непідтримуваний таймфрейм для аналізу тренду: {timeframe}"
+        logger.warning(err_msg)
+        # Повертаємо Deferred, який одразу виконається з помилкою
+        return Deferred.fromFailure(Exception(err_msg))
+    # --- КІНЕЦЬ ЗМІН ---
+
     d_signal = get_market_data(client, symbol_cache, symbol, timeframe, 200)
     d_trend = get_market_data(client, symbol_cache, symbol, trend_timeframe, 250)
     d_daily = get_market_data(client, symbol_cache, symbol, "1day", 50)
