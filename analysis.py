@@ -7,6 +7,7 @@ import time
 from typing import Optional, Dict, List
 
 from twisted.internet.defer import Deferred, DeferredList
+from twisted.python.failure import Failure
 from twisted.internet import reactor
 
 from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOAGetTrendbarsReq, ProtoOAGetTrendbarsRes
@@ -33,17 +34,23 @@ def get_current_market_regime(df: pd.DataFrame) -> str:
         return "Not Available"
     
     try:
-        # --- ПОЧАТОК ЗМІН: Адаптуємо назви колонок до тих, що генерує бібліотека ---
+        # --- ПОЧАТОК ЗМІН: Використовуємо правильні імена, які генерує бібліотека ---
         features_to_select = ['ATR', 'ADX_14', 'RSI']
         # --- КІНЕЦЬ ЗМІН ---
         
-        # Перевіряємо, чи всі необхідні колонки існують
         if not all(col in df.columns for col in features_to_select):
             missing = [col for col in features_to_select if col not in df.columns]
             logger.warning(f"Cannot determine market regime, missing columns: {missing}")
-            return "Incomplete Data"
+            # --- ПОЧАТОК ЗМІН: Перейменовуємо колонки для моделі ---
+            # Якщо модель натренована на іменах без "_14", ми можемо їх тимчасово перейменувати
+            df_renamed = df.rename(columns={"RSI_14": "RSI", "ADX_14": "ADX"})
+            if 'ADX' not in df_renamed.columns: # Якщо ADX все ще відсутній, виходимо
+                return "Incomplete Data"
+            features = df_renamed[['ATR', 'ADX', 'RSI']].copy()
+            # --- КІНЕЦЬ ЗМІН ---
+        else:
+             features = df[features_to_select].copy()
 
-        features = df[features_to_select].copy()
         last_features = features.iloc[[-1]]
         
         scaled_features = ml_models.SCALER.transform(last_features)
@@ -100,11 +107,9 @@ def _calculate_full_analysis(signal_df: pd.DataFrame, trend_df: pd.DataFrame, da
     try:
         signal_df.ta.bbands(length=20, std=2.0, append=True)
         signal_df.ta.stoch(k=14, d=3, smooth_k=3, append=True)
-        # --- ПОЧАТОК ЗМІН: Явно вказуємо назви, щоб уникнути плутанини ---
-        signal_df.ta.rsi(length=14, append=True, col_names=('RSI',))
-        signal_df.ta.adx(length=14, append=True, col_names=('ADX_14', 'DMP_14', 'DMN_14'))
-        signal_df.ta.atr(length=14, append=True, col_names=('ATR',))
-        # --- КІНЕЦЬ ЗМІН ---
+        signal_df.ta.rsi(length=14, append=True)
+        signal_df.ta.adx(length=14, append=True)
+        signal_df.ta.atr(length=14, append=True)
         trend_df.ta.ema(length=50, append=True, col_names=('EMA50',))
         trend_df.ta.ema(length=200, append=True, col_names=('EMA200',))
     except Exception as e:
@@ -132,7 +137,7 @@ def _calculate_full_analysis(signal_df: pd.DataFrame, trend_df: pd.DataFrame, da
     return {
         "verdict": verdict, "reasons": reasons, "close": last_signal.get('Close'),
         "market_regime": market_regime,
-        "rsi": last_signal.get('RSI'), "stoch_k": last_signal.get('STOCHk_14_3_3'), "stoch_d": last_signal.get('STOCHd_14_3_3'),
+        "rsi": last_signal.get('RSI_14'), "stoch_k": last_signal.get('STOCHk_14_3_3'), "stoch_d": last_signal.get('STOCHd_14_3_3'),
         "bb_upper": last_signal.get('BBU_20_2.0'), "bb_lower": last_signal.get('BBL_20_2.0'),
         "bb_percent_b": last_signal.get('BBP_20_2.0'), "trend": None, "support": support,
         "resistance": resistance, "volume_now": last_signal.get('Volume'), "volume_avg": signal_df['Volume'].rolling(window=20).mean().iloc[-1],
@@ -142,18 +147,17 @@ def _calculate_full_analysis(signal_df: pd.DataFrame, trend_df: pd.DataFrame, da
 def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int, timeframe: str = "5m") -> Deferred:
     final_deferred = Deferred()
     
-    # --- ПОЧАТОК ЗМІН: Розширюємо логіку для всіх таймфреймів ---
     trend_timeframe_map = {"1m": "5m", "5m": "15m", "15m": "1h"}
-    trend_timeframe = trend_timeframe_map.get(timeframe) # Немає значення за замовчуванням
-    # --- КІНЕЦЬ ЗМІН ---
+    trend_timeframe = trend_timeframe_map.get(timeframe)
 
-    # --- ПОЧАТОК ЗМІН: Перевіряємо, чи підтримується таймфрейм ---
     if not trend_timeframe:
         err_msg = f"Непідтримуваний таймфрейм для аналізу тренду: {timeframe}"
         logger.warning(err_msg)
-        # Повертаємо Deferred, який одразу виконається з помилкою
-        return Deferred.fromFailure(Exception(err_msg))
-    # --- КІНЕЦЬ ЗМІН ---
+        # --- ПОЧАТОК ЗМІН: Використовуємо правильний метод для створення помилки ---
+        d = Deferred()
+        d.errback(Failure(Exception(err_msg)))
+        return d
+        # --- КІНЕЦЬ ЗМІН ---
 
     d_signal = get_market_data(client, symbol_cache, symbol, timeframe, 200)
     d_trend = get_market_data(client, symbol_cache, symbol, trend_timeframe, 250)
