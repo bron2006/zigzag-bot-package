@@ -10,15 +10,10 @@ load_dotenv()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
 def get_database_url() -> str:
-    """Отримує URL для підключення до бази даних Postgres."""
     return os.getenv("DATABASE_URL")
 
 IS_DEV_MODE = os.getenv("NORD", "off").lower() == "on"
-
-# --- ПОЧАТОК ЗМІН: Використовуємо MY_TELEGRAM_ID ---
-# Тепер ID для розробника буде братися з вашого секрету
 DEV_USER_ID = int(os.getenv("MY_TELEGRAM_ID", 123456789))
-# --- КІНЕЦЬ ЗМІН ---
 
 def get_chat_id() -> int: return int(os.getenv("CHAT_ID")) if os.getenv("CHAT_ID") else None
 def get_ct_client_id() -> str: return os.getenv("CT_CLIENT_ID")
@@ -44,7 +39,6 @@ ANALYSIS_CONFIG = {
 }
 
 # --- НАЛАШТУВАННЯ СКАНЕРА ---
-IDEAL_ENTRY_THRESHOLD = 80
 SCANNER_COOLDOWN_SECONDS = 300
 
 # --- СПИСКИ АКТИВІВ ---

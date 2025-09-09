@@ -14,7 +14,7 @@ tg.expand();
 
 let currentWatchlist = [];
 let initData = tg.initData || '';
-let currentExpiration = '1m'; // Змінено з currentTimeframe
+let currentExpiration = '1m';
 let allData = {};
 let lastSelectedPair = null;
 
@@ -83,7 +83,7 @@ document.addEventListener('DOMContentLoaded', function() {
         button.addEventListener('click', () => {
             expirationButtons.forEach(btn => btn.classList.remove('active'));
             button.classList.add('active');
-            currentExpiration = button.dataset.exp; // Змінено з dataset.tf
+            currentExpiration = button.dataset.exp;
             if (lastSelectedPair) {
                 debouncedFetchSignal(lastSelectedPair);
             }
@@ -115,6 +115,7 @@ function updateScannerButtons(stateDict) {
 }
 
 function displayLiveSignal(signalData) {
+    if (signalData.verdict_text === 'NEUTRAL') return; // Не показувати нейтральні сигнали
     const signalId = `signal-${signalData.pair.replace('/', '')}-${Date.now()}`;
     const signalDiv = document.createElement('div');
     signalDiv.id = signalId;
@@ -128,11 +129,10 @@ function displayLiveSignal(signalData) {
 
     const verdict = signalData.verdict_text || '...';
     const pair = signalData.pair || 'N/A';
-    const score = signalData.bull_percentage || 50;
     
     let signalClass = 'neutral';
-    if (verdict === '⬆️ CALL') signalClass = 'buy';
-    if (verdict === '⬇️ PUT') signalClass = 'sell';
+    if (verdict.includes('CALL')) signalClass = 'buy';
+    if (verdict.includes('PUT')) signalClass = 'sell';
     
     signalDiv.classList.add(signalClass);
     signalDiv.innerHTML = `
@@ -159,9 +159,9 @@ function createPairButton(pair) {
 }
 
 function populateLists(data, query = '') {
+    // ... (no changes in this function)
     let html = '';
     const queryLower = query.toLowerCase();
-
     function createSection(title, pairs) {
         if (!Array.isArray(pairs) || pairs.length === 0) return '';
         const filteredPairs = pairs.filter(p => p.toLowerCase().includes(queryLower));
@@ -171,7 +171,6 @@ function populateLists(data, query = '') {
         sectionHtml += '</div></div>';
         return sectionHtml;
     }
-    
     const allKnownPairs = [
         ...(data.forex || []).map(session => session.pairs).flat(),
         ...(data.crypto || []), ...(data.stocks || []), ...(data.commodities || [])
@@ -179,15 +178,12 @@ function populateLists(data, query = '') {
     let watchlistDisplay = currentWatchlist.map(p_normalized => {
         return allKnownPairs.find(p_display => p_display.replace(/\//g, '') === p_normalized) || p_normalized;
     });
-
     if (queryLower) {
         watchlistDisplay = watchlistDisplay.filter(p => p.toLowerCase().includes(queryLower));
     }
-
     if (watchlistDisplay.length > 0) {
         html += createSection('⭐ Обране', watchlistDisplay);
     }
-    
     if (Array.isArray(data.forex)) {
         data.forex.forEach(session => {
             const filteredSessionPairs = session.pairs.filter(p => p.toLowerCase().includes(queryLower));
@@ -196,12 +192,10 @@ function populateLists(data, query = '') {
             }
         });
     }
-
     html += createSection('💎 Криптовалюти', data.crypto);
     html += createSection('🥇 Сировина', data.commodities);
     html += createSection('📈 Акції/Індекси', data.stocks);
     listsContainer.innerHTML = html;
-    
     listsContainer.querySelectorAll('.pair-button').forEach(button => {
         button.addEventListener('click', (event) => {
             const pair = event.target.dataset.pair;
@@ -218,13 +212,12 @@ function renderFavoriteButton(pair) {
 }
 
 function toggleFavorite(event, button, pair) {
+    // ... (no changes in this function)
     event.stopPropagation();
     const isCurrentlyFavorite = button.innerHTML.includes('✅');
     const initDataString = initData ? `&initData=${encodeURIComponent(initData)}` : '';
     const url = `${API_BASE_URL}/api/toggle_watchlist?pair=${pair}${initDataString}`;
-    
     button.innerHTML = isCurrentlyFavorite ? '⭐' : '✅';
-
     fetch(url)
         .then(res => res.json())
         .then(data => {
@@ -244,14 +237,13 @@ function toggleFavorite(event, button, pair) {
 }
 
 function fetchSignal(pair) {
+    // ... (no changes in this function)
     lastSelectedPair = pair;
     showLoader(true);
     signalOutput.innerHTML = `⏳ Отримую дані для ${pair}...`;
     signalOutput.style.textAlign = 'left';
-    
     const initDataQuery = initData ? `?initData=${encodeURIComponent(initData)}` : '';
     const signalApiUrl = `${API_BASE_URL}/api/signal?pair=${pair}&timeframe=${currentExpiration}${initDataQuery.replace('?', '&')}`;
-    
     fetch(signalApiUrl)
         .then(res => {
             if (!res.ok) {
@@ -272,31 +264,65 @@ function fetchSignal(pair) {
         });
 }
 
+// --- ПОЧАТОК ЗМІН: Повністю нова функція для відображення розширених даних ---
 function formatSignalAsHtml(signalData) {
     if (!signalData || Object.keys(signalData).length === 0) {
         return "Немає даних для відображення.";
     }
+    if (signalData.error) {
+        return `❌ Помилка: ${signalData.error}`;
+    }
 
-    const pair = signalData.pair || 'N/A';
-    const price = signalData.price || 0;
-    const verdict = signalData.verdict_text || 'Не вдалося визначити.';
-    
+    const {
+        pair, price, verdict_text, reasons,
+        stochastic, rsi, bollinger, trend,
+        support, resistance, volume
+    } = signalData;
+
     const priceStr = price ? price.toFixed(5) : "N/A";
     
     let html = `
         <div class="signal-header">
             <strong>${pair} (Експірація: ${currentExpiration})</strong> | Ціна: <code>${priceStr}</code>
         </div>
-        <div class="verdict">${verdict}</div>
+        <div class="verdict">${verdict_text}</div>
     `;
 
-    if (signalData.reasons && signalData.reasons.length > 0) {
+    // Блок з основними індикаторами
+    html += `<div class="indicator-grid">
+        <div class="indicator-item">
+            <div class="indicator-label">RSI (14)</div>
+            <div class="indicator-value">${rsi.toFixed(1)}</div>
+        </div>
+        <div class="indicator-item">
+            <div class="indicator-label">Stochastic K%</div>
+            <div class="indicator-value">${stochastic.k.toFixed(1)}</div>
+        </div>
+        <div class="indicator-item">
+            <div class="indicator-label">Trend (15m)</div>
+            <div class="indicator-value">${trend || 'N/A'}</div>
+        </div>
+        <div class="indicator-item">
+            <div class="indicator-label">Volume Ratio</div>
+            <div class="indicator-value">${volume.ratio.toFixed(2)}x</div>
+        </div>
+    </div>`;
+
+    // Блок з рівнями та іншим
+    html += `<div class="details-grid">
+        <div class="detail-item"><strong>Підтримка:</strong> <code>${support ? support.toFixed(5) : 'N/A'}</code></div>
+        <div class="detail-item"><strong>Опір:</strong> <code>${resistance ? resistance.toFixed(5) : 'N/A'}</code></div>
+    </div>`;
+
+    if (reasons && reasons.length > 0) {
         html += '<div class="reasons"><strong>Ключові фактори:</strong><ul>';
-        signalData.reasons.forEach(r => { html += `<li>${r}</li>`; });
+        reasons.forEach(r => { html += `<li>${r}</li>`; });
         html += '</ul></div>';
     }
+    
     return html;
 }
+// --- КІНЕЦЬ ЗМІН ---
 
 function showLoader(visible) {
     loader.className = visible ? '' : 'hidden';

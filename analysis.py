@@ -21,13 +21,10 @@ PERIOD_MAP = {
     "1m": TrendbarPeriod.M1, "5m": TrendbarPeriod.M5, "15m": TrendbarPeriod.M15
 }
 
-# --- ПОЧАТОК ЗМІН: Додаємо функцію для очищення даних ---
 def _sanitize(value, default=0.0):
-    """Перетворює NaN або None на безпечне значення float."""
-    if value is None or pd.isna(value):
+    if value is None or pd.isna(value) or np.isinf(value):
         return default
     return float(value)
-# --- КІНЕЦЬ ЗМІН ---
 
 def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: int) -> Deferred:
     d = Deferred()
@@ -122,42 +119,38 @@ def _calculate_full_analysis(signal_df: pd.DataFrame, trend_df: pd.DataFrame) ->
     stoch_k = last_signal.get('STOCHk_14_3_3', 50)
     bb_p = last_signal.get('BBP_20_2.0', 0.5)
 
-    if trend == "UPTREND" and is_trending:
-        if stoch_k < 30 and bb_p < 0.2:
-            verdict = "⬆️ CALL"
-            reasons.append(f"Глобальний тренд висхідний (EMA 50 на {trend_df.name})")
-            reasons.append(f"Стохастик у зоні перепроданості ({stoch_k:.1f})")
-            reasons.append(f"Ціна знаходиться в нижніх 20% каналу Боллінджера")
-            if is_volume_high:
-                reasons.append("🟢 Сигнал підтверджено підвищеним об'ємом")
-
-    if trend == "DOWNTREND" and is_trending:
-        if stoch_k > 70 and bb_p > 0.8:
-            verdict = "⬇️ PUT"
-            reasons.append(f"Глобальний тренд низхідний (EMA 50 на {trend_df.name})")
-            reasons.append(f"Стохастик у зоні перекупленості ({stoch_k:.1f})")
-            reasons.append(f"Ціна знаходиться у верхніх 20% каналу Боллінджера")
-            if is_volume_high:
-                reasons.append("🟢 Сигнал підтверджено підвищеним об'ємом")
-
+    # --- Нова логіка з двома рівнями сигналів ---
+    # 1. Сигнал високої якості (збіг усіх фільтрів)
+    if is_trending and trend == "UPTREND" and stoch_k < 30 and bb_p < 0.2:
+        verdict = "⬆️ CALL (Висока якість)"
+        reasons.append(f"Глобальний тренд висхідний (ADX: {adx:.1f})")
+        reasons.append(f"Стохастик у зоні перепроданості ({stoch_k:.1f})")
+        reasons.append("Ціна біля нижньої межі Боллінджера")
+    elif is_trending and trend == "DOWNTREND" and stoch_k > 70 and bb_p > 0.8:
+        verdict = "⬇️ PUT (Висока якість)"
+        reasons.append(f"Глобальний тренд низхідний (ADX: {adx:.1f})")
+        reasons.append(f"Стохастик у зоні перекупленості ({stoch_k:.1f})")
+        reasons.append("Ціна біля верхньої межі Боллінджера")
+    # 2. Помірний сигнал (без урахування тренду, лише точка входу)
+    elif verdict == "NEUTRAL":
+        if stoch_k < 20 and bb_p < 0.1:
+             verdict = "↗️ CALL (Помірний)"
+             reasons.append("Сильна локальна перепроданість (Stochastic + Bollinger)")
+        elif stoch_k > 80 and bb_p > 0.9:
+            verdict = "↘️ PUT (Помірний)"
+            reasons.append("Сильна локальна перекупленість (Stochastic + Bollinger)")
+    
+    if is_volume_high and verdict != "NEUTRAL":
+        reasons.append("🟢 Сигнал підтверджено підвищеним об'ємом")
+    
     return {
-        "verdict": verdict,
-        "reasons": reasons,
-        "close": last_signal.get('Close'),
-        "rsi": last_signal.get('RSI_14'),
-        "stoch_k": stoch_k,
-        "stoch_d": last_signal.get('STOCHd_14_3_3'),
-        "bb_upper": last_signal.get('BBU_20_2.0'),
-        "bb_lower": last_signal.get('BBL_20_2.0'),
-        "bb_percent_b": bb_p,
-        "trend": f"{trend} (ADX: {adx:.1f})",
-        "support": support,
-        "resistance": resistance,
-        "volume_now": current_volume,
-        "volume_avg": avg_volume,
+        "verdict": verdict, "reasons": reasons, "close": last_signal.get('Close'),
+        "rsi": last_signal.get('RSI_14'), "stoch_k": stoch_k, "stoch_d": last_signal.get('STOCHd_14_3_3'),
+        "bb_upper": last_signal.get('BBU_20_2.0'), "bb_lower": last_signal.get('BBL_20_2.0'),
+        "bb_percent_b": bb_p, "trend": f"{trend} (ADX: {adx:.1f})", "support": support,
+        "resistance": resistance, "volume_now": current_volume, "volume_avg": avg_volume,
         "volume_ratio": current_volume / avg_volume if avg_volume > 0 else 1,
-        "candle_pattern": None,
-        "special_warning": None
+        "candle_pattern": None, "special_warning": None
     }
 
 def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int, timeframe: str = "5m") -> Deferred:
@@ -184,34 +177,21 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int
 
             analysis = _calculate_full_analysis(signal_df, trend_df)
             
-            # --- ПОЧАТОК ЗМІН: Застосовуємо санітарну обробку до всіх числових даних ---
             response_data = {
                 "pair": symbol,
                 "price": _sanitize(analysis.get("close")),
                 "verdict_text": analysis["verdict"],
                 "reasons": analysis["reasons"],
-                "stochastic": {
-                    "k": _sanitize(analysis.get("stoch_k"), 50),
-                    "d": _sanitize(analysis.get("stoch_d"), 50)
-                },
+                "stochastic": {"k": _sanitize(analysis.get("stoch_k"), 50), "d": _sanitize(analysis.get("stoch_d"), 50)},
                 "rsi": _sanitize(analysis.get("rsi"), 50),
-                "bollinger": {
-                    "upper": _sanitize(analysis.get("bb_upper")),
-                    "lower": _sanitize(analysis.get("bb_lower")),
-                    "percent_b": _sanitize(analysis.get("bb_percent_b"), 0.5)
-                },
+                "bollinger": {"upper": _sanitize(analysis.get("bb_upper")), "lower": _sanitize(analysis.get("bb_lower")), "percent_b": _sanitize(analysis.get("bb_percent_b"), 0.5)},
                 "trend": analysis.get("trend"),
                 "support": _sanitize(analysis.get("support")),
                 "resistance": _sanitize(analysis.get("resistance")),
-                "volume": {
-                    "current": _sanitize(analysis.get("volume_now")),
-                    "avg": _sanitize(analysis.get("volume_avg")),
-                    "ratio": _sanitize(analysis.get("volume_ratio"))
-                },
+                "volume": {"current": _sanitize(analysis.get("volume_now")), "avg": _sanitize(analysis.get("volume_avg")), "ratio": _sanitize(analysis.get("volume_ratio"))},
                 "candle_pattern": analysis.get("candle_pattern"),
                 "special_warning": analysis.get("special_warning")
             }
-            # --- КІНЕЦЬ ЗМІН ---
             
             if user_id != 0 and analysis['verdict'] != "NEUTRAL":
                 add_signal_to_history({
