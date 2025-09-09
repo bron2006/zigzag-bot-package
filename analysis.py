@@ -77,8 +77,10 @@ def _calculate_binary_signal(df: pd.DataFrame) -> Dict:
         return {"verdict": "NEUTRAL", "reasons": ["Недостатньо даних для аналізу."]}
 
     try:
-        df.ta.bbands(length=20, std=2.0, append=True, col_names=('BBL', 'BBM', 'BBU', 'BBB', 'BBP'))
-        df.ta.stoch(k=14, d=3, smooth_k=3, append=True, col_names=('STOCHk', 'STOCHd'))
+        # --- ПОЧАТОК ЗМІН: Використовуємо стандартні назви колонок ---
+        df.ta.bbands(length=20, std=2.0, append=True)
+        df.ta.stoch(k=14, d=3, smooth_k=3, append=True)
+        # --- КІНЕЦЬ ЗМІН ---
     except Exception as e:
         logger.error(f"Помилка розрахунку індикаторів: {e}")
         return {"verdict": "NEUTRAL", "reasons": ["Помилка розрахунку індикаторів."]}
@@ -88,8 +90,16 @@ def _calculate_binary_signal(df: pd.DataFrame) -> Dict:
     verdict = "NEUTRAL"
     reasons = []
 
-    is_oversold = last['STOCHk'] < 25
-    is_touching_lower_band = last['Low'] <= last['BBL']
+    # --- ПОЧАТОК ЗМІН: Використовуємо правильні назви колонок з параметрами ---
+    stoch_k_col = 'STOCHk_14_3_3'
+    bb_lower_col = 'BBL_20_2.0'
+    bb_upper_col = 'BBU_20_2.0'
+    
+    if stoch_k_col not in last.index or bb_lower_col not in last.index or bb_upper_col not in last.index:
+        return {"verdict": "NEUTRAL", "reasons": ["Не вдалося розрахувати індикатори."]}
+
+    is_oversold = last[stoch_k_col] < 25
+    is_touching_lower_band = last['Low'] <= last[bb_lower_col]
     is_bullish_candle = last['Close'] > last['Open']
 
     if is_oversold and is_touching_lower_band and is_bullish_candle:
@@ -98,8 +108,8 @@ def _calculate_binary_signal(df: pd.DataFrame) -> Dict:
         reasons.append("Ціна торкнулася нижньої лінії Боллінджера")
         reasons.append("Остання свічка - бичача")
 
-    is_overbought = last['STOCHk'] > 75
-    is_touching_upper_band = last['High'] >= last['BBU']
+    is_overbought = last[stoch_k_col] > 75
+    is_touching_upper_band = last['High'] >= last[bb_upper_col]
     is_bearish_candle = last['Close'] < last['Open']
 
     if is_overbought and is_touching_upper_band and is_bearish_candle:
@@ -108,7 +118,8 @@ def _calculate_binary_signal(df: pd.DataFrame) -> Dict:
         reasons.append("Ціна торкнулася верхньої лінії Боллінджера")
         reasons.append("Остання свічка - ведмежа")
         
-    return {"verdict": verdict, "reasons": reasons, "stochastic": last['STOCHk'], "close": last['Close']}
+    return {"verdict": verdict, "reasons": reasons, "stochastic": last[stoch_k_col], "close": last['Close']}
+    # --- КІНЕЦЬ ЗМІН ---
 
 def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int, timeframe: str = "5m") -> Deferred:
     final_deferred = Deferred()
