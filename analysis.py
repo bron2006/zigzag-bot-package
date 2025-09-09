@@ -34,22 +34,18 @@ def get_current_market_regime(df: pd.DataFrame) -> str:
         return "Not Available"
     
     try:
-        # --- ПОЧАТОК ЗМІН: Використовуємо правильні імена, які генерує бібліотека ---
-        features_to_select = ['ATR', 'ADX_14', 'RSI']
-        # --- КІНЕЦЬ ЗМІН ---
+        # --- ПОЧАТОК ЗМІН: Використовуємо стандартні імена, які генерує бібліотека ---
+        features_to_select = ['ATRr_14', 'ADX_14', 'RSI_14']
         
         if not all(col in df.columns for col in features_to_select):
             missing = [col for col in features_to_select if col not in df.columns]
             logger.warning(f"Cannot determine market regime, missing columns: {missing}")
-            # --- ПОЧАТОК ЗМІН: Перейменовуємо колонки для моделі ---
-            # Якщо модель натренована на іменах без "_14", ми можемо їх тимчасово перейменувати
-            df_renamed = df.rename(columns={"RSI_14": "RSI", "ADX_14": "ADX"})
-            if 'ADX' not in df_renamed.columns: # Якщо ADX все ще відсутній, виходимо
-                return "Incomplete Data"
-            features = df_renamed[['ATR', 'ADX', 'RSI']].copy()
-            # --- КІНЕЦЬ ЗМІН ---
-        else:
-             features = df[features_to_select].copy()
+            return "Incomplete Data"
+
+        features = df[features_to_select].copy()
+        # Перейменовуємо колонки для сумісності з навченою моделлю
+        features.rename(columns={"RSI_14": "RSI", "ADX_14": "ADX", "ATRr_14": "ATR"}, inplace=True)
+        # --- КІНЕЦЬ ЗМІН ---
 
         last_features = features.iloc[[-1]]
         
@@ -153,11 +149,9 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int
     if not trend_timeframe:
         err_msg = f"Непідтримуваний таймфрейм для аналізу тренду: {timeframe}"
         logger.warning(err_msg)
-        # --- ПОЧАТОК ЗМІН: Використовуємо правильний метод для створення помилки ---
         d = Deferred()
         d.errback(Failure(Exception(err_msg)))
         return d
-        # --- КІНЕЦЬ ЗМІН ---
 
     d_signal = get_market_data(client, symbol_cache, symbol, timeframe, 200)
     d_trend = get_market_data(client, symbol_cache, symbol, trend_timeframe, 250)
@@ -187,7 +181,7 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int
                 "candle_pattern": analysis.get("candle_pattern"), "special_warning": analysis.get("special_warning")
             }
             
-            if user_id != 0 and analysis['verdict'] != "NEUTRAL":
+            if user_id != 0 and "NEUTRAL" not in analysis['verdict']:
                 add_signal_to_history({'user_id': user_id, 'pair': symbol, 'price': response_data['price'], 'bull_percentage': int(response_data['stochastic']['k'])})
 
             final_deferred.callback(response_data)
