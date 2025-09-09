@@ -34,7 +34,6 @@ def _collect_assets_to_scan():
     seen = set()
     return [a for a in assets if not (a in seen or seen.add(a))]
 
-# --- ПОЧАТОК ЗМІН: Нова логіка обробки результату ---
 def _handle_analysis_result(pair_norm, result):
     try:
         if not result or result.get("error"):
@@ -44,8 +43,9 @@ def _handle_analysis_result(pair_norm, result):
         
         verdict = result.get("verdict_text", "NEUTRAL")
         
-        # Перевіряємо, чи є сигнал CALL або PUT
-        is_signal = verdict in ["⬆️ CALL", "⬇️ PUT"]
+        # --- ПОЧАТОК ЗМІН: Виправляємо перевірку, щоб вона розпізнавала всі типи сигналів ---
+        is_signal = "CALL" in verdict or "PUT" in verdict
+        # --- КІНЕЦЬ ЗМІН ---
         
         logger.info(f"[SCANNER_DIAG] Pair: {pair_norm}, Verdict: {verdict}. Is signal: {is_signal}")
 
@@ -68,7 +68,6 @@ def _handle_analysis_result(pair_norm, result):
         chat_id = get_chat_id()
         if chat_id and app_state.updater:
             try:
-                # Використовуємо '1m'/'5m' як заглушку для експірації, оскільки сканер не має цього контексту
                 message = telegram_ui._format_signal_message(result, "5m") 
                 kb = telegram_ui.get_main_menu_kb()
                 app_state.updater.bot.send_message(chat_id=chat_id, text=message, parse_mode='Markdown', reply_markup=kb)
@@ -79,7 +78,6 @@ def _handle_analysis_result(pair_norm, result):
         logger.info(f"SCANNER: Notified for {pair_norm} (Verdict: {verdict})")
     except Exception:
         logger.exception("Error handling analysis result")
-# --- КІНЕЦЬ ЗМІН ---
 
 def _process_one_asset(pair: str):
     try:
@@ -88,7 +86,6 @@ def _process_one_asset(pair: str):
             logger.debug("Symbols not loaded yet, skipping asset processing.")
             return
         
-        # Сканер за замовчуванням використовує 5-хвилинний таймфрейм для аналізу
         d = get_api_detailed_signal_data(app_state.client, app_state.symbol_cache, pair_norm, 0, "5m")
         d.addCallback(lambda result, p=pair_norm: _handle_analysis_result(p, result))
         d.addErrback(lambda failure, p=pair_norm: logger.error(f"Critical error in analysis chain for {p}: {failure.getErrorMessage()}"))
