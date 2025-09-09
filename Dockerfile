@@ -25,9 +25,9 @@ RUN wget 'http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz' && 
     cd .. && \
     rm -rf ta-lib ta-lib-0.4.0-src.tar.gz
 
-# --- ПОЧАТОК ЗМІН: Встановлюємо pandas-ta-openbb з локального архіву ---
-COPY vendor/pandas-ta-openbb-0.4.22.tar.gz /app/vendor/
-RUN pip install /app/vendor/pandas-ta-openbb-0.4.22.tar.gz
+# --- ПОЧАТОК ЗМІН: Використовуємо точну назву вашого файлу ---
+COPY vendor/pandas_ta_openbb-0.4.22.tar.gz /app/vendor/
+RUN pip install /app/vendor/pandas_ta_openbb-0.4.22.tar.gz
 # --- КІНЕЦЬ ЗМІН ---
 
 # Встановлюємо решту залежностей
