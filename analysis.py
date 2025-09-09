@@ -34,12 +34,13 @@ def get_current_market_regime(df: pd.DataFrame) -> str:
         return "Not Available"
     
     try:
-        features_to_select = ['ATR', 'ADX_14', 'RSI']
+        features_to_select = ['ATR', 'ADX_14', 'RSI_14']
+        
         if not all(col in df.columns for col in features_to_select):
             missing = [col for col in features_to_select if col not in df.columns]
             logger.warning(f"Cannot determine market regime, missing columns: {missing}")
             return "Incomplete Data"
-        
+
         features = df[features_to_select].copy()
         features.rename(columns={"RSI_14": "RSI", "ADX_14": "ADX", "ATRr_14": "ATR"}, inplace=True)
         
@@ -114,27 +115,25 @@ def _calculate_full_analysis(signal_df: pd.DataFrame, trend_df: pd.DataFrame, da
     market_regime = get_current_market_regime(signal_df)
     verdict = "NEUTRAL"; reasons = [f"Режим ринку: {market_regime}"]
     
+    # --- ПОЧАТОК ЗМІН: Додаємо перевірку на існування значень EMA ---
     trend = "NEUTRAL"
-    if last_trend.get('EMA50') > last_trend.get('EMA200'):
-        trend = "UPTREND"
-    elif last_trend.get('EMA50') < last_trend.get('EMA200'):
-        trend = "DOWNTREND"
+    ema50 = last_trend.get('EMA50')
+    ema200 = last_trend.get('EMA200')
+    if ema50 is not None and ema200 is not None:
+        if ema50 > ema200:
+            trend = "UPTREND"
+        else:
+            trend = "DOWNTREND"
+    # --- КІНЕЦЬ ЗМІН ---
         
     stoch_k = last_signal.get('STOCHk_14_3_3', 50)
     bb_p = last_signal.get('BBP_20_2.0', 0.5)
-
-    # --- ПОЧАТОК ЗМІН: Тимчасово прибираємо фільтр ADX (is_trending) ---
-    if trend == "UPTREND" and stoch_k < 30 and bb_p < 0.2:
-        verdict = "⬆️ CALL (Висока якість)"
-        reasons.append(f"Глобальний тренд висхідний")
-        reasons.append(f"Стохастик у зоні перепроданості ({stoch_k:.1f})")
-        reasons.append("Ціна біля нижньої межі Боллінджера")
-    elif trend == "DOWNTREND" and stoch_k > 70 and bb_p > 0.8:
-        verdict = "⬇️ PUT (Висока якість)"
-        reasons.append(f"Глобальний тренд низхідний")
-        reasons.append(f"Стохастик у зоні перекупленості ({stoch_k:.1f})")
-        reasons.append("Ціна біля верхньої межі Боллінджера")
-    # --- КІНЕЦЬ ЗМІН ---
+    
+    if market_regime == "Млявий флет":
+        if stoch_k < 25 and bb_p < 0.1:
+            verdict = "⬆️ CALL"; reasons.append("Ціна в нижній зоні Боллінджера + Стохастик перепроданий")
+        elif stoch_k > 75 and bb_p > 0.9:
+            verdict = "⬇️ PUT"; reasons.append("Ціна в верхній зоні Боллінджера + Стохастик перекуплений")
     
     pivot_point = (prev_day['High'] + prev_day['Low'] + prev_day['Close']) / 3
     support = (2 * pivot_point) - prev_day['High']
@@ -143,9 +142,9 @@ def _calculate_full_analysis(signal_df: pd.DataFrame, trend_df: pd.DataFrame, da
     return {
         "verdict": verdict, "reasons": reasons, "close": last_signal.get('Close'),
         "market_regime": market_regime,
-        "rsi": last_signal.get('RSI_14'), "stoch_k": last_signal.get('STOCHk_14_3_3'), "stoch_d": last_signal.get('STOCHd_14_3_3'),
+        "rsi": last_signal.get('RSI_14'), "stoch_k": stoch_k, "stoch_d": last_signal.get('STOCHd_14_3_3'),
         "bb_upper": last_signal.get('BBU_20_2.0'), "bb_lower": last_signal.get('BBL_20_2.0'),
-        "bb_percent_b": last_signal.get('BBP_20_2.0'), "trend": trend, "support": support,
+        "bb_percent_b": bb_p, "trend": trend, "support": support,
         "resistance": resistance, "volume_now": last_signal.get('Volume'), "volume_avg": signal_df['Volume'].rolling(window=20).mean().iloc[-1],
         "volume_ratio": 0, "candle_pattern": _find_candle_pattern(signal_df), "special_warning": None
     }
