@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no"/>
-    <title>ZigZag WebApp</title>
+    <title>ZigZag | Binary Options</title>
     <link rel="stylesheet" href="style.css">
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <script>
@@ -12,13 +12,12 @@
 </head>
 <body>
     <div class="container">
-        <h1>Термінал</h1>
+        <h1>Термінал | Бінарні Опціони</h1>
         <div class="controls-panel">
             <input type="search" id="searchInput" class="search-input" placeholder="🔍 Пошук...">
-            <div id="timeframeSelector" class="timeframe-selector">
-                <button class="tf-button active" data-tf="1m">1m</button>
-                <button class="tf-button" data-tf="5m">5m</button>
-                <button class="tf-button" data-tf="15m">15m</button>
+            <div id="expirationSelector" class="timeframe-selector">
+                <button class="tf-button active" data-exp="1m">Експірація 1m</button>
+                <button class="tf-button" data-exp="5m">Експірація 5m</button>
             </div>
             <div id="scannerControls" class="scanner-controls">
                 <button class="scanner-button" data-cat="forex"></button>
@@ -33,7 +32,7 @@
         <div id="listsContainer"></div>
         <div class="separator"></div>
         <div id="signalContainer">
-            <div id="signalOutput">Виберіть актив для аналізу...</div>
+            <div id="signalOutput">Оберіть актив для аналізу...</div>
         </div>
         <div id="loader" class="hidden"></div>
     </div>
