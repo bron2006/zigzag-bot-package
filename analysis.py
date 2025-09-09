@@ -34,8 +34,10 @@ def get_current_market_regime(df: pd.DataFrame) -> str:
     try:
         features = df[['ATR', 'ADX', 'RSI']].copy()
         last_features = features.iloc[[-1]]
+        
         scaled_features = ml_models.SCALER.transform(last_features)
         prediction = ml_models.KMEANS_MODEL.predict(scaled_features)[0]
+        
         regime_names = {0: "Млявий флет", 1: "Бичачий тренд", 2: "Ведмежий тренд", 3: "Шторм"}
         return regime_names.get(prediction, "Unknown")
     except Exception as e:
@@ -78,22 +80,23 @@ def _find_candle_pattern(df: pd.DataFrame):
         if signal_strength > 0: return f"⬆️ {pattern_name} (Бичачий)"
         if signal_strength < 0: return f"⬇️ {pattern_name} (Ведмежий)"
         return None
-    except Exception: return None
+    except Exception:
+        return None
 
 def _calculate_full_analysis(signal_df: pd.DataFrame, trend_df: pd.DataFrame, daily_df: pd.DataFrame) -> Dict:
-    # --- ПОЧАТОК ЗМІН: Знижуємо вимогу з 50 до 30 свічок ---
     if any(df.empty or len(df) < 30 for df in [signal_df, trend_df, daily_df]):
         return {"verdict": "NEUTRAL", "reasons": ["Недостатньо даних для аналізу."]}
-    # --- КІНЕЦЬ ЗМІН ---
 
     try:
+        # --- ПОЧАТОК ЗМІН: Примусово вказуємо імена колонок ---
         signal_df.ta.bbands(length=20, std=2.0, append=True)
         signal_df.ta.stoch(k=14, d=3, smooth_k=3, append=True)
-        signal_df.ta.rsi(length=14, append=True)
-        signal_df.ta.adx(length=14, append=True)
-        signal_df.ta.atr(length=14, append=True)
+        signal_df.ta.rsi(length=14, append=True, col_names=('RSI',))
+        signal_df.ta.adx(length=14, append=True, col_names=('ADX', 'DMP', 'DMN'))
+        signal_df.ta.atr(length=14, append=True, col_names=('ATR',))
         trend_df.ta.ema(length=50, append=True, col_names=('EMA50',))
         trend_df.ta.ema(length=200, append=True, col_names=('EMA200',))
+        # --- КІНЕЦЬ ЗМІН ---
     except Exception as e:
         return {"verdict": "NEUTRAL", "reasons": [f"Помилка розрахунку індикаторів: {e}"]}
 
@@ -123,7 +126,7 @@ def _calculate_full_analysis(signal_df: pd.DataFrame, trend_df: pd.DataFrame, da
     return {
         "verdict": verdict, "reasons": reasons, "close": last_signal.get('Close'),
         "market_regime": market_regime,
-        "rsi": last_signal.get('RSI_14'), "stoch_k": last_signal.get('STOCHk_14_3_3'), "stoch_d": last_signal.get('STOCHd_14_3_3'),
+        "rsi": last_signal.get('RSI'), "stoch_k": last_signal.get('STOCHk_14_3_3'), "stoch_d": last_signal.get('STOCHd_14_3_3'),
         "bb_upper": last_signal.get('BBU_20_2.0'), "bb_lower": last_signal.get('BBL_20_2.0'),
         "bb_percent_b": last_signal.get('BBP_20_2.0'), "trend": None, "support": support,
         "resistance": resistance, "volume_now": last_signal.get('Volume'), "volume_avg": signal_df['Volume'].rolling(window=20).mean().iloc[-1],
