@@ -21,6 +21,14 @@ PERIOD_MAP = {
     "1m": TrendbarPeriod.M1, "5m": TrendbarPeriod.M5, "15m": TrendbarPeriod.M15
 }
 
+# --- ПОЧАТОК ЗМІН: Додаємо функцію для очищення даних ---
+def _sanitize(value, default=0.0):
+    """Перетворює NaN або None на безпечне значення float."""
+    if value is None or pd.isna(value):
+        return default
+    return float(value)
+# --- КІНЕЦЬ ЗМІН ---
+
 def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: int) -> Deferred:
     d = Deferred()
     symbol_details = symbol_cache.get(norm_pair)
@@ -77,54 +85,45 @@ def _calculate_full_analysis(signal_df: pd.DataFrame, trend_df: pd.DataFrame) ->
         return {"verdict": "NEUTRAL", "reasons": ["Недостатньо даних для аналізу."]}
 
     try:
-        # --- Розрахунок індикаторів на сигнальному таймфреймі ---
         signal_df.ta.bbands(length=20, std=2.0, append=True)
         signal_df.ta.stoch(k=14, d=3, smooth_k=3, append=True)
         signal_df.ta.rsi(length=14, append=True)
         signal_df.ta.adx(length=14, append=True)
-        
-        # --- Розрахунок індикаторів на трендовому таймфреймі ---
-        trend_df.ta.ema(length=50, append=True) # Довга EMA для визначення глобального тренду
-        
+        trend_df.ta.ema(length=50, append=True)
     except Exception as e:
         logger.error(f"Помилка розрахунку індикаторів: {e}")
         return {"verdict": "NEUTRAL", "reasons": ["Помилка розрахунку індикаторів."]}
 
-    # --- Отримання останніх даних ---
     last_signal = signal_df.iloc[-1]
     last_trend = trend_df.iloc[-1]
 
-    # --- 1. Визначення глобального тренду ---
     trend = "NEUTRAL"
-    if last_signal['Close'] > last_trend['EMA_50']:
-        trend = "UPTREND"
-    elif last_signal['Close'] < last_trend['EMA_50']:
-        trend = "DOWNTREND"
+    trend_ema = last_trend.get('EMA_50')
+    if pd.notna(trend_ema) and pd.notna(last_signal.get('Close')):
+        if last_signal['Close'] > trend_ema:
+            trend = "UPTREND"
+        else:
+            trend = "DOWNTREND"
 
-    # --- 2. Аналіз сили тренду ---
     adx = last_signal.get('ADX_14', 0)
     is_trending = adx > 20
 
-    # --- 3. Аналіз об'єму ---
     current_volume = last_signal['Volume']
     avg_volume = signal_df['Volume'].rolling(window=20).mean().iloc[-1]
     is_volume_high = current_volume > avg_volume * 1.5
     
-    # --- 4. Пошук рівнів підтримки/опору (простий метод) ---
     recent_period = signal_df.tail(50)
     support = recent_period['Low'].min()
     resistance = recent_period['High'].max()
 
-    # --- 5. Генерація вердикту та причин ---
     verdict = "NEUTRAL"
     reasons = []
 
     stoch_k = last_signal.get('STOCHk_14_3_3', 50)
-    bb_p = last_signal.get('BBP_20_2.0', 0.5) # %B - позиція ціни відносно каналу Боллінджера
+    bb_p = last_signal.get('BBP_20_2.0', 0.5)
 
-    # Умови для сигналу CALL (Вгору)
     if trend == "UPTREND" and is_trending:
-        if stoch_k < 30 and bb_p < 0.2: # "М'якші" умови
+        if stoch_k < 30 and bb_p < 0.2:
             verdict = "⬆️ CALL"
             reasons.append(f"Глобальний тренд висхідний (EMA 50 на {trend_df.name})")
             reasons.append(f"Стохастик у зоні перепроданості ({stoch_k:.1f})")
@@ -132,9 +131,8 @@ def _calculate_full_analysis(signal_df: pd.DataFrame, trend_df: pd.DataFrame) ->
             if is_volume_high:
                 reasons.append("🟢 Сигнал підтверджено підвищеним об'ємом")
 
-    # Умови для сигналу PUT (Вниз)
     if trend == "DOWNTREND" and is_trending:
-        if stoch_k > 70 and bb_p > 0.8: # "М'якші" умови
+        if stoch_k > 70 and bb_p > 0.8:
             verdict = "⬇️ PUT"
             reasons.append(f"Глобальний тренд низхідний (EMA 50 на {trend_df.name})")
             reasons.append(f"Стохастик у зоні перекупленості ({stoch_k:.1f})")
@@ -142,11 +140,10 @@ def _calculate_full_analysis(signal_df: pd.DataFrame, trend_df: pd.DataFrame) ->
             if is_volume_high:
                 reasons.append("🟢 Сигнал підтверджено підвищеним об'ємом")
 
-    # --- 6. Збір всіх даних для відповіді ---
     return {
         "verdict": verdict,
         "reasons": reasons,
-        "close": last_signal['Close'],
+        "close": last_signal.get('Close'),
         "rsi": last_signal.get('RSI_14'),
         "stoch_k": stoch_k,
         "stoch_d": last_signal.get('STOCHd_14_3_3'),
@@ -159,18 +156,16 @@ def _calculate_full_analysis(signal_df: pd.DataFrame, trend_df: pd.DataFrame) ->
         "volume_now": current_volume,
         "volume_avg": avg_volume,
         "volume_ratio": current_volume / avg_volume if avg_volume > 0 else 1,
-        "candle_pattern": None, # Можна додати, як раніше
+        "candle_pattern": None,
         "special_warning": None
     }
 
 def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int, timeframe: str = "5m") -> Deferred:
     final_deferred = Deferred()
     
-    # Визначаємо старший таймфрейм для трендового фільтру
     trend_timeframe_map = {"1m": "5m", "5m": "15m"}
     trend_timeframe = trend_timeframe_map.get(timeframe, "15m")
 
-    # Завантажуємо дані для двох таймфреймів
     d_signal = get_market_data(client, symbol_cache, symbol, timeframe, 100)
     d_trend = get_market_data(client, symbol_cache, symbol, trend_timeframe, 100)
     d_list = DeferredList([d_signal, d_trend], consumeErrors=True)
@@ -184,45 +179,45 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int
                 final_deferred.callback({"error": "Не вдалося завантажити ринкові дані."})
                 return
 
-            # Додаємо імена для логування
             signal_df.name = timeframe
             trend_df.name = trend_timeframe
 
             analysis = _calculate_full_analysis(signal_df, trend_df)
             
-            # --- Формуємо нову, розширену відповідь ---
+            # --- ПОЧАТОК ЗМІН: Застосовуємо санітарну обробку до всіх числових даних ---
             response_data = {
                 "pair": symbol,
-                "price": analysis.get("close"),
+                "price": _sanitize(analysis.get("close")),
                 "verdict_text": analysis["verdict"],
                 "reasons": analysis["reasons"],
                 "stochastic": {
-                    "k": float(analysis.get("stoch_k", 0)),
-                    "d": float(analysis.get("stoch_d", 0))
+                    "k": _sanitize(analysis.get("stoch_k"), 50),
+                    "d": _sanitize(analysis.get("stoch_d"), 50)
                 },
-                "rsi": float(analysis.get("rsi", 0)),
+                "rsi": _sanitize(analysis.get("rsi"), 50),
                 "bollinger": {
-                    "upper": float(analysis.get("bb_upper", 0)),
-                    "lower": float(analysis.get("bb_lower", 0)),
-                    "percent_b": float(analysis.get("bb_percent_b", 0))
+                    "upper": _sanitize(analysis.get("bb_upper")),
+                    "lower": _sanitize(analysis.get("bb_lower")),
+                    "percent_b": _sanitize(analysis.get("bb_percent_b"), 0.5)
                 },
                 "trend": analysis.get("trend"),
-                "support": analysis.get("support"),
-                "resistance": analysis.get("resistance"),
+                "support": _sanitize(analysis.get("support")),
+                "resistance": _sanitize(analysis.get("resistance")),
                 "volume": {
-                    "current": analysis.get("volume_now"),
-                    "avg": analysis.get("volume_avg"),
-                    "ratio": analysis.get("volume_ratio")
+                    "current": _sanitize(analysis.get("volume_now")),
+                    "avg": _sanitize(analysis.get("volume_avg")),
+                    "ratio": _sanitize(analysis.get("volume_ratio"))
                 },
                 "candle_pattern": analysis.get("candle_pattern"),
                 "special_warning": analysis.get("special_warning")
             }
+            # --- КІНЕЦЬ ЗМІН ---
             
             if user_id != 0 and analysis['verdict'] != "NEUTRAL":
                 add_signal_to_history({
                     'user_id': user_id, 'pair': symbol,
-                    'price': analysis.get('close'), 
-                    'bull_percentage': int(analysis.get("stoch_k", 50))
+                    'price': response_data['price'], 
+                    'bull_percentage': int(response_data['stochastic']['k'])
                 })
 
             final_deferred.callback(response_data)
