@@ -11,7 +11,9 @@ from analysis import get_api_detailed_signal_data
 
 logger = logging.getLogger(__name__)
 
-TIMEFRAMES = ["1m", "5m", "15m"]
+# --- ПОЧАТОК ЗМІН: Замінюємо таймфрейми на час експірації ---
+EXPIRATIONS = ["1m", "5m"]
+# --- КІНЕЦЬ ЗМІН ---
 
 def get_reply_keyboard() -> ReplyKeyboardMarkup:
     keyboard = [[KeyboardButton("МЕНЮ")]]
@@ -41,29 +43,31 @@ def get_main_menu_kb() -> InlineKeyboardMarkup:
         
     return InlineKeyboardMarkup(keyboard)
 
-def get_timeframe_kb(category: str) -> InlineKeyboardMarkup:
-    keyboard = [[InlineKeyboardButton(tf, callback_data=f"tf_{category}_{tf}") for tf in TIMEFRAMES]]
+# --- ПОЧАТОК ЗМІН: Функція тепер для експірацій ---
+def get_expiration_kb(category: str) -> InlineKeyboardMarkup:
+    keyboard = [[InlineKeyboardButton(exp, callback_data=f"exp_{category}_{exp}") for exp in EXPIRATIONS]]
     keyboard.append([InlineKeyboardButton("⬅️ Назад до категорій", callback_data="main_menu")])
     return InlineKeyboardMarkup(keyboard)
+# --- КІНЕЦЬ ЗМІН ---
 
-def get_forex_sessions_kb(timeframe: str) -> InlineKeyboardMarkup:
+def get_forex_sessions_kb(expiration: str) -> InlineKeyboardMarkup:
     keyboard = []
     for session_name in FOREX_SESSIONS:
         display_text = f"{TRADING_HOURS.get(session_name, '')} {session_name}".strip()
-        keyboard.append([InlineKeyboardButton(display_text, callback_data=f"session_forex_{timeframe}_{session_name}")])
-    keyboard.append([InlineKeyboardButton("⬅️ Назад до таймфреймів", callback_data="category_forex")])
+        keyboard.append([InlineKeyboardButton(display_text, callback_data=f"session_forex_{expiration}_{session_name}")])
+    keyboard.append([InlineKeyboardButton("⬅️ Назад до експірацій", callback_data="category_forex")])
     return InlineKeyboardMarkup(keyboard)
 
-def get_assets_kb(asset_list: list, category: str, timeframe: str) -> InlineKeyboardMarkup:
+def get_assets_kb(asset_list: list, category: str, expiration: str) -> InlineKeyboardMarkup:
     keyboard, row = [], []
     for asset in asset_list:
-        callback_data = f"analyze_{timeframe}_{asset.replace('/', '')}"
+        callback_data = f"analyze_{expiration}_{asset.replace('/', '')}"
         row.append(InlineKeyboardButton(asset, callback_data=callback_data))
         if len(row) == 2:
             keyboard.append(row)
             row = []
     if row: keyboard.append(row)
-    keyboard.append([InlineKeyboardButton("⬅️ Назад до таймфреймів", callback_data=f"category_{category}")])
+    keyboard.append([InlineKeyboardButton("⬅️ Назад до експірацій", callback_data=f"category_{category}")])
     return InlineKeyboardMarkup(keyboard)
 
 def start(update: Update, context: CallbackContext) -> None:
@@ -101,47 +105,38 @@ def symbols_command(update: Update, context: CallbackContext):
         return
     
     forex = sorted([s for s in app_state.all_symbol_names if "/" in s and len(s) < 8 and "USD" not in s.upper()])
+    # ... (rest of the function is unchanged)
     crypto_usd = sorted([s for s in app_state.all_symbol_names if "/USD" in s.upper()])
     crypto_usdt = sorted([s for s in app_state.all_symbol_names if "/USDT" in s.upper()])
     others = sorted([s for s in app_state.all_symbol_names if "/" not in s])
-
     message = "**Доступні символи від брокера:**\n\n"
     if forex: message += f"**Forex:**\n`{', '.join(forex)}`\n\n"
     if crypto_usd: message += f"**Crypto (USD):**\n`{', '.join(crypto_usd)}`\n\n"
     if crypto_usdt: message += f"**Crypto (USDT):**\n`{', '.join(crypto_usdt)}`\n\n"
     if others: message += f"**Indices/Stocks/Commodities:**\n`{', '.join(others)}`"
-    
     for i in range(0, len(message), 4096):
         update.message.reply_text(message[i:i + 4096], parse_mode='Markdown')
 
-def _format_signal_message(result: dict, timeframe: str) -> str:
-    # ... (no changes in this function)
-    if result.get("error"): return f"❌ Помилка аналізу: {result['error']}"
-    parts = []
-    if result.get("special_warning"): parts.append(f"**{result['special_warning']}**\n")
+def _format_signal_message(result: dict, expiration: str) -> str:
+    if result.get("error"):
+        return f"❌ Помилка аналізу: {result['error']}"
+
     pair = result.get('pair', 'N/A')
     price = result.get('price')
     verdict = result.get('verdict_text', 'Не вдалося визначити.')
-    score = result.get('bull_percentage', 50)
-    confidence = "Низька (ринок невизначений)"
-    if score > 75 or score < 25: confidence = "Висока"
-    elif score > 55 or score < 45: confidence = "Помірна (є суперечливі фактори)"
-    price_str = f"{price:.5f}" if price else "N/A"
-    parts.append(f"📈 *Аналіз для {pair} ({timeframe})*")
-    parts.append(f"**Сигнал:** {verdict}")
-    parts.append(f"**Впевненість:** {confidence}")
-    parts.append(f"**Поточна ціна:** `{price_str}`")
-    parts.append(f"\n**Баланс сил:**\n🐂 Бики: {score}% ⬆️ | 🐃 Ведмеді: {100-score}% ⬇️\n")
-    if result.get('candle_pattern', {}).get('text'): parts.append(f"**🕯️ Свічковий патерн:**\n_{result['candle_pattern']['text']}_")
-    levels = []
-    if result.get('support'): levels.append(f"Підтримка: `{result['support']:.5f}`")
-    if result.get('resistance'): levels.append(f"Опір: `{result['resistance']:.5f}`")
-    if levels: parts.append(f"🔑 **Ключові рівні:** " + " | ".join(levels))
-    if result.get('volume_info'): parts.append(f"**📊 Аналіз об'єму:**\n_{result['volume_info']}_")
+    
+    price_str = f"{price:.5f}" if price and price > 0 else "N/A"
+    
+    parts = []
+    parts.append(f"📈 *Сигнал для {pair} (Експірація: {expiration})*")
+    parts.append(f"**Прогноз:** {verdict}")
+    parts.append(f"**Ціна в момент сигналу:** `{price_str}`")
+    
     reasons = result.get('reasons', [])
-    if reasons: parts.append(f"\n📑 **Ключові фактори аналізу:**\n" + "\n".join([f"• _{r}_" for r in reasons]))
+    if reasons:
+        parts.append(f"\n📑 **Фактори аналізу:**\n" + "\n".join([f"• _{r}_" for r in reasons]))
+        
     return "\n".join(parts)
-
 
 def button_handler(update: Update, context: CallbackContext) -> None:
     query = update.callback_query
@@ -153,6 +148,7 @@ def button_handler(update: Update, context: CallbackContext) -> None:
     action = parts[0]
 
     if action == "toggle" and parts[1] == "scanner":
+        # ... (this part is unchanged)
         if len(parts) > 2:
             category = parts[2]
             if category in app_state.SCANNER_STATE:
@@ -168,32 +164,33 @@ def button_handler(update: Update, context: CallbackContext) -> None:
 
     elif action == "category":
         category = parts[1]
-        query.edit_message_text(f"Виберіть таймфрейм для '{category}':", reply_markup=get_timeframe_kb(category))
+        query.edit_message_text(f"Оберіть час експірації для '{category}':", reply_markup=get_expiration_kb(category))
 
-    elif action == "tf":
-        _, category, timeframe = parts
+    # --- ПОЧАТОК ЗМІН: Обробляємо вибір експірації ---
+    elif action == "exp":
+        _, category, expiration = parts
         if category == 'forex':
-            query.edit_message_text("💹 Виберіть торгову сесію:", reply_markup=get_forex_sessions_kb(timeframe))
+            query.edit_message_text("💹 Виберіть торгову сесію:", reply_markup=get_forex_sessions_kb(expiration))
         else:
             asset_map = {'crypto': CRYPTO_PAIRS, 'stocks': STOCK_TICKERS, 'commodities': COMMODITIES}
-            query.edit_message_text(f"Виберіть актив:", reply_markup=get_assets_kb(asset_map.get(category, []), category, timeframe))
+            query.edit_message_text(f"Виберіть актив:", reply_markup=get_assets_kb(asset_map.get(category, []), category, expiration))
 
     elif action == "session":
-        _, category, timeframe, session_name = parts
+        _, category, expiration, session_name = parts
         pairs = FOREX_SESSIONS.get(session_name, [])
-        query.edit_message_text(f"Виберіть пару для сесії '{session_name}':", reply_markup=get_assets_kb(pairs, category, timeframe))
+        query.edit_message_text(f"Виберіть пару для сесії '{session_name}':", reply_markup=get_assets_kb(pairs, category, expiration))
 
     elif action == "analyze":
-        _, timeframe, symbol = parts
+        _, expiration, symbol = parts
         if not app_state.client or not app_state.SYMBOLS_LOADED:
             query.answer(text="❌ Сервіс ще завантажується, спробуйте пізніше.", show_alert=True)
             return
         
-        query.edit_message_text(text=f"⏳ Обрано {symbol} ({timeframe}). Роблю запит...")
+        query.edit_message_text(text=f"⏳ Обрано {symbol} (експірація {expiration}). Роблю запит...")
 
         def on_success(result):
-            app_state.cache_signal(symbol, timeframe, result)
-            msg = _format_signal_message(result, timeframe)
+            app_state.cache_signal(symbol, expiration, result)
+            msg = _format_signal_message(result, expiration)
             query.edit_message_text(text=msg, parse_mode='Markdown', reply_markup=get_main_menu_kb())
 
         def on_error(failure):
@@ -202,7 +199,9 @@ def button_handler(update: Update, context: CallbackContext) -> None:
             query.edit_message_text(text=f"❌ Виникла помилка: {error}", reply_markup=get_main_menu_kb())
 
         def do_analysis():
-            d = get_api_detailed_signal_data(app_state.client, app_state.symbol_cache, symbol, query.from_user.id, timeframe)
+            # Передаємо час експірації як таймфрейм для отримання даних
+            d = get_api_detailed_signal_data(app_state.client, app_state.symbol_cache, symbol, query.from_user.id, timeframe=expiration)
             d.addCallbacks(on_success, on_error)
             
         reactor.callInThread(do_analysis)
+    # --- КІНЕЦЬ ЗМІН ---
