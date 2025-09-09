@@ -14,7 +14,7 @@ tg.expand();
 
 let currentWatchlist = [];
 let initData = tg.initData || '';
-let currentExpiration = '1m';
+let currentTimeframe = '1m';
 let allData = {};
 let lastSelectedPair = null;
 
@@ -78,12 +78,12 @@ document.addEventListener('DOMContentLoaded', function() {
         console.error("EventSource failed:", err);
     };
     
-    const expirationButtons = document.querySelectorAll('.tf-button');
-    expirationButtons.forEach(button => {
+    const timeframeButtons = document.querySelectorAll('.tf-button');
+    timeframeButtons.forEach(button => {
         button.addEventListener('click', () => {
-            expirationButtons.forEach(btn => btn.classList.remove('active'));
+            timeframeButtons.forEach(btn => btn.classList.remove('active'));
             button.classList.add('active');
-            currentExpiration = button.dataset.exp;
+            currentTimeframe = button.dataset.tf;
             if (lastSelectedPair) {
                 debouncedFetchSignal(lastSelectedPair);
             }
@@ -115,7 +115,6 @@ function updateScannerButtons(stateDict) {
 }
 
 function displayLiveSignal(signalData) {
-    if (signalData.verdict_text === 'NEUTRAL') return; // Не показувати нейтральні сигнали
     const signalId = `signal-${signalData.pair.replace('/', '')}-${Date.now()}`;
     const signalDiv = document.createElement('div');
     signalDiv.id = signalId;
@@ -159,7 +158,7 @@ function createPairButton(pair) {
 }
 
 function populateLists(data, query = '') {
-    // ... (no changes in this function)
+    // ... no changes
     let html = '';
     const queryLower = query.toLowerCase();
     function createSection(title, pairs) {
@@ -212,7 +211,7 @@ function renderFavoriteButton(pair) {
 }
 
 function toggleFavorite(event, button, pair) {
-    // ... (no changes in this function)
+    // ... no changes
     event.stopPropagation();
     const isCurrentlyFavorite = button.innerHTML.includes('✅');
     const initDataString = initData ? `&initData=${encodeURIComponent(initData)}` : '';
@@ -237,13 +236,13 @@ function toggleFavorite(event, button, pair) {
 }
 
 function fetchSignal(pair) {
-    // ... (no changes in this function)
+    // ... no changes
     lastSelectedPair = pair;
     showLoader(true);
     signalOutput.innerHTML = `⏳ Отримую дані для ${pair}...`;
     signalOutput.style.textAlign = 'left';
     const initDataQuery = initData ? `?initData=${encodeURIComponent(initData)}` : '';
-    const signalApiUrl = `${API_BASE_URL}/api/signal?pair=${pair}&timeframe=${currentExpiration}${initDataQuery.replace('?', '&')}`;
+    const signalApiUrl = `${API_BASE_URL}/api/signal?pair=${pair}&timeframe=${currentTimeframe}${initDataQuery.replace('?', '&')}`;
     fetch(signalApiUrl)
         .then(res => {
             if (!res.ok) {
@@ -264,7 +263,7 @@ function fetchSignal(pair) {
         });
 }
 
-// --- ПОЧАТОК ЗМІН: Повністю нова функція для відображення розширених даних ---
+// --- ПОЧАТОК ЗМІН: Додаємо перевірки на існування даних ---
 function formatSignalAsHtml(signalData) {
     if (!signalData || Object.keys(signalData).length === 0) {
         return "Немає даних для відображення.";
@@ -283,20 +282,19 @@ function formatSignalAsHtml(signalData) {
     
     let html = `
         <div class="signal-header">
-            <strong>${pair} (Експірація: ${currentExpiration})</strong> | Ціна: <code>${priceStr}</code>
+            <strong>${pair} (Таймфрейм: ${currentTimeframe})</strong> | Ціна: <code>${priceStr}</code>
         </div>
         <div class="verdict">${verdict_text}</div>
     `;
 
-    // Блок з основними індикаторами
     html += `<div class="indicator-grid">
         <div class="indicator-item">
             <div class="indicator-label">RSI (14)</div>
-            <div class="indicator-value">${rsi.toFixed(1)}</div>
+            <div class="indicator-value">${rsi ? rsi.toFixed(1) : 'N/A'}</div>
         </div>
         <div class="indicator-item">
             <div class="indicator-label">Stochastic K%</div>
-            <div class="indicator-value">${stochastic.k.toFixed(1)}</div>
+            <div class="indicator-value">${stochastic && stochastic.k ? stochastic.k.toFixed(1) : 'N/A'}</div>
         </div>
         <div class="indicator-item">
             <div class="indicator-label">Trend (15m)</div>
@@ -304,11 +302,10 @@ function formatSignalAsHtml(signalData) {
         </div>
         <div class="indicator-item">
             <div class="indicator-label">Volume Ratio</div>
-            <div class="indicator-value">${volume.ratio.toFixed(2)}x</div>
+            <div class="indicator-value">${volume && volume.ratio ? volume.ratio.toFixed(2) + 'x' : 'N/A'}</div>
         </div>
     </div>`;
 
-    // Блок з рівнями та іншим
     html += `<div class="details-grid">
         <div class="detail-item"><strong>Підтримка:</strong> <code>${support ? support.toFixed(5) : 'N/A'}</code></div>
         <div class="detail-item"><strong>Опір:</strong> <code>${resistance ? resistance.toFixed(5) : 'N/A'}</code></div>
