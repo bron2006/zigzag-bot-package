@@ -32,7 +32,9 @@ def get_current_market_regime(df: pd.DataFrame) -> str:
         return "Not Available"
     
     try:
-        features = df[['ATR', 'ADX', 'RSI']].copy()
+        # --- ПОЧАТОК ЗМІН: Використовуємо правильні стандартні назви колонок ---
+        features = df[['ATR', 'ADX_14', 'RSI']].copy()
+        # --- КІНЕЦЬ ЗМІН ---
         last_features = features.iloc[[-1]]
         
         scaled_features = ml_models.SCALER.transform(last_features)
@@ -88,19 +90,17 @@ def _calculate_full_analysis(signal_df: pd.DataFrame, trend_df: pd.DataFrame, da
         return {"verdict": "NEUTRAL", "reasons": ["Недостатньо даних для аналізу."]}
 
     try:
+        # --- ПОЧАТОК ЗМІН: Прибираємо перейменування для ADX ---
         signal_df.ta.bbands(length=20, std=2.0, append=True)
         signal_df.ta.stoch(k=14, d=3, smooth_k=3, append=True)
         signal_df.ta.rsi(length=14, append=True, col_names=('RSI',))
-        signal_df.ta.adx(length=14, append=True, col_names=('ADX', 'DMP', 'DMN'))
+        signal_df.ta.adx(length=14, append=True) # Дозволяємо стандартну назву ADX_14
         signal_df.ta.atr(length=14, append=True, col_names=('ATR',))
         trend_df.ta.ema(length=50, append=True, col_names=('EMA50',))
         trend_df.ta.ema(length=200, append=True, col_names=('EMA200',))
+        # --- КІНЕЦЬ ЗМІН ---
     except Exception as e:
         return {"verdict": "NEUTRAL", "reasons": [f"Помилка розрахунку індикаторів: {e}"]}
-    
-    # --- ПОЧАТОК ЗМІН: Додаємо діагностичний лог ---
-    logger.info(f"DEBUG: DataFrame columns before regime detection: {signal_df.columns.tolist()}")
-    # --- КІНЕЦЬ ЗМІН ---
 
     last_signal = signal_df.iloc[-1]
     last_trend = trend_df.iloc[-1]
@@ -110,6 +110,11 @@ def _calculate_full_analysis(signal_df: pd.DataFrame, trend_df: pd.DataFrame, da
     
     verdict = "NEUTRAL"
     reasons = [f"Режим ринку: {market_regime}"]
+
+    # --- ПОЧАТОК ЗМІН: Використовуємо правильну назву ADX_14 ---
+    adx = last_signal.get('ADX_14', 0)
+    # --- КІНЕЦЬ ЗМІН ---
+    is_trending = adx > 20
     
     if market_regime == "Млявий флет":
         stoch_k = last_signal.get('STOCHk_14_3_3', 50)
