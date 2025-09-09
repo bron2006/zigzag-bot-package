@@ -14,7 +14,7 @@ from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOATrendbarPe
 
 from db import add_signal_to_history
 from state import app_state
-import ml_models # <-- Новий імпорт
+import ml_models
 
 logger = logging.getLogger("analysis")
 
@@ -27,40 +27,22 @@ def _sanitize(value, default=0.0):
         return default
     return float(value)
 
-# --- ПОЧАТОК ЗМІН: Нова функція для визначення режиму ринку ---
 def get_current_market_regime(df: pd.DataFrame) -> str:
-    """Використовує навчену модель для класифікації поточного стану ринку."""
     if ml_models.KMEANS_MODEL is None or ml_models.SCALER is None:
         return "Not Available"
     
     try:
-        # Розраховуємо ті ж самі характеристики, що й при тренуванні
         features = df[['ATR', 'ADX', 'RSI']].copy()
-        last_features = features.iloc[[-1]] # Беремо останній рядок
-        
-        # Масштабуємо дані
+        last_features = features.iloc[[-1]]
         scaled_features = ml_models.SCALER.transform(last_features)
-        
-        # Робимо передбачення
         prediction = ml_models.KMEANS_MODEL.predict(scaled_features)[0]
-        
-        # Повертаємо назву режиму (потрібно переконатись, що вони співпадають з тими, що в нотатнику)
-        regime_names = {
-            0: "Млявий флет",
-            1: "Бичачий тренд",
-            2: "Ведмежий тренд",
-            3: "Шторм" 
-        }
-        # Примітка: Цей mapping може потребувати корекції в залежності від результатів у вашому Jupyter
-        
+        regime_names = {0: "Млявий флет", 1: "Бичачий тренд", 2: "Ведмежий тренд", 3: "Шторм"}
         return regime_names.get(prediction, "Unknown")
     except Exception as e:
         logger.error(f"Failed to determine market regime: {e}")
         return "Error"
-# --- КІНЕЦЬ ЗМІН ---
 
 def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: int) -> Deferred:
-    # ... (код без змін)
     d = Deferred()
     symbol_details = symbol_cache.get(norm_pair)
     if not symbol_details: return d.errback(Exception(f"Пара '{norm_pair}' не знайдена в кеші."))
@@ -83,9 +65,26 @@ def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: in
     deferred.addCallbacks(process_response, d.errback)
     return d
 
+def _find_candle_pattern(df: pd.DataFrame):
+    try:
+        patterns = df.ta.cdl_pattern(name="all")
+        if patterns.empty: return None
+        last_candle_patterns = patterns.iloc[-1]
+        found_patterns = last_candle_patterns[last_candle_patterns != 0]
+        if found_patterns.empty: return None
+        pattern_name = found_patterns.index[0].replace("CDL_", "")
+        signal_strength = found_patterns.iloc[0]
+        if "DOJI" in pattern_name.upper(): return f"⚪️ {pattern_name} (Нейтральний)"
+        if signal_strength > 0: return f"⬆️ {pattern_name} (Бичачий)"
+        if signal_strength < 0: return f"⬇️ {pattern_name} (Ведмежий)"
+        return None
+    except Exception: return None
+
 def _calculate_full_analysis(signal_df: pd.DataFrame, trend_df: pd.DataFrame, daily_df: pd.DataFrame) -> Dict:
-    if any(df.empty or len(df) < 50 for df in [signal_df, trend_df, daily_df]):
+    # --- ПОЧАТОК ЗМІН: Знижуємо вимогу з 50 до 30 свічок ---
+    if any(df.empty or len(df) < 30 for df in [signal_df, trend_df, daily_df]):
         return {"verdict": "NEUTRAL", "reasons": ["Недостатньо даних для аналізу."]}
+    # --- КІНЕЦЬ ЗМІН ---
 
     try:
         signal_df.ta.bbands(length=20, std=2.0, append=True)
@@ -99,46 +98,39 @@ def _calculate_full_analysis(signal_df: pd.DataFrame, trend_df: pd.DataFrame, da
         return {"verdict": "NEUTRAL", "reasons": [f"Помилка розрахунку індикаторів: {e}"]}
 
     last_signal = signal_df.iloc[-1]
-    
-    # --- ПОЧАТОК ЗМІН: Адаптивна логіка на основі режиму ринку ---
+    last_trend = trend_df.iloc[-1]
+    prev_day = daily_df.iloc[-2] if len(daily_df) > 1 else daily_df.iloc[-1]
+
     market_regime = get_current_market_regime(signal_df)
     
     verdict = "NEUTRAL"
     reasons = [f"Режим ринку: {market_regime}"]
     
-    # Застосовуємо нашу стратегію Bollinger+Stochastic тільки якщо ринок у флеті
     if market_regime == "Млявий флет":
         stoch_k = last_signal.get('STOCHk_14_3_3', 50)
         bb_p = last_signal.get('BBP_20_2.0', 0.5)
-        
         if stoch_k < 25 and bb_p < 0.1:
             verdict = "⬆️ CALL"
             reasons.append("Ціна в нижній зоні Боллінджера + Стохастик перепроданий")
         elif stoch_k > 75 and bb_p > 0.9:
             verdict = "⬇️ PUT"
             reasons.append("Ціна в верхній зоні Боллінджера + Стохастик перекуплений")
-    # Примітка: сюди можна додати інші `elif market_regime == ...` для інших стратегій
     
-    # --- КІНЕЦЬ ЗМІН ---
-
-    # Збираємо решту даних для інформативного виводу
-    prev_day = daily_df.iloc[-2]
     pivot_point = (prev_day['High'] + prev_day['Low'] + prev_day['Close']) / 3
     support = (2 * pivot_point) - prev_day['High']
     resistance = (2 * pivot_point) - prev_day['Low']
     
     return {
         "verdict": verdict, "reasons": reasons, "close": last_signal.get('Close'),
-        "market_regime": market_regime, # Додаємо режим у відповідь
+        "market_regime": market_regime,
         "rsi": last_signal.get('RSI_14'), "stoch_k": last_signal.get('STOCHk_14_3_3'), "stoch_d": last_signal.get('STOCHd_14_3_3'),
         "bb_upper": last_signal.get('BBU_20_2.0'), "bb_lower": last_signal.get('BBL_20_2.0'),
         "bb_percent_b": last_signal.get('BBP_20_2.0'), "trend": None, "support": support,
         "resistance": resistance, "volume_now": last_signal.get('Volume'), "volume_avg": signal_df['Volume'].rolling(window=20).mean().iloc[-1],
-        "volume_ratio": 0, "candle_pattern": None, "special_warning": None
+        "volume_ratio": 0, "candle_pattern": _find_candle_pattern(signal_df), "special_warning": None
     }
 
 def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int, timeframe: str = "5m") -> Deferred:
-    # ... (код майже без змін, але тепер повертає 'market_regime')
     final_deferred = Deferred()
     trend_timeframe_map = {"1m": "5m", "5m": "15m"}
     trend_timeframe = trend_timeframe_map.get(timeframe, "15m")
@@ -161,8 +153,7 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int
             
             response_data = {
                 "pair": symbol, "price": _sanitize(analysis.get("close")), "verdict_text": analysis["verdict"],
-                "reasons": analysis["reasons"],
-                "market_regime": analysis.get("market_regime"),
+                "reasons": analysis["reasons"], "market_regime": analysis.get("market_regime"),
                 "stochastic": {"k": _sanitize(analysis.get("stoch_k"), 50), "d": _sanitize(analysis.get("stoch_d"), 50)},
                 "rsi": _sanitize(analysis.get("rsi"), 50),
                 "bollinger": {"upper": _sanitize(analysis.get("bb_upper")), "lower": _sanitize(analysis.get("bb_lower")), "percent_b": _sanitize(analysis.get("bb_percent_b"), 0.5)},
