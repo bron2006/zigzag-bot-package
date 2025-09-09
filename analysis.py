@@ -34,19 +34,15 @@ def get_current_market_regime(df: pd.DataFrame) -> str:
         return "Not Available"
     
     try:
-        # --- ПОЧАТОК ЗМІН: Використовуємо стандартні імена, які генерує бібліотека ---
-        features_to_select = ['ATRr_14', 'ADX_14', 'RSI_14']
-        
+        features_to_select = ['ATR', 'ADX_14', 'RSI']
         if not all(col in df.columns for col in features_to_select):
             missing = [col for col in features_to_select if col not in df.columns]
             logger.warning(f"Cannot determine market regime, missing columns: {missing}")
             return "Incomplete Data"
-
+        
         features = df[features_to_select].copy()
-        # Перейменовуємо колонки для сумісності з навченою моделлю
         features.rename(columns={"RSI_14": "RSI", "ADX_14": "ADX", "ATRr_14": "ATR"}, inplace=True)
-        # --- КІНЕЦЬ ЗМІН ---
-
+        
         last_features = features.iloc[[-1]]
         
         scaled_features = ml_models.SCALER.transform(last_features)
@@ -118,13 +114,27 @@ def _calculate_full_analysis(signal_df: pd.DataFrame, trend_df: pd.DataFrame, da
     market_regime = get_current_market_regime(signal_df)
     verdict = "NEUTRAL"; reasons = [f"Режим ринку: {market_regime}"]
     
-    if market_regime == "Млявий флет":
-        stoch_k = last_signal.get('STOCHk_14_3_3', 50)
-        bb_p = last_signal.get('BBP_20_2.0', 0.5)
-        if stoch_k < 25 and bb_p < 0.1:
-            verdict = "⬆️ CALL"; reasons.append("Ціна в нижній зоні Боллінджера + Стохастик перепроданий")
-        elif stoch_k > 75 and bb_p > 0.9:
-            verdict = "⬇️ PUT"; reasons.append("Ціна в верхній зоні Боллінджера + Стохастик перекуплений")
+    trend = "NEUTRAL"
+    if last_trend.get('EMA50') > last_trend.get('EMA200'):
+        trend = "UPTREND"
+    elif last_trend.get('EMA50') < last_trend.get('EMA200'):
+        trend = "DOWNTREND"
+        
+    stoch_k = last_signal.get('STOCHk_14_3_3', 50)
+    bb_p = last_signal.get('BBP_20_2.0', 0.5)
+
+    # --- ПОЧАТОК ЗМІН: Тимчасово прибираємо фільтр ADX (is_trending) ---
+    if trend == "UPTREND" and stoch_k < 30 and bb_p < 0.2:
+        verdict = "⬆️ CALL (Висока якість)"
+        reasons.append(f"Глобальний тренд висхідний")
+        reasons.append(f"Стохастик у зоні перепроданості ({stoch_k:.1f})")
+        reasons.append("Ціна біля нижньої межі Боллінджера")
+    elif trend == "DOWNTREND" and stoch_k > 70 and bb_p > 0.8:
+        verdict = "⬇️ PUT (Висока якість)"
+        reasons.append(f"Глобальний тренд низхідний")
+        reasons.append(f"Стохастик у зоні перекупленості ({stoch_k:.1f})")
+        reasons.append("Ціна біля верхньої межі Боллінджера")
+    # --- КІНЕЦЬ ЗМІН ---
     
     pivot_point = (prev_day['High'] + prev_day['Low'] + prev_day['Close']) / 3
     support = (2 * pivot_point) - prev_day['High']
@@ -135,23 +145,19 @@ def _calculate_full_analysis(signal_df: pd.DataFrame, trend_df: pd.DataFrame, da
         "market_regime": market_regime,
         "rsi": last_signal.get('RSI_14'), "stoch_k": last_signal.get('STOCHk_14_3_3'), "stoch_d": last_signal.get('STOCHd_14_3_3'),
         "bb_upper": last_signal.get('BBU_20_2.0'), "bb_lower": last_signal.get('BBL_20_2.0'),
-        "bb_percent_b": last_signal.get('BBP_20_2.0'), "trend": None, "support": support,
+        "bb_percent_b": last_signal.get('BBP_20_2.0'), "trend": trend, "support": support,
         "resistance": resistance, "volume_now": last_signal.get('Volume'), "volume_avg": signal_df['Volume'].rolling(window=20).mean().iloc[-1],
         "volume_ratio": 0, "candle_pattern": _find_candle_pattern(signal_df), "special_warning": None
     }
 
 def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int, timeframe: str = "5m") -> Deferred:
     final_deferred = Deferred()
-    
     trend_timeframe_map = {"1m": "5m", "5m": "15m", "15m": "1h"}
     trend_timeframe = trend_timeframe_map.get(timeframe)
-
     if not trend_timeframe:
         err_msg = f"Непідтримуваний таймфрейм для аналізу тренду: {timeframe}"
         logger.warning(err_msg)
-        d = Deferred()
-        d.errback(Failure(Exception(err_msg)))
-        return d
+        d = Deferred(); d.errback(Failure(Exception(err_msg))); return d
 
     d_signal = get_market_data(client, symbol_cache, symbol, timeframe, 200)
     d_trend = get_market_data(client, symbol_cache, symbol, trend_timeframe, 250)
@@ -163,7 +169,6 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int
             success_signal, signal_df = results[0]
             success_trend, trend_df = results[1]
             success_daily, daily_df = results[2]
-
             if not (success_signal and success_trend and success_daily):
                 return final_deferred.callback({"error": "Не вдалося завантажити всі ринкові дані."})
 
@@ -188,6 +193,5 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int
         except Exception as e:
             logger.exception(f"Critical analysis error for {symbol}: {e}")
             final_deferred.errback(e)
-
     d_list.addCallback(on_data_ready)
     return final_deferred
