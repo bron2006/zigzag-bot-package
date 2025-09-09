@@ -119,26 +119,14 @@ def _calculate_full_analysis(signal_df: pd.DataFrame, trend_df: pd.DataFrame) ->
     stoch_k = last_signal.get('STOCHk_14_3_3', 50)
     bb_p = last_signal.get('BBP_20_2.0', 0.5)
 
-    # --- Нова логіка з двома рівнями сигналів ---
-    # 1. Сигнал високої якості (збіг усіх фільтрів)
-    if is_trending and trend == "UPTREND" and stoch_k < 30 and bb_p < 0.2:
-        verdict = "⬆️ CALL (Висока якість)"
-        reasons.append(f"Глобальний тренд висхідний (ADX: {adx:.1f})")
-        reasons.append(f"Стохастик у зоні перепроданості ({stoch_k:.1f})")
-        reasons.append("Ціна біля нижньої межі Боллінджера")
-    elif is_trending and trend == "DOWNTREND" and stoch_k > 70 and bb_p > 0.8:
-        verdict = "⬇️ PUT (Висока якість)"
-        reasons.append(f"Глобальний тренд низхідний (ADX: {adx:.1f})")
-        reasons.append(f"Стохастик у зоні перекупленості ({stoch_k:.1f})")
-        reasons.append("Ціна біля верхньої межі Боллінджера")
-    # 2. Помірний сигнал (без урахування тренду, лише точка входу)
-    elif verdict == "NEUTRAL":
-        if stoch_k < 20 and bb_p < 0.1:
-             verdict = "↗️ CALL (Помірний)"
-             reasons.append("Сильна локальна перепроданість (Stochastic + Bollinger)")
-        elif stoch_k > 80 and bb_p > 0.9:
-            verdict = "↘️ PUT (Помірний)"
-            reasons.append("Сильна локальна перекупленість (Stochastic + Bollinger)")
+    # --- ПОЧАТОК ЗМІН: Тимчасово спрощуємо умови для тестування ---
+    if stoch_k < 40: # Було 20
+        verdict = "↗️ CALL (Помірний)"
+        reasons.append("Тест: Стохастик показує потенціал для росту")
+    elif stoch_k > 60: # Було 80
+        verdict = "↘️ PUT (Помірний)"
+        reasons.append("Тест: Стохастик показує потенціал для падіння")
+    # --- КІНЕЦЬ ЗМІН ---
     
     if is_volume_high and verdict != "NEUTRAL":
         reasons.append("🟢 Сигнал підтверджено підвищеним об'ємом")
