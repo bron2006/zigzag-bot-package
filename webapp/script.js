@@ -12,9 +12,9 @@ let tg = window.Telegram.WebApp;
 tg.ready();
 tg.expand();
 
+// Глобальні змінні, які нам все ще потрібні
 let currentWatchlist = [];
 let initData = tg.initData || '';
-let currentTimeframe = '1m';
 let allData = {};
 let lastSelectedPair = null;
 
@@ -78,17 +78,20 @@ document.addEventListener('DOMContentLoaded', function() {
         console.error("EventSource failed:", err);
     };
     
-    const timeframeButtons = document.querySelectorAll('.tf-button');
-    timeframeButtons.forEach(button => {
+    // --- ПОЧАТОК ЗМІН: Обробник кнопок тепер лише змінює вигляд ---
+    const expirationButtons = document.querySelectorAll('.tf-button');
+    expirationButtons.forEach(button => {
         button.addEventListener('click', () => {
-            timeframeButtons.forEach(btn => btn.classList.remove('active'));
+            expirationButtons.forEach(btn => btn.classList.remove('active'));
             button.classList.add('active');
-            currentTimeframe = button.dataset.tf;
+            // Більше не зберігаємо значення в глобальну змінну, 
+            // а одразу викликаємо аналіз, якщо пара була обрана
             if (lastSelectedPair) {
                 debouncedFetchSignal(lastSelectedPair);
             }
         });
     });
+    // --- КІНЕЦЬ ЗМІН ---
     
     const searchInput = document.getElementById('searchInput');
     searchInput.addEventListener('input', debounce((event) => {
@@ -97,11 +100,9 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 function updateScannerButtons(stateDict) {
+    // ... (код без змін)
     const textMap = {
-        forex: "💹 Forex",
-        crypto: "💎 Crypto",
-        commodities: "🥇 Сировина",
-        watchlist: "⭐ Обране"
+        forex: "💹 Forex", crypto: "💎 Crypto", commodities: "🥇 Сировина", watchlist: "⭐ Обране"
     };
     for (const category in textMap) {
         const button = scannerControls.querySelector(`.scanner-button[data-cat="${category}"]`);
@@ -115,32 +116,22 @@ function updateScannerButtons(stateDict) {
 }
 
 function displayLiveSignal(signalData) {
+    // ... (код без змін)
+    if (signalData.verdict_text === 'NEUTRAL') return;
     const signalId = `signal-${signalData.pair.replace('/', '')}-${Date.now()}`;
     const signalDiv = document.createElement('div');
     signalDiv.id = signalId;
     signalDiv.className = 'live-signal';
     signalDiv.style.cursor = 'pointer';
-    
-    signalDiv.onclick = () => {
-        signalOutput.innerHTML = formatSignalAsHtml(signalData);
-        signalContainer.scrollIntoView({ behavior: 'smooth' });
-    };
-
+    signalDiv.onclick = () => fetchSignal(signalData.pair);
     const verdict = signalData.verdict_text || '...';
     const pair = signalData.pair || 'N/A';
-    
     let signalClass = 'neutral';
     if (verdict.includes('CALL')) signalClass = 'buy';
     if (verdict.includes('PUT')) signalClass = 'sell';
-    
     signalDiv.classList.add(signalClass);
-    signalDiv.innerHTML = `
-        <div class="live-signal-content">${verdict} по ${pair}</div>
-        <button class="live-signal-close" onclick="event.stopPropagation(); this.parentElement.remove()">×</button>
-    `;
-    
+    signalDiv.innerHTML = `<div class="live-signal-content">${verdict} по ${pair}</div><button class="live-signal-close" onclick="event.stopPropagation(); this.parentElement.remove()">×</button>`;
     liveSignalsContainer.prepend(signalDiv);
-    
     setTimeout(() => {
         const el = document.getElementById(signalId);
         if (el) {
@@ -151,14 +142,12 @@ function displayLiveSignal(signalData) {
 }
 
 function createPairButton(pair) {
-    return `<div class="pair-item">
-        <button class="pair-button" data-pair="${pair}">${pair}</button>
-        ${renderFavoriteButton(pair)}
-    </div>`;
+    // ... (код без змін)
+    return `<div class="pair-item"><button class="pair-button" data-pair="${pair}">${pair}</button>${renderFavoriteButton(pair)}</div>`;
 }
 
 function populateLists(data, query = '') {
-    // ... no changes
+    // ... (код без змін)
     let html = '';
     const queryLower = query.toLowerCase();
     function createSection(title, pairs) {
@@ -170,13 +159,8 @@ function populateLists(data, query = '') {
         sectionHtml += '</div></div>';
         return sectionHtml;
     }
-    const allKnownPairs = [
-        ...(data.forex || []).map(session => session.pairs).flat(),
-        ...(data.crypto || []), ...(data.stocks || []), ...(data.commodities || [])
-    ];
-    let watchlistDisplay = currentWatchlist.map(p_normalized => {
-        return allKnownPairs.find(p_display => p_display.replace(/\//g, '') === p_normalized) || p_normalized;
-    });
+    const allKnownPairs = [...(data.forex || []).map(session => session.pairs).flat(), ...(data.crypto || []), ...(data.stocks || []), ...(data.commodities || [])];
+    let watchlistDisplay = currentWatchlist.map(p_normalized => allKnownPairs.find(p_display => p_display.replace(/\//g, '') === p_normalized) || p_normalized);
     if (queryLower) {
         watchlistDisplay = watchlistDisplay.filter(p => p.toLowerCase().includes(queryLower));
     }
@@ -204,6 +188,7 @@ function populateLists(data, query = '') {
 }
 
 function renderFavoriteButton(pair) {
+    // ... (код без змін)
     const pairNormalized = pair.replace(/\//g, '');
     const isFavorite = currentWatchlist.includes(pairNormalized);
     const icon = isFavorite ? '✅' : '⭐';
@@ -211,7 +196,7 @@ function renderFavoriteButton(pair) {
 }
 
 function toggleFavorite(event, button, pair) {
-    // ... no changes
+    // ... (код без змін)
     event.stopPropagation();
     const isCurrentlyFavorite = button.innerHTML.includes('✅');
     const initDataString = initData ? `&initData=${encodeURIComponent(initData)}` : '';
@@ -235,14 +220,19 @@ function toggleFavorite(event, button, pair) {
         });
 }
 
+// --- ПОЧАТОК ЗМІН: Функція тепер зчитує час експірації напряму з активної кнопки ---
 function fetchSignal(pair) {
-    // ... no changes
     lastSelectedPair = pair;
     showLoader(true);
     signalOutput.innerHTML = `⏳ Отримую дані для ${pair}...`;
     signalOutput.style.textAlign = 'left';
+
+    const activeBtn = document.querySelector('#expirationSelector .tf-button.active');
+    const expiration = activeBtn ? activeBtn.dataset.exp : '1m'; // Значення за замовчуванням '1m'
+
     const initDataQuery = initData ? `?initData=${encodeURIComponent(initData)}` : '';
-    const signalApiUrl = `${API_BASE_URL}/api/signal?pair=${pair}&timeframe=${currentTimeframe}${initDataQuery.replace('?', '&')}`;
+    const signalApiUrl = `${API_BASE_URL}/api/signal?pair=${pair}&timeframe=${expiration}${initDataQuery.replace('?', '&')}`;
+    
     fetch(signalApiUrl)
         .then(res => {
             if (!res.ok) {
@@ -251,7 +241,7 @@ function fetchSignal(pair) {
             return res.json();
         })
         .then(signalData => {
-            let html = formatSignalAsHtml(signalData);
+            let html = formatSignalAsHtml(signalData, expiration);
             signalOutput.innerHTML = html;
         })
         .catch(err => {
@@ -263,60 +253,34 @@ function fetchSignal(pair) {
         });
 }
 
-// --- ПОЧАТОК ЗМІН: Додаємо перевірки на існування даних ---
-function formatSignalAsHtml(signalData) {
-    if (!signalData || Object.keys(signalData).length === 0) {
-        return "Немає даних для відображення.";
-    }
-    if (signalData.error) {
-        return `❌ Помилка: ${signalData.error}`;
-    }
+function formatSignalAsHtml(signalData, expiration) {
+    // ... (код майже без змін, лише отримує expiration як аргумент)
+    if (!signalData || Object.keys(signalData).length === 0) return "Немає даних для відображення.";
+    if (signalData.error) return `❌ Помилка: ${signalData.error}`;
 
-    const {
-        pair, price, verdict_text, reasons,
-        stochastic, rsi, bollinger, trend,
-        support, resistance, volume
-    } = signalData;
-
+    const { pair, price, verdict_text, reasons, stochastic, rsi, bollinger, trend, support, resistance, volume, market_regime } = signalData;
     const priceStr = price ? price.toFixed(5) : "N/A";
-    
     let html = `
         <div class="signal-header">
-            <strong>${pair} (Таймфрейм: ${currentTimeframe})</strong> | Ціна: <code>${priceStr}</code>
+            <strong>${pair} (Експірація: ${expiration})</strong> | Ціна: <code>${priceStr}</code>
         </div>
         <div class="verdict">${verdict_text}</div>
     `;
-
     html += `<div class="indicator-grid">
-        <div class="indicator-item">
-            <div class="indicator-label">RSI (14)</div>
-            <div class="indicator-value">${rsi ? rsi.toFixed(1) : 'N/A'}</div>
-        </div>
-        <div class="indicator-item">
-            <div class="indicator-label">Stochastic K%</div>
-            <div class="indicator-value">${stochastic && stochastic.k ? stochastic.k.toFixed(1) : 'N/A'}</div>
-        </div>
-        <div class="indicator-item">
-            <div class="indicator-label">Trend (15m)</div>
-            <div class="indicator-value">${trend || 'N/A'}</div>
-        </div>
-        <div class="indicator-item">
-            <div class="indicator-label">Volume Ratio</div>
-            <div class="indicator-value">${volume && volume.ratio ? volume.ratio.toFixed(2) + 'x' : 'N/A'}</div>
-        </div>
+        <div class="indicator-item"><div class="indicator-label">Режим ринку</div><div class="indicator-value">${market_regime || 'N/A'}</div></div>
+        <div class="indicator-item"><div class="indicator-label">RSI (14)</div><div class="indicator-value">${rsi ? rsi.toFixed(1) : 'N/A'}</div></div>
+        <div class="indicator-item"><div class="indicator-label">Stochastic K%</div><div class="indicator-value">${stochastic && stochastic.k ? stochastic.k.toFixed(1) : 'N/A'}</div></div>
+        <div class="indicator-item"><div class="indicator-label">Volume Ratio</div><div class="indicator-value">${volume && volume.ratio ? volume.ratio.toFixed(2) + 'x' : 'N/A'}</div></div>
     </div>`;
-
     html += `<div class="details-grid">
         <div class="detail-item"><strong>Підтримка:</strong> <code>${support ? support.toFixed(5) : 'N/A'}</code></div>
         <div class="detail-item"><strong>Опір:</strong> <code>${resistance ? resistance.toFixed(5) : 'N/A'}</code></div>
     </div>`;
-
     if (reasons && reasons.length > 0) {
         html += '<div class="reasons"><strong>Ключові фактори:</strong><ul>';
         reasons.forEach(r => { html += `<li>${r}</li>`; });
         html += '</ul></div>';
     }
-    
     return html;
 }
 // --- КІНЕЦЬ ЗМІН ---
