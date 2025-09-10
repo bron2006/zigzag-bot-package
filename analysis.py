@@ -34,7 +34,6 @@ def get_current_market_regime(df: pd.DataFrame) -> str:
         return "Not Available"
     
     try:
-        # --- ПОЧАТОК ЗМІН: Використовуємо правильну назву 'ATRr_14' ---
         features_to_select = ['ATRr_14', 'ADX_14', 'RSI_14']
         
         if not all(col in df.columns for col in features_to_select):
@@ -44,8 +43,7 @@ def get_current_market_regime(df: pd.DataFrame) -> str:
 
         features = df[features_to_select].copy()
         features.rename(columns={"RSI_14": "RSI", "ADX_14": "ADX", "ATRr_14": "ATR"}, inplace=True)
-        # --- КІНЕЦЬ ЗМІН ---
-
+        
         last_features = features.iloc[[-1]]
         
         scaled_features = ml_models.SCALER.transform(last_features)
@@ -129,11 +127,15 @@ def _calculate_full_analysis(signal_df: pd.DataFrame, trend_df: pd.DataFrame, da
     stoch_k = last_signal.get('STOCHk_14_3_3', 50)
     bb_p = last_signal.get('BBP_20_2.0', 0.5)
     
+    # --- ПОЧАТОК ЗМІН: Послаблюємо умови для генерації сигналів ---
     if market_regime == "Млявий флет":
-        if stoch_k < 25 and bb_p < 0.1:
-            verdict = "⬆️ CALL"; reasons.append("Ціна в нижній зоні Боллінджера + Стохастик перепроданий")
-        elif stoch_k > 75 and bb_p > 0.9:
-            verdict = "⬇️ PUT"; reasons.append("Ціна в верхній зоні Боллінджера + Стохастик перекуплений")
+        if stoch_k < 30 and bb_p < 0.2: # Було 25 і 0.1
+            verdict = "↗️ CALL (Помірний)"
+            reasons.append("Ціна в нижній зоні Боллінджера + Стохастик перепроданий")
+        elif stoch_k > 70 and bb_p > 0.8: # Було 75 і 0.9
+            verdict = "↘️ PUT (Помірний)"
+            reasons.append("Ціна в верхній зоні Боллінджера + Стохастик перекуплений")
+    # --- КІНЕЦЬ ЗМІН ---
     
     pivot_point = (prev_day['High'] + prev_day['Low'] + prev_day['Close']) / 3
     support = (2 * pivot_point) - prev_day['High']
