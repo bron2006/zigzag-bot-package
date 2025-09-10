@@ -68,21 +68,25 @@ def _calculate_score_and_reasons(signal_df: pd.DataFrame, trend_df: pd.DataFrame
     last_signal = signal_df.iloc[-1]
     last_trend = trend_df.iloc[-1]
     
-    score = 50  # Початкова нейтральна оцінка
+    score = 50
     reasons = []
+    
+    # --- ПОЧАТОК ЗМІН: Ініціалізуємо змінну trend ---
+    trend = "NEUTRAL"
+    # --- КІНЕЦЬ ЗМІН ---
 
-    # 1. Аналіз глобального тренду (найвагоміший фактор: +/- 20 балів)
     ema50 = last_trend.get('EMA50')
     ema200 = last_trend.get('EMA200')
     if ema50 is not None and ema200 is not None:
         if ema50 > ema200:
             score += 20
             reasons.append("📈 Глобальний тренд: висхідний (EMA50 > EMA200)")
+            trend = "UPTREND" # Присвоюємо значення
         else:
             score -= 20
             reasons.append("📉 Глобальний тренд: низхідний (EMA50 < EMA200)")
+            trend = "DOWNTREND" # Присвоюємо значення
 
-    # 2. Аналіз моментуму: Stochastic (+/- 15 балів)
     stoch_k = last_signal.get('STOCHk_14_3_3')
     if pd.notna(stoch_k):
         if stoch_k < 20:
@@ -92,7 +96,6 @@ def _calculate_score_and_reasons(signal_df: pd.DataFrame, trend_df: pd.DataFrame
             score -= 15
             reasons.append("🐃 Моментум: сильна перекупленість (Stochastic > 80)")
 
-    # 3. Аналіз моментуму: RSI (+/- 10 балів)
     rsi = last_signal.get('RSI_14')
     if pd.notna(rsi):
         if rsi < 30:
@@ -102,13 +105,12 @@ def _calculate_score_and_reasons(signal_df: pd.DataFrame, trend_df: pd.DataFrame
             score -= 10
             reasons.append("🐃 Моментум: перекупленість (RSI > 70)")
 
-    # 4. Аналіз волатильності: Bollinger Bands (+/- 10 балів)
     bb_p = last_signal.get('BBP_20_2.0')
     if pd.notna(bb_p):
-        if bb_p < 0.05: # Ціна дуже близько до нижньої межі
+        if bb_p < 0.05:
             score += 10
             reasons.append("📈 Волатильність: ціна біля нижньої межі Боллінджера")
-        elif bb_p > 0.95: # Ціна дуже близько до верхньої межі
+        elif bb_p > 0.95:
             score -= 10
             reasons.append("📉 Волатильність: ціна біля верхньої межі Боллінджера")
 
@@ -118,7 +120,6 @@ def _calculate_score_and_reasons(signal_df: pd.DataFrame, trend_df: pd.DataFrame
         "score": final_score,
         "reasons": reasons if reasons else ["Ринок нейтральний, немає явних факторів."],
         "close": last_signal.get('Close'),
-        # Повертаємо сирі дані для відображення в UI
         "raw_indicators": {
             "rsi": rsi,
             "stoch_k": stoch_k,
@@ -158,14 +159,12 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int
             analysis = _calculate_score_and_reasons(signal_df, trend_df)
             verdict = _generate_verdict_from_score(analysis['score'])
             
-            # Зберігаємо дані для відповіді API
             response_data = {
                 "pair": symbol,
                 "price": _sanitize(analysis.get("close")),
                 "verdict_text": verdict,
                 "reasons": analysis.get("reasons", []),
-                "score": analysis.get("score", 50), # Нове поле з оцінкою
-                # Поля для UI, які ми поки не розраховуємо, але залишимо для сумісності
+                "score": analysis.get("score", 50),
                 "market_regime": None,
                 "stochastic": {"k": _sanitize(analysis.get("raw_indicators", {}).get("stoch_k"), 50), "d": None},
                 "rsi": _sanitize(analysis.get("raw_indicators", {}).get("rsi"), 50),
@@ -173,8 +172,7 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int
                 "support": None, "resistance": None, "volume": None, "candle_pattern": None, "special_warning": None
             }
             
-            # Зберігаємо в історію лише сильні сигнали
-            if user_id != 0 and analysis['score'] >= 65 or analysis['score'] <= 35:
+            if user_id != 0 and (analysis['score'] >= 65 or analysis['score'] <= 35):
                 add_signal_to_history({
                     'user_id': user_id, 'pair': symbol,
                     'price': response_data['price'], 
