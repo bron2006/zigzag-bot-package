@@ -34,7 +34,8 @@ def get_current_market_regime(df: pd.DataFrame) -> str:
         return "Not Available"
     
     try:
-        features_to_select = ['ATR', 'ADX_14', 'RSI_14']
+        # --- ПОЧАТОК ЗМІН: Використовуємо правильну назву 'ATRr_14' ---
+        features_to_select = ['ATRr_14', 'ADX_14', 'RSI_14']
         
         if not all(col in df.columns for col in features_to_select):
             missing = [col for col in features_to_select if col not in df.columns]
@@ -43,7 +44,8 @@ def get_current_market_regime(df: pd.DataFrame) -> str:
 
         features = df[features_to_select].copy()
         features.rename(columns={"RSI_14": "RSI", "ADX_14": "ADX", "ATRr_14": "ATR"}, inplace=True)
-        
+        # --- КІНЕЦЬ ЗМІН ---
+
         last_features = features.iloc[[-1]]
         
         scaled_features = ml_models.SCALER.transform(last_features)
@@ -115,7 +117,6 @@ def _calculate_full_analysis(signal_df: pd.DataFrame, trend_df: pd.DataFrame, da
     market_regime = get_current_market_regime(signal_df)
     verdict = "NEUTRAL"; reasons = [f"Режим ринку: {market_regime}"]
     
-    # --- ПОЧАТОК ЗМІН: Додаємо перевірку на існування значень EMA ---
     trend = "NEUTRAL"
     ema50 = last_trend.get('EMA50')
     ema200 = last_trend.get('EMA200')
@@ -124,7 +125,6 @@ def _calculate_full_analysis(signal_df: pd.DataFrame, trend_df: pd.DataFrame, da
             trend = "UPTREND"
         else:
             trend = "DOWNTREND"
-    # --- КІНЕЦЬ ЗМІН ---
         
     stoch_k = last_signal.get('STOCHk_14_3_3', 50)
     bb_p = last_signal.get('BBP_20_2.0', 0.5)
@@ -151,6 +151,7 @@ def _calculate_full_analysis(signal_df: pd.DataFrame, trend_df: pd.DataFrame, da
 
 def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int, timeframe: str = "5m") -> Deferred:
     final_deferred = Deferred()
+    
     trend_timeframe_map = {"1m": "5m", "5m": "15m", "15m": "1h"}
     trend_timeframe = trend_timeframe_map.get(timeframe)
     if not trend_timeframe:
