@@ -53,11 +53,10 @@ def _get_prediction_from_model(df: pd.DataFrame) -> Dict:
     if ml_models.LGBM_MODEL is None or ml_models.SCALER is None:
         return {"score": 50, "reasons": ["ML модель не завантажена."]}
 
-    if df.empty or len(df) < 200:
-        return {"score": 50, "reasons": ["Недостатньо даних для розрахунку характеристик."]}
+    if df.empty or len(df) < 250: # Перевірка на достатність даних для всіх індикаторів
+        return {"score": 50, "reasons": ["Недостатньо даних для розрахунку всіх характеристик."]}
 
     try:
-        # Розраховуємо ті ж характеристики, що й при тренуванні
         df.ta.atr(length=14, append=True)
         df.ta.adx(length=14, append=True)
         df.ta.rsi(length=14, append=True)
@@ -67,23 +66,22 @@ def _get_prediction_from_model(df: pd.DataFrame) -> Dict:
         last_features = df.iloc[[-1]]
         
         features_list = ['ATR', 'ADX_14', 'RSI_14', 'EMA50', 'EMA200']
-        if not all(col in last_features.columns for col in features_list):
-            return {"score": 50, "reasons": ["Не вдалося розрахувати всі характеристики."]}
+        # Перейменовуємо колонки для сумісності з моделлю
+        features_renamed = last_features.rename(columns={"ATRr_14": "ATR"})
+        
+        if not all(col in features_renamed.columns for col in features_list):
+             return {"score": 50, "reasons": ["Не вдалося розрахувати всі характеристики."]}
 
-        # Готуємо дані
-        features = last_features[features_list].copy()
+        features = features_renamed[features_list].copy()
         scaled_features = ml_models.SCALER.transform(features)
         
-        # Отримуємо ймовірності для обох класів (0 - програш, 1 - виграш)
         probabilities = ml_models.LGBM_MODEL.predict_proba(scaled_features)
-        
-        # Беремо ймовірність виграшу (клас 1) і перетворюємо у відсотки
         win_probability = probabilities[0][1] * 100
         
         reasons = [
             f"RSI: {_sanitize(last_features['RSI_14'].iloc[0], 0):.1f}",
             f"ADX: {_sanitize(last_features['ADX_14'].iloc[0], 0):.1f}",
-            f"ATR: {_sanitize(last_features['ATR'].iloc[0], 0):.5f}",
+            f"ATR: {_sanitize(features_renamed['ATR'].iloc[0], 0):.5f}",
         ]
         
         return {"score": int(win_probability), "reasons": reasons, "close": last_features['Close'].iloc[0]}
@@ -97,7 +95,7 @@ def _generate_verdict_from_score(score: int) -> str:
     if score >= 60: return "↗️ Помірна ймовірність CALL"
     if score <= 25: return "⬇️ Висока ймовірність PUT"
     if score <= 40: return "↘️ Помірна ймовірність PUT"
-    return "🟡 НЕЙТРАЛЬНО"
+    return "🟡 NEUTRAL"
 
 def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int, timeframe: str = "5m") -> Deferred:
     final_deferred = Deferred()
@@ -112,7 +110,7 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int
                 "price": _sanitize(analysis.get("close")),
                 "verdict_text": verdict,
                 "reasons": analysis.get("reasons", []),
-                "score": analysis.get("score", 50) # Тепер це ймовірність
+                "score": analysis.get("score", 50)
             }
             
             if user_id != 0 and (analysis['score'] >= 60 or analysis['score'] <= 40):
@@ -126,7 +124,7 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int
             logger.exception(f"Critical analysis error for {symbol}: {e}")
             final_deferred.errback(e)
 
-    # ML модель вимагає більше даних для розрахунку всіх індикаторів
+    # Запитуємо більше даних, щоб вистачило для EMA 200
     d = get_market_data(client, symbol_cache, symbol, timeframe, 300)
     d.addCallbacks(on_data_ready, final_deferred.errback)
     
