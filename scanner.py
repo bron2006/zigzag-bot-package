@@ -2,6 +2,8 @@
 import time
 import queue
 import logging
+from datetime import datetime
+import pytz # Новий імпорт для роботи з часовими зонами
 from twisted.internet import reactor
 
 from state import app_state
@@ -10,19 +12,53 @@ import db
 import analysis as analysis_module
 from config import (
     FOREX_SESSIONS, CRYPTO_PAIRS, COMMODITIES,
-    IDEAL_ENTRY_THRESHOLD, SCANNER_COOLDOWN_SECONDS, get_chat_id
+    SCANNER_COOLDOWN_SECONDS, get_chat_id
 )
 
 logger = logging.getLogger("scanner")
 get_api_detailed_signal_data = analysis_module.get_api_detailed_signal_data
 
+# --- ПОЧАТОК ЗМІН: Нова функція для визначення активних сесій ---
+def _get_active_forex_sessions() -> list:
+    """Визначає, які торгові сесії активні зараз за часом UTC."""
+    # Час роботи сесій в UTC (враховуючи літній/зимовий час приблизно)
+    SESSION_TIMES_UTC = {
+        "Тихоокеанська": (21, 6), # Sydney
+        "Азіатська": (0, 9),      # Tokyo
+        "Європейська": (7, 16),   # London
+        "Американська": (13, 22) # New York
+    }
+    utc_now = datetime.now(pytz.utc)
+    current_hour = utc_now.hour
+    active_sessions = []
+    
+    for session, (start, end) in SESSION_TIMES_UTC.items():
+        # Обробка сесій, які переходять через північ (напр. Сідней)
+        if start > end: 
+            if current_hour >= start or current_hour < end:
+                active_sessions.append(session)
+        # Стандартні денні сесії
+        else:
+            if start <= current_hour < end:
+                active_sessions.append(session)
+                
+    return active_sessions
+# --- КІНЕЦЬ ЗМІН ---
+
 def _collect_assets_to_scan():
-    # ... (код без змін)
     assets = []
+    # --- ПОЧАТОК ЗМІН: Скануємо пари Forex тільки під час їх активних сесій ---
     if app_state.get_scanner_state("forex"):
-        for session_pairs in FOREX_SESSIONS.values(): assets.extend(session_pairs)
-    if app_state.get_scanner_state("crypto"): assets.extend(CRYPTO_PAIRS)
-    if app_state.get_scanner_state("commodities"): assets.extend(COMMODITIES)
+        active_sessions = _get_active_forex_sessions()
+        logger.info(f"Active Forex sessions: {active_sessions}")
+        for session_name in active_sessions:
+            assets.extend(FOREX_SESSIONS.get(session_name, []))
+    # --- КІНЕЦЬ ЗМІН ---
+
+    if app_state.get_scanner_state("crypto"):
+        assets.extend(CRYPTO_PAIRS)
+    if app_state.get_scanner_state("commodities"):
+        assets.extend(COMMODITIES)
     if app_state.get_scanner_state("watchlist"):
         user_id = get_chat_id()
         if user_id:
@@ -33,47 +69,35 @@ def _collect_assets_to_scan():
     return [a for a in assets if not (a in seen or seen.add(a))]
 
 def _handle_analysis_result(pair_norm, result):
+    # ... (код без змін)
     try:
         if not result or result.get("error"):
             if result and result.get("error"):
                  logger.warning(f"Analysis failed for {pair_norm}: {result.get('error')}")
             return
-        
-        # --- ПОЧАТОК ЗМІН: Використовуємо числову оцінку ---
         score = result.get("score", 50)
-        lower_bound = 100 - IDEAL_ENTRY_THRESHOLD
-        
-        is_signal = score >= IDEAL_ENTRY_THRESHOLD or score <= lower_bound
-        
-        logger.info(f"[SCANNER_DIAG] Pair: {pair_norm}, Score: {score}. Is signal: {is_signal} (Threshold: >= {IDEAL_ENTRY_THRESHOLD} or <= {lower_bound})")
-
-        if not is_signal:
-            return
-        # --- КІНЕЦЬ ЗМІН ---
-
+        lower_bound = 100 - app_state.IDEAL_ENTRY_THRESHOLD # Використовуємо app_state
+        is_signal = score >= app_state.IDEAL_ENTRY_THRESHOLD or score <= lower_bound
+        logger.info(f"[SCANNER_DIAG] Pair: {pair_norm}, Score: {score}. Is signal: {is_signal} (Threshold: >= {app_state.IDEAL_ENTRY_THRESHOLD} or <= {lower_bound})")
+        if not is_signal: return
         now = time.time()
         if (now - app_state.scanner_cooldown_cache.get(pair_norm, 0)) < SCANNER_COOLDOWN_SECONDS:
             logger.debug(f"{pair_norm} on cooldown, skip notify")
             return
-        
         logger.info(f"[SCANNER_DIAG] Signal for {pair_norm} PASSED filter. Notifying.")
-        
         try:
             app_state.sse_queue.put_nowait(result)
         except queue.Full:
             logger.warning("SSE queue full - dropping")
-
         app_state.latest_analysis_cache[pair_norm] = result
         chat_id = get_chat_id()
         if chat_id and app_state.updater:
             try:
-                # В `_format_signal_message` передаємо `score` для відображення
                 message = telegram_ui._format_signal_message(result, "5m") 
                 kb = telegram_ui.get_main_menu_kb()
                 app_state.updater.bot.send_message(chat_id=chat_id, text=message, parse_mode='Markdown', reply_markup=kb)
             except Exception:
                 logger.exception("Failed to send telegram notification")
-
         app_state.scanner_cooldown_cache[pair_norm] = now
         logger.info(f"SCANNER: Notified for {pair_norm} (Score: {score})")
     except Exception:
