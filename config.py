@@ -23,25 +23,16 @@ def get_demo_account_id() -> int: return int(os.getenv("DEMO_ACCOUNT_ID")) if os
 def get_fly_app_name() -> str: return os.getenv("FLY_APP_NAME")
 
 # --- НАЛАШТУВАННЯ АНАЛІЗУ ---
-ANALYSIS_CONFIG = {
-    "ema_daily_period": 200,
-    "rsi_period": 14,
-    "rsi_oversold": 30,
-    "rsi_overbought": 70,
-    "macd_fast": 12,
-    "macd_slow": 26,
-    "macd_signal": 9,
-    "volume_spike_multiplier": 1.5,
-    "volume_low_multiplier": 0.5,
-    "pivot_proximity_percent": 0.005,
-    "min_bars_for_analysis": 200,
-    "max_candle_staleness_seconds": 3600 * 3
-}
+ANALYSIS_CONFIG = { "min_bars_for_analysis": 50 }
 
 # --- НАЛАШТУВАННЯ СКАНЕРА ---
+# --- ПОЧАТОК ЗМІН: Повертаємо поріг для сканера ---
+IDEAL_ENTRY_THRESHOLD = 65 # Сигнал спрацює, якщо оцінка >= 65 або <= 35
+# --- КІНЕЦЬ ЗМІН ---
 SCANNER_COOLDOWN_SECONDS = 300
 
 # --- СПИСКИ АКТИВІВ ---
+# ... (решта файлу без змін)
 def load_assets_from_json():
     try:
         with open(Path(__file__).parent / "assets.json", "r", encoding="utf-8") as f:

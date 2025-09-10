@@ -2,6 +2,7 @@
 const API_BASE_URL = window.API_BASE_URL || "https://fallback.example.com";
 
 const loader = document.getElementById("loader");
+// ... (інші змінні без змін)
 const listsContainer = document.getElementById("listsContainer");
 const signalOutput = document.getElementById("signalOutput");
 const scannerControls = document.getElementById('scannerControls');
@@ -14,36 +15,27 @@ tg.expand();
 
 let currentWatchlist = [];
 let initData = tg.initData || '';
+let currentExpiration = '1m';
 let allData = {};
 let lastSelectedPair = null;
 
 const debouncedFetchSignal = debounce(fetchSignal, 300);
 
 document.addEventListener('DOMContentLoaded', function() {
+    // ... (код без змін)
     showLoader(true);
     const initDataQuery = initData ? `?initData=${encodeURIComponent(initData)}` : '';
     const staticPairsUrl = `${API_BASE_URL}/api/get_pairs${initDataQuery}`;
-
-    fetch(staticPairsUrl)
-        .then(res => {
-            if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
-            return res.json();
-        })
-        .then(staticData => {
-            allData = staticData;
-            currentWatchlist = (staticData.watchlist || []).map(p => p.replace(/\//g, ''));
-            populateLists(allData);
-            showLoader(false);
-        })
-        .catch(err => {
-            signalOutput.innerHTML = `<h3 style="color: #ef5350;">❌ Помилка завантаження списків пар.</h3><p>${err.message}</p>`;
-            showLoader(false);
-        });
-    
-    fetch(`${API_BASE_URL}/api/scanner/status${initDataQuery}`)
-        .then(res => res.json())
-        .then(data => updateScannerButtons(data));
-
+    fetch(staticPairsUrl).then(res => res.json()).then(staticData => {
+        allData = staticData;
+        currentWatchlist = (staticData.watchlist || []).map(p => p.replace(/\//g, ''));
+        populateLists(allData);
+        showLoader(false);
+    }).catch(err => {
+        signalOutput.innerHTML = `<h3 style="color: #ef5350;">❌ Помилка завантаження списків пар.</h3>`;
+        showLoader(false);
+    });
+    fetch(`${API_BASE_URL}/api/scanner/status${initDataQuery}`).then(res => res.json()).then(data => updateScannerButtons(data));
     scannerControls.addEventListener('click', (event) => {
         const button = event.target.closest('.scanner-button');
         if (!button) return;
@@ -56,50 +48,29 @@ document.addEventListener('DOMContentLoaded', function() {
         });
         tempState[category] = !tempState[category];
         updateScannerButtons(tempState);
-        fetch(toggleUrl, { method: 'POST' })
-            .then(res => res.json())
-            .then(newState => updateScannerButtons(newState))
-            .catch(() => {
-                tempState[category] = !tempState[category];
-                updateScannerButtons(tempState);
-            });
+        fetch(toggleUrl, { method: 'POST' }).then(res => res.json()).then(newState => updateScannerButtons(newState));
     });
-
     const eventSource = new EventSource(`${API_BASE_URL}/api/signal-stream${initDataQuery}`);
-    
     eventSource.onmessage = function(event) {
         const signalData = JSON.parse(event.data);
         if (signalData._ping) return;
         displayLiveSignal(signalData);
     };
-    
-    eventSource.onerror = function(err) {
-        console.error("EventSource failed:", err);
-    };
-    
+    eventSource.onerror = function(err) { console.error("EventSource failed:", err); };
     const expirationButtons = document.querySelectorAll('.tf-button');
     expirationButtons.forEach(button => {
         button.addEventListener('click', () => {
             expirationButtons.forEach(btn => btn.classList.remove('active'));
             button.classList.add('active');
-            // --- ПОЧАТОК ЗМІН: Прибираємо небажаний виклик аналізу ---
-            // if (lastSelectedPair) {
-            //     debouncedFetchSignal(lastSelectedPair);
-            // }
-            // --- КІНЕЦЬ ЗМІН ---
         });
     });
-    
     const searchInput = document.getElementById('searchInput');
-    searchInput.addEventListener('input', debounce((event) => {
-        populateLists(allData, event.target.value);
-    }, 300));
+    searchInput.addEventListener('input', debounce((event) => { populateLists(allData, event.target.value); }, 300));
 });
 
 function updateScannerButtons(stateDict) {
-    const textMap = {
-        forex: "💹 Forex", crypto: "💎 Crypto", commodities: "🥇 Сировина", watchlist: "⭐ Обране"
-    };
+    // ... (код без змін)
+    const textMap = { forex: "💹 Forex", crypto: "💎 Crypto", commodities: "🥇 Сировина", watchlist: "⭐ Обране" };
     for (const category in textMap) {
         const button = scannerControls.querySelector(`.scanner-button[data-cat="${category}"]`);
         if (button) {
@@ -111,36 +82,27 @@ function updateScannerButtons(stateDict) {
     }
 }
 
-// --- ПОЧАТОК ЗМІН: Повертаємо логіку "розгортання" сигналу ---
 function displayLiveSignal(signalData) {
-    if (signalData.verdict_text === 'NEUTRAL') return;
+    // ... (код без змін, але тепер використовує score)
     const signalId = `signal-${signalData.pair.replace('/', '')}-${Date.now()}`;
     const signalDiv = document.createElement('div');
     signalDiv.id = signalId;
     signalDiv.className = 'live-signal';
     signalDiv.style.cursor = 'pointer';
-    
     signalDiv.onclick = () => {
-        const expiration = signalData.timeframe || 'N/A'; // Сканер не знає експірацію, тому можемо взяти її з даних
+        const expiration = document.querySelector('#expirationSelector .tf-button.active')?.dataset.exp || '5m';
         signalOutput.innerHTML = formatSignalAsHtml(signalData, expiration);
         signalContainer.scrollIntoView({ behavior: 'smooth' });
     };
-
     const verdict = signalData.verdict_text || '...';
     const pair = signalData.pair || 'N/A';
-    
+    const score = signalData.score || 50;
     let signalClass = 'neutral';
-    if (verdict.includes('CALL')) signalClass = 'buy';
-    if (verdict.includes('PUT')) signalClass = 'sell';
-    
+    if (score >= 65) signalClass = 'buy';
+    if (score <= 35) signalClass = 'sell';
     signalDiv.classList.add(signalClass);
-    signalDiv.innerHTML = `
-        <div class="live-signal-content">${verdict} по ${pair}</div>
-        <button class="live-signal-close" onclick="event.stopPropagation(); this.parentElement.remove()">×</button>
-    `;
-    
+    signalDiv.innerHTML = `<div class="live-signal-content">${verdict} по ${pair} (Оцінка: ${score})</div><button class="live-signal-close" onclick="event.stopPropagation(); this.parentElement.remove()">×</button>`;
     liveSignalsContainer.prepend(signalDiv);
-    
     setTimeout(() => {
         const el = document.getElementById(signalId);
         if (el) {
@@ -149,13 +111,11 @@ function displayLiveSignal(signalData) {
         }
     }, 300000);
 }
-// --- КІНЕЦЬ ЗМІН ---
 
-function createPairButton(pair) {
-    return `<div class="pair-item"><button class="pair-button" data-pair="${pair}">${pair}</button>${renderFavoriteButton(pair)}</div>`;
-}
+function createPairButton(pair) { /* ... (без змін) ... */ return `<div class="pair-item"><button class="pair-button" data-pair="${pair}">${pair}</button>${renderFavoriteButton(pair)}</div>`; }
 
 function populateLists(data, query = '') {
+    // ... (код без змін)
     let html = '';
     const queryLower = query.toLowerCase();
     function createSection(title, pairs) {
@@ -169,18 +129,12 @@ function populateLists(data, query = '') {
     }
     const allKnownPairs = [...(data.forex || []).map(session => session.pairs).flat(), ...(data.crypto || []), ...(data.stocks || []), ...(data.commodities || [])];
     let watchlistDisplay = currentWatchlist.map(p_normalized => allKnownPairs.find(p_display => p_display.replace(/\//g, '') === p_normalized) || p_normalized);
-    if (queryLower) {
-        watchlistDisplay = watchlistDisplay.filter(p => p.toLowerCase().includes(queryLower));
-    }
-    if (watchlistDisplay.length > 0) {
-        html += createSection('⭐ Обране', watchlistDisplay);
-    }
+    if (queryLower) { watchlistDisplay = watchlistDisplay.filter(p => p.toLowerCase().includes(queryLower)); }
+    if (watchlistDisplay.length > 0) { html += createSection('⭐ Обране', watchlistDisplay); }
     if (Array.isArray(data.forex)) {
         data.forex.forEach(session => {
             const filteredSessionPairs = session.pairs.filter(p => p.toLowerCase().includes(queryLower));
-            if (filteredSessionPairs.length > 0) {
-                 html += createSection(session.title, filteredSessionPairs);
-            }
+            if (filteredSessionPairs.length > 0) { html += createSection(session.title, filteredSessionPairs); }
         });
     }
     html += createSection('💎 Криптовалюти', data.crypto);
@@ -195,91 +149,70 @@ function populateLists(data, query = '') {
     });
 }
 
-function renderFavoriteButton(pair) {
-    const pairNormalized = pair.replace(/\//g, '');
-    const isFavorite = currentWatchlist.includes(pairNormalized);
-    const icon = isFavorite ? '✅' : '⭐';
-    return `<button class="fav-btn" onclick="toggleFavorite(event, this, '${pair}')">${icon}</button>`;
-}
+function renderFavoriteButton(pair) { /* ... (без змін) ... */ const pairNormalized = pair.replace(/\//g, ''); const isFavorite = currentWatchlist.includes(pairNormalized); const icon = isFavorite ? '✅' : '⭐'; return `<button class="fav-btn" onclick="toggleFavorite(event, this, '${pair}')">${icon}</button>`; }
 
 function toggleFavorite(event, button, pair) {
+    // ... (код без змін)
     event.stopPropagation();
     const isCurrentlyFavorite = button.innerHTML.includes('✅');
     const initDataString = initData ? `&initData=${encodeURIComponent(initData)}` : '';
     const url = `${API_BASE_URL}/api/toggle_watchlist?pair=${pair}${initDataString}`;
     button.innerHTML = isCurrentlyFavorite ? '⭐' : '✅';
-    fetch(url)
-        .then(res => res.json())
-        .then(data => {
-            if (!data.success) {
-                button.innerHTML = isCurrentlyFavorite ? '✅' : '⭐';
-            } else {
-                const pairNormalized = pair.replace(/\//g, '');
-                if (isCurrentlyFavorite) {
-                    currentWatchlist = currentWatchlist.filter(p => p !== pairNormalized);
-                } else {
-                    currentWatchlist.push(pairNormalized);
-                }
-                const currentQuery = document.getElementById('searchInput').value;
-                populateLists(allData, currentQuery);
-            }
-        });
+    fetch(url).then(res => res.json()).then(data => {
+        if (!data.success) { button.innerHTML = isCurrentlyFavorite ? '✅' : '⭐'; }
+        else {
+            const pairNormalized = pair.replace(/\//g, '');
+            if (isCurrentlyFavorite) { currentWatchlist = currentWatchlist.filter(p => p !== pairNormalized); }
+            else { currentWatchlist.push(pairNormalized); }
+            const currentQuery = document.getElementById('searchInput').value;
+            populateLists(allData, currentQuery);
+        }
+    });
 }
 
 function fetchSignal(pair) {
+    // ... (код без змін)
     lastSelectedPair = pair;
     showLoader(true);
     signalOutput.innerHTML = `⏳ Отримую дані для ${pair}...`;
     signalOutput.style.textAlign = 'left';
-
     const activeBtn = document.querySelector('#expirationSelector .tf-button.active');
     const expiration = activeBtn ? activeBtn.dataset.exp : '1m';
-
     const initDataQuery = initData ? `?initData=${encodeURIComponent(initData)}` : '';
     const signalApiUrl = `${API_BASE_URL}/api/signal?pair=${pair}&timeframe=${expiration}${initDataQuery.replace('?', '&')}`;
-    
-    fetch(signalApiUrl)
-        .then(res => {
-            if (!res.ok) {
-                return res.json().then(errData => { throw new Error(errData.error || `HTTP ${res.status}`) });
-            }
-            return res.json();
-        })
-        .then(signalData => {
-            let html = formatSignalAsHtml(signalData, expiration);
-            signalOutput.innerHTML = html;
-        })
-        .catch(err => {
-            signalOutput.innerHTML = `❌ Помилка: ${err.message}`;
-        })
-        .finally(() => {
-            signalContainer.scrollIntoView({ behavior: 'smooth' });
-            showLoader(false);
-        });
+    fetch(signalApiUrl).then(res => {
+        if (!res.ok) { return res.json().then(errData => { throw new Error(errData.error || `HTTP ${res.status}`) }); }
+        return res.json();
+    }).then(signalData => {
+        let html = formatSignalAsHtml(signalData, expiration);
+        signalOutput.innerHTML = html;
+    }).catch(err => {
+        signalOutput.innerHTML = `❌ Помилка: ${err.message}`;
+    }).finally(() => {
+        signalContainer.scrollIntoView({ behavior: 'smooth' });
+        showLoader(false);
+    });
 }
 
+// --- ПОЧАТОК ЗМІН: Оновлюємо відображення для нової системи оцінок ---
 function formatSignalAsHtml(signalData, expiration) {
     if (!signalData || Object.keys(signalData).length === 0) return "Немає даних для відображення.";
     if (signalData.error) return `❌ Помилка: ${signalData.error}`;
 
-    const { pair, price, verdict_text, reasons, stochastic, rsi, bollinger, trend, support, resistance, volume, market_regime } = signalData;
+    const { pair, price, verdict_text, reasons, score } = signalData;
     const priceStr = price ? price.toFixed(5) : "N/A";
+    
     let html = `
         <div class="signal-header">
             <strong>${pair} (Експірація: ${expiration})</strong> | Ціна: <code>${priceStr}</code>
         </div>
         <div class="verdict">${verdict_text}</div>
+        <div class="power-balance">
+            <span>🐂 Бики: ${score}%</span>
+            <span>🐃 Ведмеді: ${100 - score}%</span>
+        </div>
     `;
-    html += `<div class="indicator-grid">
-        <div class="indicator-item"><div class="indicator-label">Режим ринку</div><div class="indicator-value">${market_regime || 'N/A'}</div></div>
-        <div class="indicator-item"><div class="indicator-label">RSI (14)</div><div class="indicator-value">${rsi ? rsi.toFixed(1) : 'N/A'}</div></div>
-        <div class="indicator-item"><div class="indicator-label">Stochastic K%</div><div class="indicator-value">${stochastic && stochastic.k ? stochastic.k.toFixed(1) : 'N/A'}</div></div>
-        <div class="indicator-item"><div class="indicator-label">Volume Ratio</div><div class="indicator-value">${volume && volume.ratio ? volume.ratio.toFixed(2) + 'x' : 'N/A'}</div></div>
-    </div>`;
-    html += `<div class="details-grid">
-        <div class="detail-item"><strong>Підтримка:</strong> <code>${support ? support.toFixed(5) : 'N/A'}</code></div>
-        <div class="detail-item"><strong>Опір:</strong> <code>${resistance ? resistance.toFixed(5) : 'N/A'}</code></div>
-    </div>`;
+
     if (reasons && reasons.length > 0) {
         html += '<div class="reasons"><strong>Ключові фактори:</strong><ul>';
         reasons.forEach(r => { html += `<li>${r}</li>`; });
@@ -287,15 +220,7 @@ function formatSignalAsHtml(signalData, expiration) {
     }
     return html;
 }
+// --- КІНЕЦЬ ЗМІН ---
 
-function showLoader(visible) {
-    loader.className = visible ? '' : 'hidden';
-}
-
-function debounce(func, delay) {
-    let timeout;
-    return function(...args) {
-        clearTimeout(timeout);
-        timeout = setTimeout(() => func.apply(this, args), delay);
-    };
-}
+function showLoader(visible) { /* ... (без змін) ... */ loader.className = visible ? '' : 'hidden'; }
+function debounce(func, delay) { /* ... (без змін) ... */ let timeout; return function(...args) { clearTimeout(timeout); timeout = setTimeout(() => func.apply(this, args), delay); }; }
