@@ -16,7 +16,7 @@ import scanner
 import bot
 import ctrader
 import api
-import ml_models # <-- Новий імпорт
+import ml_models # Важливо, щоб цей імпорт був
 
 # Logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -27,10 +27,8 @@ app = Flask(__name__)
 app.config['JSON_AS_ASCII'] = False
 
 def _start_background_services():
-    """Запускає всі фонові сервіси."""
     bot.start_telegram_bot()
     ctrader.start_ctrader_client()
-    
     LoopingCall(scanner.scan_markets_once).start(60.0, now=False)
     LoopingCall(lambda: (app_state.sse_queue.put_nowait({"_ping": int(time.time())}) if not app_state.sse_queue.full() else None)).start(20.0, now=False)
 
@@ -43,9 +41,8 @@ def main():
     reactor.listenTCP(port, site, interface="0.0.0.0")
     logger.info(f"Twisted WSGI server listening on {port}")
 
-    # --- ПОЧАТОК ЗМІН: Завантажуємо моделі ---
+    # Завантажуємо ML моделі при старті
     ml_models.load_models()
-    # --- КІНЕЦЬ ЗМІН ---
 
     reactor.callWhenRunning(_start_background_services)
 

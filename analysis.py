@@ -4,7 +4,7 @@ import pandas as pd
 import pandas_ta as ta
 import numpy as np
 import time
-from typing import Optional, Dict, List
+from typing import Optional, Dict
 
 from twisted.internet.defer import Deferred, DeferredList
 from twisted.python.failure import Failure
@@ -16,14 +16,10 @@ from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOATrendbarPe
 from db import add_signal_to_history
 from state import app_state
 import ml_models
-from config import MIN_ATR_PERCENTAGE # <-- Новий імпорт
 
 logger = logging.getLogger("analysis")
 
-PERIOD_MAP = {
-    "1m": TrendbarPeriod.M1, "5m": TrendbarPeriod.M5, "15m": TrendbarPeriod.M15, 
-    "1h": TrendbarPeriod.H1, "4h": TrendbarPeriod.H4, "1day": TrendbarPeriod.D1
-}
+PERIOD_MAP = { "1m": TrendbarPeriod.M1, "5m": TrendbarPeriod.M5, "15m": TrendbarPeriod.M15 }
 
 def _sanitize(value, default=0.0):
     if value is None or pd.isna(value) or np.isinf(value):
@@ -37,7 +33,7 @@ def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: in
     tf_proto = PERIOD_MAP.get(period)
     if not tf_proto: return d.errback(Exception(f"Непідтримуваний таймфрейм: {period}"))
     now = int(time.time() * 1000)
-    seconds_in_period = {'1m': 60, '5m': 300, '15m': 900, '1h': 3600, '4h': 14400, '1day': 86400}.get(period, 300)
+    seconds_in_period = {'1m': 60, '5m': 300, '15m': 900}.get(period, 300)
     from_ts = now - (count * seconds_in_period * 1000)
     request = ProtoOAGetTrendbarsReq(ctidTraderAccountId=client._client.account_id, symbolId=symbol_details.symbolId, period=tf_proto, fromTimestamp=from_ts, toTimestamp=now)
     deferred = client.send(request, timeout=30)
@@ -53,123 +49,85 @@ def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: in
     deferred.addCallbacks(process_response, d.errback)
     return d
 
-def _calculate_score_and_reasons(signal_df: pd.DataFrame, trend_df: pd.DataFrame) -> Dict:
-    if any(df.empty or len(df) < 50 for df in [signal_df, trend_df]):
-        return {"score": 50, "reasons": ["Недостатньо даних для аналізу."]}
+def _get_prediction_from_model(df: pd.DataFrame) -> Dict:
+    if ml_models.LGBM_MODEL is None or ml_models.SCALER is None:
+        return {"score": 50, "reasons": ["ML модель не завантажена."]}
+
+    if df.empty or len(df) < 200:
+        return {"score": 50, "reasons": ["Недостатньо даних для розрахунку характеристик."]}
 
     try:
-        signal_df.ta.bbands(length=20, std=2.0, append=True)
-        signal_df.ta.stoch(k=14, d=3, smooth_k=3, append=True)
-        signal_df.ta.rsi(length=14, append=True)
-        signal_df.ta.atr(length=14, append=True) # <-- Додаємо ATR
-        trend_df.ta.ema(length=50, append=True, col_names=('EMA50',))
-        trend_df.ta.ema(length=200, append=True, col_names=('EMA200',))
+        # Розраховуємо ті ж характеристики, що й при тренуванні
+        df.ta.atr(length=14, append=True)
+        df.ta.adx(length=14, append=True)
+        df.ta.rsi(length=14, append=True)
+        df.ta.ema(length=50, append=True, col_names=('EMA50',))
+        df.ta.ema(length=200, append=True, col_names=('EMA200',))
+        
+        last_features = df.iloc[[-1]]
+        
+        features_list = ['ATR', 'ADX_14', 'RSI_14', 'EMA50', 'EMA200']
+        if not all(col in last_features.columns for col in features_list):
+            return {"score": 50, "reasons": ["Не вдалося розрахувати всі характеристики."]}
+
+        # Готуємо дані
+        features = last_features[features_list].copy()
+        scaled_features = ml_models.SCALER.transform(features)
+        
+        # Отримуємо ймовірності для обох класів (0 - програш, 1 - виграш)
+        probabilities = ml_models.LGBM_MODEL.predict_proba(scaled_features)
+        
+        # Беремо ймовірність виграшу (клас 1) і перетворюємо у відсотки
+        win_probability = probabilities[0][1] * 100
+        
+        reasons = [
+            f"RSI: {_sanitize(last_features['RSI_14'].iloc[0], 0):.1f}",
+            f"ADX: {_sanitize(last_features['ADX_14'].iloc[0], 0):.1f}",
+            f"ATR: {_sanitize(last_features['ATR'].iloc[0], 0):.5f}",
+        ]
+        
+        return {"score": int(win_probability), "reasons": reasons, "close": last_features['Close'].iloc[0]}
+
     except Exception as e:
-        return {"score": 50, "reasons": [f"Помилка розрахунку індикаторів: {e}"]}
-
-    last_signal = signal_df.iloc[-1]
-    last_trend = trend_df.iloc[-1]
-    
-    # --- ПОЧАТОК ЗМІН: Фільтр волатильності ---
-    atr = last_signal.get('ATRr_14', 0)
-    price = last_signal.get('Close', 0)
-    atr_percentage = (atr / price) * 100 if price > 0 else 0
-    
-    if atr_percentage < MIN_ATR_PERCENTAGE:
-        return {
-            "score": 50, 
-            "reasons": [f"Ринок занадто спокійний (волатильність {atr_percentage:.3f}%)"],
-            "close": price,
-            "raw_indicators": {} # Повертаємо порожні індикатори
-        }
-    # --- КІНЕЦЬ ЗМІН ---
-
-    score = 50
-    reasons = []
-    
-    trend = "NEUTRAL"
-    ema50 = last_trend.get('EMA50')
-    ema200 = last_trend.get('EMA200')
-    if ema50 is not None and ema200 is not None:
-        if ema50 > ema200:
-            score += 20; reasons.append("📈 Глобальний тренд: висхідний"); trend = "UPTREND"
-        else:
-            score -= 20; reasons.append("📉 Глобальний тренд: низхідний"); trend = "DOWNTREND"
-
-    stoch_k = last_signal.get('STOCHk_14_3_3')
-    if pd.notna(stoch_k):
-        if stoch_k < 20: score += 15; reasons.append("🐂 Моментум: сильна перепроданість")
-        elif stoch_k > 80: score -= 15; reasons.append("🐃 Моментум: сильна перекупленість")
-
-    rsi = last_signal.get('RSI_14')
-    if pd.notna(rsi):
-        if rsi < 30: score += 10; reasons.append("🐂 Моментум: перепроданість")
-        elif rsi > 70: score -= 10; reasons.append("🐃 Моментум: перекупленість")
-
-    bb_p = last_signal.get('BBP_20_2.0')
-    if pd.notna(bb_p):
-        if bb_p < 0.05: score += 10; reasons.append("📈 Волатильність: ціна біля нижньої межі")
-        elif bb_p > 0.95: score -= 10; reasons.append("📉 Волатильність: ціна біля верхньої межі")
-
-    final_score = int(np.clip(score, 0, 100))
-    
-    return {
-        "score": final_score, "reasons": reasons if reasons else ["Ринок нейтральний."],
-        "close": price,
-        "raw_indicators": { "rsi": rsi, "stoch_k": stoch_k, "bb_percent_b": bb_p, "trend": trend }
-    }
+        logger.error(f"Помилка під час прогнозування моделлю: {e}")
+        return {"score": 50, "reasons": ["Помилка роботи ML моделі."]}
 
 def _generate_verdict_from_score(score: int) -> str:
-    if score >= 85: return "⬆️ Дуже сильний CALL"
-    if score >= 65: return "↗️ CALL"
-    if score <= 15: return "⬇️ Дуже сильний PUT"
-    if score <= 35: return "↘️ PUT"
-    return "🟡 NEUTRAL"
+    if score >= 75: return "⬆️ Висока ймовірність CALL"
+    if score >= 60: return "↗️ Помірна ймовірність CALL"
+    if score <= 25: return "⬇️ Висока ймовірність PUT"
+    if score <= 40: return "↘️ Помірна ймовірність PUT"
+    return "🟡 НЕЙТРАЛЬНО"
 
 def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int, timeframe: str = "5m") -> Deferred:
     final_deferred = Deferred()
-    
-    trend_timeframe_map = {"1m": "5m", "5m": "15m", "15m": "1h"}
-    trend_timeframe = trend_timeframe_map.get(timeframe)
-    if not trend_timeframe:
-        err_msg = f"Непідтримуваний таймфрейм: {timeframe}"
-        d = Deferred(); d.errback(Failure(Exception(err_msg))); return d
 
-    d_signal = get_market_data(client, symbol_cache, symbol, timeframe, 250)
-    d_trend = get_market_data(client, symbol_cache, symbol, trend_timeframe, 250)
-    d_list = DeferredList([d_signal, d_trend], consumeErrors=True)
-
-    def on_data_ready(results):
+    def on_data_ready(df: pd.DataFrame):
         try:
-            success_signal, signal_df = results[0]
-            success_trend, trend_df = results[1]
-
-            if not (success_signal and success_trend):
-                return final_deferred.callback({"error": "Не вдалося завантажити ринкові дані."})
-
-            analysis = _calculate_score_and_reasons(signal_df, trend_df)
+            analysis = _get_prediction_from_model(df)
             verdict = _generate_verdict_from_score(analysis['score'])
             
             response_data = {
-                "pair": symbol, "price": _sanitize(analysis.get("close")),
-                "verdict_text": verdict, "reasons": analysis.get("reasons", []),
-                "score": analysis.get("score", 50),
-                "stochastic": {"k": _sanitize(analysis.get("raw_indicators", {}).get("stoch_k"), 50), "d": None},
-                "rsi": _sanitize(analysis.get("raw_indicators", {}).get("rsi"), 50),
-                "bollinger": {"percent_b": _sanitize(analysis.get("raw_indicators", {}).get("bb_percent_b"), 0.5)},
+                "pair": symbol,
+                "price": _sanitize(analysis.get("close")),
+                "verdict_text": verdict,
+                "reasons": analysis.get("reasons", []),
+                "score": analysis.get("score", 50) # Тепер це ймовірність
             }
             
-            if user_id != 0 and (analysis['score'] >= 65 or analysis['score'] <= 35):
+            if user_id != 0 and (analysis['score'] >= 60 or analysis['score'] <= 40):
                 add_signal_to_history({
                     'user_id': user_id, 'pair': symbol,
                     'price': response_data['price'], 
                     'bull_percentage': analysis['score']
                 })
-
             final_deferred.callback(response_data)
         except Exception as e:
             logger.exception(f"Critical analysis error for {symbol}: {e}")
             final_deferred.errback(e)
 
-    d_list.addCallback(on_data_ready)
+    # ML модель вимагає більше даних для розрахунку всіх індикаторів
+    d = get_market_data(client, symbol_cache, symbol, timeframe, 300)
+    d.addCallbacks(on_data_ready, final_deferred.errback)
+    
     return final_deferred
