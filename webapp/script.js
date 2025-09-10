@@ -12,7 +12,6 @@ let tg = window.Telegram.WebApp;
 tg.ready();
 tg.expand();
 
-// Глобальні змінні, які нам все ще потрібні
 let currentWatchlist = [];
 let initData = tg.initData || '';
 let allData = {};
@@ -78,20 +77,18 @@ document.addEventListener('DOMContentLoaded', function() {
         console.error("EventSource failed:", err);
     };
     
-    // --- ПОЧАТОК ЗМІН: Обробник кнопок тепер лише змінює вигляд ---
     const expirationButtons = document.querySelectorAll('.tf-button');
     expirationButtons.forEach(button => {
         button.addEventListener('click', () => {
             expirationButtons.forEach(btn => btn.classList.remove('active'));
             button.classList.add('active');
-            // Більше не зберігаємо значення в глобальну змінну, 
-            // а одразу викликаємо аналіз, якщо пара була обрана
-            if (lastSelectedPair) {
-                debouncedFetchSignal(lastSelectedPair);
-            }
+            // --- ПОЧАТОК ЗМІН: Прибираємо небажаний виклик аналізу ---
+            // if (lastSelectedPair) {
+            //     debouncedFetchSignal(lastSelectedPair);
+            // }
+            // --- КІНЕЦЬ ЗМІН ---
         });
     });
-    // --- КІНЕЦЬ ЗМІН ---
     
     const searchInput = document.getElementById('searchInput');
     searchInput.addEventListener('input', debounce((event) => {
@@ -100,7 +97,6 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 function updateScannerButtons(stateDict) {
-    // ... (код без змін)
     const textMap = {
         forex: "💹 Forex", crypto: "💎 Crypto", commodities: "🥇 Сировина", watchlist: "⭐ Обране"
     };
@@ -115,23 +111,36 @@ function updateScannerButtons(stateDict) {
     }
 }
 
+// --- ПОЧАТОК ЗМІН: Повертаємо логіку "розгортання" сигналу ---
 function displayLiveSignal(signalData) {
-    // ... (код без змін)
     if (signalData.verdict_text === 'NEUTRAL') return;
     const signalId = `signal-${signalData.pair.replace('/', '')}-${Date.now()}`;
     const signalDiv = document.createElement('div');
     signalDiv.id = signalId;
     signalDiv.className = 'live-signal';
     signalDiv.style.cursor = 'pointer';
-    signalDiv.onclick = () => fetchSignal(signalData.pair);
+    
+    signalDiv.onclick = () => {
+        const expiration = signalData.timeframe || 'N/A'; // Сканер не знає експірацію, тому можемо взяти її з даних
+        signalOutput.innerHTML = formatSignalAsHtml(signalData, expiration);
+        signalContainer.scrollIntoView({ behavior: 'smooth' });
+    };
+
     const verdict = signalData.verdict_text || '...';
     const pair = signalData.pair || 'N/A';
+    
     let signalClass = 'neutral';
     if (verdict.includes('CALL')) signalClass = 'buy';
     if (verdict.includes('PUT')) signalClass = 'sell';
+    
     signalDiv.classList.add(signalClass);
-    signalDiv.innerHTML = `<div class="live-signal-content">${verdict} по ${pair}</div><button class="live-signal-close" onclick="event.stopPropagation(); this.parentElement.remove()">×</button>`;
+    signalDiv.innerHTML = `
+        <div class="live-signal-content">${verdict} по ${pair}</div>
+        <button class="live-signal-close" onclick="event.stopPropagation(); this.parentElement.remove()">×</button>
+    `;
+    
     liveSignalsContainer.prepend(signalDiv);
+    
     setTimeout(() => {
         const el = document.getElementById(signalId);
         if (el) {
@@ -140,14 +149,13 @@ function displayLiveSignal(signalData) {
         }
     }, 300000);
 }
+// --- КІНЕЦЬ ЗМІН ---
 
 function createPairButton(pair) {
-    // ... (код без змін)
     return `<div class="pair-item"><button class="pair-button" data-pair="${pair}">${pair}</button>${renderFavoriteButton(pair)}</div>`;
 }
 
 function populateLists(data, query = '') {
-    // ... (код без змін)
     let html = '';
     const queryLower = query.toLowerCase();
     function createSection(title, pairs) {
@@ -188,7 +196,6 @@ function populateLists(data, query = '') {
 }
 
 function renderFavoriteButton(pair) {
-    // ... (код без змін)
     const pairNormalized = pair.replace(/\//g, '');
     const isFavorite = currentWatchlist.includes(pairNormalized);
     const icon = isFavorite ? '✅' : '⭐';
@@ -196,7 +203,6 @@ function renderFavoriteButton(pair) {
 }
 
 function toggleFavorite(event, button, pair) {
-    // ... (код без змін)
     event.stopPropagation();
     const isCurrentlyFavorite = button.innerHTML.includes('✅');
     const initDataString = initData ? `&initData=${encodeURIComponent(initData)}` : '';
@@ -220,7 +226,6 @@ function toggleFavorite(event, button, pair) {
         });
 }
 
-// --- ПОЧАТОК ЗМІН: Функція тепер зчитує час експірації напряму з активної кнопки ---
 function fetchSignal(pair) {
     lastSelectedPair = pair;
     showLoader(true);
@@ -228,7 +233,7 @@ function fetchSignal(pair) {
     signalOutput.style.textAlign = 'left';
 
     const activeBtn = document.querySelector('#expirationSelector .tf-button.active');
-    const expiration = activeBtn ? activeBtn.dataset.exp : '1m'; // Значення за замовчуванням '1m'
+    const expiration = activeBtn ? activeBtn.dataset.exp : '1m';
 
     const initDataQuery = initData ? `?initData=${encodeURIComponent(initData)}` : '';
     const signalApiUrl = `${API_BASE_URL}/api/signal?pair=${pair}&timeframe=${expiration}${initDataQuery.replace('?', '&')}`;
@@ -254,7 +259,6 @@ function fetchSignal(pair) {
 }
 
 function formatSignalAsHtml(signalData, expiration) {
-    // ... (код майже без змін, лише отримує expiration як аргумент)
     if (!signalData || Object.keys(signalData).length === 0) return "Немає даних для відображення.";
     if (signalData.error) return `❌ Помилка: ${signalData.error}`;
 
@@ -283,7 +287,6 @@ function formatSignalAsHtml(signalData, expiration) {
     }
     return html;
 }
-// --- КІНЕЦЬ ЗМІН ---
 
 function showLoader(visible) {
     loader.className = visible ? '' : 'hidden';
