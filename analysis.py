@@ -53,7 +53,7 @@ def _get_prediction_from_model(df: pd.DataFrame) -> Dict:
     if ml_models.LGBM_MODEL is None or ml_models.SCALER is None:
         return {"score": 50, "reasons": ["ML модель не завантажена."]}
 
-    if df.empty or len(df) < 250: # Перевірка на достатність даних для всіх індикаторів
+    if df.empty or len(df) < 250:
         return {"score": 50, "reasons": ["Недостатньо даних для розрахунку всіх характеристик."]}
 
     try:
@@ -63,28 +63,38 @@ def _get_prediction_from_model(df: pd.DataFrame) -> Dict:
         df.ta.ema(length=50, append=True, col_names=('EMA50',))
         df.ta.ema(length=200, append=True, col_names=('EMA200',))
         
-        last_features = df.iloc[[-1]]
+        last_features_raw = df.iloc[[-1]]
         
-        features_list = ['ATR', 'ADX_14', 'RSI_14', 'EMA50', 'EMA200']
-        # Перейменовуємо колонки для сумісності з моделлю
-        features_renamed = last_features.rename(columns={"ATRr_14": "ATR"})
+        # --- ПОЧАТОК ЗМІН: Явно перейменовуємо колонки до вигляду, на якому тренувалася модель ---
+        feature_map = {
+            "ATRr_14": "ATR",
+            "ADX_14": "ADX",
+            "RSI_14": "RSI",
+            "EMA50": "EMA50",
+            "EMA200": "EMA200"
+        }
         
-        if not all(col in features_renamed.columns for col in features_list):
-             return {"score": 50, "reasons": ["Не вдалося розрахувати всі характеристики."]}
+        # Перевіряємо, чи всі потрібні колонки існують
+        if not all(col in last_features_raw.columns for col in feature_map.keys()):
+             return {"score": 50, "reasons": ["Не вдалося розрахувати всі характеристики для моделі."]}
 
-        features = features_renamed[features_list].copy()
-        scaled_features = ml_models.SCALER.transform(features)
+        # Створюємо новий DataFrame з правильними іменами
+        features_for_model = last_features_raw[list(feature_map.keys())].copy()
+        features_for_model.rename(columns=feature_map, inplace=True)
+        # --- КІНЕЦЬ ЗМІН ---
+
+        scaled_features = ml_models.SCALER.transform(features_for_model)
         
         probabilities = ml_models.LGBM_MODEL.predict_proba(scaled_features)
         win_probability = probabilities[0][1] * 100
         
         reasons = [
-            f"RSI: {_sanitize(last_features['RSI_14'].iloc[0], 0):.1f}",
-            f"ADX: {_sanitize(last_features['ADX_14'].iloc[0], 0):.1f}",
-            f"ATR: {_sanitize(features_renamed['ATR'].iloc[0], 0):.5f}",
+            f"RSI: {_sanitize(last_features_raw['RSI_14'].iloc[0], 0):.1f}",
+            f"ADX: {_sanitize(last_features_raw['ADX_14'].iloc[0], 0):.1f}",
+            f"ATR: {_sanitize(last_features_raw['ATRr_14'].iloc[0], 0):.5f}",
         ]
         
-        return {"score": int(win_probability), "reasons": reasons, "close": last_features['Close'].iloc[0]}
+        return {"score": int(win_probability), "reasons": reasons, "close": last_features_raw['Close'].iloc[0]}
 
     except Exception as e:
         logger.error(f"Помилка під час прогнозування моделлю: {e}")
@@ -124,7 +134,6 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int
             logger.exception(f"Critical analysis error for {symbol}: {e}")
             final_deferred.errback(e)
 
-    # Запитуємо більше даних, щоб вистачило для EMA 200
     d = get_market_data(client, symbol_cache, symbol, timeframe, 300)
     d.addCallbacks(on_data_ready, final_deferred.errback)
     
