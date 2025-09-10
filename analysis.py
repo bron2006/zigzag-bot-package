@@ -29,32 +29,6 @@ def _sanitize(value, default=0.0):
         return default
     return float(value)
 
-def get_current_market_regime(df: pd.DataFrame) -> str:
-    if ml_models.KMEANS_MODEL is None or ml_models.SCALER is None:
-        return "Not Available"
-    
-    try:
-        features_to_select = ['ATRr_14', 'ADX_14', 'RSI_14']
-        
-        if not all(col in df.columns for col in features_to_select):
-            missing = [col for col in features_to_select if col not in df.columns]
-            logger.warning(f"Cannot determine market regime, missing columns: {missing}")
-            return "Incomplete Data"
-
-        features = df[features_to_select].copy()
-        features.rename(columns={"RSI_14": "RSI", "ADX_14": "ADX", "ATRr_14": "ATR"}, inplace=True)
-        
-        last_features = features.iloc[[-1]]
-        
-        scaled_features = ml_models.SCALER.transform(last_features)
-        prediction = ml_models.KMEANS_MODEL.predict(scaled_features)[0]
-        
-        regime_names = {0: "Млявий флет", 1: "Бичачий тренд", 2: "Ведмежий тренд", 3: "Шторм"}
-        return regime_names.get(prediction, "Unknown")
-    except Exception as e:
-        logger.error(f"Failed to determine market regime: {e}")
-        return "Error"
-
 def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: int) -> Deferred:
     d = Deferred()
     symbol_details = symbol_cache.get(norm_pair)
@@ -78,78 +52,87 @@ def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: in
     deferred.addCallbacks(process_response, d.errback)
     return d
 
-def _find_candle_pattern(df: pd.DataFrame):
-    try:
-        patterns = df.ta.cdl_pattern(name="all")
-        if patterns.empty: return None
-        last_candle_patterns = patterns.iloc[-1]
-        found_patterns = last_candle_patterns[last_candle_patterns != 0]
-        if found_patterns.empty: return None
-        pattern_name = found_patterns.index[0].replace("CDL_", "")
-        signal_strength = found_patterns.iloc[0]
-        if "DOJI" in pattern_name.upper(): return f"⚪️ {pattern_name} (Нейтральний)"
-        if signal_strength > 0: return f"⬆️ {pattern_name} (Бичачий)"
-        if signal_strength < 0: return f"⬇️ {pattern_name} (Ведмежий)"
-        return None
-    except Exception: return None
-
-def _calculate_full_analysis(signal_df: pd.DataFrame, trend_df: pd.DataFrame, daily_df: pd.DataFrame) -> Dict:
-    if any(df.empty or len(df) < 30 for df in [signal_df, trend_df, daily_df]):
-        return {"verdict": "NEUTRAL", "reasons": ["Недостатньо даних для аналізу."]}
+def _calculate_score_and_reasons(signal_df: pd.DataFrame, trend_df: pd.DataFrame) -> Dict:
+    if any(df.empty or len(df) < 50 for df in [signal_df, trend_df]):
+        return {"score": 50, "reasons": ["Недостатньо даних для аналізу."]}
 
     try:
         signal_df.ta.bbands(length=20, std=2.0, append=True)
         signal_df.ta.stoch(k=14, d=3, smooth_k=3, append=True)
         signal_df.ta.rsi(length=14, append=True)
-        signal_df.ta.adx(length=14, append=True)
-        signal_df.ta.atr(length=14, append=True)
         trend_df.ta.ema(length=50, append=True, col_names=('EMA50',))
         trend_df.ta.ema(length=200, append=True, col_names=('EMA200',))
     except Exception as e:
-        return {"verdict": "NEUTRAL", "reasons": [f"Помилка розрахунку індикаторів: {e}"]}
+        return {"score": 50, "reasons": [f"Помилка розрахунку індикаторів: {e}"]}
 
     last_signal = signal_df.iloc[-1]
     last_trend = trend_df.iloc[-1]
-    prev_day = daily_df.iloc[-2] if len(daily_df) > 1 else daily_df.iloc[-1]
-
-    market_regime = get_current_market_regime(signal_df)
-    verdict = "NEUTRAL"; reasons = [f"Режим ринку: {market_regime}"]
     
-    trend = "NEUTRAL"
+    score = 50  # Початкова нейтральна оцінка
+    reasons = []
+
+    # 1. Аналіз глобального тренду (найвагоміший фактор: +/- 20 балів)
     ema50 = last_trend.get('EMA50')
     ema200 = last_trend.get('EMA200')
     if ema50 is not None and ema200 is not None:
         if ema50 > ema200:
-            trend = "UPTREND"
+            score += 20
+            reasons.append("📈 Глобальний тренд: висхідний (EMA50 > EMA200)")
         else:
-            trend = "DOWNTREND"
-        
-    stoch_k = last_signal.get('STOCHk_14_3_3', 50)
-    bb_p = last_signal.get('BBP_20_2.0', 0.5)
-    
-    # --- ПОЧАТОК ЗМІН: Послаблюємо умови для генерації сигналів ---
-    if market_regime == "Млявий флет":
-        if stoch_k < 30 and bb_p < 0.2: # Було 25 і 0.1
-            verdict = "↗️ CALL (Помірний)"
-            reasons.append("Ціна в нижній зоні Боллінджера + Стохастик перепроданий")
-        elif stoch_k > 70 and bb_p > 0.8: # Було 75 і 0.9
-            verdict = "↘️ PUT (Помірний)"
-            reasons.append("Ціна в верхній зоні Боллінджера + Стохастик перекуплений")
-    # --- КІНЕЦЬ ЗМІН ---
-    
-    pivot_point = (prev_day['High'] + prev_day['Low'] + prev_day['Close']) / 3
-    support = (2 * pivot_point) - prev_day['High']
-    resistance = (2 * pivot_point) - prev_day['Low']
+            score -= 20
+            reasons.append("📉 Глобальний тренд: низхідний (EMA50 < EMA200)")
+
+    # 2. Аналіз моментуму: Stochastic (+/- 15 балів)
+    stoch_k = last_signal.get('STOCHk_14_3_3')
+    if pd.notna(stoch_k):
+        if stoch_k < 20:
+            score += 15
+            reasons.append("🐂 Моментум: сильна перепроданість (Stochastic < 20)")
+        elif stoch_k > 80:
+            score -= 15
+            reasons.append("🐃 Моментум: сильна перекупленість (Stochastic > 80)")
+
+    # 3. Аналіз моментуму: RSI (+/- 10 балів)
+    rsi = last_signal.get('RSI_14')
+    if pd.notna(rsi):
+        if rsi < 30:
+            score += 10
+            reasons.append("🐂 Моментум: перепроданість (RSI < 30)")
+        elif rsi > 70:
+            score -= 10
+            reasons.append("🐃 Моментум: перекупленість (RSI > 70)")
+
+    # 4. Аналіз волатильності: Bollinger Bands (+/- 10 балів)
+    bb_p = last_signal.get('BBP_20_2.0')
+    if pd.notna(bb_p):
+        if bb_p < 0.05: # Ціна дуже близько до нижньої межі
+            score += 10
+            reasons.append("📈 Волатильність: ціна біля нижньої межі Боллінджера")
+        elif bb_p > 0.95: # Ціна дуже близько до верхньої межі
+            score -= 10
+            reasons.append("📉 Волатильність: ціна біля верхньої межі Боллінджера")
+
+    final_score = int(np.clip(score, 0, 100))
     
     return {
-        "verdict": verdict, "reasons": reasons, "close": last_signal.get('Close'),
-        "market_regime": market_regime,
-        "rsi": last_signal.get('RSI_14'), "stoch_k": stoch_k, "stoch_d": last_signal.get('STOCHd_14_3_3'),
-        "bb_upper": last_signal.get('BBU_20_2.0'), "bb_lower": last_signal.get('BBL_20_2.0'),
-        "bb_percent_b": bb_p, "trend": trend, "support": support,
-        "resistance": resistance, "volume_now": last_signal.get('Volume'), "volume_avg": signal_df['Volume'].rolling(window=20).mean().iloc[-1],
-        "volume_ratio": 0, "candle_pattern": _find_candle_pattern(signal_df), "special_warning": None
+        "score": final_score,
+        "reasons": reasons if reasons else ["Ринок нейтральний, немає явних факторів."],
+        "close": last_signal.get('Close'),
+        # Повертаємо сирі дані для відображення в UI
+        "raw_indicators": {
+            "rsi": rsi,
+            "stoch_k": stoch_k,
+            "bb_percent_b": bb_p,
+            "trend": trend,
+        }
     }
+
+def _generate_verdict_from_score(score: int) -> str:
+    if score >= 85: return "⬆️ Дуже сильний CALL"
+    if score >= 65: return "↗️ CALL"
+    if score <= 15: return "⬇️ Дуже сильний PUT"
+    if score <= 35: return "↘️ PUT"
+    return "🟡 NEUTRAL"
 
 def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int, timeframe: str = "5m") -> Deferred:
     final_deferred = Deferred()
@@ -157,43 +140,51 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int
     trend_timeframe_map = {"1m": "5m", "5m": "15m", "15m": "1h"}
     trend_timeframe = trend_timeframe_map.get(timeframe)
     if not trend_timeframe:
-        err_msg = f"Непідтримуваний таймфрейм для аналізу тренду: {timeframe}"
-        logger.warning(err_msg)
+        err_msg = f"Непідтримуваний таймфрейм: {timeframe}"
         d = Deferred(); d.errback(Failure(Exception(err_msg))); return d
 
-    d_signal = get_market_data(client, symbol_cache, symbol, timeframe, 200)
+    d_signal = get_market_data(client, symbol_cache, symbol, timeframe, 250)
     d_trend = get_market_data(client, symbol_cache, symbol, trend_timeframe, 250)
-    d_daily = get_market_data(client, symbol_cache, symbol, "1day", 50)
-    d_list = DeferredList([d_signal, d_trend, d_daily], consumeErrors=True)
+    d_list = DeferredList([d_signal, d_trend], consumeErrors=True)
 
     def on_data_ready(results):
         try:
             success_signal, signal_df = results[0]
             success_trend, trend_df = results[1]
-            success_daily, daily_df = results[2]
-            if not (success_signal and success_trend and success_daily):
-                return final_deferred.callback({"error": "Не вдалося завантажити всі ринкові дані."})
 
-            signal_df.name = timeframe; trend_df.name = trend_timeframe
-            analysis = _calculate_full_analysis(signal_df, trend_df, daily_df)
+            if not (success_signal and success_trend):
+                return final_deferred.callback({"error": "Не вдалося завантажити ринкові дані."})
+
+            analysis = _calculate_score_and_reasons(signal_df, trend_df)
+            verdict = _generate_verdict_from_score(analysis['score'])
             
+            # Зберігаємо дані для відповіді API
             response_data = {
-                "pair": symbol, "price": _sanitize(analysis.get("close")), "verdict_text": analysis["verdict"],
-                "reasons": analysis["reasons"], "market_regime": analysis.get("market_regime"),
-                "stochastic": {"k": _sanitize(analysis.get("stoch_k"), 50), "d": _sanitize(analysis.get("stoch_d"), 50)},
-                "rsi": _sanitize(analysis.get("rsi"), 50),
-                "bollinger": {"upper": _sanitize(analysis.get("bb_upper")), "lower": _sanitize(analysis.get("bb_lower")), "percent_b": _sanitize(analysis.get("bb_percent_b"), 0.5)},
-                "support": _sanitize(analysis.get("support")), "resistance": _sanitize(analysis.get("resistance")),
-                "volume": {"current": _sanitize(analysis.get("volume_now")), "avg": _sanitize(analysis.get("volume_avg")), "ratio": _sanitize(analysis.get("volume_ratio"))},
-                "candle_pattern": analysis.get("candle_pattern"), "special_warning": analysis.get("special_warning")
+                "pair": symbol,
+                "price": _sanitize(analysis.get("close")),
+                "verdict_text": verdict,
+                "reasons": analysis.get("reasons", []),
+                "score": analysis.get("score", 50), # Нове поле з оцінкою
+                # Поля для UI, які ми поки не розраховуємо, але залишимо для сумісності
+                "market_regime": None,
+                "stochastic": {"k": _sanitize(analysis.get("raw_indicators", {}).get("stoch_k"), 50), "d": None},
+                "rsi": _sanitize(analysis.get("raw_indicators", {}).get("rsi"), 50),
+                "bollinger": {"percent_b": _sanitize(analysis.get("raw_indicators", {}).get("bb_percent_b"), 0.5)},
+                "support": None, "resistance": None, "volume": None, "candle_pattern": None, "special_warning": None
             }
             
-            if user_id != 0 and "NEUTRAL" not in analysis['verdict']:
-                add_signal_to_history({'user_id': user_id, 'pair': symbol, 'price': response_data['price'], 'bull_percentage': int(response_data['stochastic']['k'])})
+            # Зберігаємо в історію лише сильні сигнали
+            if user_id != 0 and analysis['score'] >= 65 or analysis['score'] <= 35:
+                add_signal_to_history({
+                    'user_id': user_id, 'pair': symbol,
+                    'price': response_data['price'], 
+                    'bull_percentage': analysis['score']
+                })
 
             final_deferred.callback(response_data)
         except Exception as e:
             logger.exception(f"Critical analysis error for {symbol}: {e}")
             final_deferred.errback(e)
+
     d_list.addCallback(on_data_ready)
     return final_deferred
