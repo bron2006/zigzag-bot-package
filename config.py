@@ -8,13 +8,9 @@ load_dotenv()
 
 # --- ОСНОВНІ НАЛАШТУВАННЯ ---
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-
-def get_database_url() -> str:
-    return os.getenv("DATABASE_URL")
-
+def get_database_url() -> str: return os.getenv("DATABASE_URL")
 IS_DEV_MODE = os.getenv("NORD", "off").lower() == "on"
 DEV_USER_ID = int(os.getenv("MY_TELEGRAM_ID", 123456789))
-
 def get_chat_id() -> int: return int(os.getenv("CHAT_ID")) if os.getenv("CHAT_ID") else None
 def get_ct_client_id() -> str: return os.getenv("CT_CLIENT_ID")
 def get_ct_client_secret() -> str: return os.getenv("CT_CLIENT_SECRET")
@@ -26,13 +22,14 @@ def get_fly_app_name() -> str: return os.getenv("FLY_APP_NAME")
 ANALYSIS_CONFIG = { "min_bars_for_analysis": 50 }
 
 # --- НАЛАШТУВАННЯ СКАНЕРА ---
-# --- ПОЧАТОК ЗМІН: Повертаємо поріг для сканера ---
-IDEAL_ENTRY_THRESHOLD = 65 # Сигнал спрацює, якщо оцінка >= 65 або <= 35
-# --- КІНЕЦЬ ЗМІН ---
+IDEAL_ENTRY_THRESHOLD = 65
 SCANNER_COOLDOWN_SECONDS = 300
+# --- ПОЧАТОК ЗМІН: Додаємо поріг для фільтра волатильності ---
+MIN_ATR_PERCENTAGE = 0.05 # Ігнорувати сигнали, якщо волатильність < 0.05% від ціни
+# --- КІНЕЦЬ ЗМІН ---
+
 
 # --- СПИСКИ АКТИВІВ ---
-# ... (решта файлу без змін)
 def load_assets_from_json():
     try:
         with open(Path(__file__).parent / "assets.json", "r", encoding="utf-8") as f:

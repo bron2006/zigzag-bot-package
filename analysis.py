@@ -16,6 +16,7 @@ from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOATrendbarPe
 from db import add_signal_to_history
 from state import app_state
 import ml_models
+from config import MIN_ATR_PERCENTAGE # <-- Новий імпорт
 
 logger = logging.getLogger("analysis")
 
@@ -60,6 +61,7 @@ def _calculate_score_and_reasons(signal_df: pd.DataFrame, trend_df: pd.DataFrame
         signal_df.ta.bbands(length=20, std=2.0, append=True)
         signal_df.ta.stoch(k=14, d=3, smooth_k=3, append=True)
         signal_df.ta.rsi(length=14, append=True)
+        signal_df.ta.atr(length=14, append=True) # <-- Додаємо ATR
         trend_df.ta.ema(length=50, append=True, col_names=('EMA50',))
         trend_df.ta.ema(length=200, append=True, col_names=('EMA200',))
     except Exception as e:
@@ -68,64 +70,53 @@ def _calculate_score_and_reasons(signal_df: pd.DataFrame, trend_df: pd.DataFrame
     last_signal = signal_df.iloc[-1]
     last_trend = trend_df.iloc[-1]
     
+    # --- ПОЧАТОК ЗМІН: Фільтр волатильності ---
+    atr = last_signal.get('ATRr_14', 0)
+    price = last_signal.get('Close', 0)
+    atr_percentage = (atr / price) * 100 if price > 0 else 0
+    
+    if atr_percentage < MIN_ATR_PERCENTAGE:
+        return {
+            "score": 50, 
+            "reasons": [f"Ринок занадто спокійний (волатильність {atr_percentage:.3f}%)"],
+            "close": price,
+            "raw_indicators": {} # Повертаємо порожні індикатори
+        }
+    # --- КІНЕЦЬ ЗМІН ---
+
     score = 50
     reasons = []
     
-    # --- ПОЧАТОК ЗМІН: Ініціалізуємо змінну trend ---
     trend = "NEUTRAL"
-    # --- КІНЕЦЬ ЗМІН ---
-
     ema50 = last_trend.get('EMA50')
     ema200 = last_trend.get('EMA200')
     if ema50 is not None and ema200 is not None:
         if ema50 > ema200:
-            score += 20
-            reasons.append("📈 Глобальний тренд: висхідний (EMA50 > EMA200)")
-            trend = "UPTREND" # Присвоюємо значення
+            score += 20; reasons.append("📈 Глобальний тренд: висхідний"); trend = "UPTREND"
         else:
-            score -= 20
-            reasons.append("📉 Глобальний тренд: низхідний (EMA50 < EMA200)")
-            trend = "DOWNTREND" # Присвоюємо значення
+            score -= 20; reasons.append("📉 Глобальний тренд: низхідний"); trend = "DOWNTREND"
 
     stoch_k = last_signal.get('STOCHk_14_3_3')
     if pd.notna(stoch_k):
-        if stoch_k < 20:
-            score += 15
-            reasons.append("🐂 Моментум: сильна перепроданість (Stochastic < 20)")
-        elif stoch_k > 80:
-            score -= 15
-            reasons.append("🐃 Моментум: сильна перекупленість (Stochastic > 80)")
+        if stoch_k < 20: score += 15; reasons.append("🐂 Моментум: сильна перепроданість")
+        elif stoch_k > 80: score -= 15; reasons.append("🐃 Моментум: сильна перекупленість")
 
     rsi = last_signal.get('RSI_14')
     if pd.notna(rsi):
-        if rsi < 30:
-            score += 10
-            reasons.append("🐂 Моментум: перепроданість (RSI < 30)")
-        elif rsi > 70:
-            score -= 10
-            reasons.append("🐃 Моментум: перекупленість (RSI > 70)")
+        if rsi < 30: score += 10; reasons.append("🐂 Моментум: перепроданість")
+        elif rsi > 70: score -= 10; reasons.append("🐃 Моментум: перекупленість")
 
     bb_p = last_signal.get('BBP_20_2.0')
     if pd.notna(bb_p):
-        if bb_p < 0.05:
-            score += 10
-            reasons.append("📈 Волатильність: ціна біля нижньої межі Боллінджера")
-        elif bb_p > 0.95:
-            score -= 10
-            reasons.append("📉 Волатильність: ціна біля верхньої межі Боллінджера")
+        if bb_p < 0.05: score += 10; reasons.append("📈 Волатильність: ціна біля нижньої межі")
+        elif bb_p > 0.95: score -= 10; reasons.append("📉 Волатильність: ціна біля верхньої межі")
 
     final_score = int(np.clip(score, 0, 100))
     
     return {
-        "score": final_score,
-        "reasons": reasons if reasons else ["Ринок нейтральний, немає явних факторів."],
-        "close": last_signal.get('Close'),
-        "raw_indicators": {
-            "rsi": rsi,
-            "stoch_k": stoch_k,
-            "bb_percent_b": bb_p,
-            "trend": trend,
-        }
+        "score": final_score, "reasons": reasons if reasons else ["Ринок нейтральний."],
+        "close": price,
+        "raw_indicators": { "rsi": rsi, "stoch_k": stoch_k, "bb_percent_b": bb_p, "trend": trend }
     }
 
 def _generate_verdict_from_score(score: int) -> str:
@@ -160,16 +151,12 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int
             verdict = _generate_verdict_from_score(analysis['score'])
             
             response_data = {
-                "pair": symbol,
-                "price": _sanitize(analysis.get("close")),
-                "verdict_text": verdict,
-                "reasons": analysis.get("reasons", []),
+                "pair": symbol, "price": _sanitize(analysis.get("close")),
+                "verdict_text": verdict, "reasons": analysis.get("reasons", []),
                 "score": analysis.get("score", 50),
-                "market_regime": None,
                 "stochastic": {"k": _sanitize(analysis.get("raw_indicators", {}).get("stoch_k"), 50), "d": None},
                 "rsi": _sanitize(analysis.get("raw_indicators", {}).get("rsi"), 50),
                 "bollinger": {"percent_b": _sanitize(analysis.get("raw_indicators", {}).get("bb_percent_b"), 0.5)},
-                "support": None, "resistance": None, "volume": None, "candle_pattern": None, "special_warning": None
             }
             
             if user_id != 0 and (analysis['score'] >= 65 or analysis['score'] <= 35):
