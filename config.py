@@ -22,7 +22,10 @@ def get_fly_app_name() -> str: return os.getenv("FLY_APP_NAME")
 ANALYSIS_CONFIG = { "min_bars_for_analysis": 50 }
 
 # --- НАЛАШТУВАННЯ СКАНЕРА ---
-IDEAL_ENTRY_THRESHOLD = 75 # Сигнал спрацює, якщо оцінка >= 75 або <= 25
+IDEAL_ENTRY_THRESHOLD = 78
+# --- ПОЧАТОК ЗМІН ---
+SCANNER_TIMEFRAME = "1m"   # Таймфрейм для фонового сканера
+# --- КІНЕЦЬ ЗМІН ---
 SCANNER_COOLDOWN_SECONDS = 300
 MIN_ATR_PERCENTAGE = 0.05
 
