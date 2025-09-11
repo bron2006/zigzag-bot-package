@@ -10,11 +10,11 @@ from state import app_state
 import telegram_ui
 import db
 import analysis as analysis_module
-# --- ПОЧАТОК ЗМІН ---
+# --- ПОЧАТОК ЗМІН: Видаляємо IDEAL_ENTRY_THRESHOLD з імпортів ---
 from config import (
     FOREX_SESSIONS, CRYPTO_PAIRS, COMMODITIES,
-    SCANNER_COOLDOWN_SECONDS, get_chat_id, IDEAL_ENTRY_THRESHOLD,
-    SCANNER_TIMEFRAME  # Додаємо новий імпорт
+    SCANNER_COOLDOWN_SECONDS, get_chat_id, 
+    SCANNER_TIMEFRAME
 )
 # --- КІНЕЦЬ ЗМІН ---
 
@@ -66,10 +66,14 @@ def _handle_analysis_result(pair_norm, result):
             return
         
         score = result.get("score", 50)
-        lower_bound = 100 - IDEAL_ENTRY_THRESHOLD
-        is_signal = score >= IDEAL_ENTRY_THRESHOLD or score <= lower_bound
         
-        logger.info(f"[SCANNER_DIAG] Pair: {pair_norm}, Score: {score}. Is signal: {is_signal} (Threshold: >= {IDEAL_ENTRY_THRESHOLD} or <= {lower_bound})")
+        # --- ПОЧАТОК ЗМІН: Використовуємо поріг з app_state ---
+        threshold = app_state.IDEAL_ENTRY_THRESHOLD
+        lower_bound = 100 - threshold
+        is_signal = score >= threshold or score <= lower_bound
+        
+        logger.info(f"[SCANNER_DIAG] Pair: {pair_norm}, Score: {score}. Is signal: {is_signal} (Threshold: >= {threshold} or <= {lower_bound})")
+        # --- КІНЕЦЬ ЗМІН ---
 
         if not is_signal:
             return
@@ -109,9 +113,7 @@ def _process_one_asset(pair: str):
             logger.debug("Symbols not loaded yet, skipping asset processing.")
             return
         
-        # --- ПОЧАТОК ЗМІН: Використовуємо таймфрейм з конфігурації ---
         d = get_api_detailed_signal_data(app_state.client, app_state.symbol_cache, pair_norm, 0, SCANNER_TIMEFRAME)
-        # --- КІНЕЦЬ ЗМІН ---
 
         d.addCallback(lambda result, p=pair_norm: _handle_analysis_result(p, result))
         d.addErrback(lambda failure, p=pair_norm: logger.error(f"Critical error in analysis chain for {p}: {failure.getErrorMessage()}"))
