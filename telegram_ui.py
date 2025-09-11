@@ -6,7 +6,9 @@ from twisted.internet import reactor
 from telegram.error import BadRequest
 
 from state import app_state
-from config import FOREX_SESSIONS, CRYPTO_PAIRS, STOCK_TICKERS, COMM_ODITIES, TRADING_HOURS
+# --- ПОЧАТОК ЗМІН ---
+from config import FOREX_SESSIONS, CRYPTO_PAIRS, STOCK_TICKERS, COMMODITIES, TRADING_HOURS # Виправлено COMM_ODITIES на COMMODITIES
+# --- КІНЕЦЬ ЗМІН ---
 from analysis import get_api_detailed_signal_data
 
 logger = logging.getLogger(__name__)
@@ -191,7 +193,4 @@ def button_handler(update: Update, context: CallbackContext) -> None:
             d = get_api_detailed_signal_data(app_state.client, app_state.symbol_cache, symbol, query.from_user.id, timeframe=expiration)
             d.addCallbacks(on_success, on_error)
 
-        # --- ПОЧАТОК ЗМІН: Виправлено критичну помилку ---
-        # Запускаємо асинхронну задачу в головному потоці реактора, а не в окремому.
         reactor.callLater(0, do_analysis)
-        # --- КІНЕЦЬ ЗМІН ---
