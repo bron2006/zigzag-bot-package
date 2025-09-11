@@ -22,12 +22,9 @@ def get_fly_app_name() -> str: return os.getenv("FLY_APP_NAME")
 ANALYSIS_CONFIG = { "min_bars_for_analysis": 50 }
 
 # --- НАЛАШТУВАННЯ СКАНЕРА ---
-IDEAL_ENTRY_THRESHOLD = 65
+IDEAL_ENTRY_THRESHOLD = 75 # Сигнал спрацює, якщо оцінка >= 75 або <= 25
 SCANNER_COOLDOWN_SECONDS = 300
-# --- ПОЧАТОК ЗМІН: Додаємо поріг для фільтра волатильності ---
-MIN_ATR_PERCENTAGE = 0.05 # Ігнорувати сигнали, якщо волатильність < 0.05% від ціни
-# --- КІНЕЦЬ ЗМІН ---
-
+MIN_ATR_PERCENTAGE = 0.05
 
 # --- СПИСКИ АКТИВІВ ---
 def load_assets_from_json():
