@@ -6,14 +6,12 @@ from twisted.internet import reactor
 from telegram.error import BadRequest
 
 from state import app_state
-from config import FOREX_SESSIONS, CRYPTO_PAIRS, STOCK_TICKERS, COMMODITIES, TRADING_HOURS
+from config import FOREX_SESSIONS, CRYPTO_PAIRS, STOCK_TICKERS, COMM_ODITIES, TRADING_HOURS
 from analysis import get_api_detailed_signal_data
 
 logger = logging.getLogger(__name__)
 
-# --- ПОЧАТОК ЗМІН: Замінюємо таймфрейми на час експірації ---
 EXPIRATIONS = ["1m", "5m"]
-# --- КІНЕЦЬ ЗМІН ---
 
 def get_reply_keyboard() -> ReplyKeyboardMarkup:
     keyboard = [[KeyboardButton("МЕНЮ")]]
@@ -43,12 +41,10 @@ def get_main_menu_kb() -> InlineKeyboardMarkup:
         
     return InlineKeyboardMarkup(keyboard)
 
-# --- ПОЧАТОК ЗМІН: Функція тепер для експірацій ---
 def get_expiration_kb(category: str) -> InlineKeyboardMarkup:
     keyboard = [[InlineKeyboardButton(exp, callback_data=f"exp_{category}_{exp}") for exp in EXPIRATIONS]]
     keyboard.append([InlineKeyboardButton("⬅️ Назад до категорій", callback_data="main_menu")])
     return InlineKeyboardMarkup(keyboard)
-# --- КІНЕЦЬ ЗМІН ---
 
 def get_forex_sessions_kb(expiration: str) -> InlineKeyboardMarkup:
     keyboard = []
@@ -67,7 +63,10 @@ def get_assets_kb(asset_list: list, category: str, expiration: str) -> InlineKey
             keyboard.append(row)
             row = []
     if row: keyboard.append(row)
-    keyboard.append([InlineKeyboardButton("⬅️ Назад до експірацій", callback_data=f"category_{category}")])
+    if category == 'forex':
+         keyboard.append([InlineKeyboardButton("⬅️ Назад до сесій", callback_data=f"exp_forex_{expiration}")])
+    else:
+         keyboard.append([InlineKeyboardButton("⬅️ Назад до експірацій", callback_data=f"category_{category}")])
     return InlineKeyboardMarkup(keyboard)
 
 def start(update: Update, context: CallbackContext) -> None:
@@ -86,13 +85,6 @@ def menu(update: Update, context: CallbackContext) -> None:
     sent_message = update.message.reply_text("🏠 Головне меню:", reply_markup=get_main_menu_kb())
     context.user_data['last_menu_id'] = sent_message.message_id
 
-    context.bot.send_message(
-        chat_id=update.effective_chat.id,
-        text=".",
-        disable_notification=True,
-        reply_markup=get_reply_keyboard()
-    )
-
 def reset_ui(update: Update, context: CallbackContext) -> None:
     update.message.reply_text(
         f"Невідома команда: '{update.message.text}'. Використовуйте кнопки.",
@@ -105,7 +97,6 @@ def symbols_command(update: Update, context: CallbackContext):
         return
     
     forex = sorted([s for s in app_state.all_symbol_names if "/" in s and len(s) < 8 and "USD" not in s.upper()])
-    # ... (rest of the function is unchanged)
     crypto_usd = sorted([s for s in app_state.all_symbol_names if "/USD" in s.upper()])
     crypto_usdt = sorted([s for s in app_state.all_symbol_names if "/USDT" in s.upper()])
     others = sorted([s for s in app_state.all_symbol_names if "/" not in s])
@@ -148,7 +139,6 @@ def button_handler(update: Update, context: CallbackContext) -> None:
     action = parts[0]
 
     if action == "toggle" and parts[1] == "scanner":
-        # ... (this part is unchanged)
         if len(parts) > 2:
             category = parts[2]
             if category in app_state.SCANNER_STATE:
@@ -166,7 +156,6 @@ def button_handler(update: Update, context: CallbackContext) -> None:
         category = parts[1]
         query.edit_message_text(f"Оберіть час експірації для '{category}':", reply_markup=get_expiration_kb(category))
 
-    # --- ПОЧАТОК ЗМІН: Обробляємо вибір експірації ---
     elif action == "exp":
         _, category, expiration = parts
         if category == 'forex':
@@ -199,9 +188,10 @@ def button_handler(update: Update, context: CallbackContext) -> None:
             query.edit_message_text(text=f"❌ Виникла помилка: {error}", reply_markup=get_main_menu_kb())
 
         def do_analysis():
-            # Передаємо час експірації як таймфрейм для отримання даних
             d = get_api_detailed_signal_data(app_state.client, app_state.symbol_cache, symbol, query.from_user.id, timeframe=expiration)
             d.addCallbacks(on_success, on_error)
-            
-        reactor.callInThread(do_analysis)
-    # --- КІНЕЦЬ ЗМІН ---
+
+        # --- ПОЧАТОК ЗМІН: Виправлено критичну помилку ---
+        # Запускаємо асинхронну задачу в головному потоці реактора, а не в окремому.
+        reactor.callLater(0, do_analysis)
+        # --- КІНЕЦЬ ЗМІН ---
