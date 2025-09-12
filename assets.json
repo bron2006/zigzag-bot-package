@@ -1,49 +1,33 @@
 {
   "forex_sessions": {
-    "Європейська": [
-      "EUR/USD",
-      "GBP/USD",
-      "USD/CHF",
-      "CHF/JPY"
-    ],
-    "Американська": [
-      "USD/CAD",
-      "USD/JPY",
-      "EUR/JPY",
-      "EUR/MXN"
+    "Тихоокеанська": [
+      "AUD/CAD", "AUD/JPY", "AUD/NZD", "NZD/JPY", "NZD/USD",
+      "NZD/CAD", "AUD/DKK", "AUD/HUF", "AUD/NOK", "AUD/SEK",
+      "AUD/CHF", "NZD/CHF"
     ],
     "Азіатська": [
-      "AUD/USD",
-      "NZD/USD",
-      "AUD/JPY",
-      "NZD/JPY",
-      "AUD/NZD"
+      "AUD/JPY", "EUR/JPY", "GBP/JPY", "CHF/JPY", "NZD/JPY",
+      "USD/JPY", "AUD/USD", "EUR/AUD", "GBP/AUD"
     ],
-    "Тихоокеанська": [
-      "AUD/CAD",
-      "EUR/NZD",
-      "GBP/NZD"
+    "Європейська": [
+      "EUR/AUD", "EUR/CAD", "EUR/CHF", "EUR/GBP", "EUR/JPY",
+      "EUR/NZD", "EUR/USD", "GBP/AUD", "GBP/CAD", "GBP/CHF",
+      "GBP/JPY", "GBP/NZD", "GBP/USD", "USD/CAD", "USD/CHF",
+      "USD/JPY"
+    ],
+    "Американська": [
+      "AUD/USD", "EUR/USD", "GBP/USD", "NZD/USD", "USD/CAD",
+      "USD/CHF", "USD/JPY", "USD/MXN", "EUR/MXN"
     ]
   },
   "crypto_pairs": [
-    "BTCUSD",
-    "ETHUSD",
-    "LTCUSD",
-    "BCHUSD",
-    "PEPEUSD"
+    "BTC/USD", "ETH/USD", "XRP/USD", "LTC/USD", "BCH/USD",
+    "ADA/USD", "SOL/USD", "DOGE/USD", "BNB/USD"
   ],
   "stock_tickers": [
-    "US30",
-    "US500",
-    "USTEC",
-    "UK100",
-    "DE40",
-    "F40",
-    "JP225"
+    "US30", "US100", "US500", "DE30", "UK100"
   ],
   "commodities": [
-    "XAUUSD",
-    "XAGUSD",
-    "WTI"
+    "XAU/USD", "XAG/USD", "USO/USD"
   ]
 }
