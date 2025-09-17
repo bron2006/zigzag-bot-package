@@ -1,0 +1,14 @@
+cargo:rerun-if-env-changed=TAURI_CONFIG
+cargo:rustc-check-cfg=cfg(desktop)
+cargo:rustc-cfg=desktop
+cargo:rustc-check-cfg=cfg(mobile)
+cargo:rerun-if-changed=/mnt/c/Users/Admin/Desktop/zigzag_bot_package/src-tauri/tauri.conf.json
+cargo:rustc-env=TAURI_ANDROID_PACKAGE_NAME_APP_NAME=bot
+cargo:rustc-env=TAURI_ANDROID_PACKAGE_NAME_PREFIX=com_zigzag
+cargo:rustc-check-cfg=cfg(dev)
+cargo:PERMISSION_FILES_PATH=/mnt/c/Users/Admin/Desktop/zigzag_bot_package/src-tauri/target/x86_64-pc-windows-gnu/release/build/app-cf5425ee8712d653/out/app-manifest/__app__-permission-files
+cargo:rerun-if-changed=capabilities
+cargo:rerun-if-env-changed=REMOVE_UNUSED_COMMANDS
+cargo:rustc-env=TAURI_ENV_TARGET_TRIPLE=x86_64-pc-windows-gnu
+TOML parsing error
+cargo:rustc-link-arg-bins=/mnt/c/Users/Admin/Desktop/zigzag_bot_package/src-tauri/target/x86_64-pc-windows-gnu/release/build/app-cf5425ee8712d653/out/resource.lib

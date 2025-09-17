@@ -1,0 +1,11 @@
+/mnt/c/Users/Admin/Desktop/zigzag_bot_package/src-tauri/target/release/deps/serde-63a1d4af4bd6b4ed.d: /home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.223/src/lib.rs /home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.223/src/integer128.rs /home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.223/src/private/mod.rs /home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.223/src/private/de.rs /home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.223/src/private/ser.rs
+
+/mnt/c/Users/Admin/Desktop/zigzag_bot_package/src-tauri/target/release/deps/libserde-63a1d4af4bd6b4ed.rlib: /home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.223/src/lib.rs /home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.223/src/integer128.rs /home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.223/src/private/mod.rs /home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.223/src/private/de.rs /home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.223/src/private/ser.rs
+
+/mnt/c/Users/Admin/Desktop/zigzag_bot_package/src-tauri/target/release/deps/libserde-63a1d4af4bd6b4ed.rmeta: /home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.223/src/lib.rs /home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.223/src/integer128.rs /home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.223/src/private/mod.rs /home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.223/src/private/de.rs /home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.223/src/private/ser.rs
+
+/home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.223/src/lib.rs:
+/home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.223/src/integer128.rs:
+/home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.223/src/private/mod.rs:
+/home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.223/src/private/de.rs:
+/home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.223/src/private/ser.rs:

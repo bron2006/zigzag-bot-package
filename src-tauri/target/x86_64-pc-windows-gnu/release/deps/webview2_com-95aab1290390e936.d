@@ -1,0 +1,10 @@
+/mnt/c/Users/Admin/Desktop/zigzag_bot_package/src-tauri/target/x86_64-pc-windows-gnu/release/deps/webview2_com-95aab1290390e936.d: /home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/webview2-com-0.38.0/src/lib.rs /home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/webview2-com-0.38.0/src/callback.rs /home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/webview2-com-0.38.0/src/options.rs /home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/webview2-com-0.38.0/src/pwstr.rs
+
+/mnt/c/Users/Admin/Desktop/zigzag_bot_package/src-tauri/target/x86_64-pc-windows-gnu/release/deps/libwebview2_com-95aab1290390e936.rlib: /home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/webview2-com-0.38.0/src/lib.rs /home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/webview2-com-0.38.0/src/callback.rs /home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/webview2-com-0.38.0/src/options.rs /home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/webview2-com-0.38.0/src/pwstr.rs
+
+/mnt/c/Users/Admin/Desktop/zigzag_bot_package/src-tauri/target/x86_64-pc-windows-gnu/release/deps/libwebview2_com-95aab1290390e936.rmeta: /home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/webview2-com-0.38.0/src/lib.rs /home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/webview2-com-0.38.0/src/callback.rs /home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/webview2-com-0.38.0/src/options.rs /home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/webview2-com-0.38.0/src/pwstr.rs
+
+/home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/webview2-com-0.38.0/src/lib.rs:
+/home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/webview2-com-0.38.0/src/callback.rs:
+/home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/webview2-com-0.38.0/src/options.rs:
+/home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/webview2-com-0.38.0/src/pwstr.rs:

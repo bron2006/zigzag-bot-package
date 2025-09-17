@@ -1,0 +1,13 @@
+/mnt/c/Users/Admin/Desktop/zigzag_bot_package/src-tauri/target/release/deps/unic_common-ac95bb20fb568d15.d: /home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/unic-common-0.9.0/src/lib.rs /home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/unic-common-0.9.0/src/pkg_info.rs /home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/unic-common-0.9.0/src/version.rs
+
+/mnt/c/Users/Admin/Desktop/zigzag_bot_package/src-tauri/target/release/deps/libunic_common-ac95bb20fb568d15.rlib: /home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/unic-common-0.9.0/src/lib.rs /home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/unic-common-0.9.0/src/pkg_info.rs /home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/unic-common-0.9.0/src/version.rs
+
+/mnt/c/Users/Admin/Desktop/zigzag_bot_package/src-tauri/target/release/deps/libunic_common-ac95bb20fb568d15.rmeta: /home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/unic-common-0.9.0/src/lib.rs /home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/unic-common-0.9.0/src/pkg_info.rs /home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/unic-common-0.9.0/src/version.rs
+
+/home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/unic-common-0.9.0/src/lib.rs:
+/home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/unic-common-0.9.0/src/pkg_info.rs:
+/home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/unic-common-0.9.0/src/version.rs:
+
+# env-dep:CARGO_PKG_DESCRIPTION=UNIC — Common Utilities
+# env-dep:CARGO_PKG_NAME=unic-common
+# env-dep:CARGO_PKG_VERSION=0.9.0

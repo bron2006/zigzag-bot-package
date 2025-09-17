@@ -1,0 +1,11 @@
+/mnt/c/Users/Admin/Desktop/zigzag_bot_package/src-tauri/target/x86_64-pc-windows-gnu/release/deps/fern-33114dbca898119c.d: /home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fern-0.7.1/src/lib.rs /home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fern-0.7.1/src/builders.rs /home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fern-0.7.1/src/errors.rs /home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fern-0.7.1/src/log_impl.rs /home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fern-0.7.1/src/meta.rs
+
+/mnt/c/Users/Admin/Desktop/zigzag_bot_package/src-tauri/target/x86_64-pc-windows-gnu/release/deps/libfern-33114dbca898119c.rlib: /home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fern-0.7.1/src/lib.rs /home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fern-0.7.1/src/builders.rs /home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fern-0.7.1/src/errors.rs /home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fern-0.7.1/src/log_impl.rs /home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fern-0.7.1/src/meta.rs
+
+/mnt/c/Users/Admin/Desktop/zigzag_bot_package/src-tauri/target/x86_64-pc-windows-gnu/release/deps/libfern-33114dbca898119c.rmeta: /home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fern-0.7.1/src/lib.rs /home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fern-0.7.1/src/builders.rs /home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fern-0.7.1/src/errors.rs /home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fern-0.7.1/src/log_impl.rs /home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fern-0.7.1/src/meta.rs
+
+/home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fern-0.7.1/src/lib.rs:
+/home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fern-0.7.1/src/builders.rs:
+/home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fern-0.7.1/src/errors.rs:
+/home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fern-0.7.1/src/log_impl.rs:
+/home/addmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fern-0.7.1/src/meta.rs:
