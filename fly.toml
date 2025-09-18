@@ -7,9 +7,10 @@ primary_region = 'fra'
 [http_service]
   internal_port = 8080
   force_https = true
-  auto_stop_machines = true # Можна повернути true для економії, або залишити false
+  auto_stop_machines = false # Залишаємо false, щоб сканер не засинав
   auto_start_machines = true
-  min_machines_running = 0 # Встановлюємо 0, щоб машина могла засинати, якщо не використовується
+  min_machines_running = 0
+  processes = ["app"] # <--- ОСЬ КЛЮЧОВЕ ВИПРАВЛЕННЯ
 
 [[vm]]
   memory = '1gb'
@@ -20,12 +21,5 @@ primary_region = 'fra'
   source="signals_data"
   destination="/data"
 
-# --- ПОЧАТОК ЗМІН: Повертаємо один процес ---
 [processes]
   app = "python app.py"
-# --- КІНЕЦЬ ЗМІН ---
-
-# --- ПОЧАТОК ЗМІН: Додаємо налаштування, щоб машина не засинала ---
-[experimental]
-  auto_stop_machines = false
-# --- КІНЕЦЬ ЗМІН ---
