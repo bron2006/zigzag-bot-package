@@ -16,7 +16,7 @@ import scanner
 import bot
 import ctrader
 import api
-import ml_models
+import ml_models # Важливо, щоб цей імпорт був
 
 # Logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -27,23 +27,9 @@ app = Flask(__name__)
 app.config['JSON_AS_ASCII'] = False
 
 def _start_background_services():
-    """Запускає всі фонові сервіси, включаючи сканер."""
-    logger.info("Starting all background services...")
     bot.start_telegram_bot()
     ctrader.start_ctrader_client()
-    
-    # Чекаємо, поки завантажаться символи, перш ніж запускати сканер
-    def check_symbols_and_start_scanner():
-        if app_state.SYMBOLS_LOADED:
-            logger.info("Symbols loaded. Starting market scanner loop.")
-            LoopingCall(scanner.scan_markets_once).start(60.0, now=True)
-        else:
-            logger.info("Symbols not loaded yet, checking again in 10 seconds.")
-            reactor.callLater(10, check_symbols_and_start_scanner)
-            
-    reactor.callLater(10, check_symbols_and_start_scanner)
-    
-    # Ping для SSE з'єднання
+    LoopingCall(scanner.scan_markets_once).start(60.0, now=False)
     LoopingCall(lambda: (app_state.sse_queue.put_nowait({"_ping": int(time.time())}) if not app_state.sse_queue.full() else None)).start(20.0, now=False)
 
 def main():
@@ -55,7 +41,7 @@ def main():
     reactor.listenTCP(port, site, interface="0.0.0.0")
     logger.info(f"Twisted WSGI server listening on {port}")
 
-    # Завантажуємо ML моделі
+    # Завантажуємо ML моделі при старті
     ml_models.load_models()
 
     reactor.callWhenRunning(_start_background_services)
@@ -66,14 +52,12 @@ def main():
             if app_state.updater:
                 app_state.updater.stop()
         finally:
-            if reactor.running:
-                reactor.stop()
+            reactor.stop()
             sys.exit(0)
-            
     signal.signal(signal.SIGTERM, _sigterm)
     signal.signal(signal.SIGINT, _sigterm)
 
-    logger.info("Starting Twisted reactor for web app and scanner.")
+    logger.info("Starting Twisted reactor.")
     reactor.run()
 
 if __name__ == "__main__":
