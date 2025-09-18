@@ -1,1 +1,0 @@
-WindowBuilder<'_, tauri_runtime_wry::Wry<EventLoopMessage>, tauri::App>

@@ -1,56 +1,64 @@
 # app.py
 import os
+import sys
+import time
+import signal
 import logging
-from flask import Flask, jsonify, request, send_from_directory, session
-from flask_cors import CORS
-from dotenv import load_dotenv
-from waitress import serve
 
-# Load environment variables
-load_dotenv()
+from twisted.internet import reactor
+from twisted.internet.task import LoopingCall
+from twisted.web.wsgi import WSGIResource
+from twisted.web.server import Site
+from flask import Flask
 
-# Import project modules
-import db
+from state import app_state
+import scanner
 import bot
 import ctrader
-import scanner
 import api
-from auth import auth_debugger, init_data_valid
-from state import state_manager
+import ml_models # Важливо, щоб цей імпорт був
 
-# Configure logging
+# Logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger("app")
 
-# Initialize Flask app
-app = Flask(__name__, static_folder='webapp', static_url_path='')
-app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'default-secret-key-for-development')
-CORS(app)
+# Flask app
+app = Flask(__name__)
+app.config['JSON_AS_ASCII'] = False
 
-# Register API blueprints
-app.register_blueprint(api.bp)
+def _start_background_services():
+    bot.start_telegram_bot()
+    ctrader.start_ctrader_client()
+    LoopingCall(scanner.scan_markets_once).start(60.0, now=False)
+    LoopingCall(lambda: (app_state.sse_queue.put_nowait({"_ping": int(time.time())}) if not app_state.sse_queue.full() else None)).start(20.0, now=False)
 
-# Serve the main web application
-@app.route('/')
-def serve_index():
-    return send_from_directory(app.static_folder, 'index.html')
-
-# Main function to run the application
 def main():
-    # Initialize database
-    try:
-        db.initialize_database()
-    except Exception as e:
-        logging.error(f"Error initializing database: {e}")
-
-    # Initialize and start other services
-    bot.init_bot()
-    ctrader.init_ctrader()
-    scanner.init_scanner()
+    api.register_routes(app)
     
-    # Run the web server using waitress, listening on all interfaces
-    port = int(os.environ.get('PORT', 8080))
-    logging.info(f"Waitress server listening on 0.0.0.0:{port}")
-    serve(app, host='0.0.0.0', port=port)
+    resource = WSGIResource(reactor, reactor.getThreadPool(), app)
+    site = Site(resource)
+    port = int(os.environ.get("PORT", "8080"))
+    reactor.listenTCP(port, site, interface="0.0.0.0")
+    logger.info(f"Twisted WSGI server listening on {port}")
 
-if __name__ == '__main__':
+    # Завантажуємо ML моделі при старті
+    ml_models.load_models()
+
+    reactor.callWhenRunning(_start_background_services)
+
+    def _sigterm(signum, frame):
+        logger.info("SIGTERM received — stopping reactor")
+        try:
+            if app_state.updater:
+                app_state.updater.stop()
+        finally:
+            reactor.stop()
+            sys.exit(0)
+    signal.signal(signal.SIGTERM, _sigterm)
+    signal.signal(signal.SIGINT, _sigterm)
+
+    logger.info("Starting Twisted reactor.")
+    reactor.run()
+
+if __name__ == "__main__":
     main()
