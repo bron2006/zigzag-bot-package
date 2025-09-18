@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "identifier": "com.zigzag.bot",
   "build": {
-    "devUrl": "http://localhost:8080",
+    "devUrl": "https://zigzag-bot-package.fly.dev",
     "beforeDevCommand": "",
     "beforeBuildCommand": ""
   },
