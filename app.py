@@ -3,10 +3,8 @@ import os
 import logging
 from flask import Flask, jsonify, request, send_from_directory, session
 from flask_cors import CORS
-from twisted.internet import reactor
-from twisted.web.server import Site
-from twisted.web.wsgi import WSGIResource
 from dotenv import load_dotenv
+from waitress import serve
 
 # Load environment variables
 load_dotenv()
@@ -36,26 +34,23 @@ app.register_blueprint(api.bp)
 def serve_index():
     return send_from_directory(app.static_folder, 'index.html')
 
-# Initialize database
-try:
-    db.initialize_database()
-except Exception as e:
-    logging.error(f"Error initializing database: {e}")
+# Main function to run the application
+def main():
+    # Initialize database
+    try:
+        db.initialize_database()
+    except Exception as e:
+        logging.error(f"Error initializing database: {e}")
 
-# Initialize and start other services
-bot.init_bot()
-ctrader.init_ctrader()
-scanner.init_scanner()
-
-# Set up Twisted server
-if __name__ == '__main__':
+    # Initialize and start other services
+    bot.init_bot()
+    ctrader.init_ctrader()
+    scanner.init_scanner()
+    
+    # Run the web server using waitress, listening on all interfaces
     port = int(os.environ.get('PORT', 8080))
-    resource = WSGIResource(reactor, reactor.getThreadPool(), app)
-    site = Site(resource)
-    
-    # --- КЛЮЧОВА ЗМІНА ТУТ ---
-    # Listen on all interfaces (0.0.0.0), not just localhost
-    reactor.listenTCP(port, site, interface='0.0.0.0')
-    
-    logging.info(f"Twisted WSGI server listening on {port}")
-    reactor.run()
+    logging.info(f"Waitress server listening on 0.0.0.0:{port}")
+    serve(app, host='0.0.0.0', port=port)
+
+if __name__ == '__main__':
+    main()

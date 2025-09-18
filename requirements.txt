@@ -15,6 +15,7 @@ service-identity
 pyOpenSSL
 cryptography
 numpy
+waitress
 TA-Lib
 pandas
 pandas-ta-openbb
