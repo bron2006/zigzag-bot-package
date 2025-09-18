@@ -12,7 +12,7 @@ from twisted.web.server import Site
 from flask import Flask
 
 from state import app_state
-# --- ЗМІНА: більше не імпортуємо scanner напряму для запуску ---
+import scanner
 import bot
 import ctrader
 import api
@@ -27,10 +27,23 @@ app = Flask(__name__)
 app.config['JSON_AS_ASCII'] = False
 
 def _start_background_services():
-    # --- ЗМІНА: Прибрали запуск сканера звідси ---
+    """Запускає всі фонові сервіси, включаючи сканер."""
+    logger.info("Starting all background services...")
     bot.start_telegram_bot()
-    # ctrader.start_ctrader_client() # Цей сервіс тепер запускається у worker.py
-    # LoopingCall(scanner.scan_markets_once).start(60.0, now=False) # ВИДАЛЕНО
+    ctrader.start_ctrader_client()
+    
+    # Чекаємо, поки завантажаться символи, перш ніж запускати сканер
+    def check_symbols_and_start_scanner():
+        if app_state.SYMBOLS_LOADED:
+            logger.info("Symbols loaded. Starting market scanner loop.")
+            LoopingCall(scanner.scan_markets_once).start(60.0, now=True)
+        else:
+            logger.info("Symbols not loaded yet, checking again in 10 seconds.")
+            reactor.callLater(10, check_symbols_and_start_scanner)
+            
+    reactor.callLater(10, check_symbols_and_start_scanner)
+    
+    # Ping для SSE з'єднання
     LoopingCall(lambda: (app_state.sse_queue.put_nowait({"_ping": int(time.time())}) if not app_state.sse_queue.full() else None)).start(20.0, now=False)
 
 def main():
@@ -42,7 +55,7 @@ def main():
     reactor.listenTCP(port, site, interface="0.0.0.0")
     logger.info(f"Twisted WSGI server listening on {port}")
 
-    # Завантажуємо ML моделі при старті (залишаємо, бо API їх використовує)
+    # Завантажуємо ML моделі
     ml_models.load_models()
 
     reactor.callWhenRunning(_start_background_services)
@@ -60,7 +73,7 @@ def main():
     signal.signal(signal.SIGTERM, _sigterm)
     signal.signal(signal.SIGINT, _sigterm)
 
-    logger.info("Starting Twisted reactor for web app.")
+    logger.info("Starting Twisted reactor for web app and scanner.")
     reactor.run()
 
 if __name__ == "__main__":
