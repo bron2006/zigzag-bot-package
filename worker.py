@@ -6,20 +6,31 @@ import sys
 from twisted.internet import reactor
 from twisted.internet.task import LoopingCall
 
-# Налаштовуємо логування, щоб бачити роботу воркера
+# Налаштовуємо логування
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("worker")
 
-# Імпортуємо необхідні модулі з вашого проєкту
+# Імпортуємо необхідні модулі
+import db
 import ctrader
 import ml_models
 import scanner
 from state import app_state
 
-def _start_background_services():
-    """Запускає лише ті сервіси, які потрібні сканеру."""
-    logger.info("Worker process starting background services...")
+def _start_worker_services():
+    """Запускає всі сервіси, необхідні для роботи сканера."""
+    logger.info("Worker process starting services...")
+    # Ініціалізуємо базу даних
+    try:
+        db.initialize_database()
+    except Exception as e:
+        logger.error(f"Worker failed to initialize database: {e}")
+        # Можна або зупинити, або продовжити без БД
+    
+    # Запускаємо клієнт cTrader
+    ctrader.init_ctrader()
     ctrader.start_ctrader_client()
+
     # Чекаємо, поки завантажаться символи, перш ніж запускати сканер
     def check_symbols_and_start_scanner():
         if app_state.SYMBOLS_LOADED:
@@ -29,6 +40,7 @@ def _start_background_services():
             logger.info("Symbols not loaded yet, checking again in 5 seconds.")
             reactor.callLater(5, check_symbols_and_start_scanner)
     
+    # Починаємо перевірку через 5 секунд після запуску реактора
     reactor.callLater(5, check_symbols_and_start_scanner)
 
 def main():
@@ -38,7 +50,7 @@ def main():
     ml_models.load_models()
 
     # Запускаємо сервіси, коли реактор готовий
-    reactor.callWhenRunning(_start_background_services)
+    reactor.callWhenRunning(_start_worker_services)
 
     # Обробка сигналів для коректної зупинки
     def _sigterm(signum, frame):
