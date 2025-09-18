@@ -28,7 +28,6 @@ def _start_worker_services():
         # Можна або зупинити, або продовжити без БД
     
     # Запускаємо клієнт cTrader
-    ctrader.init_ctrader()
     ctrader.start_ctrader_client()
 
     # Чекаємо, поки завантажаться символи, перш ніж запускати сканер
