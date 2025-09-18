@@ -1,12 +1,11 @@
 # requirements.txt
-Flask==2.3.3
+Flask
 Flask-Cors
-SQLAlchemy==2.0.23
-psycopg2-binary==2.9.9
-python-dotenv==1.0.1
-Twisted>=22.0.0
+SQLAlchemy
+psycopg2-binary
+python-dotenv
+Twisted
 apscheduler
-klein
 cTrader-open-api @ git+https://github.com/spotware/OpenApiPy.git
 protobuf==3.20.1
 requests
@@ -15,10 +14,11 @@ service-identity
 pyOpenSSL
 cryptography
 numpy
-waitress
 TA-Lib
 pandas
-pandas-ta-openbb
-scikit-learn==1.7.2
-joblib==1.4.2
-lightgbm==4.4.0
+pandas-ta
+scikit-learn
+joblib
+lightgbm
+waitress
+python-telegram-bot
