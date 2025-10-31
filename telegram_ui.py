@@ -1,34 +1,22 @@
 # telegram_ui.py
 import logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, Message
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import CallbackContext
 from twisted.internet import reactor
-from telegram.error import BadRequest
+from telegram.error import BadRequest # <--- Додано імпорт
+
 from state import app_state
 from config import FOREX_SESSIONS, CRYPTO_PAIRS, STOCK_TICKERS, COMMODITIES, TRADING_HOURS
 from analysis import get_api_detailed_signal_data
-from utils_message_cleanup import bot_track_message, bot_clear_messages # <--- ІМПОРТ
 
 logger = logging.getLogger(__name__)
-EXPIRATIONS = ["1m", "5m"]
 
-def _get_chat_id(update: Update) -> int:
-    if update.effective_chat: return update.effective_chat.id
-    if update.callback_query and update.callback_query.message: return update.callback_query.message.chat_id
-    if update.effective_user: return update.effective_user.id
-    logger.error("Не вдалося отримати chat_id з update")
-    return 0 
-def _safe_delete(bot, chat_id: int, message_id: int):
-    try:
-        bot.delete_message(chat_id=chat_id, message_id=message_id)
-    except BadRequest as e:
-        logger.debug("safe_delete failed: %s (chat=%s mid=%s)", e, chat_id, message_id)
+EXPIRATIONS = ["1m", "5m"]
 
 def get_reply_keyboard() -> ReplyKeyboardMarkup:
     keyboard = [[KeyboardButton("МЕНЮ")]]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-# (Функції клавіатур get_main_menu_kb, get_expiration_kb, get_forex_sessions_kb, get_assets_kb залишаються БЕЗ ЗМІН)
 def get_main_menu_kb() -> InlineKeyboardMarkup:
     keyboard = [
         [InlineKeyboardButton("💹 Валютні пари (Forex)", callback_data="category_forex")],
@@ -36,7 +24,10 @@ def get_main_menu_kb() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("📈 Акції/Індекси", callback_data="category_stocks")],
         [InlineKeyboardButton("🥇 Сировина", callback_data="category_commodities")]
     ]
-    scanner_map = {"forex": "💹 Forex", "crypto": "💎 Crypto", "commodities": "🥇 Сировина", "watchlist": "⭐ Обране"}
+    scanner_map = {
+        "forex": "💹 Forex", "crypto": "💎 Crypto",
+        "commodities": "🥇 Сировина", "watchlist": "⭐ Обране"
+    }
     for key, text in scanner_map.items():
         is_enabled = app_state.get_scanner_state(key)
         status_icon = "✅" if is_enabled else "❌"
@@ -44,10 +35,12 @@ def get_main_menu_kb() -> InlineKeyboardMarkup:
         callback_data = f"toggle_scanner_{key}"
         keyboard.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
     return InlineKeyboardMarkup(keyboard)
+
 def get_expiration_kb(category: str) -> InlineKeyboardMarkup:
     keyboard = [[InlineKeyboardButton(exp, callback_data=f"exp_{category}_{exp}") for exp in EXPIRATIONS]]
     keyboard.append([InlineKeyboardButton("⬅️ Назад до категорій", callback_data="main_menu")])
     return InlineKeyboardMarkup(keyboard)
+
 def get_forex_sessions_kb(expiration: str) -> InlineKeyboardMarkup:
     keyboard = []
     for session_name in FOREX_SESSIONS:
@@ -55,6 +48,7 @@ def get_forex_sessions_kb(expiration: str) -> InlineKeyboardMarkup:
         keyboard.append([InlineKeyboardButton(display_text, callback_data=f"session_forex_{expiration}_{session_name}")])
     keyboard.append([InlineKeyboardButton("⬅️ Назад до експірацій", callback_data="category_forex")])
     return InlineKeyboardMarkup(keyboard)
+
 def get_assets_kb(asset_list: list, category: str, expiration: str) -> InlineKeyboardMarkup:
     keyboard, row = [], []
     for asset in asset_list:
@@ -69,32 +63,57 @@ def get_assets_kb(asset_list: list, category: str, expiration: str) -> InlineKey
          keyboard.append([InlineKeyboardButton("⬅️ Назад до експірацій", callback_data=f"category_{category}")])
     return InlineKeyboardMarkup(keyboard)
 
-
-# --- Хендлери (Модифіковані згідно з логікою експерта) ---
 def start(update: Update, context: CallbackContext) -> None:
-    update.message.reply_text("👋 Вітаю! Натисніть «МЕНЮ» для вибору активів.", reply_markup=get_reply_keyboard())
+    update.message.reply_text(
+        "👋 Вітаю! Натисніть «МЕНЮ» для вибору активів.",
+        reply_markup=get_reply_keyboard()
+    )
 
+# --- ЗМІНИ: Нова функція menu (Порада 1 Експерта) ---
 def menu(update: Update, context: CallbackContext) -> None:
-    chat_id = _get_chat_id(update)
-    if not chat_id: return
-    bot_clear_messages(context.bot, context.bot_data, chat_id, limit=50) # Очищення
-    sent_message = update.message.reply_text("🏠 Головне меню:", reply_markup=get_main_menu_kb())
-    bot_track_message(context.bot_data, chat_id, sent_message.message_id) # Відстеження
+    chat_id = update.effective_chat.id
+    chat_key = f"chat_{chat_id}_messages" # <--- Виправлено згідно з порадою
+
+    # Очищаємо всі повідомлення, що бот колись надсилав у цьому чаті
+    messages = context.bot_data.get(chat_key, [])
+    logger.debug(f"Menu: Знайдено {len(messages)} повідомлень для очищення.")
+    for mid in messages[-30:]:  # максимум 30 останніх
+        try:
+            context.bot.delete_message(chat_id=chat_id, message_id=mid)
+        except BadRequest:
+            pass
+        except Exception:
+            pass
+    context.bot_data[chat_key] = []
+
+    # Надсилаємо нове меню
+    sent = update.message.reply_text("🏠 Головне меню:", reply_markup=get_main_menu_kb())
+
+    # Зберігаємо ID нового повідомлення
+    context.bot_data.setdefault(chat_key, []).append(sent.message_id)
+# --- КІНЕЦЬ ЗМІН ---
 
 def reset_ui(update: Update, context: CallbackContext) -> None:
-    chat_id = _get_chat_id(update);
-    if not chat_id: return
-    sent_message = update.message.reply_text(f"Невідома команда: '{update.message.text}'. Використовуйте кнопки.", reply_markup=get_reply_keyboard())
-    bot_track_message(context.bot_data, chat_id, sent_message.message_id) # Відстеження
+    sent_message = update.message.reply_text(
+        f"Невідома команда: '{update.message.text}'. Використовуйте кнопки.",
+        reply_markup=get_reply_keyboard()
+    )
+    # --- ЗМІНИ: Відстежуємо "спам" (Порада 2 Експерта) ---
+    chat_id = update.effective_chat.id
+    chat_key = f"chat_{chat_id}_messages"
+    context.bot_data.setdefault(chat_key, []).append(sent_message.message_id)
+    # --- КІНЕЦЬ ЗМІН ---
 
 def symbols_command(update: Update, context: CallbackContext):
-    chat_id = _get_chat_id(update);
-    if not chat_id: return
+    chat_id = update.effective_chat.id
+    chat_key = f"chat_{chat_id}_messages"
+
     if not app_state.SYMBOLS_LOADED or not hasattr(app_state, 'all_symbol_names'):
         sent_msg = update.message.reply_text("Список символів ще не завантажено. Спробуйте за хвилину.")
-        bot_track_message(context.bot_data, chat_id, sent_msg.message_id) # Відстеження
+        context.bot_data.setdefault(chat_key, []).append(sent_msg.message_id) # Відстежуємо
         return
-    # (код для форматування списку символів - без змін)
+    
+    # ... (код форматування тексту символів без змін) ...
     forex = sorted([s for s in app_state.all_symbol_names if "/" in s and len(s) < 8 and "USD" not in s.upper()])
     crypto_usd = sorted([s for s in app_state.all_symbol_names if "/USD" in s.upper()])
     crypto_usdt = sorted([s for s in app_state.all_symbol_names if "/USDT" in s.upper()])
@@ -107,35 +126,35 @@ def symbols_command(update: Update, context: CallbackContext):
     
     for i in range(0, len(message), 4096):
         sent_msg = update.message.reply_text(message[i:i + 4096], parse_mode='Markdown')
-        bot_track_message(context.bot_data, chat_id, sent_msg.message_id) # Відстеження
+        context.bot_data.setdefault(chat_key, []).append(sent_msg.message_id) # Відстежуємо
 
 def _format_signal_message(result: dict, expiration: str) -> str:
-    # (Функція форматування без змін)
-    if result.get("error"): return f"❌ Помилка аналізу: {result['error']}"
-    pair = result.get('pair', 'N/A'); price = result.get('price')
+    # ... (код форматування без змін) ...
+    if result.get("error"):
+        return f"❌ Помилка аналізу: {result['error']}"
+    pair = result.get('pair', 'N/A')
+    price = result.get('price')
     verdict = result.get('verdict_text', 'Не вдалося визначити.')
     price_str = f"{price:.5f}" if price and price > 0 else "N/A"
     parts = [f"📈 *Сигнал для {pair} (Експірація: {expiration})*"]
     parts.append(f"**Прогноз:** {verdict}")
     parts.append(f"**Ціна в момент сигналу:** `{price_str}`")
     reasons = result.get('reasons', [])
-    if reasons: parts.append(f"\n📑 **Фактори аналізу:**\n" + "\n".join([f"• _{r}_" for r in reasons]))
+    if reasons:
+        parts.append(f"\n📑 **Фактори аналізу:**\n" + "\n".join([f"• _{r}_" for r in reasons]))
     return "\n".join(parts)
 
+# --- ВАШ ОРИГІНАЛЬНИЙ button_handler (БЕЗ МОЇХ "ТЕХНОЛОГІЙ") ---
 def button_handler(update: Update, context: CallbackContext) -> None:
-    query = update.callback_query;
-    if not query: return
+    query = update.callback_query
     query.answer()
-    data = query.data or ""
-    chat_id = _get_chat_id(update)
-    if not chat_id: return
+    data = query.data
     
-    # --- ГОЛОВНА ЗМІНА: ЗАВЖДИ ВИДАЛЯЄМО (Замість edit_message_text) ---
-    _safe_delete(context.bot, chat_id, query.message.message_id)
-    # --- КІНЕЦЬ ---
+    # Ваш код з last_menu_id (який тепер буде видалятися кнопкою МЕНЮ)
+    context.user_data['last_menu_id'] = query.message.message_id 
 
-    parts = data.split('_'); action = parts[0]
-    sent_msg = None 
+    parts = data.split('_')
+    action = parts[0]
 
     if action == "toggle" and parts[1] == "scanner":
         if len(parts) > 2:
@@ -143,53 +162,72 @@ def button_handler(update: Update, context: CallbackContext) -> None:
             if category in app_state.SCANNER_STATE:
                 new_state = not app_state.get_scanner_state(category)
                 app_state.set_scanner_state(category, new_state)
-        sent_msg = context.bot.send_message(chat_id, "🏠 Головне меню:", reply_markup=get_main_menu_kb())
+                status_text = "увімкнено" if new_state else "вимкнено"
+                query.answer(text=f"Сканер '{category}' {status_text}")
+                query.edit_message_text("🏠 Головне меню:", reply_markup=get_main_menu_kb())
+            return
 
-    elif action == "main":
-        sent_msg = context.bot.send_message(chat_id, "🏠 Головне меню:", reply_markup=get_main_menu_kb())
+    if action == "main":
+        query.edit_message_text("🏠 Головне меню:", reply_markup=get_main_menu_kb())
+
     elif action == "category":
         category = parts[1]
-        sent_msg = context.bot.send_message(chat_id, f"Оберіть час експірації для '{category}':", reply_markup=get_expiration_kb(category))
+        query.edit_message_text(f"Оберіть час експірації для '{category}':", reply_markup=get_expiration_kb(category))
+
     elif action == "exp":
         _, category, expiration = parts
         if category == 'forex':
-            sent_msg = context.bot.send_message(chat_id, "💹 Виберіть торгову сесію:", reply_markup=get_forex_sessions_kb(expiration))
+            query.edit_message_text("💹 Виберіть торгову сесію:", reply_markup=get_forex_sessions_kb(expiration))
         else:
             asset_map = {'crypto': CRYPTO_PAIRS, 'stocks': STOCK_TICKERS, 'commodities': COMMODITIES}
-            sent_msg = context.bot.send_message(chat_id, f"Виберіть актив:", reply_markup=get_assets_kb(asset_map.get(category, []), category, expiration))
+            query.edit_message_text(f"Виберіть актив:", reply_markup=get_assets_kb(asset_map.get(category, []), category, expiration))
+
     elif action == "session":
         _, category, expiration, session_name = parts
         pairs = FOREX_SESSIONS.get(session_name, [])
-        sent_msg = context.bot.send_message(chat_id, f"Виберіть пару для сесії '{session_name}':", reply_markup=get_assets_kb(pairs, category, expiration))
+        query.edit_message_text(f"Виберіть пару для сесії '{session_name}':", reply_markup=get_assets_kb(pairs, category, expiration))
+
     elif action == "analyze":
         _, expiration, symbol = parts
         if not app_state.client or not app_state.SYMBOLS_LOADED:
             query.answer(text="❌ Сервіс ще завантажується, спробуйте пізніше.", show_alert=True)
-            sent_msg = context.bot.send_message(chat_id, "🏠 Головне меню:", reply_markup=get_main_menu_kb())
-            bot_track_message(context.bot_data, chat_id, sent_msg.message_id) # Відстежуємо меню
             return
         
-        loading_msg = context.bot.send_message(chat_id, text=f"⏳ Обрано {symbol} (експірація {expiration}). Роблю запит...")
-        bot_track_message(context.bot_data, chat_id, loading_msg.message_id) # Відстежуємо "Завантаження"
+        query.edit_message_text(text=f"⏳ Обрано {symbol} (експірація {expiration}). Роблю запит...")
 
         def on_success(result):
-            _safe_delete(context.bot, chat_id, loading_msg.message_id) # Видаляємо "Завантаження"
-            app_state.cache_signal(symbol, expiration, result) # Ваш оригінальний кеш
+            app_state.cache_signal(symbol, expiration, result)
             msg = _format_signal_message(result, expiration)
-            sent_signal = context.bot.send_message(chat_id, text=msg, parse_mode='Markdown')
-            bot_track_message(context.bot_data, chat_id, sent_signal.message_id) # Відстежуємо результат
+            query.edit_message_text(text=msg, parse_mode='Markdown', reply_markup=get_main_menu_kb())
 
         def on_error(failure):
-            _safe_delete(context.bot, chat_id, loading_msg.message_id) # Видаляємо "Завантаження"
             error = failure.getErrorMessage() if hasattr(failure, 'getErrorMessage') else str(failure)
             logger.error(f"❌ Помилка при отриманні сигналу для {symbol}: {error}")
-            sent_error = context.bot.send_message(chat_id, text=f"❌ Виникла помилка: {error}")
-            bot_track_message(context.bot_data, chat_id, sent_error.message_id) # Відстежуємо помилку
+            
+            # --- ЗМІНИ: Відстежуємо "спам" про помилку (Порада 2 Експерта) ---
+            # Ми не можемо тут редагувати (query.edit_message_text), бо "МЕНЮ" могло видалити це повідомлення.
+            # Тому ми видаляємо "Завантаження..." і надсилаємо 2 нових повідомлення.
+            
+            chat_id = query.effective_chat.id
+            chat_key = f"chat_{chat_id}_messages"
+            
+            # 1. Видаляємо "Завантаження..."
+            try:
+                context.bot.delete_message(chat_id=chat_id, message_id=query.message.message_id)
+            except BadRequest:
+                pass # Вже видалено
+
+            # 2. Надсилаємо помилку ("спам") і відстежуємо
+            sent_err = context.bot.send_message(chat_id, text=f"❌ Виникла помилка: {error}")
+            context.bot_data.setdefault(chat_key, []).append(sent_err.message_id)
+            
+            # 3. Надсилаємо нове меню і відстежуємо
+            sent_menu = context.bot.send_message(chat_id, "🏠 Головне меню:", reply_markup=get_main_menu_kb())
+            context.bot_data.setdefault(chat_key, []).append(sent_menu.message_id)
+            # --- КІНЕЦЬ ЗМІН ---
 
         def do_analysis():
-            d = get_api_detailed_signal_data(app_state.client, app_state.symbol_cache, symbol, query.from_user.id, timeframe=expiration) 
+            d = get_api_detailed_signal_data(app_state.client, app_state.symbol_cache, symbol, query.from_user.id, timeframe=expiration)
             d.addCallbacks(on_success, on_error)
+
         reactor.callLater(0, do_analysis)
-    
-    if sent_msg:
-        bot_track_message(context.bot_data, chat_id, sent_msg.message_id) # Відстежуємо всі нові меню
