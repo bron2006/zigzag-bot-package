@@ -1,0 +1,22 @@
+# requirements.txt
+Flask==2.3.3
+python-telegram-bot==13.15
+python-dotenv==1.0.1
+pandas
+pandas-ta-openbb
+ctrader-open-api @ git+https://github.com/spotware/OpenApiPy.git
+protobuf==3.20.1
+requests
+cachetools
+service-identity
+pyOpenSSL
+cryptography
+numpy
+TA-Lib
+twisted>=22.0.0
+SQLAlchemy==2.0.23
+psycopg2-binary==2.9.9
+scikit-learn==1.7.2
+joblib==1.4.2
+lightgbm==4.4.0
+Flask-Cors

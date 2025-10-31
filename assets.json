@@ -1,0 +1,33 @@
+{
+  "forex_sessions": {
+    "Тихоокеанська": [
+      "AUD/CAD", "AUD/JPY", "AUD/NZD", "NZD/JPY", "NZD/USD",
+      "NZD/CAD", "AUD/DKK", "AUD/HUF", "AUD/NOK", "AUD/SEK",
+      "AUD/CHF", "NZD/CHF"
+    ],
+    "Азіатська": [
+      "AUD/JPY", "EUR/JPY", "GBP/JPY", "CHF/JPY", "NZD/JPY",
+      "USD/JPY", "AUD/USD", "EUR/AUD", "GBP/AUD"
+    ],
+    "Європейська": [
+      "EUR/AUD", "EUR/CAD", "EUR/CHF", "EUR/GBP", "EUR/JPY",
+      "EUR/NZD", "EUR/USD", "GBP/AUD", "GBP/CAD", "GBP/CHF",
+      "GBP/JPY", "GBP/NZD", "GBP/USD", "USD/CAD", "USD/CHF",
+      "USD/JPY"
+    ],
+    "Американська": [
+      "AUD/USD", "EUR/USD", "GBP/USD", "NZD/USD", "USD/CAD",
+      "USD/CHF", "USD/JPY", "USD/MXN", "EUR/MXN"
+    ]
+  },
+  "crypto_pairs": [
+    "BTC/USD", "ETH/USD", "XRP/USD", "LTC/USD", "BCH/USD",
+    "ADA/USD", "SOL/USD", "DOGE/USD", "BNB/USD"
+  ],
+  "stock_tickers": [
+    "US30", "US100", "US500", "DE30", "UK100"
+  ],
+  "commodities": [
+    "XAU/USD", "XAG/USD", "USO/USD"
+  ]
+}

@@ -1,0 +1,18 @@
+# Папки кешу Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+ctrader_open_api/__pycache__/
+
+# Папки віртуального середовища
+venv/
+venv.bak/
+.venv/
+
+# Файл зі змінними середовища (ніколи не додавайте його в Git!)
+.env
+
+# Специфічні файли IDE
+.idea/
+.vscode/
