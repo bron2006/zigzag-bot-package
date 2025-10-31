@@ -4,14 +4,14 @@ import queue
 from typing import Dict, Any
 from config import IDEAL_ENTRY_THRESHOLD, get_ctrader_access_token
 from telegram.error import BadRequest
+from utils_message_cleanup import bot_track_message
 
 logger = logging.getLogger(__name__)
 
 class AppState:
     def __init__(self):
-        # --- ВАШ ОРИГІНАЛЬНИЙ КОД (БЕЗ МОЇХ ВИГАДОК) ---
         self.client = None
-        self.updater = None # Це поле заповнить bot.py
+        self.updater = None
         self.all_symbol_names: list = []
         self.symbol_cache: Dict[str, Any] = {}
         self.symbol_id_map: Dict[int, str] = {}
@@ -26,31 +26,28 @@ class AppState:
         self.sse_queue: queue.Queue = queue.Queue()
         self.IDEAL_ENTRY_THRESHOLD = IDEAL_ENTRY_THRESHOLD
         self.access_token = get_ctrader_access_token()
-        # --- КІНЕЦЬ ВАШОГО КОДУ ---
 
     def set_scanner_state(self, category: str, enabled: bool):
         if category in self.SCANNER_STATE:
             self.SCANNER_STATE[category] = enabled
             logger.info(f"Сканер '{category}' => {'ON' if enabled else 'OFF'}")
+
     def get_scanner_state(self, category: str) -> bool:
         return self.SCANNER_STATE.get(category, False)
+
     def cache_signal(self, pair: str, timeframe: str, signal_data: dict):
         key = f"{pair}_{timeframe}"
         self.SIGNAL_CACHE[key] = signal_data
         logger.debug(f"Кеш оновлено: {key}")
+
     def get_cached_signal(self, pair: str, timeframe: str):
         key = f"{pair}_{timeframe}"
         return self.SIGNAL_CACHE.get(key)
 
-    # --- ЗМІНИ: Додаємо відстеження (Порада 2 Експерта) ---
     def send_telegram_alert(self, chat_id: int, message: str, parse_mode='Markdown'):
-        """
-        Надсилає повідомлення та відстежує його ID у bot_data.
-        """
         if not self.updater:
             logger.error("Updater is not initialized in AppState. Cannot send alert.")
             return
-
         try:
             sent_msg = self.updater.bot.send_message(
                 chat_id=chat_id,
@@ -58,16 +55,11 @@ class AppState:
                 parse_mode=parse_mode,
                 disable_web_page_preview=True
             )
-            
-            # Порада 2 Експерта: Відстежуємо "спам" від сканера
-            if sent_msg and hasattr(self, 'updater') and self.updater.bot:
-                chat_key = f"chat_{chat_id}_messages"
-                self.updater.bot.bot_data.setdefault(chat_key, []).append(sent_msg.message_id)
-
+            if sent_msg:
+                bot_track_message(self.updater.bot.bot_data, chat_id, sent_msg.message_id)
         except BadRequest as e:
             logger.error(f"Telegram BadRequest sending alert to {chat_id}: {e}")
-        except Exception as e:
-            logger.error(f"Failed to send Telegram alert to {chat_id}", exc_info=True)
-    # --- КІНЕЦЬ ЗМІН ---
+        except Exception:
+            logger.exception("Failed to send Telegram alert")
 
 app_state = AppState()
