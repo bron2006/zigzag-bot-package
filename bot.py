@@ -7,7 +7,7 @@ from telegram.ext import (
     MessageHandler, 
     Filters, 
     CallbackQueryHandler,
-    PicklePersistence # Потрібно для context.user_data
+    PicklePersistence # Вмикає context.bot_data
 )
 import os 
 from state import app_state
@@ -21,23 +21,28 @@ def start_telegram_bot():
         logger.warning("TELEGRAM_BOT_TOKEN not set — Telegram disabled")
         return
     try:
+        # Шлях до файлу збереження на постійному диску Fly.io
         persistence_path = os.path.join('/data', 'bot_data.pkl')
         logger.info(f"Using persistence file at: {persistence_path}")
         
+        # Створюємо об'єкт "пам'яті"
         persistence = PicklePersistence(filename=persistence_path)
         
+        # Передаємо "пам'ять" (persistence) в Updater
         updater = Updater(
             token=TELEGRAM_BOT_TOKEN, 
             use_context=True, 
-            persistence=persistence # Увімкнено
+            persistence=persistence
         )
 
-        app_state.updater = updater
+        # Зберігаємо updater в app_state, щоб сканер мав доступ до bot_data
+        app_state.updater = updater 
+        
         dp = updater.dispatcher
         
-        # Виправлення: використовуємо Filters.regex, як радив експерт
         dp.add_handler(CommandHandler("start", telegram_ui.start))
         dp.add_handler(CommandHandler("symbols", telegram_ui.symbols_command))
+        # Використовуємо Filters.regex, як радив експерт
         dp.add_handler(MessageHandler(Filters.regex('^МЕНЮ$'), telegram_ui.menu)) 
         dp.add_handler(MessageHandler(Filters.text & ~Filters.command, telegram_ui.reset_ui))
         dp.add_handler(CallbackQueryHandler(telegram_ui.button_handler))
