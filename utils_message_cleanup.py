@@ -20,7 +20,6 @@ def bot_track_message(bot_data, chat_id: int, message_id: int, max_store: int = 
     lst.append(message_id)
     if len(lst) > max_store:
         store[str(chat_id)] = lst[-max_store:]
-    # persist back (необов'язково, оскільки PicklePersistence робить це при зупинці, але надійно)
     bot_data[BOT_DATA_KEY] = store
     logger.debug("Tracked message chat=%s mid=%s (stored=%d)", chat_id, message_id, len(store.get(str(chat_id), [])))
 

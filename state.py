@@ -1,62 +1,58 @@
 # state.py
 import logging
+import queue
+from typing import Dict, Any
+from config import IDEAL_ENTRY_THRESHOLD, get_ctrader_access_token
 from telegram.error import BadRequest
-from asyncio import Queue
 
-# --- ІНТЕГРАЦІЯ ЕКСПЕРТА (для очищення) ---
-# Ми залишаємо це, оскільки інші файли це використовують
+# --- ЗМІНИ: Імпортуємо логіку експерта ---
 from utils_message_cleanup import bot_track_message
-# --- КІНЕЦЬ ---
+# --- КІНЕЦЬ ЗМІН ---
 
 logger = logging.getLogger(__name__)
 
 class AppState:
     def __init__(self):
+        # --- Це ВАШІ ОРИГІНАЛЬНІ поля (які я помилково видалив) ---
         self.client = None
-        self.updater = None # Потрібно для bot.py та очищення
-        
-        # --- ПОВЕРНЕННЯ КРИТИЧНИХ АТРИБУТІВ ---
-        # (Я помилково видалив їх у попередній версії, що зламало cTrader)
-        self.access_token = None
-        self.refresh_token = None
-        self.token_expires_at = None
-        self.sse_queue = Queue(maxsize=100) # Потрібно для app.py
-        # --- КІНЕЦЬ ПОВЕРНЕННЯ ---
-
-        self.SYMBOLS_LOADED = False
-        self.all_symbol_names = set()
-        self.symbol_cache = {}
-        self.signal_cache = {}
-        self.SCANNER_STATE = {
-            "forex": False,
-            "crypto": False,
-            "commodities": False,
-            "watchlist": False
+        self.updater = None # Це поле заповнить bot.py
+        self.all_symbol_names: list = []
+        self.symbol_cache: Dict[str, Any] = {}
+        self.symbol_id_map: Dict[int, str] = {}
+        self.SYMBOLS_LOADED: bool = False
+        self.live_prices: Dict[str, Dict[str, Any]] = {}
+        self.scanner_cooldown_cache: Dict[str, float] = {}
+        self.latest_analysis_cache: Dict[str, Dict[str, Any]] = {}
+        self.SIGNAL_CACHE: Dict[str, Dict[str, Any]] = {}
+        self.SCANNER_STATE: Dict[str, bool] = {
+            "forex": False, "crypto": False, "commodities": False, "watchlist": False
         }
+        self.sse_queue: queue.Queue = queue.Queue()
+        self.IDEAL_ENTRY_THRESHOLD = IDEAL_ENTRY_THRESHOLD
+        self.access_token = get_ctrader_access_token()
+        # --- КІНЕЦЬ ВАШИХ ПОЛІВ ---
 
-    def get_scanner_state(self, category_key: str) -> bool:
-        return self.SCANNER_STATE.get(category_key, False)
+    def set_scanner_state(self, category: str, enabled: bool):
+        if category in self.SCANNER_STATE:
+            self.SCANNER_STATE[category] = enabled
+            logger.info(f"Сканер '{category}' => {'ON' if enabled else 'OFF'}")
 
-    def set_scanner_state(self, category_key: str, state: bool):
-        if category_key in self.SCANNER_STATE:
-            self.SCANNER_STATE[category_key] = state
-            logger.info(f"Scanner state for '{category_key}' set to {state}")
-        else:
-            logger.warning(f"Attempted to set unknown scanner state '{category_key}'")
+    def get_scanner_state(self, category: str) -> bool:
+        return self.SCANNER_STATE.get(category, False)
 
-    def cache_signal(self, symbol, timeframe, result):
-        key = f"{symbol}_{timeframe}"
-        self.signal_cache[key] = result
-        logger.debug(f"Signal cached for {key}")
+    def cache_signal(self, pair: str, timeframe: str, signal_data: dict):
+        key = f"{pair}_{timeframe}"
+        self.SIGNAL_CACHE[key] = signal_data
+        logger.debug(f"Кеш оновлено: {key}")
 
-    def get_cached_signal(self, symbol, timeframe):
-        key = f"{symbol}_{timeframe}"
-        return self.signal_cache.get(key)
-    
+    def get_cached_signal(self, pair: str, timeframe: str):
+        key = f"{pair}_{timeframe}"
+        return self.SIGNAL_CACHE.get(key)
+
+    # --- ЗМІНИ: Додаємо функцію, яку радив експерт ---
     def send_telegram_alert(self, chat_id: int, message: str, parse_mode='Markdown'):
         """
         Надсилає повідомлення та відстежує його ID у bot_data.
-        (Інтеграція експерта)
         """
         if not self.updater:
             logger.error("Updater is not initialized in AppState. Cannot send alert.")
@@ -70,15 +66,14 @@ class AppState:
                 disable_web_page_preview=True
             )
             
-            # --- ІНТЕГРАЦІЯ ЕКСПЕРТА ---
+            # Використовуємо глобальний bot_data для відстеження
             if sent_msg and hasattr(self, 'updater') and self.updater.bot:
                 bot_track_message(self.updater.bot.bot_data, chat_id, sent_msg.message_id)
-            # --- КІНЕЦЬ ---
 
         except BadRequest as e:
             logger.error(f"Telegram BadRequest sending alert to {chat_id}: {e}")
         except Exception as e:
             logger.error(f"Failed to send Telegram alert to {chat_id}", exc_info=True)
+    # --- КІНЕЦЬ ЗМІН ---
 
-# Створюємо єдиний екземпляр стану
 app_state = AppState()

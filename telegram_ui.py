@@ -9,15 +9,15 @@ from state import app_state
 from config import FOREX_SESSIONS, CRYPTO_PAIRS, STOCK_TICKERS, COMMODITIES, TRADING_HOURS
 from analysis import get_api_detailed_signal_data
 
-# --- ІНТЕГРАЦІЯ ЕКСПЕРТА ---
+# --- ЗМІНИ: Імпортуємо логіку експерта ---
 from utils_message_cleanup import bot_track_message, bot_clear_messages
-# --- КІНЕЦЬ ---
+# --- КІНЕЦЬ ЗМІН ---
 
 logger = logging.getLogger(__name__)
 
 EXPIRATIONS = ["1m", "5m"]
 
-# --- Нові утиліти (злегка адаптовані з коду експерта) ---
+# --- ЗМІНИ: Додаємо утиліти експерта ---
 def _get_chat_id(update: Update) -> int:
     """Повертає chat_id незалежно від того, message чи callback_query."""
     if update.effective_chat:
@@ -26,8 +26,7 @@ def _get_chat_id(update: Update) -> int:
         return update.callback_query.message.chat_id
     if update.effective_user:
         return update.effective_user.id
-    logger.error("Не вдалося отримати chat_id з update", extra={"update": update.to_dict()})
-    # Повертаємо 0 або None, щоб уникнути падіння, якщо chat_id не знайдено
+    logger.error("Не вдалося отримати chat_id з update")
     return 0 
 
 def _safe_delete(bot, chat_id: int, message_id: int):
@@ -36,11 +35,9 @@ def _safe_delete(bot, chat_id: int, message_id: int):
         bot.delete_message(chat_id=chat_id, message_id=message_id)
     except BadRequest as e:
         logger.debug("safe_delete failed: %s (chat=%s mid=%s)", e, chat_id, message_id)
-    except Exception as e:
-        logger.error("Unexpected error in _safe_delete: %s", e, exc_info=True)
+# --- КІНЕЦЬ ЗМІН ---
 
-# --- Клавіатури (Без змін) ---
-
+# --- Клавіатури (Без змін, як у вашій робочій версії) ---
 def get_reply_keyboard() -> ReplyKeyboardMarkup:
     keyboard = [[KeyboardButton("МЕНЮ")]]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
@@ -91,7 +88,7 @@ def get_assets_kb(asset_list: list, category: str, expiration: str) -> InlineKey
          keyboard.append([InlineKeyboardButton("⬅️ Назад до експірацій", callback_data=f"category_{category}")])
     return InlineKeyboardMarkup(keyboard)
 
-# --- Хендлери (Інтегровано bot_data) ---
+# --- Хендлери (Модифіковані згідно з порадами експерта) ---
 
 def start(update: Update, context: CallbackContext) -> None:
     sent = update.message.reply_text(
@@ -104,13 +101,13 @@ def menu(update: Update, context: CallbackContext) -> None:
     chat_id = _get_chat_id(update)
     if not chat_id: return
 
-    # 1. Агресивне очищення
+    # 1. Агресивне очищення (використовуємо bot_data)
     bot_clear_messages(context.bot, context.bot_data, chat_id, limit=50)
 
     # 2. Надсилаємо нове меню
     sent_message = update.message.reply_text("🏠 Головне меню:", reply_markup=get_main_menu_kb())
 
-    # 3. Реєструємо нове меню
+    # 3. Реєструємо нове меню (у bot_data)
     bot_track_message(context.bot_data, chat_id, sent_message.message_id)
 
 def reset_ui(update: Update, context: CallbackContext) -> None:
@@ -164,22 +161,20 @@ def _format_signal_message(result: dict, expiration: str) -> str:
 
 def button_handler(update: Update, context: CallbackContext) -> None:
     query = update.callback_query
-    if not query:
-        logger.warning("button_handler викликаний без query")
-        return
+    if not query: return
         
     query.answer()
     data = query.data or ""
     chat_id = _get_chat_id(update)
     if not chat_id: return
     
-    # --- ЛОГІКА ЕКСПЕРТА: Завжди видаляємо повідомлення з кнопками ---
+    # --- ЗМІНИ: Видаляємо старе меню (за порадою експерта) ---
     _safe_delete(context.bot, chat_id, query.message.message_id)
-    # --- КІНЕЦЬ ---
+    # --- КІНЕЦЬ ЗМІН ---
 
     parts = data.split('_')
     action = parts[0]
-    sent_msg = None # Ініціалізуємо змінну для відстеження
+    sent_msg = None 
 
     if action == "toggle" and parts[1] == "scanner":
         if len(parts) > 2:
@@ -222,7 +217,9 @@ def button_handler(update: Update, context: CallbackContext) -> None:
 
         def on_success(result):
             _safe_delete(context.bot, chat_id, loading_msg.message_id)
-            app_state.cache_signal(symbol, expiration, result)
+            
+            # Використовуємо ваш оригінальний cache_signal
+            app_state.cache_signal(symbol, expiration, result) 
             msg = _format_signal_message(result, expiration)
             sent_signal = context.bot.send_message(chat_id, text=msg, parse_mode='Markdown')
             bot_track_message(context.bot_data, chat_id, sent_signal.message_id)
@@ -235,11 +232,12 @@ def button_handler(update: Update, context: CallbackContext) -> None:
             bot_track_message(context.bot_data, chat_id, sent_error.message_id)
 
         def do_analysis():
-            d = get_api_detailed_signal_data(app_state.client, app_state.symbol_cache, symbol, query.from_user.id, timeframe=expiration)
+            # Використовуємо ваш оригінальний get_api_detailed_signal_data
+            d = get_api_detailed_signal_data(app_state.client, app_state.symbol_cache, symbol, query.from_user.id, timeframe=expiration) 
             d.addCallbacks(on_success, on_error)
 
         reactor.callLater(0, do_analysis)
-        # sent_msg тут None, бо ми вже відстежили loading_msg
+        # sent_msg тут None
     
     if sent_msg:
         bot_track_message(context.bot_data, chat_id, sent_msg.message_id)
