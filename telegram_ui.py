@@ -1,6 +1,6 @@
 # telegram_ui.py
 import logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, Message
 from telegram.ext import CallbackContext
 from twisted.internet import reactor
 from telegram.error import BadRequest
@@ -13,37 +13,62 @@ logger = logging.getLogger(__name__)
 
 EXPIRATIONS = ["1m", "5m"]
 
-# --- КОД ЕКСПЕРТА (Без змін) ---
+# --- ПОЧАТОК КОДУ ВІД ЕКСПЕРТА ---
 
-def track_message(context: CallbackContext, message):
+def _get_chat_id(update: Update) -> int:
+    """Повертає chat_id незалежно від того, message чи callback_query."""
+    if update.effective_chat:
+        return update.effective_chat.id
+    if update.effective_user:
+        return update.effective_user.id
+    # Резервний варіант для callback_query без effective_chat
+    if update.callback_query and update.callback_query.message:
+        return update.callback_query.message.chat_id
+    logger.error("Не вдалося отримати chat_id з update", extra={"update": update.to_dict()})
+    raise RuntimeError("Немає chat_id в update")
+
+def _safe_delete(bot, chat_id: int, message_id: int):
+    """Безпечне видалення повідомлення з логуванням помилок."""
+    try:
+        bot.delete_message(chat_id=chat_id, message_id=message_id)
+    except BadRequest as e:
+        # логування для діагностики (змінимо на warning, щоб не спамити в debug)
+        logger.warning("safe_delete failed: %s (chat=%s mid=%s)", e, chat_id, message_id)
+    except Exception as e:
+        logger.error("Unexpected error in _safe_delete: %s", e, exc_info=True)
+
+def track_message(context: CallbackContext, message: Message):
     """Зберігає ID усіх повідомлень бота для подальшого очищення."""
+    if not message: # Перевірка, чи message не None
+        return
     if 'sent_messages' not in context.user_data:
         context.user_data['sent_messages'] = []
     context.user_data['sent_messages'].append(message.message_id)
-
-    # Обмежуємо список (щоб не ріс безмежно)
-    if len(context.user_data['sent_messages']) > 50:
-        context.user_data['sent_messages'] = context.user_data['sent_messages'][-50:]
+    # обмежуємо зберігання
+    if len(context.user_data['sent_messages']) > 100:
+        context.user_data['sent_messages'] = context.user_data['sent_messages'][-100:]
 
 def clear_bot_messages(update: Update, context: CallbackContext, limit: int = 20):
     """Видаляє до `limit` останніх повідомлень, надісланих ботом."""
-    chat_id = update.effective_chat.id
-    message_ids = context.user_data.get('sent_messages', [])
+    chat_id = _get_chat_id(update)
+    stored = context.user_data.get('sent_messages', [])
+    if not stored:
+        logger.debug("clear_bot_messages: Немає збережених повідомлень для видалення.")
+        return
     
-    # Видаляємо останні 'limit' повідомлень
-    ids_to_delete = message_ids[-limit:]
+    to_delete = stored[-limit:]
+    logger.debug(f"clear_bot_messages: Намагаюся видалити {len(to_delete)} повідомлень.")
     
-    for mid in ids_to_delete:
-        try:
-            context.bot.delete_message(chat_id=chat_id, message_id=mid)
-        except BadRequest:
-            pass  # Могло бути видалено або старше 48 годин
+    for mid in to_delete:
+        _safe_delete(context.bot, chat_id, mid)
     
-    # Очищаємо лог від видалених ID
-    context.user_data['sent_messages'] = [mid for mid in message_ids if mid not in ids_to_delete]
+    # видаляємо тільки ті, що спробували видалити
+    context.user_data['sent_messages'] = [mid for mid in stored if mid not in to_delete]
 
-# --- КІНЕЦЬ КОДУ ЕКСПЕРТА ---
+# --- КІНЕЦЬ КОДУ ВІД ЕКСПЕРТА ---
 
+
+# --- Клавіатури (Без змін) ---
 
 def get_reply_keyboard() -> ReplyKeyboardMarkup:
     keyboard = [[KeyboardButton("МЕНЮ")]]
@@ -101,21 +126,23 @@ def get_assets_kb(asset_list: list, category: str, expiration: str) -> InlineKey
          keyboard.append([InlineKeyboardButton("⬅️ Назад до експірацій", callback_data=f"category_{category}")])
     return InlineKeyboardMarkup(keyboard)
 
+# --- Хендлери (Повністю інтегровані з логікою Експерта) ---
+
 def start(update: Update, context: CallbackContext) -> None:
-    sent_message = update.message.reply_text(
+    sent = update.message.reply_text(
         "👋 Вітаю! Натисніть «МЕНЮ» для вибору активів.",
         reply_markup=get_reply_keyboard()
     )
-    # Не відстежуємо привітання
+    # Не відстежуємо привітання, щоб не видаляти його
 
 def menu(update: Update, context: CallbackContext) -> None:
-    # 1. Агресивне очищення старих повідомлень
-    clear_bot_messages(update, context, limit=20)
+    # 1. Агресивне очищення
+    clear_bot_messages(update, context, limit=50) # Видаляємо до 50 старих
 
     # 2. Надсилаємо нове меню
     sent_message = update.message.reply_text("🏠 Головне меню:", reply_markup=get_main_menu_kb())
 
-    # 3. Реєструємо нове повідомлення (для майбутнього видалення)
+    # 3. Реєструємо нове меню
     track_message(context, sent_message)
 
 def reset_ui(update: Update, context: CallbackContext) -> None:
@@ -123,7 +150,7 @@ def reset_ui(update: Update, context: CallbackContext) -> None:
         f"Невідома команда: '{update.message.text}'. Використовуйте кнопки.",
         reply_markup=get_reply_keyboard()
     )
-    track_message(context, sent_message) # Реєструємо спам
+    track_message(context, sent_message) # Відстежуємо
 
 def symbols_command(update: Update, context: CallbackContext):
     if not app_state.SYMBOLS_LOADED or not hasattr(app_state, 'all_symbol_names'):
@@ -143,7 +170,7 @@ def symbols_command(update: Update, context: CallbackContext):
     
     for i in range(0, len(message), 4096):
         sent_msg = update.message.reply_text(message[i:i + 4096], parse_mode='Markdown')
-        track_message(context, sent_msg)
+        track_message(context, sent_msg) # Відстежуємо
 
 def _format_signal_message(result: dict, expiration: str) -> str:
     if result.get("error"):
@@ -165,20 +192,24 @@ def _format_signal_message(result: dict, expiration: str) -> str:
 
 def button_handler(update: Update, context: CallbackContext) -> None:
     query = update.callback_query
+    if not query:
+        logger.warning("button_handler викликаний без query")
+        return
+        
     query.answer()
-    data = query.data
-    chat_id = query.message.chat_id
-
-    # --- ПОЧАТОК ЗМІН: ЗАМІНА 'EDIT' НА 'DELETE' + 'SEND' ---
-    # Ми видаляємо старе меню, щоб надіслати нове (або повідомлення про завантаження)
-    # Це дозволить нам відстежувати ID нових повідомлень
+    data = query.data or ""
+    chat_id = _get_chat_id(update)
+    
+    # --- ЛОГІКА ЕКСПЕРТА: Завжди видаляємо повідомлення з кнопками ---
     try:
         query.delete_message()
-    except BadRequest:
-        pass # Повідомлення вже могло бути видалене
+    except Exception as e:
+        logger.debug("query.delete_message failed: %s", e)
+    # --- КІНЕЦЬ ---
 
     parts = data.split('_')
     action = parts[0]
+    sent_msg = None # Ініціалізуємо змінну для відстеження
 
     if action == "toggle" and parts[1] == "scanner":
         if len(parts) > 2:
@@ -186,21 +217,15 @@ def button_handler(update: Update, context: CallbackContext) -> None:
             if category in app_state.SCANNER_STATE:
                 new_state = not app_state.get_scanner_state(category)
                 app_state.set_scanner_state(category, new_state)
-                # query.answer(text=...) не надсилає повідомлення, тому не відстежуємо
-            
-            # Надсилаємо нове меню (замість edit_message_text)
-            sent_msg = context.bot.send_message(chat_id, "🏠 Головне меню:", reply_markup=get_main_menu_kb())
-            track_message(context, sent_msg)
-            return
-
-    if action == "main":
+        # Надсилаємо нове меню (замість edit)
         sent_msg = context.bot.send_message(chat_id, "🏠 Головне меню:", reply_markup=get_main_menu_kb())
-        track_message(context, sent_msg)
+
+    elif action == "main":
+        sent_msg = context.bot.send_message(chat_id, "🏠 Головне меню:", reply_markup=get_main_menu_kb())
 
     elif action == "category":
         category = parts[1]
         sent_msg = context.bot.send_message(chat_id, f"Оберіть час експірації для '{category}':", reply_markup=get_expiration_kb(category))
-        track_message(context, sent_msg)
 
     elif action == "exp":
         _, category, expiration = parts
@@ -209,53 +234,41 @@ def button_handler(update: Update, context: CallbackContext) -> None:
         else:
             asset_map = {'crypto': CRYPTO_PAIRS, 'stocks': STOCK_TICKERS, 'commodities': COMMODITIES}
             sent_msg = context.bot.send_message(chat_id, f"Виберіть актив:", reply_markup=get_assets_kb(asset_map.get(category, []), category, expiration))
-        track_message(context, sent_msg)
 
     elif action == "session":
         _, category, expiration, session_name = parts
         pairs = FOREX_SESSIONS.get(session_name, [])
         sent_msg = context.bot.send_message(chat_id, f"Виберіть пару для сесії '{session_name}':", reply_markup=get_assets_kb(pairs, category, expiration))
-        track_message(context, sent_msg)
 
     elif action == "analyze":
         _, expiration, symbol = parts
         if not app_state.client or not app_state.SYMBOLS_LOADED:
-            # query.answer - це спливаюче повідомлення, не відстежуємо
             query.answer(text="❌ Сервіс ще завантажується, спробуйте пізніше.", show_alert=True)
-            # Повертаємо головне меню, щоб користувач не застряг
             sent_msg = context.bot.send_message(chat_id, "🏠 Головне меню:", reply_markup=get_main_menu_kb())
-            track_message(context, sent_msg)
+            track_message(context, sent_msg) # Відстежуємо меню, на яке повернулися
             return
         
-        # Надсилаємо "Завантаження" як нове повідомлення і відстежуємо його
+        # Надсилаємо "Завантаження" і відстежуємо
         loading_msg = context.bot.send_message(chat_id, text=f"⏳ Обрано {symbol} (експірація {expiration}). Роблю запит...")
         track_message(context, loading_msg)
 
         def on_success(result):
-            # Видаляємо "Завантаження..."
-            try:
-                context.bot.delete_message(chat_id=chat_id, message_id=loading_msg.message_id)
-            except BadRequest:
-                pass
-                
+            _safe_delete(context.bot, chat_id, loading_msg.message_id) # Видаляємо "Завантаження..."
+            
             app_state.cache_signal(symbol, expiration, result)
             msg = _format_signal_message(result, expiration)
             
-            # Надсилаємо результат сигналу (спам) і відстежуємо його
+            # Надсилаємо результат і відстежуємо
             sent_signal = context.bot.send_message(chat_id, text=msg, parse_mode='Markdown')
             track_message(context, sent_signal)
 
         def on_error(failure):
-            # Видаляємо "Завантаження..."
-            try:
-                context.bot.delete_message(chat_id=chat_id, message_id=loading_msg.message_id)
-            except BadRequest:
-                pass
+            _safe_delete(context.bot, chat_id, loading_msg.message_id) # Видаляємо "Завантаження..."
 
             error = failure.getErrorMessage() if hasattr(failure, 'getErrorMessage') else str(failure)
             logger.error(f"❌ Помилка при отриманні сигналу для {symbol}: {error}")
             
-            # Надсилаємо помилку (спам) і відстежуємо її
+            # Надсилаємо помилку і відстежуємо
             sent_error = context.bot.send_message(chat_id, text=f"❌ Виникла помилка: {error}")
             track_message(context, sent_error)
 
@@ -264,3 +277,8 @@ def button_handler(update: Update, context: CallbackContext) -> None:
             d.addCallbacks(on_success, on_error)
 
         reactor.callLater(0, do_analysis)
+        # sent_msg тут None, бо ми вже відстежили loading_msg
+    
+    # Відстежуємо всі повідомлення, надіслані в цьому хендлері
+    if sent_msg:
+        track_message(context, sent_msg)
