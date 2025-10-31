@@ -3,7 +3,8 @@ import logging
 from telegram.error import BadRequest
 from asyncio import Queue
 
-# --- ІНТЕГРАЦІЯ ЕКСПЕРТА ---
+# --- ІНТЕГРАЦІЯ ЕКСПЕРТА (для очищення) ---
+# Ми залишаємо це, оскільки інші файли це використовують
 from utils_message_cleanup import bot_track_message
 # --- КІНЕЦЬ ---
 
@@ -12,10 +13,10 @@ logger = logging.getLogger(__name__)
 class AppState:
     def __init__(self):
         self.client = None
-        self.updater = None # Буде встановлено з bot.py
+        self.updater = None # Потрібно для bot.py та очищення
         
-        # --- ПОВЕРНЕННЯ ВІДСУТНІХ АТРИБУТІВ ---
-        # (Я помилково видалив їх у попередній версії)
+        # --- ПОВЕРНЕННЯ КРИТИЧНИХ АТРИБУТІВ ---
+        # (Я помилково видалив їх у попередній версії, що зламало cTrader)
         self.access_token = None
         self.refresh_token = None
         self.token_expires_at = None

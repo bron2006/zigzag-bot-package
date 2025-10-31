@@ -1,29 +1,26 @@
 # fly.toml
-app = "zigzag-bot-package"
-primary_region = "ams" # Повертаємо Амстердам
 
-kill_signal = "SIGINT"
-kill_timeout = 5
-processes = []
-
-[env]
-PORT = "8080"
+app = 'zigzag-bot-package'
+primary_region = 'fra'
 
 [build]
-dockerfile = "Dockerfile"
 
-[deploy]
-# Повертаємо таймаут 10 хвилин
-release_command = "python app.py"
-release_command_timeout = "600s"
-
-[mounts]
-source="signals_data"
-destination="/data"
-
-# [http_service] секцію видалено, щоб уникнути Health Checks
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ['app']
 
 [[vm]]
-cpu_kind = "shared"
-cpus = 1
-memory_mb = 512
+  memory = '512mb'
+  cpu_kind = 'shared'
+  cpus = 1
+
+[mounts]
+  source="signals_data"
+  destination="/data"
+
+[processes]
+  app = "python app.py"
