@@ -1,8 +1,9 @@
 # state.py
 import logging
 from telegram.error import BadRequest
+from asyncio import Queue
+
 # --- ІНТЕГРАЦІЯ ЕКСПЕРТА ---
-# Імпортуємо нашу нову, глобальну функцію відстеження
 from utils_message_cleanup import bot_track_message
 # --- КІНЕЦЬ ---
 
@@ -12,6 +13,15 @@ class AppState:
     def __init__(self):
         self.client = None
         self.updater = None # Буде встановлено з bot.py
+        
+        # --- ПОВЕРНЕННЯ ВІДСУТНІХ АТРИБУТІВ ---
+        # (Я помилково видалив їх у попередній версії)
+        self.access_token = None
+        self.refresh_token = None
+        self.token_expires_at = None
+        self.sse_queue = Queue(maxsize=100) # Потрібно для app.py
+        # --- КІНЕЦЬ ПОВЕРНЕННЯ ---
+
         self.SYMBOLS_LOADED = False
         self.all_symbol_names = set()
         self.symbol_cache = {}
@@ -45,6 +55,7 @@ class AppState:
     def send_telegram_alert(self, chat_id: int, message: str, parse_mode='Markdown'):
         """
         Надсилає повідомлення та відстежує його ID у bot_data.
+        (Інтеграція експерта)
         """
         if not self.updater:
             logger.error("Updater is not initialized in AppState. Cannot send alert.")
@@ -59,7 +70,6 @@ class AppState:
             )
             
             # --- ІНТЕГРАЦІЯ ЕКСПЕРТА ---
-            # Використовуємо глобальний bot_data для відстеження
             if sent_msg and hasattr(self, 'updater') and self.updater.bot:
                 bot_track_message(self.updater.bot.bot_data, chat_id, sent_msg.message_id)
             # --- КІНЕЦЬ ---
@@ -68,7 +78,6 @@ class AppState:
             logger.error(f"Telegram BadRequest sending alert to {chat_id}: {e}")
         except Exception as e:
             logger.error(f"Failed to send Telegram alert to {chat_id}", exc_info=True)
-
 
 # Створюємо єдиний екземпляр стану
 app_state = AppState()
