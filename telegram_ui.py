@@ -11,7 +11,6 @@ from analysis import get_api_detailed_signal_data
 from utils_message_cleanup import bot_track_message, bot_clear_messages
 
 logger = logging.getLogger(__name__)
-
 EXPIRATIONS = ["1m", "5m"]
 
 def _get_chat_id(update: Update) -> int:
@@ -74,8 +73,7 @@ def get_assets_kb(asset_list: list, category: str, expiration: str) -> InlineKey
         cd = f"analyze_{expiration}_{asset.replace('/', '')}"
         row.append(InlineKeyboardButton(asset, callback_data=cd))
         if len(row) == 2:
-            kb.append(row)
-            row = []
+            kb.append(row); row = []
     if row:
         kb.append(row)
     back = "⬅️ Назад до сесій" if category == 'forex' else "⬅️ Назад до експірацій"
@@ -88,7 +86,6 @@ def start(update: Update, context: CallbackContext) -> None:
     if not chat_id:
         return
     sent = update.message.reply_text("👋 Вітаю! Натисніть «МЕНЮ» для вибору активів.", reply_markup=get_reply_keyboard())
-    # Відстежуємо привітальне повідомлення
     bot_track_message(context.bot_data, chat_id, sent.message_id)
 
 def menu(update: Update, context: CallbackContext) -> None:
@@ -97,18 +94,30 @@ def menu(update: Update, context: CallbackContext) -> None:
         return
 
     # Очистити повідомлення, які зберігаються в поточному dispatcher (context.bot_data)
-    bot_clear_messages(context.bot, context.bot_data, chat_id, limit=100)
+    try:
+        bot_clear_messages(context.bot, context.bot_data, chat_id, limit=100)
+    except Exception:
+        logger.exception("bot_clear_messages(context.bot) failed")
 
-    # Якщо є інший dispatcher (запущений апдейтер у app_state), очистити і його tracked (scanner повідомлення)
+    # Якщо є інший dispatcher (app_state.updater), очистити і його tracked (scanner повідомлення)
     if app_state.updater:
         try:
-            other_bot_data = app_state.updater.dispatcher.bot_data
-            bot_clear_messages(app_state.updater.bot, other_bot_data, chat_id, limit=100)
+            other_bot_data = getattr(app_state.updater.dispatcher, "bot_data", None)
+            if other_bot_data is not None:
+                bot_clear_messages(app_state.updater.bot, other_bot_data, chat_id, limit=100)
         except Exception:
             logger.exception("Не вдалося очистити app_state.updater.dispatcher.bot_data")
 
-    sent = update.message.reply_text("🏠 Головне меню:", reply_markup=get_main_menu_kb())
+    # Надсилаємо головне меню (inline) і відстежуємо
+    sent = context.bot.send_message(chat_id, "🏠 Головне меню:", reply_markup=get_main_menu_kb())
     bot_track_message(context.bot_data, chat_id, sent.message_id)
+
+    # Повторно відображаємо клавіатуру "МЕНЮ" у вигляді reply keyboard, щоб кнопка залишалася доступною
+    try:
+        kb_msg = context.bot.send_message(chat_id, "📋 Для повернення натисніть «МЕНЮ».", reply_markup=get_reply_keyboard())
+        bot_track_message(context.bot_data, chat_id, kb_msg.message_id)
+    except Exception:
+        logger.exception("Не вдалося надіслати reply keyboard після очищення")
 
 def reset_ui(update: Update, context: CallbackContext) -> None:
     chat_id = _get_chat_id(update)
@@ -169,7 +178,7 @@ def button_handler(update: Update, context: CallbackContext) -> None:
     if not chat_id:
         return
 
-    # Видаляємо кнопкове меню (щоб не накопичувалося)
+    # Видаляємо повідомлення з inline клавіатурою (щоб не накопичувалося)
     try:
         _safe_delete(context.bot, chat_id, query.message.message_id)
     except Exception:
@@ -220,7 +229,6 @@ def button_handler(update: Update, context: CallbackContext) -> None:
         bot_track_message(context.bot_data, chat_id, loading_msg.message_id)
 
         def on_success(result):
-            # видаляємо повідомлення "Завантаження..."
             try:
                 _safe_delete(context.bot, chat_id, loading_msg.message_id)
             except Exception:
@@ -230,10 +238,8 @@ def button_handler(update: Update, context: CallbackContext) -> None:
             msg = _format_signal_message(result, expiration)
 
             sent_signal = context.bot.send_message(chat_id, text=msg, parse_mode='Markdown')
-            # Відстежуємо повідомлення зі сигналом
             bot_track_message(context.bot_data, chat_id, sent_signal.message_id)
 
-            # Надсилаємо головне меню після сигналу
             sent_menu = context.bot.send_message(chat_id, "🏠 Головне меню:", reply_markup=get_main_menu_kb())
             bot_track_message(context.bot_data, chat_id, sent_menu.message_id)
 

@@ -2,7 +2,7 @@
 import logging
 from twisted.internet import reactor
 from telegram.ext import (
-    Updater, CommandHandler, MessageHandler, 
+    Updater, CommandHandler, MessageHandler,
     Filters, CallbackQueryHandler, PicklePersistence
 )
 import os
@@ -18,7 +18,7 @@ def start_telegram_bot():
         return
     try:
         persistence_path = os.path.join('/data', 'bot_persistence.pkl')
-        logger.info("Using persistence file at: %s", persistence_path)
+        logger.info(f"Using persistence file at: {persistence_path}")
         persistence = PicklePersistence(filename=persistence_path)
 
         updater = Updater(
@@ -27,6 +27,7 @@ def start_telegram_bot():
             persistence=persistence
         )
 
+        # Зберігаємо updater у глобальному стані
         app_state.updater = updater
 
         dp = updater.dispatcher
@@ -36,7 +37,7 @@ def start_telegram_bot():
         dp.add_handler(MessageHandler(Filters.text & ~Filters.command, telegram_ui.reset_ui))
         dp.add_handler(CallbackQueryHandler(telegram_ui.button_handler))
 
-        # Запуск polling в окремому потоці Twisted
+        # Запускаємо polling у фоновому потоці (reactor в додатку)
         reactor.callInThread(updater.start_polling)
         logger.info("Telegram bot started (polling in background thread).")
     except Exception:

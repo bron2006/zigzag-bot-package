@@ -59,7 +59,6 @@ class AppState:
                 disable_web_page_preview=True
             )
             try:
-                # tracked у dispatcher.bot_data
                 self.updater.dispatcher.bot_data.setdefault("sent_messages_by_chat", {}).setdefault(str(chat_id), []).append(sent_msg.message_id)
             except Exception:
                 logger.exception("Failed to record sent message in dispatcher.bot_data")

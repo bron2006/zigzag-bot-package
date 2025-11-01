@@ -12,10 +12,9 @@ import db
 import analysis as analysis_module
 from config import (
     FOREX_SESSIONS, CRYPTO_PAIRS, COMMODITIES,
-    SCANNER_COOLDOWN_SECONDS, get_chat_id, 
+    SCANNER_COOLDOWN_SECONDS, get_chat_id,
     SCANNER_TIMEFRAME
 )
-from utils_message_cleanup import bot_track_message
 
 logger = logging.getLogger("scanner")
 get_api_detailed_signal_data = analysis_module.get_api_detailed_signal_data
@@ -93,12 +92,12 @@ def _handle_analysis_result(pair_norm, result):
                 expiration = result.get('timeframe', '1m')
                 message = telegram_ui._format_signal_message(result, expiration)
                 kb = telegram_ui.get_main_menu_kb()
-                # Надсилаємо через updater і відстежуємо у dispatcher.bot_data
+                # Use updater.dispatcher.bot_data to track the message via utils_message_cleanup
                 sent = app_state.updater.bot.send_message(chat_id=chat_id, text=message, parse_mode='Markdown', reply_markup=kb)
                 try:
-                    bot_track_message(app_state.updater.dispatcher.bot_data, chat_id, sent.message_id)
+                    app_state.updater.dispatcher.bot_data.setdefault("sent_messages_by_chat", {}).setdefault(str(chat_id), []).append(sent.message_id)
                 except Exception:
-                    logger.exception("Failed to track scanner-sent message")
+                    logger.exception("Failed to record scanner-sent message in dispatcher.bot_data")
             except Exception:
                 logger.exception("Failed to send telegram notification")
 
