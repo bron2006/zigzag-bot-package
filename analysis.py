@@ -17,6 +17,13 @@ logger = logging.getLogger("analysis")
 
 PERIOD_MAP = { "1m": TrendbarPeriod.M1, "5m": TrendbarPeriod.M5, "15m": TrendbarPeriod.M15 }
 
+def _resolve_price_divisor(symbol_details) -> int:
+    """Визначає дільник ціни на основі кількості знаків після коми (digits)."""
+    digits = getattr(symbol_details, "digits", 5)
+    if not isinstance(digits, int) or digits < 0:
+        digits = 5
+    return 10 ** digits
+
 def _sanitize(value, default=0.0):
     import pandas as pd
     import numpy as np
@@ -31,7 +38,6 @@ def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: in
     d = Deferred()
     symbol_details = symbol_cache.get(norm_pair)
     
-    # ВИПРАВЛЕНО: Тепер функція завжди повертає об'єкт Deferred, навіть при помилці
     if not symbol_details:
         reactor.callLater(0, d.errback, Exception(f"Пара '{norm_pair}' не знайдена в кеші."))
         return d
@@ -64,7 +70,7 @@ def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: in
             if not response.trendbar:
                 return d.callback(pd.DataFrame())
                 
-            divisor = 10**5
+            divisor = _resolve_price_divisor(symbol_details)
             bars = [{
                 'ts': pd.to_datetime(bar.utcTimestampInMinutes * 60, unit='s', utc=True),
                 'Open': (bar.low + bar.deltaOpen) / divisor,
@@ -164,7 +170,6 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int
             logger.exception(f"Analysis error for {symbol}: {e}")
             final_deferred.errback(e)
 
-    # Викликаємо отримання даних
     d = get_market_data(client, symbol_cache, symbol, timeframe, 300)
     d.addCallbacks(on_data_ready, final_deferred.errback)
     

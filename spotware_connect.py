@@ -1,6 +1,6 @@
 # spotware_connect.py
 import logging
-import requests # <-- Новий імпорт
+import requests
 from twisted.internet import reactor
 from twisted.internet.defer import Deferred, TimeoutError
 from ctrader_open_api.client import Client as SpotwareClientBase
@@ -14,7 +14,7 @@ from ctrader_open_api.messages.OpenApiMessages_pb2 import (
 )
 from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOAPayloadType
 from config import get_demo_account_id, get_ctrader_refresh_token
-from state import app_state # Імпортуємо глобальний стан
+from state import app_state
 
 logger = logging.getLogger(__name__)
 
@@ -91,32 +91,20 @@ class SpotwareConnect(EventEmitter):
         }
         
         try:
-            # --- ПОЧАТОК ВИПРАВЛЕННЯ ---
-            #
-            # Помилка була тут. Ми відправляли `params=...` (як URL-параметри),
-            # а cTrader очікує ці дані у тілі запиту (`data=...`).
-            #
             response = requests.post(TOKEN_REFRESH_URL, data=params)
-            #
-            # --- КІНЕЦЬ ВИПРАВЛЕННЯ ---
-            
             response.raise_for_status()
             data = response.json()
 
             new_access_token = data.get("accessToken")
             if not new_access_token:
-                # Якщо cTrader все одно не повернув токен, логуємо відповідь
                 logger.error(f"Failed to refresh: 'accessToken' missing. Response: {data}")
                 raise Exception("Response is missing 'accessToken'")
             
             app_state.access_token = new_access_token
             logger.info("✅ Access token has been successfully refreshed.")
-            
-            # Після успішного оновлення повторюємо авторизацію акаунта
             self._authorize_account()
 
         except requests.exceptions.RequestException as e:
-            # Якщо cTrader поверне помилку 400/401, ми побачимо її тут
             logger.error(f"HTTP error during token refresh: {e}")
             if e.response is not None:
                 logger.error(f"cTrader response content: {e.response.text}")
@@ -151,7 +139,9 @@ class SpotwareConnect(EventEmitter):
         elif pt == ProtoOAPayloadType.PROTO_OA_ERROR_RES:
             res = ProtoOAErrorRes(); res.ParseFromString(message.payload)
             logger.error(f"API Error: {res.errorCode} - {res.description}")
-            if res.errorCode == "INVALID_REQUEST" and "Trading account is not authorized" in res.description:
+            
+            # ВИПРАВЛЕНО: Додано обробку CH_ACCESS_TOKEN_INVALID
+            if res.errorCode == "CH_ACCESS_TOKEN_INVALID" or (res.errorCode == "INVALID_REQUEST" and "Trading account is not authorized" in res.description):
                 self._refresh_access_token()
 
         elif pt == ProtoOAPayloadType.PROTO_OA_SPOT_EVENT:
@@ -183,8 +173,9 @@ class SpotwareConnect(EventEmitter):
             return
         symbol_id = self.symbol_map[symbol_name]
         def handler(event: ProtoOASpotEvent):
-            bid = event.bid / 100000.0
-            ask = event.ask / 100000.0
+            divisor = 10**5
+            bid = event.bid / divisor if event.HasField("bid") else None
+            ask = event.ask / divisor if event.HasField("ask") else None
             callback(symbol_name, bid, ask)
         self.on(f"spot_event_{symbol_id}", handler)
         logger.info(f"Subscribed to ticks for {symbol_name} (ID {symbol_id})")

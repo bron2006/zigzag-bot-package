@@ -4,10 +4,8 @@ import time
 from twisted.internet import reactor
 
 from state import app_state
-# --- ПОЧАТОК ЗМІН ---
-import config # Додаємо імпорт конфігурації
+import config 
 from config import STOCK_TICKERS, get_ct_client_id, get_ct_client_secret
-# --- КІНЕЦЬ ЗМІН ---
 from spotware_connect import SpotwareConnect
 from ctrader_open_api.messages.OpenApiMessages_pb2 import (
     ProtoOASymbolsListRes, ProtoOASubscribeSpotsReq, ProtoOASpotEvent
@@ -16,6 +14,14 @@ import scanner
 
 logger = logging.getLogger("ctrader")
 
+def _resolve_price_divisor(symbol_name: str) -> int:
+    """Визначає дільник ціни для стріму в реальному часі."""
+    symbol_details = app_state.symbol_cache.get(symbol_name)
+    digits = getattr(symbol_details, "digits", 5) if symbol_details else 5
+    if not isinstance(digits, int) or digits < 0:
+        digits = 5
+    return 10 ** digits
+
 def _on_spot_event(event: ProtoOASpotEvent):
     try:
         if not (event.HasField("bid") or event.HasField("ask")):
@@ -23,7 +29,8 @@ def _on_spot_event(event: ProtoOASpotEvent):
         symbol_name = app_state.symbol_id_map.get(event.symbolId)
         if not symbol_name:
             return
-        divisor = 10**5
+        
+        divisor = _resolve_price_divisor(symbol_name)
         bid = event.bid / divisor if event.HasField("bid") else None
         ask = event.ask / divisor if event.HasField("ask") else None
         mid = (bid + ask) / 2.0 if bid and ask else None
@@ -33,11 +40,9 @@ def _on_spot_event(event: ProtoOASpotEvent):
         logger.exception("Error processing spot event")
 
 def start_price_subscriptions():
-    # --- ПОЧАТОК ЗМІН: Перевірка режиму роботи ---
     if config.APP_MODE == "light":
         logger.info("APP_MODE is 'light'. Skipping automatic price subscriptions at startup.")
         return
-    # --- КІНЕЦЬ ЗМІН ---
     
     logger.info("Starting price subscriptions for all scannable assets...")
     assets_to_subscribe = scanner._collect_assets_to_scan()

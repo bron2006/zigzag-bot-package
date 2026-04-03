@@ -8,16 +8,16 @@ load_dotenv()
 
 # --- ОСНОВНІ НАЛАШТУВАННЯ ---
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")  # ДОДАНО: Ключ для ШІ-фільтра
 def get_database_url() -> str: return os.getenv("DATABASE_URL")
 IS_DEV_MODE = os.getenv("NORD", "off").lower() == "on"
 DEV_USER_ID = int(os.getenv("MY_TELEGRAM_ID", 123456789))
+
 def get_chat_id() -> int: return int(os.getenv("CHAT_ID")) if os.getenv("CHAT_ID") else None
 def get_ct_client_id() -> str: return os.getenv("CT_CLIENT_ID")
 def get_ct_client_secret() -> str: return os.getenv("CT_CLIENT_SECRET")
 def get_ctrader_access_token() -> str: return os.getenv("CTRADER_ACCESS_TOKEN")
-# --- ПОЧАТОК ЗМІН ---
 def get_ctrader_refresh_token() -> str: return os.getenv("CTRADER_REFRESH_TOKEN")
-# --- КІНЕЦЬ ЗМІН ---
 def get_demo_account_id() -> int: return int(os.getenv("DEMO_ACCOUNT_ID")) if os.getenv("DEMO_ACCOUNT_ID") else None
 def get_fly_app_name() -> str: return os.getenv("FLY_APP_NAME")
 
