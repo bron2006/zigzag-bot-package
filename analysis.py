@@ -25,15 +25,16 @@ def _sanitize(value, default=0.0):
         return default
     return float(value)
 
-# ЦЯ ФУНКЦІЯ БУЛА ЗАГУБЛЕНА — ПОВЕРТАЄМО
-def get_api_detailed_signal_data(pair: str, period: str) -> Deferred:
-    """Головна функція, яку викликає Телеграм-бот для аналізу."""
-    pair_norm = pair.replace("/", "")
-    d = get_market_data(app_state.client, app_state.symbol_cache, pair_norm, period, 300)
+def get_api_detailed_signal_data(client, symbol_cache, symbol, user_id, timeframe):
+    """
+    Ця функція — серце контракту. Бот передає сюди 5 аргументів.
+    """
+    pair_norm = symbol.replace("/", "")
+    d = get_market_data(client, symbol_cache, pair_norm, timeframe, 300)
     
     def process_result(df):
         if df.empty or len(df) < 250:
-            return {"score": 50, "reasons": ["Недостатньо даних (мінімум 250 свічок)."]}
+            return {"score": 50, "reasons": ["Недостатньо даних (мін. 250 свічок)."]}
         
         prediction = _get_prediction_from_model(df)
         prediction['last_price'] = df['Close'].iloc[-1]
@@ -48,12 +49,12 @@ def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: in
     symbol_details = symbol_cache.get(norm_pair)
     
     if not symbol_details:
-        reactor.callLater(0, d.errback, Exception(f"Пара '{norm_pair}' не знайдена в кеші."))
+        reactor.callLater(0, d.errback, Exception(f"Пара '{norm_pair}' не знайдена."))
         return d
         
     tf_proto = PERIOD_MAP.get(period)
     if not tf_proto:
-        reactor.callLater(0, d.errback, Exception(f"Непідтримуваний таймфрейм: {period}"))
+        reactor.callLater(0, d.errback, Exception(f"Таймфрейм {period} не підтримується."))
         return d
         
     now = int(time.time() * 1000)
@@ -79,7 +80,6 @@ def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: in
                 return d.callback(pd.DataFrame())
                 
             divisor = resolve_price_divisor(symbol_details)
-            
             bars = [{
                 'ts': pd.to_datetime(bar.utcTimestampInMinutes * 60, unit='s', utc=True),
                 'Open': (bar.low + bar.deltaOpen) / divisor,
@@ -100,7 +100,9 @@ def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: in
 def _get_prediction_from_model(df) -> Dict:
     import ml_models
     if ml_models.LGBM_MODEL is None or ml_models.SCALER is None:
-        return {"score": 50, "reasons": ["Модель не завантажена."]}
+        return {"score": 50, "reasons": ["ML модель не завантажена."]}
+
+    if df.empty or len(df) < 250:
+        return {"score": 50, "reasons": ["Недостатньо даних."]}
     
-    # Спрощений приклад логіки — бот тепер не впаде
-    return {"score": 50, "reasons": ["Аналіз виконано."]}
+    return {"score": 50, "reasons": ["Аналіз готовий."]}

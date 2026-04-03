@@ -1,7 +1,6 @@
 """Utilities for price scaling across cTrader payloads."""
 
 def resolve_price_divisor(symbol_details, fallback_digits: int = 5) -> int:
-    """Визначає дільник ціни на основі налаштувань символу."""
     if symbol_details is None:
         return 10 ** fallback_digits
 
