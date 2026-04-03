@@ -4,23 +4,16 @@ import time
 from twisted.internet import reactor
 
 from state import app_state
-import config 
+import config
 from config import STOCK_TICKERS, get_ct_client_id, get_ct_client_secret
 from spotware_connect import SpotwareConnect
 from ctrader_open_api.messages.OpenApiMessages_pb2 import (
     ProtoOASymbolsListRes, ProtoOASubscribeSpotsReq, ProtoOASpotEvent
 )
 import scanner
+from price_utils import resolve_price_divisor
 
 logger = logging.getLogger("ctrader")
-
-def _resolve_price_divisor(symbol_name: str) -> int:
-    """Визначає дільник ціни для стріму в реальному часі."""
-    symbol_details = app_state.symbol_cache.get(symbol_name)
-    digits = getattr(symbol_details, "digits", 5) if symbol_details else 5
-    if not isinstance(digits, int) or digits < 0:
-        digits = 5
-    return 10 ** digits
 
 def _on_spot_event(event: ProtoOASpotEvent):
     try:
@@ -29,11 +22,14 @@ def _on_spot_event(event: ProtoOASpotEvent):
         symbol_name = app_state.symbol_id_map.get(event.symbolId)
         if not symbol_name:
             return
+            
+        symbol_details = app_state.symbol_cache.get(symbol_name)
+        divisor = resolve_price_divisor(symbol_details)
         
-        divisor = _resolve_price_divisor(symbol_name)
         bid = event.bid / divisor if event.HasField("bid") else None
         ask = event.ask / divisor if event.HasField("ask") else None
         mid = (bid + ask) / 2.0 if bid and ask else None
+        
         app_state.live_prices[symbol_name] = {"bid": bid, "ask": ask, "mid": mid, "ts": time.time()}
         logger.debug(f"Tick {symbol_name}: Mid Price = {mid}")
     except Exception:
@@ -54,32 +50,27 @@ def start_price_subscriptions():
             try:
                 pair_norm = p.replace("/", "")
                 symbol_details = app_state.symbol_cache.get(pair_norm)
-                if not symbol_details:
-                    logger.warning(f"Cannot subscribe to {pair_norm}: not found in symbol cache.")
-                    return
-                req = ProtoOASubscribeSpotsReq(
-                    ctidTraderAccountId=app_state.client._client.account_id,
-                    symbolId=[symbol_details.symbolId]
-                )
-                d = app_state.client.send(req)
-                d.addCallbacks(
-                    lambda _, p=pair_norm: logger.info(f"✅ Subscribed to price stream for {p}"),
-                    lambda err, p=pair_norm: logger.error(f"❌ Failed to subscribe to {p}: {err.getErrorMessage()}")
-                )
-                app_state.client.on(f"spot_event_{symbol_details.symbolId}", _on_spot_event)
+                if symbol_details:
+                    req = ProtoOASubscribeSpotsReq(
+                        ctidTraderAccountId=app_state.client._client.account_id,
+                        symbolId=[symbol_details.symbolId]
+                    )
+                    app_state.client.send(req)
             except Exception:
-                logger.exception(f"Error during subscription schedule for {p}")
-        reactor.callLater(i * 0.2, subscribe_pair, pair)
+                logger.exception(f"Error subscribing to {p}")
+        
+        reactor.callLater(i * 0.1, subscribe_pair, pair)
 
 def _on_symbols_loaded(raw_message):
     try:
         res = ProtoOASymbolsListRes()
         res.ParseFromString(raw_message.payload)
-        app_state.symbol_cache = {s.symbolName.replace("/", ""): s for s in res.symbol}
-        app_state.symbol_id_map = {s.symbolId: s.symbolName.replace("/", "") for s in res.symbol}
-        app_state.all_symbol_names = [s.symbolName for s in res.symbol]
+        for s in res.symbol:
+            app_state.symbol_cache[s.symbolName] = s
+            app_state.symbol_id_map[s.symbolId] = s.symbolName
+        
+        logger.info(f"Loaded {len(res.symbol)} symbols from cTrader.")
         app_state.SYMBOLS_LOADED = True
-        logger.info(f"Loaded {len(app_state.symbol_cache)} symbols from cTrader.")
         start_price_subscriptions()
     except Exception:
         logger.exception("on_symbols_loaded error")
@@ -102,6 +93,7 @@ def start_ctrader_client():
         client = SpotwareConnect(get_ct_client_id(), get_ct_client_secret())
         app_state.client = client
         client.on("ready", on_ctrader_ready)
+        client.on("spot_event", _on_spot_event) 
         reactor.callWhenRunning(client.start)
         logger.info("cTrader client scheduled to start")
     except Exception:

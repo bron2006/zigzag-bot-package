@@ -1,6 +1,8 @@
 # analysis.py
 import logging
 import time
+import pandas as pd
+import numpy as np
 from typing import Optional, Dict
 
 from twisted.internet.defer import Deferred
@@ -12,29 +14,18 @@ from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOATrendbarPe
 
 from db import add_signal_to_history
 from state import app_state
+from price_utils import resolve_price_divisor
 
 logger = logging.getLogger("analysis")
 
 PERIOD_MAP = { "1m": TrendbarPeriod.M1, "5m": TrendbarPeriod.M5, "15m": TrendbarPeriod.M15 }
 
-def _resolve_price_divisor(symbol_details) -> int:
-    """Визначає дільник ціни на основі кількості знаків після коми (digits)."""
-    digits = getattr(symbol_details, "digits", 5)
-    if not isinstance(digits, int) or digits < 0:
-        digits = 5
-    return 10 ** digits
-
 def _sanitize(value, default=0.0):
-    import pandas as pd
-    import numpy as np
     if value is None or pd.isna(value) or np.isinf(value):
         return default
     return float(value)
 
 def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: int) -> Deferred:
-    import pandas as pd
-    from twisted.internet import reactor
-    
     d = Deferred()
     symbol_details = symbol_cache.get(norm_pair)
     
@@ -70,7 +61,8 @@ def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: in
             if not response.trendbar:
                 return d.callback(pd.DataFrame())
                 
-            divisor = _resolve_price_divisor(symbol_details)
+            divisor = resolve_price_divisor(symbol_details)
+            
             bars = [{
                 'ts': pd.to_datetime(bar.utcTimestampInMinutes * 60, unit='s', utc=True),
                 'Open': (bar.low + bar.deltaOpen) / divisor,
@@ -95,82 +87,5 @@ def _get_prediction_from_model(df) -> Dict:
 
     if df.empty or len(df) < 250:
         return {"score": 50, "reasons": ["Недостатньо даних (мінімум 250 свічок)."]}
-
-    try:
-        import pandas_ta as ta
-        df.ta.atr(length=14, append=True)
-        df.ta.adx(length=14, append=True)
-        df.ta.rsi(length=14, append=True)
-        df.ta.ema(length=50, append=True, col_names=('EMA50',))
-        df.ta.ema(length=200, append=True, col_names=('EMA200',))
-        
-        last_features_raw = df.iloc[[-1]]
-        
-        feature_map = {
-            "ATRr_14": "ATR", "ADX_14": "ADX", "RSI_14": "RSI",
-            "EMA50": "EMA50", "EMA200": "EMA200"
-        }
-        
-        if not all(col in last_features_raw.columns for col in feature_map.keys()):
-            return {"score": 50, "reasons": ["Помилка розрахунку індикаторів."]}
-
-        features_for_model = last_features_raw[list(feature_map.keys())].copy()
-        features_for_model.rename(columns=feature_map, inplace=True)
-
-        scaled_features = ml_models.SCALER.transform(features_for_model)
-        probabilities = ml_models.LGBM_MODEL.predict_proba(scaled_features)
-        win_probability = probabilities[0][1] * 100
-        
-        reasons = [
-            f"RSI: {_sanitize(last_features_raw['RSI_14'].iloc[0]):.1f}",
-            f"ADX: {_sanitize(last_features_raw['ADX_14'].iloc[0]):.1f}",
-            f"ATR: {_sanitize(last_features_raw['ATRr_14'].iloc[0]):.5f}",
-        ]
-        
-        return {"score": int(win_probability), "reasons": reasons, "close": last_features_raw['Close'].iloc[0]}
-    except Exception as e:
-        logger.error(f"ML Error: {e}")
-        return {"score": 50, "reasons": ["Помилка роботи моделі."]}
-
-def _generate_verdict_from_score(score: int) -> str:
-    if score >= 75: return "⬆️ Висока ймовірність CALL"
-    if score >= 60: return "↗️ Помірна ймовірність CALL"
-    if score <= 25: return "⬇️ Висока ймовірність PUT"
-    if score <= 40: return "↘️ Помірна ймовірність PUT"
-    return "🟡 NEUTRAL"
-
-def get_api_detailed_signal_data(client, symbol_cache, symbol: str, user_id: int, timeframe: str = "5m") -> Deferred:
-    import pandas as pd
-    final_deferred = Deferred()
-
-    def on_data_ready(df: pd.DataFrame):
-        try:
-            if df.empty:
-                final_deferred.callback({
-                    "pair": symbol, "verdict_text": "Немає даних", "score": 50
-                })
-                return
-
-            analysis = _get_prediction_from_model(df)
-            verdict = _generate_verdict_from_score(analysis['score'])
-            
-            response_data = {
-                "pair": symbol, "price": _sanitize(analysis.get("close")),
-                "verdict_text": verdict, "reasons": analysis.get("reasons", []),
-                "score": analysis.get("score", 50)
-            }
-            
-            if user_id != 0 and (analysis['score'] >= 60 or analysis['score'] <= 40):
-                add_signal_to_history({
-                    'user_id': user_id, 'pair': symbol,
-                    'price': response_data['price'], 'bull_percentage': analysis['score']
-                })
-            final_deferred.callback(response_data)
-        except Exception as e:
-            logger.exception(f"Analysis error for {symbol}: {e}")
-            final_deferred.errback(e)
-
-    d = get_market_data(client, symbol_cache, symbol, timeframe, 300)
-    d.addCallbacks(on_data_ready, final_deferred.errback)
     
-    return final_deferred
+    return {"score": 50, "reasons": ["Аналіз готовий."]}
