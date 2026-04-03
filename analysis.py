@@ -21,7 +21,7 @@ logger = logging.getLogger("analysis")
 PERIOD_MAP = { "1m": TrendbarPeriod.M1, "5m": TrendbarPeriod.M5, "15m": TrendbarPeriod.M15 }
 
 def get_api_detailed_signal_data(client, symbol_cache, symbol, user_id, timeframe):
-    """Головна функція для аналізу. Тепер з усіма полями для UI."""
+    """Головна функція аналізу. Тепер із повною структурою для вебу."""
     pair_norm = symbol.replace("/", "")
     main_d = Deferred()
     
@@ -30,24 +30,27 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol, user_id, timefram
     def process_result(df):
         try:
             if df is None or df.empty or len(df) < 250:
-                # Навіть при помилці віддаємо структуру, щоб не було undefined
                 main_d.callback({
                     "symbol": symbol,
+                    "pair": symbol,
                     "direction": "WAIT",
+                    "signal": "WAIT",
                     "price": 0.0,
                     "score": 50,
-                    "reasons": ["Недостатньо даних для аналізу."]
+                    "reasons": ["Чекаємо на завантаження даних..."]
                 })
                 return
 
             last_close = float(df['Close'].iloc[-1])
             
-            # Формуємо відповідь, яку розуміє UI (скріншот)
+            # ВИПРАВЛЕНО: Додаємо всі можливі ключі, щоб прибрати 'undefined'
             prediction = {
-                "symbol": symbol,           # Щоб не було undefined вгорі
+                "symbol": symbol,
                 "pair": symbol,
-                "direction": "NEUTRAL",     # Напис під ціною
-                "price": last_close,        # Ціна входу (замість N/A)
+                "price": last_close,
+                "direction": "NEUTRAL",  # Один із цих ключів прибере 'undefined'
+                "signal": "NEUTRAL",     # Друга спроба
+                "type": "NEUTRAL",       # Третя спроба
                 "score": 50,
                 "reasons": ["Аналіз завершено. Очікуємо підтвердження тренду."],
                 "ts": time.time()
@@ -55,10 +58,10 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol, user_id, timefram
             
             main_d.callback(prediction)
         except Exception as e:
-            logger.exception("UI Data processing error")
-            main_d.callback({"symbol": symbol, "direction": "ERROR", "price": 0, "score": 50, "reasons": [str(e)]})
+            logger.exception("UI formatting error")
+            main_d.callback({"symbol": symbol, "signal": "ERROR", "price": 0, "score": 50, "reasons": [str(e)]})
 
-    market_d.addCallbacks(process_result, lambda err: main_d.callback({"symbol": symbol, "direction": "TIMEOUT", "price": 0, "score": 50, "reasons": [str(err)]}))
+    market_d.addCallbacks(process_result, lambda err: main_d.callback({"symbol": symbol, "signal": "TIMEOUT", "price": 0, "score": 50, "reasons": [str(err)]}))
     return main_d
 
 def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: int) -> Deferred:
