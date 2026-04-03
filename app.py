@@ -17,9 +17,7 @@ import bot
 import ctrader
 import api
 import ml_models
-# --- ПОЧАТОК ЗМІН ---
-import config # Додаємо імпорт конфігурації
-# --- КІНЕЦЬ ЗМІН ---
+import config
 
 # Logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -40,17 +38,20 @@ def main():
     
     resource = WSGIResource(reactor, reactor.getThreadPool(), app)
     site = Site(resource)
+    
+    # Отримуємо порт від Fly.io
     port = int(os.environ.get("PORT", "8080"))
+    
+    # Слухаємо на всіх інтерфейсах 0.0.0.0
     reactor.listenTCP(port, site, interface="0.0.0.0")
     logger.info(f"Twisted WSGI server listening on {port}")
 
-    # --- ПОЧАТОТОК ЗМІН: Умовне завантаження моделей ---
+    # Умовне завантаження моделей
     if config.APP_MODE == "full":
         logger.info("APP_MODE is 'full'. Loading ML models...")
         ml_models.load_models()
     else:
-        logger.info("APP_MODE is 'light'. Skipping ML model loading at startup.")
-    # --- КІНЕЦЬ ЗМІН ---
+        logger.info("APP_MODE is 'light'. Skipping ML model loading.")
 
     reactor.callWhenRunning(_start_background_services)
 
@@ -60,8 +61,10 @@ def main():
             if app_state.updater:
                 app_state.updater.stop()
         finally:
-            reactor.stop()
+            if reactor.running:
+                reactor.stop()
             sys.exit(0)
+
     signal.signal(signal.SIGTERM, _sigterm)
     signal.signal(signal.SIGINT, _sigterm)
 

@@ -17,7 +17,8 @@ def start_telegram_bot():
         logger.warning("TELEGRAM_BOT_TOKEN not set — Telegram disabled")
         return
     try:
-        persistence_path = os.path.join('/data', 'bot_persistence.pkl')
+        # ВИПРАВЛЕНО: Зберігаємо файл пам'яті в корені, бо папки /data немає
+        persistence_path = 'bot_persistence.pkl'
         logger.info(f"Using persistence file at: {persistence_path}")
         persistence = PicklePersistence(filename=persistence_path)
 
@@ -37,7 +38,7 @@ def start_telegram_bot():
         dp.add_handler(MessageHandler(Filters.text & ~Filters.command, telegram_ui.reset_ui))
         dp.add_handler(CallbackQueryHandler(telegram_ui.button_handler))
 
-        # Запускаємо polling у фоновому потоці (reactor в додатку)
+        # Запускаємо polling у фоновому потоці
         reactor.callInThread(updater.start_polling)
         logger.info("Telegram bot started (polling in background thread).")
     except Exception:
