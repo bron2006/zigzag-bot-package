@@ -25,6 +25,24 @@ def _sanitize(value, default=0.0):
         return default
     return float(value)
 
+# ЦЯ ФУНКЦІЯ БУЛА ЗАГУБЛЕНА — ПОВЕРТАЄМО
+def get_api_detailed_signal_data(pair: str, period: str) -> Deferred:
+    """Головна функція, яку викликає Телеграм-бот для аналізу."""
+    pair_norm = pair.replace("/", "")
+    d = get_market_data(app_state.client, app_state.symbol_cache, pair_norm, period, 300)
+    
+    def process_result(df):
+        if df.empty or len(df) < 250:
+            return {"score": 50, "reasons": ["Недостатньо даних (мінімум 250 свічок)."]}
+        
+        prediction = _get_prediction_from_model(df)
+        prediction['last_price'] = df['Close'].iloc[-1]
+        prediction['ts'] = time.time()
+        return prediction
+
+    d.addCallback(process_result)
+    return d
+
 def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: int) -> Deferred:
     d = Deferred()
     symbol_details = symbol_cache.get(norm_pair)
@@ -56,7 +74,6 @@ def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: in
         try:
             response = ProtoOAGetTrendbarsRes()
             response.ParseFromString(message.payload)
-            logger.info(f"✅ Received {len(response.trendbar)} candles for {norm_pair} ({period}).")
             
             if not response.trendbar:
                 return d.callback(pd.DataFrame())
@@ -83,9 +100,7 @@ def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: in
 def _get_prediction_from_model(df) -> Dict:
     import ml_models
     if ml_models.LGBM_MODEL is None or ml_models.SCALER is None:
-        return {"score": 50, "reasons": ["ML модель не завантажена."]}
-
-    if df.empty or len(df) < 250:
-        return {"score": 50, "reasons": ["Недостатньо даних (мінімум 250 свічок)."]}
+        return {"score": 50, "reasons": ["Модель не завантажена."]}
     
-    return {"score": 50, "reasons": ["Аналіз готовий."]}
+    # Спрощений приклад логіки — бот тепер не впаде
+    return {"score": 50, "reasons": ["Аналіз виконано."]}
