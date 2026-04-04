@@ -7,27 +7,20 @@ let initData = window.Telegram?.WebApp?.initData || '';
 
 document.addEventListener('DOMContentLoaded', () => {
     showLoader(true);
-    const initDataQuery = initData ? `?initData=${encodeURIComponent(initData)}` : '';
-    fetch(`${API_BASE_URL}/api/get_pairs${initDataQuery}`)
-        .then(res => res.json()).then(data => {
-            allData = data;
-            currentWatchlist = (data.watchlist || []).map(p => p.replace(/\//g, ''));
-            populateLists(data);
-            showLoader(false);
-        }).catch(() => showLoader(false));
+    const q = initData ? `?initData=${encodeURIComponent(initData)}` : '';
+    fetch(`${API_BASE_URL}/api/get_pairs${q}`).then(res => res.json()).then(data => {
+        allData = data;
+        currentWatchlist = (data.watchlist || []).map(p => p.replace(/\//g, ''));
+        populateLists(data);
+        showLoader(false);
+    }).catch(() => showLoader(false));
 
-    // SSE ДЛЯ ЖИВИХ ЦІН НА КНОПКАХ
-    const eventSource = new EventSource(`${API_BASE_URL}/api/signal-stream${initDataQuery}`);
-    eventSource.onmessage = (e) => {
-        const data = JSON.parse(e.data);
-        if (data.pair && data.price) {
-            const pId = data.pair.replace(/\//g, "");
-            const el = document.getElementById(`price-${pId}`);
-            if (el) {
-                el.textContent = data.price.toFixed(5);
-                el.style.color = "#3390ec"; 
-                setTimeout(() => { if(el) el.style.color = ""; }, 500);
-            }
+    const es = new EventSource(`${API_BASE_URL}/api/signal-stream${q}`);
+    es.onmessage = (e) => {
+        const d = JSON.parse(e.data);
+        if (d.pair && d.price) {
+            const el = document.getElementById(`price-${d.pair.replace(/\//g, "")}`);
+            if (el) el.textContent = d.price.toFixed(5);
         }
     };
 });
@@ -35,21 +28,20 @@ document.addEventListener('DOMContentLoaded', () => {
 function populateLists(data) {
     let html = '';
     const createSection = (title, pairs) => {
-        if (!pairs || pairs.length === 0) return '';
-        let s = `<div class="category-title">${title}</div><div class="pair-list">`;
+        if (!pairs || !pairs.length) return '';
+        let s = `<div class="category-title" style="color:#888; font-size:14px; margin:15px 0 5px;">${title}</div><div class="pair-list" style="display:flex; flex-direction:column; gap:8px;">`;
         pairs.forEach(p => {
             const pId = p.replace(/\//g, "");
-            s += `<div class="pair-item">
-                <button class="pair-button" onclick="fetchSignal('${p}')">
-                    <span>${p}</span><span class="live-price-min" id="price-${pId}">---</span>
+            s += `<div class="pair-item" style="display:flex; height:45px;">
+                <button class="pair-button" onclick="fetchSignal('${p}')" style="flex-grow:1; display:flex; justify-content:space-between; align-items:center; padding:0 15px; background:#272727; border:none; color:white; border-radius:8px 0 0 8px;">
+                    <span>${p}</span><span class="live-price-min" id="price-${pId}" style="font-family:monospace; color:#3390ec; background:rgba(0,0,0,0.2); padding:3px 6px; border-radius:4px;">---</span>
                 </button>
-                <button class="fav-btn">${currentWatchlist.includes(pId) ? '✅' : '⭐'}</button>
+                <button class="fav-btn" style="width:45px; background:#272727; border:none; color:white; border-radius:0 8px 8px 0; border-left:1px solid #1a1a1a;">${currentWatchlist.includes(pId) ? '✅' : '⭐'}</button>
             </div>`;
         });
         return s + '</div>';
     };
-
-    if (currentWatchlist.length > 0) html += createSection('⭐ Обране', currentWatchlist);
+    if (currentWatchlist.length) html += createSection('⭐ Обране', currentWatchlist);
     if (data.forex) data.forex.forEach(session => html += createSection(session.title, session.pairs));
     html += createSection('💎 Криптовалюти', data.crypto);
     html += createSection('🥇 Сировина', data.commodities);
@@ -60,25 +52,18 @@ function populateLists(data) {
 function fetchSignal(pair) {
     showLoader(true);
     signalOutput.innerHTML = `⏳ Аналіз ${pair}...`;
-    const initDataQuery = initData ? `&initData=${encodeURIComponent(initData)}` : '';
-    fetch(`${API_BASE_URL}/api/signal?pair=${pair}&timeframe=${currentExpiration}${initDataQuery}`)
-        .then(res => res.json()).then(data => {
-            if (data.error) throw new Error(data.error);
-            const score = data.score || 50;
-            const aiHtml = data.sentiment ? `<div class="ai-verdict ${data.sentiment==='GO'?'ai-go':'ai-block'}">${data.sentiment==='GO'?'✅':'🚨'} ШІ Новини: ${data.sentiment}</div>` : "";
-            signalOutput.innerHTML = `
-                <div style="font-weight:bold; margin-bottom:10px; border-bottom: 1px solid #444; padding-bottom:5px;">${data.pair} (${currentExpiration})</div>
-                <div class="price-display-manual"><div style="color:#aaa;font-size:0.9em">Ціна входу</div><div class="signal-price">${data.price ? data.price.toFixed(5) : 'N/A'}</div></div>
-                <div class="verdict">${data.verdict_text}</div>
-                ${aiHtml}
-                <div class="power-balance"><span>🐂 Бики: ${score}%</span><span>🐃 Ведмеді: ${100-score}%</span></div>
-            `;
-            // ПОВЕРНУТО: АВТОМАТИЧНИЙ СКРОЛЛ
-            setTimeout(() => {
-                const rect = signalOutput.getBoundingClientRect();
-                window.scrollTo({ top: window.scrollY + rect.top - 20, behavior: 'smooth' });
-            }, 100);
-        }).catch(err => { signalOutput.innerHTML = `❌ Помилка: ${err.message}`; })
-        .finally(() => showLoader(false));
+    const q = initData ? `&initData=${encodeURIComponent(initData)}` : '';
+    fetch(`${API_BASE_URL}/api/signal?pair=${pair}&timeframe=${currentExpiration}${q}`).then(res => res.json()).then(d => {
+        const score = d.score || 50;
+        const ai = d.sentiment ? `<div class="ai-verdict ${d.sentiment==='GO'?'ai-go':'ai-block'}" style="padding:10px; border-radius:8px; text-align:center; font-weight:bold; margin:10px 0; background:${d.sentiment==='GO'?'rgba(38,166,154,0.1)':'rgba(239,83,80,0.1)'}; color:${d.sentiment==='GO'?'#26a69a':'#ef5350'}; border:1px solid">${d.sentiment==='GO'?'✅':'🚨'} ШІ Новини: ${d.sentiment}</div>` : "";
+        signalOutput.innerHTML = `<div style="font-weight:bold;">${d.pair}</div>
+            <div class="price-display-manual" style="text-align:center; padding:15px; background:#111; border-radius:10px; margin:10px 0;"><div style="color:#aaa; font-size:12px;">Ціна входу</div><div style="font-size:2em; font-family:monospace; font-weight:bold;">${d.price?d.price.toFixed(5):'N/A'}</div></div>
+            <div class="verdict" style="text-align:center; font-weight:bold; padding:10px; background:#222; border-radius:8px;">${d.verdict_text}</div>
+            ${ai}
+            <div style="display:flex; justify-content:space-around; margin-top:10px;"><span>🐂 Бики: ${score}%</span><span>🐃 Ведмеді: ${100-score}%</span></div>`;
+        
+        // ПЕРЕВІРЕНИЙ АВТОСКРОЛ
+        setTimeout(() => { signalOutput.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, 100);
+    }).finally(() => showLoader(false));
 }
 function showLoader(v) { loader.className = v ? '' : 'hidden'; }

@@ -43,8 +43,8 @@ def register_routes(app):
                 api_base_url = f"https://{app_name}.fly.dev"
                 content = content.replace("{{API_BASE_URL}}", api_base_url)
                 cache_buster = int(time.time())
-                content = content.replace("script.js", f"script.js?v={cache_buster}")
-                content = content.replace("style.css", f"style.css?v={cache_buster}")
+                content = content.replace("script.js", f"script.js?v=2.0")
+                content = content.replace("style.css", f"style.css?v=2.0")
                 return Response(content, mimetype='text/html')
             return "Web UI not found", 404
         except Exception:
