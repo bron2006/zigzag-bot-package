@@ -1,4 +1,4 @@
-// webapp/script.js
+﻿// webapp/script.js
 const API_BASE_URL = window.API_BASE_URL || "https://fallback.example.com";
 
 const loader = document.getElementById("loader");
@@ -33,7 +33,7 @@ document.addEventListener('DOMContentLoaded', function() {
             populateLists(allData);
             showLoader(false);
         }).catch(err => {
-            signalOutput.innerHTML = `<h3 style="color: #ef5350;">❌ Помилка завантаження списків пар.</h3>`;
+            signalOutput.innerHTML = `<h3 style="color: #ef5350;">вќЊ РџРѕРјРёР»РєР° Р·Р°РІР°РЅС‚Р°Р¶РµРЅРЅСЏ СЃРїРёСЃРєС–РІ РїР°СЂ.</h3>`;
             showLoader(false);
         });
 
@@ -83,12 +83,12 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 function updateScannerButtons(stateDict) {
-    const textMap = { forex: "💹 Forex", crypto: "💎 Crypto", commodities: "🥇 Сировина", watchlist: "⭐ Обране" };
+    const textMap = { forex: "рџ’№ Forex", crypto: "рџ’Ћ Crypto", commodities: "рџҐ‡ РЎРёСЂРѕРІРёРЅР°", watchlist: "в­ђ РћР±СЂР°РЅРµ" };
     for (const category in textMap) {
         const button = scannerControls.querySelector(`.scanner-button[data-cat="${category}"]`);
         if (button) {
             const isEnabled = stateDict[category];
-            const icon = isEnabled ? '✅' : '❌';
+            const icon = isEnabled ? 'вњ…' : 'вќЊ';
             button.textContent = `${icon} ${textMap[category]}`;
             button.classList.toggle('enabled', isEnabled);
         }
@@ -117,7 +117,7 @@ function displayLiveSignal(signalData) {
     if (score <= 35) signalClass = 'sell';
     
     signalDiv.classList.add(signalClass);
-    signalDiv.innerHTML = `<div class="live-signal-content">${verdict} по ${pair} (Оцінка: ${score})</div><button class="live-signal-close" onclick="event.stopPropagation(); this.parentElement.remove()">×</button>`;
+    signalDiv.innerHTML = `<div class="live-signal-content">${verdict} РїРѕ ${pair} (РћС†С–РЅРєР°: ${score})</div><button class="live-signal-close" onclick="event.stopPropagation(); this.parentElement.remove()">Г—</button>`;
     
     liveSignalsContainer.prepend(signalDiv);
 
@@ -157,7 +157,7 @@ function populateLists(data, query = '') {
     }
 
     if (watchlistDisplay.length > 0) {
-        html += createSection('⭐ Обране', watchlistDisplay);
+        html += createSection('в­ђ РћР±СЂР°РЅРµ', watchlistDisplay);
     }
     
     if (Array.isArray(data.forex)) {
@@ -169,9 +169,9 @@ function populateLists(data, query = '') {
         });
     }
 
-    html += createSection('💎 Криптовалюти', data.crypto);
-    html += createSection('🥇 Сировина', data.commodities);
-    html += createSection('📈 Акції/Індекси', data.stocks);
+    html += createSection('рџ’Ћ РљСЂРёРїС‚РѕРІР°Р»СЋС‚Рё', data.crypto);
+    html += createSection('рџҐ‡ РЎРёСЂРѕРІРёРЅР°', data.commodities);
+    html += createSection('рџ“€ РђРєС†С–С—/Р†РЅРґРµРєСЃРё', data.stocks);
 
     listsContainer.innerHTML = html;
     listsContainer.querySelectorAll('.pair-button').forEach(button => {
@@ -185,23 +185,23 @@ function populateLists(data, query = '') {
 function renderFavoriteButton(pair) {
     const pairNormalized = pair.replace(/\//g, '');
     const isFavorite = currentWatchlist.includes(pairNormalized);
-    const icon = isFavorite ? '✅' : '⭐';
+    const icon = isFavorite ? 'вњ…' : 'в­ђ';
     return `<button class="fav-btn" onclick="toggleFavorite(event, this, '${pair}')">${icon}</button>`;
 }
 
 function toggleFavorite(event, button, pair) {
     event.stopPropagation();
-    const isCurrentlyFavorite = button.innerHTML.includes('✅');
+    const isCurrentlyFavorite = button.innerHTML.includes('вњ…');
     const initDataString = initData ? `&initData=${encodeURIComponent(initData)}` : '';
     const url = `${API_BASE_URL}/api/toggle_watchlist?pair=${pair}${initDataString}`;
     
-    button.innerHTML = isCurrentlyFavorite ? '⭐' : '✅';
+    button.innerHTML = isCurrentlyFavorite ? 'в­ђ' : 'вњ…';
     
     fetch(url)
         .then(res => res.json())
         .then(data => {
             if (!data.success) {
-                button.innerHTML = isCurrentlyFavorite ? '✅' : '⭐';
+                button.innerHTML = isCurrentlyFavorite ? 'вњ…' : 'в­ђ';
             } else {
                 const pairNormalized = pair.replace(/\//g, '');
                 if (isCurrentlyFavorite) {
@@ -218,7 +218,7 @@ function toggleFavorite(event, button, pair) {
 function fetchSignal(pair) {
     lastSelectedPair = pair;
     showLoader(true);
-    signalOutput.innerHTML = `⏳ Отримую дані для ${pair}...`;
+    signalOutput.innerHTML = `вЏі РћС‚СЂРёРјСѓСЋ РґР°РЅС– РґР»СЏ ${pair}...`;
     signalOutput.style.textAlign = 'left';
 
     const activeBtn = document.querySelector('#expirationSelector .tf-button.active');
@@ -239,7 +239,7 @@ function fetchSignal(pair) {
             signalOutput.innerHTML = html;
         })
         .catch(err => {
-            signalOutput.innerHTML = `❌ Помилка: ${err.message}`;
+            signalOutput.innerHTML = `вќЊ РџРѕРјРёР»РєР°: ${err.message}`;
         })
         .finally(() => {
             signalContainer.scrollIntoView({ behavior: 'smooth' });
@@ -247,12 +247,18 @@ function fetchSignal(pair) {
         });
 }
 
-// --- ПОЧАТОК ЗМІН: Повністю перероблена функція для відображення ціни ---
+// --- РџРћР§РђРўРћРљ Р—РњР†Рќ: РџРѕРІРЅС–СЃС‚СЋ РїРµСЂРµСЂРѕР±Р»РµРЅР° С„СѓРЅРєС†С–СЏ РґР»СЏ РІС–РґРѕР±СЂР°Р¶РµРЅРЅСЏ С†С–РЅРё ---
 function formatSignalAsHtml(signalData, expiration) {
-    if (!signalData || Object.keys(signalData).length === 0) return "Немає даних для відображення.";
-    if (signalData.error) return `❌ Помилка: ${signalData.error}`;
+    if (!signalData || Object.keys(signalData).length === 0) return "РќРµРјР°С” РґР°РЅРёС… РґР»СЏ РІС–РґРѕР±СЂР°Р¶РµРЅРЅСЏ.";
+    if (signalData.error) return `вќЊ РџРѕРјРёР»РєР°: ${signalData.error}`;
 
-    const { pair, price, verdict_text, reasons, score } = signalData;
+    const { pair, price, verdict_text, reasons, score, sentiment } = signalData;
+    let aiHtml = "";
+    if (sentiment) {
+        const aiClass = sentiment === "GO" ? "ai-go" : "ai-block";
+        const aiIcon = sentiment === "GO" ? "✅" : "🚨";
+        aiHtml = `<div class="ai-verdict ${aiClass}">${aiIcon} ШІ Фільтр новин: ${sentiment}</div>`;
+    }
     const priceStr = price ? price.toFixed(5) : "N/A";
 
     let priceClass = 'price-neutral';
@@ -261,32 +267,32 @@ function formatSignalAsHtml(signalData, expiration) {
 
     let reasonsHtml = '';
     if (reasons && reasons.length > 0) {
-        reasonsHtml = '<div class="reasons"><strong>Ключові фактори:</strong><ul>';
+        reasonsHtml = '<div class="reasons"><strong>РљР»СЋС‡РѕРІС– С„Р°РєС‚РѕСЂРё:</strong><ul>';
         reasons.forEach(r => { reasonsHtml += `<li>${r}</li>`; });
         reasonsHtml += '</ul></div>';
     }
 
     return `
         <div class="signal-header">
-            <strong>${pair} (Експірація: ${expiration})</strong>
+            <strong>${pair} (Р•РєСЃРїС–СЂР°С†С–СЏ: ${expiration})</strong>
         </div>
 
         <div class="price-display-manual">
-            <div class="price-label">Ціна входу</div>
+            <div class="price-label">Р¦С–РЅР° РІС…РѕРґСѓ</div>
             <div class="signal-price ${priceClass}">${priceStr}</div>
         </div>
         
         <div class="verdict">${verdict_text}</div>
         
         <div class="power-balance">
-            <span>🐂 Бики: ${score}%</span>
-            <span>🐃 Ведмеді: ${100 - score}%</span>
+            <span>рџђ‚ Р‘РёРєРё: ${score}%</span>
+            <span>рџђѓ Р’РµРґРјРµРґС–: ${100 - score}%</span>
         </div>
         
-        ${reasonsHtml}
+         ${aiHtml} ${reasonsHtml}
     `;
 }
-// --- КІНЕЦЬ ЗМІН ---
+// --- РљР†РќР•Р¦Р¬ Р—РњР†Рќ ---
 
 function showLoader(visible) {
     loader.className = visible ? '' : 'hidden';

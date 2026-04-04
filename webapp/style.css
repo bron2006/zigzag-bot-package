@@ -247,3 +247,23 @@ h1 { text-align: center; color: var(--text-color); font-size: 24px; margin-top: 
     color: var(--text-color);
 }
 /* --- РљР†РќР•Р¦Р¬ Р—РњР†Рќ --- */
+/* Стилі для вердикту ШІ */
+.ai-verdict {
+    margin: 10px 0;
+    padding: 12px;
+    border-radius: 8px;
+    text-align: center;
+    font-weight: bold;
+    font-size: 1.1em;
+    border: 2px solid transparent;
+}
+.ai-go {
+    background-color: rgba(38, 166, 154, 0.1);
+    color: #26a69a;
+    border-color: #26a69a;
+}
+.ai-block {
+    background-color: rgba(239, 83, 80, 0.1);
+    color: #ef5350;
+    border-color: #ef5350;
+}
