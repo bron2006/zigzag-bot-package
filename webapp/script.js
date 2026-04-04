@@ -62,13 +62,13 @@ document.addEventListener('DOMContentLoaded', function() {
         const signalData = JSON.parse(event.data);
         if (signalData._ping) return;
 
-        // --- ДОДАНО: ЛОГІКА ЖИВИХ ЦІН НА КНОПКАХ ---
+        // --- ОСЬ ЦЕ Я ДОДАВ: ОНОВЛЕННЯ ЦІНИ НА КНОПЦІ В РЕАЛЬНОМУ ЧАСІ ---
         if (signalData.pair && signalData.price) {
             const pId = signalData.pair.replace(/\//g, "");
             const el = document.getElementById(`price-${pId}`);
             if (el) {
                 el.textContent = signalData.price.toFixed(5);
-                el.style.color = "#00ff00";
+                el.style.color = "#00ff00"; // Зелений спалах
                 setTimeout(() => { el.style.color = "#3390ec"; }, 300);
             }
         }
@@ -141,7 +141,7 @@ function displayLiveSignal(signalData) {
     }, 300000);
 }
 
-// --- МОДИФІКОВАНО: ДОДАНО SPAN ДЛЯ ЦІНИ ---
+// --- ОСЬ ЦЕ Я МОДИФІКУВАВ: ДОДАНО ID ДЛЯ ЦІНИ ---
 function createPairButton(pair) {
     const pId = pair.replace(/\//g, "");
     return `<div class="pair-item">
@@ -237,7 +237,7 @@ function toggleFavorite(event, button, pair) {
 function fetchSignal(pair) {
     lastSelectedPair = pair;
     showLoader(true);
-    signalOutput.innerHTML = `⏳ Отримую дані для ${pair}...`;
+    signalOutput.innerHTML = `⏳ Аналіз ${pair}...`;
     signalOutput.style.textAlign = 'left';
 
     const activeBtn = document.querySelector('#expirationSelector .tf-button.active');
