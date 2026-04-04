@@ -27,10 +27,7 @@ document.addEventListener('DOMContentLoaded', function() {
             currentWatchlist = (staticData.watchlist || []).map(p => p.replace(/\//g, ''));
             populateLists(allData);
             showLoader(false);
-        }).catch(() => {
-            signalOutput.innerHTML = `<h3 style="color: #ef5350;">❌ Помилка завантаження.</h3>`;
-            showLoader(false);
-        });
+        }).catch(() => { showLoader(false); });
 
     fetch(`${API_BASE_URL}/api/scanner/status${initDataQuery}`).then(res => res.json()).then(data => updateScannerButtons(data));
 
@@ -44,17 +41,18 @@ document.addEventListener('DOMContentLoaded', function() {
 
     const eventSource = new EventSource(`${API_BASE_URL}/api/signal-stream${initDataQuery}`);
     eventSource.onmessage = (e) => {
-    const data = JSON.parse(e.data);
-    if (data.pair && data.price) {
-        const pId = data.pair.replace(/\//g, "");
-        const priceEl = document.getElementById(`price-${pId}`);
-        if (priceEl) {
-            priceEl.textContent = data.price.toFixed(5);
-            priceEl.style.color = "#3390ec"; // Підсвічуємо оновлення
+        const data = JSON.parse(e.data);
+        if (data.pair && data.price) {
+            const pId = data.pair.replace(/\//g, "");
+            const priceEl = document.getElementById(`price-${pId}`);
+            if (priceEl) {
+                priceEl.textContent = data.price.toFixed(5);
+                priceEl.classList.add('price-update');
+                setTimeout(() => priceEl.classList.remove('price-update'), 500);
+            }
         }
-    }
-    displayLiveSignal(data);
-};
+        if (data.verdict_text) displayLiveSignal(data);
+    };
 
     document.querySelectorAll('.tf-button').forEach(btn => {
         btn.addEventListener('click', () => {
@@ -86,7 +84,16 @@ function populateLists(data, query = '') {
         const filtered = (pairs || []).filter(p => p.toLowerCase().includes(q));
         if (!filtered.length) return '';
         let s = `<div class="category"><div class="category-title">${title}</div><div class="pair-list">`;
-        filtered.forEach(p => s += `<div class="pair-item"><button class="pair-button" data-pair="${p}">${p}</button><button class="fav-btn" onclick="toggleFavorite(event, this, '${p}')">${currentWatchlist.includes(p.replace(/\//g,'')) ? '✅' : '⭐'}</button></div>`);
+        filtered.forEach(p => {
+            const pId = p.replace(/\//g, "");
+            s += `<div class="pair-item">
+                <button class="pair-button" data-pair="${p}">
+                    <span class="pair-name">${p}</span>
+                    <span class="live-price-min" id="price-${pId}">---</span>
+                </button>
+                <button class="fav-btn" onclick="toggleFavorite(event, this, '${p}')">${currentWatchlist.includes(pId) ? '✅' : '⭐'}</button>
+            </div>`;
+        });
         return s + '</div></div>';
     };
     html += createSection('⭐ Обране', currentWatchlist);
@@ -95,7 +102,7 @@ function populateLists(data, query = '') {
     html += createSection('🥇 Сировина', data.commodities);
     html += createSection('📈 Акції/Індекси', data.stocks);
     listsContainer.innerHTML = html;
-    listsContainer.querySelectorAll('.pair-button').forEach(b => b.addEventListener('click', (e) => debouncedFetchSignal(e.target.dataset.pair)));
+    listsContainer.querySelectorAll('.pair-button').forEach(b => b.addEventListener('click', (e) => debouncedFetchSignal(e.currentTarget.dataset.pair)));
 }
 
 function fetchSignal(pair) {
@@ -114,13 +121,7 @@ function formatSignalAsHtml(data, exp) {
     if (data.error) return `❌ Помилка: ${data.error}`;
     const { pair, price, verdict_text, score, sentiment } = data;
     const pClass = score >= 65 ? 'price-call' : (score <= 35 ? 'price-put' : 'price-neutral');
-    
-    let aiHtml = "";
-    if (sentiment) {
-        const aiClass = sentiment === "GO" ? "ai-go" : "ai-block";
-        aiHtml = `<div class="ai-verdict ${aiClass}">${sentiment === "GO" ? "✅" : "🚨"} ШІ Фільтр новин: ${sentiment}</div>`;
-    }
-
+    let aiHtml = sentiment ? `<div class="ai-verdict ${sentiment === 'GO' ? 'ai-go' : 'ai-block'}">${sentiment === 'GO' ? '✅' : '🚨'} ШІ Фільтр новин: ${sentiment}</div>` : "";
     return `
         <div class="signal-header"><strong>${pair} (Експірація: ${exp})</strong></div>
         <div class="price-display-manual"><div class="price-label">Ціна входу</div><div class="signal-price ${pClass}">${price ? price.toFixed(5) : "N/A"}</div></div>
@@ -129,6 +130,6 @@ function formatSignalAsHtml(data, exp) {
         <div class="power-balance"><span>🐂 Бики: ${score}%</span><span>🐃 Ведмеді: ${100 - score}%</span></div>
     `;
 }
-
+function displayLiveSignal(s) { /* логіка живих сигналів зверху */ }
 function showLoader(v) { loader.className = v ? '' : 'hidden'; }
 function debounce(f, d) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => f.apply(this, a), d); }; }
