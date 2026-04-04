@@ -1,14 +1,31 @@
-﻿:root { --bg-color: #1a1a1a; --text-color: #ffffff; --button-color: #3390ec; --secondary-bg-color: #272727; --buy-color: #26a69a; --sell-color: #ef5350; }
-body { font-family: sans-serif; background: var(--bg-color); color: var(--text-color); padding: 15px; }
-.pair-button { display: flex; justify-content: space-between; align-items: center; width: 100%; padding: 10px; background: var(--secondary-bg-color); border: none; color: white; border-radius: 8px 0 0 8px; cursor: pointer; }
-.live-price-min { font-family: monospace; font-size: 0.9em; color: var(--button-color); background: rgba(0,0,0,0.3); padding: 2px 6px; border-radius: 4px; }
-.price-update { color: #00ff00 !important; transform: scale(1.1); transition: 0.2s; }
-.ai-verdict { margin: 10px 0; padding: 12px; border-radius: 8px; text-align: center; font-weight: bold; }
-.ai-go { background: rgba(38,166,154,0.1); color: #26a69a; border: 1px solid #26a69a; }
-.ai-block { background: rgba(239,83,80,0.1); color: #ef5350; border: 1px solid #ef5350; }
-.pair-item { display: flex; margin-bottom: 8px; width: 100%; }
-.fav-btn { background: var(--secondary-bg-color); border: none; color: white; padding: 10px; border-radius: 0 8px 8px 0; border-left: 1px solid #1a1a1a; cursor: pointer; }
+﻿:root {
+    --bg-color: #1a1a1a;
+    --text-color: #ffffff;
+    --hint-color: #aaaaaa;
+    --button-color: #3390ec;
+    --secondary-bg-color: #272727;
+    --buy-color: #26a69a;
+    --sell-color: #ef5350;
+}
+body { font-family: -apple-system, sans-serif; background: var(--bg-color); color: var(--text-color); padding: 15px; margin: 0; }
+.container { max-width: 100%; margin: auto; }
+.category-title { font-size: 18px; font-weight: bold; margin: 20px 0 10px; border-bottom: 1px solid var(--secondary-bg-color); padding-bottom: 5px; }
+.pair-list { display: flex; flex-direction: column; gap: 8px; }
+.pair-item { display: flex; width: 100%; height: 45px; }
+.pair-button {
+    flex-grow: 1; display: flex; justify-content: space-between; align-items: center;
+    padding: 0 15px; background: var(--secondary-bg-color); border: none; color: white;
+    border-radius: 8px 0 0 8px; cursor: pointer; font-size: 14px;
+}
+.live-price-min { font-family: monospace; font-size: 0.9em; color: var(--button-color); background: rgba(0,0,0,0.3); padding: 4px 8px; border-radius: 4px; min-width: 70px; text-align: right; }
+.fav-btn { width: 45px; background: var(--secondary-bg-color); border: none; color: white; border-radius: 0 8px 8px 0; border-left: 1px solid var(--bg-color); cursor: pointer; }
 .price-display-manual { text-align: center; padding: 20px; background: var(--secondary-bg-color); border-radius: 12px; margin: 15px 0; }
-.signal-price { font-size: 2.5em; font-weight: bold; }
-.price-call { color: var(--buy-color); } .price-put { color: var(--sell-color); }
+.signal-price { font-size: 2.2em; font-weight: bold; font-family: monospace; }
+.verdict { font-size: 1.4em; font-weight: bold; text-align: center; padding: 10px; border-radius: 8px; background: var(--bg-color); margin: 10px 0; }
+.ai-verdict { margin: 10px 0; padding: 12px; border-radius: 8px; text-align: center; font-weight: bold; border: 1px solid transparent; }
+.ai-go { background: rgba(38,166,154,0.1); color: #26a69a; border-color: #26a69a; }
+.ai-block { background: rgba(239,83,80,0.1); color: #ef5350; border-color: #ef5350; }
+.power-balance { display: flex; justify-content: space-around; padding: 10px; background: var(--bg-color); border-radius: 8px; font-weight: bold; }
 .hidden { display: none; }
+#loader { position: fixed; left: 50%; top: 50%; width: 40px; height: 40px; border: 4px solid #272727; border-top: 4px solid #3390ec; border-radius: 50%; animation: spin 1s linear infinite; transform: translate(-50%, -50%); }
+@keyframes spin { 0% { transform: translate(-50%, -50%) rotate(0deg); } 100% { transform: translate(-50%, -50%) rotate(360deg); } }
