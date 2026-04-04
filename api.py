@@ -43,8 +43,8 @@ def register_routes(app):
                 api_base_url = f"https://{app_name}.fly.dev"
                 content = content.replace("{{API_BASE_URL}}", api_base_url)
                 cache_buster = int(time.time())
-                content = content.replace("script.js", f"script.js?v={int(time.time())}"))}")
-                content = content.replace("style.css", f"style.css?v=2.0")
+                content = content.replace("script.js", f"script.js?v={cache_buster}")
+                content = content.replace("style.css", f"style.css?v={cache_buster}")
                 return Response(content, mimetype='text/html')
             return "Web UI not found", 404
         except Exception:
@@ -84,7 +84,7 @@ def register_routes(app):
             d = get_api_detailed_signal_data(app_state.client, app_state.symbol_cache, pair_normalized, user_id, timeframe)
             done_q = queue.Queue()
             d.addCallbacks(lambda res: done_q.put(res), lambda f: done_q.put({"error": str(f)}))
-            result = done_q.get(timeout=120)
+            result = done_q.get(timeout=30)
             if result.get("error"):
                 logger.error(f"On-demand analysis failed for {pair_normalized}: {result.get('error')}")
                 return jsonify(result), 500
@@ -132,7 +132,7 @@ def register_routes(app):
             logger.info("DEBUG: Web client connected to SSE stream. Waiting for signals...")
             while True:
                 try:
-                    data = app_state.sse_queue.get(timeout=60)
+                    data = app_state.sse_queue.get(timeout=20)
                     logger.info(f"DEBUG: Signal for {data.get('pair')} GOT from SSE queue. Sending to web client.")
                     yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
                 except queue.Empty:
