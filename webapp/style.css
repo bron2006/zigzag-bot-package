@@ -1,4 +1,4 @@
-/* webapp/style.css */
+﻿/* webapp/style.css */
 :root {
     --bg-color: var(--tg-theme-bg-color, #1a1a1a);
     --text-color: var(--tg-theme-text-color, #ffffff);
@@ -200,7 +200,7 @@ h1 { text-align: center; color: var(--text-color); font-size: 24px; margin-top: 
 .verdict { font-size: 1.3em; font-weight: bold; margin-bottom: 15px; padding: 10px; border-radius: 8px; text-align: center; background-color: var(--bg-color); }
 .reasons ul { list-style-type: none; padding-left: 0; margin: 10px 0 0 0; }
 .reasons li { margin-bottom: 5px; padding-left: 15px; position: relative; }
-.reasons li::before { content: '•'; color: var(--button-color); position: absolute; left: 0; font-weight: bold; }
+.reasons li::before { content: 'вЂў'; color: var(--button-color); position: absolute; left: 0; font-weight: bold; }
 
 .power-balance {
     display: flex;
@@ -212,7 +212,7 @@ h1 { text-align: center; color: var(--text-color); font-size: 24px; margin-top: 
     font-weight: bold;
 }
 
-/* --- ПОЧАТОК ЗМІН: Нові стилі для виділення ціни --- */
+/* --- РџРћР§РђРўРћРљ Р—РњР†Рќ: РќРѕРІС– СЃС‚РёР»С– РґР»СЏ РІРёРґС–Р»РµРЅРЅСЏ С†С–РЅРё --- */
 .price-display-manual {
     background-color: var(--bg-color);
     border-radius: 8px;
@@ -246,8 +246,8 @@ h1 { text-align: center; color: var(--text-color); font-size: 24px; margin-top: 
 .price-display-manual .price-neutral {
     color: var(--text-color);
 }
-/* --- КІНЕЦЬ ЗМІН --- */
-/* ���� ��� �������� ز */
+/* --- РљР†РќР•Р¦Р¬ Р—РњР†Рќ --- */
+/* Стилі для вердикту ШІ */
 .ai-verdict {
     margin: 10px 0;
     padding: 12px;
