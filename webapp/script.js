@@ -1,70 +1,100 @@
-﻿const API_BASE_URL = window.API_BASE_URL || "";
+﻿const API_BASE_URL = window.API_BASE_URL || "https://fallback.example.com";
 const loader = document.getElementById("loader");
 const listsContainer = document.getElementById("listsContainer");
 const signalOutput = document.getElementById("signalOutput");
-let currentWatchlist = [], allData = {}, currentExpiration = '1m', initData = window.Telegram?.WebApp?.initData || '';
+const scannerControls = document.getElementById('scannerControls');
+const liveSignalsContainer = document.getElementById('liveSignalsContainer');
+const signalContainer = document.getElementById('signalContainer');
 
-document.addEventListener('DOMContentLoaded', () => {
+let tg = window.Telegram.WebApp;
+tg.ready(); tg.expand();
+
+let currentWatchlist = [];
+let initData = tg.initData || '';
+let currentExpiration = '1m';
+let allData = {};
+let lastSelectedPair = null;
+
+const debouncedFetchSignal = debounce(fetchSignal, 300);
+
+document.addEventListener('DOMContentLoaded', function() {
     showLoader(true);
-    const q = initData ? `?initData=${encodeURIComponent(initData)}` : '';
-    fetch(`${API_BASE_URL}/api/get_pairs${q}`).then(res => res.json()).then(data => {
-        allData = data;
-        currentWatchlist = (data.watchlist || []).map(p => p.replace(/\//g, ''));
-        populateLists(data);
+    const initDataQuery = initData ? `?initData=${encodeURIComponent(initData)}` : '';
+    const staticPairsUrl = `${API_BASE_URL}/api/get_pairs${initDataQuery}`;
+    fetch(staticPairsUrl).then(res => res.json()).then(staticData => {
+        allData = staticData;
+        currentWatchlist = (staticData.watchlist || []).map(p => p.replace(/\//g, ''));
+        populateLists(allData);
         showLoader(false);
-    }).catch(() => showLoader(false));
+    }).catch(err => {
+        signalOutput.innerHTML = `<h3 style="color: #ef5350;">❌ Помилка завантаження списків пар.</h3>`;
+        showLoader(false);
+    });
 
-    const es = new EventSource(`${API_BASE_URL}/api/signal-stream${q}`);
-    es.onmessage = (e) => {
-        const d = JSON.parse(e.data);
-        if (d.pair && d.price) {
-            const el = document.getElementById(`price-${d.pair.replace(/\//g, "")}`);
-            if (el) el.textContent = d.price.toFixed(5);
-        }
+    fetch(`${API_BASE_URL}/api/scanner/status${initDataQuery}`).then(res => res.json()).then(data => updateScannerButtons(data));
+
+    const eventSource = new EventSource(`${API_BASE_URL}/api/signal-stream${initDataQuery}`);
+    eventSource.onmessage = function(event) {
+        const signalData = JSON.parse(event.data);
+        if (signalData._ping) return;
+        displayLiveSignal(signalData);
     };
+
+    const searchInput = document.getElementById('searchInput');
+    searchInput.addEventListener('input', debounce((event) => { populateLists(allData, event.target.value); }, 300));
 });
 
-function populateLists(data) {
+function populateLists(data, query = '') {
     let html = '';
-    const createSection = (title, pairs) => {
-        if (!pairs || !pairs.length) return '';
-        let s = `<div class="category-title" style="color:#aaa; font-weight:bold; margin:15px 0 5px;">${title}</div><div class="pair-list" style="display:flex; flex-direction:column; gap:8px;">`;
-        pairs.forEach(p => {
-            const pId = p.replace(/\//g, "");
-            s += `<div class="pair-item" style="display:flex; height:45px;">
-                <button class="pair-button" onclick="fetchSignal('${p}')" style="flex-grow:1; display:flex; justify-content:space-between; align-items:center; padding:0 15px; background:#272727; border:none; color:white; border-radius:8px 0 0 8px; cursor:pointer;">
-                    <span>${p}</span><span class="live-price-min" id="price-${pId}" style="font-family:monospace; color:#3390ec; background:rgba(0,0,0,0.2); padding:3px 6px; border-radius:4px;">---</span>
-                </button>
-                <button class="fav-btn" style="width:45px; background:#272727; border:none; color:white; border-radius:0 8px 8px 0; border-left:1px solid #1a1a1a;">${currentWatchlist.includes(pId) ? '✅' : '⭐'}</button>
-            </div>`;
-        });
-        return s + '</div>';
-    };
-    if (currentWatchlist.length) html += createSection('⭐ Обране', currentWatchlist);
+    const queryLower = query.toLowerCase();
+    function createPairButton(pair) {
+        return `<div class="pair-item"><button class="pair-button" data-pair="${pair}">${pair}</button>${renderFavoriteButton(pair)}</div>`;
+    }
+    function createSection(title, pairs) {
+        if (!Array.isArray(pairs) || pairs.length === 0) return '';
+        const filteredPairs = pairs.filter(p => p.toLowerCase().includes(queryLower));
+        if (filteredPairs.length === 0) return '';
+        let sectionHtml = `<div class="category"><div class="category-title">${title}</div><div class="pair-list">`;
+        filteredPairs.forEach(pair => sectionHtml += createPairButton(pair));
+        return sectionHtml + '</div></div>';
+    }
     if (data.forex) data.forex.forEach(session => html += createSection(session.title, session.pairs));
     html += createSection('💎 Криптовалюти', data.crypto);
     html += createSection('🥇 Сировина', data.commodities);
     html += createSection('📈 Акції/Індекси', data.stocks);
     listsContainer.innerHTML = html;
+    listsContainer.querySelectorAll('.pair-button').forEach(button => {
+        button.addEventListener('click', (event) => debouncedFetchSignal(event.target.dataset.pair));
+    });
 }
 
 function fetchSignal(pair) {
+    lastSelectedPair = pair;
     showLoader(true);
-    signalOutput.innerHTML = `⏳ Аналіз ${pair}...`;
-    const q = initData ? `&initData=${encodeURIComponent(initData)}` : '';
-    fetch(`${API_BASE_URL}/api/signal?pair=${pair}&timeframe=${currentExpiration}${q}`).then(res => res.json()).then(d => {
-        const score = d.score || 50;
-        const ai = d.sentiment ? `<div class="ai-verdict ${d.sentiment==='GO'?'ai-go':'ai-block'}" style="padding:12px; border-radius:8px; text-align:center; font-weight:bold; margin:10px 0; border:1px solid">${d.sentiment==='GO'?'✅':'🚨'} ШІ Новини: ${d.sentiment}</div>` : "";
-        signalOutput.innerHTML = `<div style="font-weight:bold;">${d.pair}</div>
-            <div style="text-align:center; padding:20px; background:#111; border-radius:12px; margin:15px 0; border:1px solid #333;">
-                <div style="color:#aaa; font-size:12px;">Ціна входу</div>
-                <div style="font-size:2.2em; font-family:monospace; font-weight:bold;">${d.price?d.price.toFixed(5):'N/A'}</div>
-            </div>
-            <div style="text-align:center; font-weight:bold; padding:12px; background:#222; border-radius:8px;">${d.verdict_text}</div>
-            ${ai}
-            <div style="display:flex; justify-content:space-around; margin-top:10px;"><span>🐂 Бики: ${score}%</span><span>🐃 Ведмеді: ${100-score}%</span></div>`;
-        
-        setTimeout(() => { signalOutput.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, 150);
-    }).finally(() => showLoader(false));
+    signalOutput.innerHTML = `⏳ Отримую дані для ${pair}...`;
+    const initDataQuery = initData ? `?initData=${encodeURIComponent(initData)}` : '';
+    fetch(`${API_BASE_URL}/api/signal?pair=${pair}&timeframe=${currentExpiration}${initDataQuery.replace('?', '&')}`)
+        .then(res => res.json()).then(signalData => {
+            signalOutput.innerHTML = formatSignalAsHtml(signalData, currentExpiration);
+        }).finally(() => {
+            signalContainer.scrollIntoView({ behavior: 'smooth' });
+            showLoader(false);
+        });
 }
-function showLoader(v) { loader.className = v ? '' : 'hidden'; }
+
+function formatSignalAsHtml(signalData, expiration) {
+    if (signalData.error) return `❌ Помилка: ${signalData.error}`;
+    const { pair, price, verdict_text, score } = signalData;
+    return `
+        <div class="signal-header"><strong>${pair} (${expiration})</strong></div>
+        <div class="price-display-manual"><div class="price-label">Ціна входу</div><div class="signal-price">${price ? price.toFixed(5) : "N/A"}</div></div>
+        <div class="verdict">${verdict_text}</div>
+        <div class="power-balance"><span>🐂 Бики: ${score}%</span><span>🐃 Ведмеді: ${100 - score}%</span></div>
+    `;
+}
+
+function renderFavoriteButton(pair) { return `<button class="fav-btn">⭐</button>`; }
+function updateScannerButtons(s) {}
+function displayLiveSignal(s) {}
+function showLoader(visible) { loader.className = visible ? '' : 'hidden'; }
+function debounce(func, delay) { let timeout; return function(...args) { clearTimeout(timeout); timeout = setTimeout(() => func.apply(this, args), delay); }; }
