@@ -1,4 +1,4 @@
-# api.py
+﻿# api.py
 import os
 import json
 import time
@@ -84,7 +84,7 @@ def register_routes(app):
             d = get_api_detailed_signal_data(app_state.client, app_state.symbol_cache, pair_normalized, user_id, timeframe)
             done_q = queue.Queue()
             d.addCallbacks(lambda res: done_q.put(res), lambda f: done_q.put({"error": str(f)}))
-            result = done_q.get(timeout=30)
+            result = done_q.get(timeout=120)
             if result.get("error"):
                 logger.error(f"On-demand analysis failed for {pair_normalized}: {result.get('error')}")
                 return jsonify(result), 500
@@ -132,7 +132,7 @@ def register_routes(app):
             logger.info("DEBUG: Web client connected to SSE stream. Waiting for signals...")
             while True:
                 try:
-                    data = app_state.sse_queue.get(timeout=20)
+                    data = app_state.sse_queue.get(timeout=60)
                     logger.info(f"DEBUG: Signal for {data.get('pair')} GOT from SSE queue. Sending to web client.")
                     yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
                 except queue.Empty:
