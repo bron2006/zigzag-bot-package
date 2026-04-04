@@ -43,7 +43,18 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 
     const eventSource = new EventSource(`${API_BASE_URL}/api/signal-stream${initDataQuery}`);
-    eventSource.onmessage = (e) => displayLiveSignal(JSON.parse(e.data));
+    eventSource.onmessage = (e) => {
+    const data = JSON.parse(e.data);
+    if (data.pair && data.price) {
+        const pId = data.pair.replace(/\//g, "");
+        const priceEl = document.getElementById(`price-${pId}`);
+        if (priceEl) {
+            priceEl.textContent = data.price.toFixed(5);
+            priceEl.style.color = "#3390ec"; // Підсвічуємо оновлення
+        }
+    }
+    displayLiveSignal(data);
+};
 
     document.querySelectorAll('.tf-button').forEach(btn => {
         btn.addEventListener('click', () => {

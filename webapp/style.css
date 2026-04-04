@@ -267,3 +267,19 @@ h1 { text-align: center; color: var(--text-color); font-size: 24px; margin-top: 
     color: #ef5350;
     border-color: #ef5350;
 }
+.pair-button {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 12px;
+}
+.live-price-min {
+    font-family: 'Courier New', monospace;
+    font-size: 0.85em;
+    font-weight: bold;
+    color: var(--button-color);
+    background: rgba(51, 144, 236, 0.1);
+    padding: 2px 6px;
+    border-radius: 4px;
+    margin-left: 8px;
+}
