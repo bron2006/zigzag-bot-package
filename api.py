@@ -1,5 +1,4 @@
-﻿# api.py
-import os
+﻿import os
 import json
 import time
 import queue
@@ -129,11 +128,12 @@ def register_routes(app):
     @protected_route
     def signal_stream():
         def generate():
-            logger.info("DEBUG: Web client connected to SSE stream. Waiting for signals...")
+            logger.info("DEBUG: Web client connected to SSE stream.")
             while True:
                 try:
                     data = app_state.sse_queue.get(timeout=20)
-                    logger.info(f"DEBUG: Signal for {data.get('pair')} GOT from SSE queue. Sending to web client.")
+                    # Додаємо лог відправки ціни
+                    logger.info(f"SSE SEND: {data.get('pair')} - {data.get('price')}")
                     yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
                 except queue.Empty:
                     yield ": ping\n\n"
