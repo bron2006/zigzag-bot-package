@@ -1,9 +1,8 @@
-# analysis.py
 import logging
 import time
 import pandas as pd
 import numpy as np
-import pandas_ta as ta  # Наша математика
+import pandas_ta as ta
 from typing import Optional, Dict
 from twisted.internet.defer import Deferred
 from twisted.internet import reactor
@@ -13,30 +12,23 @@ from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOATrendbarPe
 
 from state import app_state
 from price_utils import resolve_price_divisor
-import ml_models  # Завантажені lgbm_model.pkl та lgbm_scaler.pkl
+import ml_models
+import news_filter  # Підключаємо твій новий фільтр новин
 
 logger = logging.getLogger("analysis")
 PERIOD_MAP = { "1m": TrendbarPeriod.M1, "5m": TrendbarPeriod.M5, "15m": TrendbarPeriod.M15 }
 
 def _prepare_features(df: pd.DataFrame):
-    """
-    КРОК 4.1: Готуємо 5 індикаторів.
-    Ці назви (ATR, ADX, RSI, EMA50, EMA200) мають бути саме в такому порядку.
-    """
+    """Розрахунок 5 основних індикаторів для LightGBM."""
     df = df.copy()
-    
-    # Розрахунок індикаторів (те, що ми щойно перевірили в тесті)
-    df.ta.rsi(length=14, append=True)
-    df.ta.adx(length=14, append=True)
-    df.ta.atr(length=14, append=True)
-    df.ta.ema(length=50, append=True)
-    df.ta.ema(length=200, append=True)
-    
-    # Вибираємо останній рядок
-    latest = df.tail(1)
-    
-    # Формуємо масив значень у строгому порядку для моделі
     try:
+        df.ta.rsi(length=14, append=True)
+        df.ta.adx(length=14, append=True)
+        df.ta.atr(length=14, append=True)
+        df.ta.ema(length=50, append=True)
+        df.ta.ema(length=200, append=True)
+        
+        latest = df.tail(1)
         features = [
             latest["ATRr_14"].values[0],
             latest["ADX_14"].values[0],
@@ -45,60 +37,59 @@ def _prepare_features(df: pd.DataFrame):
             latest["EMA_200"].values[0]
         ]
         return np.array([features])
-    except KeyError as e:
-        logger.error(f"Missing indicator column: {e}")
+    except Exception as e:
+        logger.error(f"Indicator calculation error: {e}")
         return None
 
 def get_api_detailed_signal_data(client, symbol_cache, symbol, user_id, timeframe="5m"):
     pair_norm = symbol.replace("/", "")
     main_d = Deferred()
-    
-    # Запитуємо 300 свічок, щоб вистачило для EMA 200
     market_d = get_market_data(client, symbol_cache, pair_norm, timeframe, 300)
     
     def process_result(df):
         try:
             if df is None or df.empty or len(df) < 250:
-                main_d.callback({"pair": symbol, "verdict_text": "WAIT", "price": 0.0, "score": 50, "reasons": ["Дані завантажуються..."]})
+                main_d.callback({"pair": symbol, "verdict_text": "WAIT", "price": 0.0, "score": 50, "reasons": ["Очікуємо дані..."]})
                 return
 
             last_close = float(df['Close'].iloc[-1])
             score = 50
             verdict = "NEUTRAL"
-            
-            # КРОК 4.2: Робота з ШІ
+            reasons = []
+
+            # 1. ТЕХНІЧНИЙ АНАЛІЗ (LightGBM)
             if ml_models.LGBM_MODEL and ml_models.SCALER:
                 features_raw = _prepare_features(df)
-                
                 if features_raw is not None and not np.isnan(features_raw).any():
-                    # Масштабуємо дані через Scaler
                     features_scaled = ml_models.SCALER.transform(features_raw)
-                    # Отримуємо прогноз від LightGBM
                     probs = ml_models.LGBM_MODEL.predict_proba(features_scaled)
-                    prob_up = probs[0][1]  # Ймовірність росту
-                    score = int(prob_up * 100)
+                    score = int(probs[0][1] * 100)
                     
-                    # Логіка вердикту
                     if score > 75: verdict = "BUY"
                     elif score < 25: verdict = "SELL"
+            
+            # 2. ФІЛЬТР НОВИН (Gemini AI)
+            # Запитуємо Gemini тільки якщо техніка дає сигнал
+            if verdict != "NEUTRAL":
+                ai_news = news_filter.get_latest_news_sentiment(symbol)
+                if ai_news == "BLOCK":
+                    logger.info(f"🚨 {symbol} BLOCKED by News Filter")
+                    verdict = "NEWS_WAIT"
+                    reasons.append("ШІ: Ризиковані новини. Вхід заборонено.")
                 else:
-                    logger.warning(f"Indicators not ready for {symbol}")
+                    reasons.append(f"ШІ: Новини ок. Технічний Score: {score}%")
+            else:
+                reasons.append(f"Score: {score}%. Сигнал відсутній.")
 
-            # КРОК 4.3: Відповідь для UI (як на скріншоті)
-            prediction = {
-                "pair": symbol,
-                "price": last_close,
-                "verdict_text": verdict,
-                "score": score,
-                "reasons": [f"ШІ Score: {score}%", "Аналіз технічних індикаторів завершено."],
-                "ts": time.time()
-            }
-            main_d.callback(prediction)
+            main_d.callback({
+                "pair": symbol, "price": last_close, "verdict_text": verdict,
+                "score": score, "reasons": reasons, "ts": time.time()
+            })
         except Exception as e:
-            logger.exception("AI analysis logic failure")
+            logger.exception("Analysis Error")
             main_d.callback({"pair": symbol, "verdict_text": "ERROR", "score": 50, "reasons": [str(e)]})
 
-    market_d.addCallbacks(process_result, lambda err: main_d.callback({"pair": symbol, "verdict_text": "TIMEOUT", "score": 50}))
+    market_d.addCallbacks(process_result, lambda err: main_d.callback({"pair": symbol, "verdict_text": "TIMEOUT"}))
     return main_d
 
 def get_market_data(client, symbol_cache, norm_pair, period, count):
