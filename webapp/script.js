@@ -2,8 +2,7 @@
 const loader = document.getElementById("loader");
 const listsContainer = document.getElementById("listsContainer");
 const signalOutput = document.getElementById("signalOutput");
-let currentWatchlist = [], allData = {}, lastSelectedPair = null, currentExpiration = '1m';
-let initData = window.Telegram?.WebApp?.initData || '';
+let currentWatchlist = [], allData = {}, currentExpiration = '1m', initData = window.Telegram?.WebApp?.initData || '';
 
 document.addEventListener('DOMContentLoaded', () => {
     showLoader(true);
@@ -29,11 +28,11 @@ function populateLists(data) {
     let html = '';
     const createSection = (title, pairs) => {
         if (!pairs || !pairs.length) return '';
-        let s = `<div class="category-title" style="color:#888; font-size:14px; margin:15px 0 5px;">${title}</div><div class="pair-list" style="display:flex; flex-direction:column; gap:8px;">`;
+        let s = `<div class="category-title" style="color:#aaa; font-weight:bold; margin:15px 0 5px;">${title}</div><div class="pair-list" style="display:flex; flex-direction:column; gap:8px;">`;
         pairs.forEach(p => {
             const pId = p.replace(/\//g, "");
             s += `<div class="pair-item" style="display:flex; height:45px;">
-                <button class="pair-button" onclick="fetchSignal('${p}')" style="flex-grow:1; display:flex; justify-content:space-between; align-items:center; padding:0 15px; background:#272727; border:none; color:white; border-radius:8px 0 0 8px;">
+                <button class="pair-button" onclick="fetchSignal('${p}')" style="flex-grow:1; display:flex; justify-content:space-between; align-items:center; padding:0 15px; background:#272727; border:none; color:white; border-radius:8px 0 0 8px; cursor:pointer;">
                     <span>${p}</span><span class="live-price-min" id="price-${pId}" style="font-family:monospace; color:#3390ec; background:rgba(0,0,0,0.2); padding:3px 6px; border-radius:4px;">---</span>
                 </button>
                 <button class="fav-btn" style="width:45px; background:#272727; border:none; color:white; border-radius:0 8px 8px 0; border-left:1px solid #1a1a1a;">${currentWatchlist.includes(pId) ? '✅' : '⭐'}</button>
@@ -55,15 +54,19 @@ function fetchSignal(pair) {
     const q = initData ? `&initData=${encodeURIComponent(initData)}` : '';
     fetch(`${API_BASE_URL}/api/signal?pair=${pair}&timeframe=${currentExpiration}${q}`).then(res => res.json()).then(d => {
         const score = d.score || 50;
-        const ai = d.sentiment ? `<div class="ai-verdict ${d.sentiment==='GO'?'ai-go':'ai-block'}" style="padding:10px; border-radius:8px; text-align:center; font-weight:bold; margin:10px 0; background:${d.sentiment==='GO'?'rgba(38,166,154,0.1)':'rgba(239,83,80,0.1)'}; color:${d.sentiment==='GO'?'#26a69a':'#ef5350'}; border:1px solid">${d.sentiment==='GO'?'✅':'🚨'} ШІ Новини: ${d.sentiment}</div>` : "";
-        signalOutput.innerHTML = `<div style="font-weight:bold;">${d.pair}</div>
-            <div class="price-display-manual" style="text-align:center; padding:15px; background:#111; border-radius:10px; margin:10px 0;"><div style="color:#aaa; font-size:12px;">Ціна входу</div><div style="font-size:2em; font-family:monospace; font-weight:bold;">${d.price?d.price.toFixed(5):'N/A'}</div></div>
-            <div class="verdict" style="text-align:center; font-weight:bold; padding:10px; background:#222; border-radius:8px;">${d.verdict_text}</div>
+        const ai = d.sentiment ? `<div class="ai-verdict ${d.sentiment==='GO'?'ai-go':'ai-block'}" style="padding:12px; border-radius:8px; text-align:center; font-weight:bold; margin:10px 0; border:1px solid">${d.sentiment==='GO'?'✅':'🚨'} ШІ Новини: ${d.sentiment}</div>` : "";
+        signalOutput.innerHTML = `
+            <div style="font-weight:bold;">${d.pair}</div>
+            <div style="text-align:center; padding:20px; background:#111; border-radius:12px; margin:15px 0; border:1px solid #333;">
+                <div style="color:#aaa; font-size:12px;">Ціна входу</div>
+                <div style="font-size:2.2em; font-family:monospace; font-weight:bold;">${d.price?d.price.toFixed(5):'N/A'}</div>
+            </div>
+            <div style="text-align:center; font-weight:bold; padding:12px; background:#222; border-radius:8px;">${d.verdict_text}</div>
             ${ai}
             <div style="display:flex; justify-content:space-around; margin-top:10px;"><span>🐂 Бики: ${score}%</span><span>🐃 Ведмеді: ${100-score}%</span></div>`;
         
-        // ПЕРЕВІРЕНИЙ АВТОСКРОЛ
-        setTimeout(() => { signalOutput.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, 100);
+        // Автоматичний спуск вниз
+        setTimeout(() => { signalOutput.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, 150);
     }).finally(() => showLoader(false));
 }
 function showLoader(v) { loader.className = v ? '' : 'hidden'; }
