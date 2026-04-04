@@ -55,8 +55,7 @@ function fetchSignal(pair) {
     fetch(`${API_BASE_URL}/api/signal?pair=${pair}&timeframe=${currentExpiration}${q}`).then(res => res.json()).then(d => {
         const score = d.score || 50;
         const ai = d.sentiment ? `<div class="ai-verdict ${d.sentiment==='GO'?'ai-go':'ai-block'}" style="padding:12px; border-radius:8px; text-align:center; font-weight:bold; margin:10px 0; border:1px solid">${d.sentiment==='GO'?'✅':'🚨'} ШІ Новини: ${d.sentiment}</div>` : "";
-        signalOutput.innerHTML = `
-            <div style="font-weight:bold;">${d.pair}</div>
+        signalOutput.innerHTML = `<div style="font-weight:bold;">${d.pair}</div>
             <div style="text-align:center; padding:20px; background:#111; border-radius:12px; margin:15px 0; border:1px solid #333;">
                 <div style="color:#aaa; font-size:12px;">Ціна входу</div>
                 <div style="font-size:2.2em; font-family:monospace; font-weight:bold;">${d.price?d.price.toFixed(5):'N/A'}</div>
@@ -65,7 +64,6 @@ function fetchSignal(pair) {
             ${ai}
             <div style="display:flex; justify-content:space-around; margin-top:10px;"><span>🐂 Бики: ${score}%</span><span>🐃 Ведмеді: ${100-score}%</span></div>`;
         
-        // Автоматичний спуск вниз
         setTimeout(() => { signalOutput.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, 150);
     }).finally(() => showLoader(false));
 }
