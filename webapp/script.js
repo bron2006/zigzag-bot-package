@@ -16,6 +16,7 @@ document.addEventListener('DOMContentLoaded', () => {
             showLoader(false);
         }).catch(() => showLoader(false));
 
+    // SSE ДЛЯ ЖИВИХ ЦІН НА КНОПКАХ
     const eventSource = new EventSource(`${API_BASE_URL}/api/signal-stream${initDataQuery}`);
     eventSource.onmessage = (e) => {
         const data = JSON.parse(e.data);
@@ -42,7 +43,7 @@ function populateLists(data) {
                 <button class="pair-button" onclick="fetchSignal('${p}')">
                     <span>${p}</span><span class="live-price-min" id="price-${pId}">---</span>
                 </button>
-                <button class="fav-btn" onclick="event.stopPropagation();">${currentWatchlist.includes(pId) ? '✅' : '⭐'}</button>
+                <button class="fav-btn">${currentWatchlist.includes(pId) ? '✅' : '⭐'}</button>
             </div>`;
         });
         return s + '</div>';
@@ -67,22 +68,16 @@ function fetchSignal(pair) {
             const aiHtml = data.sentiment ? `<div class="ai-verdict ${data.sentiment==='GO'?'ai-go':'ai-block'}">${data.sentiment==='GO'?'✅':'🚨'} ШІ Новини: ${data.sentiment}</div>` : "";
             signalOutput.innerHTML = `
                 <div style="font-weight:bold; margin-bottom:10px; border-bottom: 1px solid #444; padding-bottom:5px;">${data.pair} (${currentExpiration})</div>
-                <div class="price-display-manual">
-                    <div style="color:#aaa;font-size:0.9em">Ціна входу</div>
-                    <div class="signal-price">${data.price ? data.price.toFixed(5) : 'N/A'}</div>
-                </div>
+                <div class="price-display-manual"><div style="color:#aaa;font-size:0.9em">Ціна входу</div><div class="signal-price">${data.price ? data.price.toFixed(5) : 'N/A'}</div></div>
                 <div class="verdict">${data.verdict_text}</div>
                 ${aiHtml}
-                <div class="power-balance">
-                    <span>🐂 Бики: ${score}%</span>
-                    <span>🐃 Ведмеді: ${100-score}%</span>
-                </div>
+                <div class="power-balance"><span>🐂 Бики: ${score}%</span><span>🐃 Ведмеді: ${100-score}%</span></div>
             `;
-            // АВТОСКРОЛЛ ДО РЕЗУЛЬТАТУ
+            // ПОВЕРНУТО: АВТОМАТИЧНИЙ СКРОЛЛ
             setTimeout(() => {
                 const rect = signalOutput.getBoundingClientRect();
                 window.scrollTo({ top: window.scrollY + rect.top - 20, behavior: 'smooth' });
-            }, 150);
+            }, 100);
         }).catch(err => { signalOutput.innerHTML = `❌ Помилка: ${err.message}`; })
         .finally(() => showLoader(false));
 }
