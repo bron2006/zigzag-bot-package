@@ -30,31 +30,6 @@ document.addEventListener('DOMContentLoaded', function() {
             showLoader(false);
         }).catch(() => showLoader(false));
 
-    fetch(`${API_BASE_URL}/api/scanner/status${initDataQuery}`)
-        .then(res => res.json())
-        .then(data => updateScannerButtons(data));
-
-    scannerControls.addEventListener('click', (event) => {
-        const button = event.target.closest('.scanner-button');
-        if (!button) return;
-        const category = button.dataset.cat;
-        const toggleUrl = `${API_BASE_URL}/api/scanner/toggle?category=${category}${initDataQuery.replace('?','&')}`;
-        const tempState = {};
-        scannerControls.querySelectorAll('.scanner-button').forEach(btn => {
-            tempState[btn.dataset.cat] = btn.classList.contains('enabled');
-        });
-        tempState[category] = !tempState[category];
-        updateScannerButtons(tempState);
-        fetch(toggleUrl, { method: 'POST' }).then(res => res.json()).then(newState => updateScannerButtons(newState));
-    });
-
-    const eventSource = new EventSource(`${API_BASE_URL}/api/signal-stream${initDataQuery}`);
-    eventSource.onmessage = function(event) {
-        const signalData = JSON.parse(event.data);
-        if (signalData._ping) return;
-        displayLiveSignal(signalData);
-    };
-
     const expirationButtons = document.querySelectorAll('.tf-button');
     expirationButtons.forEach(button => {
         button.addEventListener('click', () => {
@@ -69,42 +44,19 @@ document.addEventListener('DOMContentLoaded', function() {
     searchInput.addEventListener('input', debounce((event) => { populateLists(allData, event.target.value); }, 300));
 });
 
-function updateScannerButtons(stateDict) {
-    const textMap = { forex: "💹 Forex", crypto: "💎 Crypto", commodities: "🥇 Сировина", watchlist: "⭐ Обране" };
-    for (const category in textMap) {
-        const button = scannerControls.querySelector(`.scanner-button[data-cat="${category}"]`);
-        if (button) {
-            const isEnabled = stateDict[category];
-            button.textContent = `${isEnabled ? '✅' : '❌'} ${textMap[category]}`;
-            button.classList.toggle('enabled', isEnabled);
-        }
-    }
-}
-
 function displayLiveSignal(signalData) {
     const signalId = `signal-${signalData.pair.replace('/', '')}-${Date.now()}`;
     const signalDiv = document.createElement('div');
-    signalDiv.id = signalId;
     signalDiv.className = 'live-signal';
     signalDiv.onclick = () => {
         signalOutput.innerHTML = formatSignalAsHtml(signalData, currentExpiration);
-        signalContainer.scrollIntoView({ behavior: 'smooth' });
+        signalContainer.scrollIntoView({ behavior: 'smooth' }); // ПОВЕРНУТО СКРОЛ
     };
-    const score = signalData.score || 50;
-    signalDiv.classList.add(score >= 65 ? 'buy' : (score <= 35 ? 'sell' : 'neutral'));
-    signalDiv.innerHTML = `<div class="live-signal-content">${signalData.verdict_text} по ${signalData.pair} (${score}%)</div><button class="live-signal-close" onclick="event.stopPropagation(); this.parentElement.remove()">×</button>`;
     liveSignalsContainer.prepend(signalDiv);
-    setTimeout(() => { if (document.getElementById(signalId)) document.getElementById(signalId).remove(); }, 300000);
 }
 
-// --- ВИДАЛИЛИ ЦІНУ ТА РИСОЧКИ З КНОПКИ ТУТ ---
 function createPairButton(pair) {
-    return `<div class="pair-item">
-        <button class="pair-button" data-pair="${pair}">
-            <span>${pair}</span>
-        </button>
-        ${renderFavoriteButton(pair)}
-    </div>`;
+    return `<div class="pair-item"><button class="pair-button" data-pair="${pair}"><span>${pair}</span></button>${renderFavoriteButton(pair)}</div>`;
 }
 
 function populateLists(data, query = '') {
@@ -137,16 +89,12 @@ function renderFavoriteButton(pair) {
 
 function toggleFavorite(event, button, pair) {
     event.stopPropagation();
-    const isFav = button.innerHTML.includes('✅');
     const iData = initData ? `&initData=${encodeURIComponent(initData)}` : '';
-    button.innerHTML = isFav ? '⭐' : '✅';
-    fetch(`${API_BASE_URL}/api/toggle_watchlist?pair=${pair}${iData}`).then(res => res.json()).then(data => {
-        if (data.success) {
-            const pn = pair.replace(/\//g, '');
-            if (isFav) currentWatchlist = currentWatchlist.filter(p => p !== pn);
-            else currentWatchlist.push(pn);
-            populateLists(allData, document.getElementById('searchInput').value);
-        } else button.innerHTML = isFav ? '✅' : '⭐';
+    fetch(`${API_BASE_URL}/api/toggle_watchlist?pair=${pair}${iData}`).then(() => {
+        const pn = pair.replace(/\//g, '');
+        if (currentWatchlist.includes(pn)) currentWatchlist = currentWatchlist.filter(p => p !== pn);
+        else currentWatchlist.push(pn);
+        populateLists(allData, document.getElementById('searchInput').value);
     });
 }
 
@@ -158,8 +106,10 @@ function fetchSignal(pair) {
     const iData = initData ? `?initData=${encodeURIComponent(initData)}` : '';
     fetch(`${API_BASE_URL}/api/signal?pair=${pair}&timeframe=${exp}${iData.replace('?', '&')}`)
         .then(res => res.json())
-        .then(data => { signalOutput.innerHTML = formatSignalAsHtml(data, exp); })
-        .catch(err => { signalOutput.innerHTML = `❌ Помилка: ${err.message}`; })
+        .then(data => { 
+            signalOutput.innerHTML = formatSignalAsHtml(data, exp);
+            setTimeout(() => { signalContainer.scrollIntoView({ behavior: 'smooth' }); }, 100); // ПОВЕРНУТО СКРОЛ
+        })
         .finally(() => showLoader(false));
 }
 
