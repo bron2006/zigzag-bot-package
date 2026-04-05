@@ -22,7 +22,7 @@ document.addEventListener('DOMContentLoaded', function() {
     showLoader(true);
     const initDataQuery = initData ? `?initData=${encodeURIComponent(initData)}` : '';
     
-    // 1. Завантаження пар
+    // 1. Завантаження списків
     fetch(`${API_BASE_URL}/api/get_pairs${initDataQuery}`)
         .then(res => res.json())
         .then(staticData => {
@@ -30,34 +30,39 @@ document.addEventListener('DOMContentLoaded', function() {
             currentWatchlist = (staticData.watchlist || []).map(p => p.replace(/\//g, ''));
             populateLists(allData);
             showLoader(false);
-        }).catch(err => {
-            console.error("Failed to load pairs", err);
-            showLoader(false);
-        });
+        }).catch(() => showLoader(false));
 
-    // 2. Отримання початкового статусу сканерів
+    // 2. Статус сканерів
     fetch(`${API_BASE_URL}/api/scanner/status${initDataQuery}`)
         .then(res => res.json())
-        .then(state => updateScannerButtons(state))
-        .catch(err => console.error("Failed to load scanner status", err));
+        .then(state => updateScannerButtons(state));
 
-    // 3. Обробка натискання на сканери
+    // 3. ПІДКЛЮЧЕННЯ ЖИВИХ СИГНАЛІВ (SSE)
+    const eventSource = new EventSource(`${API_BASE_URL}/api/signal-stream${initDataQuery}`);
+    
+    eventSource.onmessage = function(event) {
+        const data = JSON.parse(event.data);
+        if (data && !data._ping) {
+            console.log("Новий живий сигнал:", data);
+            displayLiveSignal(data);
+        }
+    };
+
+    eventSource.onerror = function() {
+        console.log("SSE error, reconnecting...");
+    };
+
+    // Обробка кнопок сканера
     scannerControls.addEventListener('click', (event) => {
         const button = event.target.closest('.scanner-button');
         if (!button) return;
-        
         const category = button.dataset.cat;
-        console.log(`Toggling scanner: ${category}`);
-        
         fetch(`${API_BASE_URL}/api/scanner/toggle?category=${category}${initDataQuery.replace('?','&')}`)
             .then(res => res.json())
-            .then(newState => {
-                console.log("New scanner state:", newState);
-                updateScannerButtons(newState);
-            })
-            .catch(err => console.error("Toggle failed", err));
+            .then(newState => updateScannerButtons(newState));
     });
 
+    // Експірація
     const expirationButtons = document.querySelectorAll('.tf-button');
     expirationButtons.forEach(button => {
         button.addEventListener('click', () => {
@@ -73,9 +78,8 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 function updateScannerButtons(stateDict) {
-    if (!stateDict || typeof stateDict !== 'object') return;
+    if (!stateDict) return;
     const textMap = { forex: "Forex", crypto: "Crypto", commodities: "Сировина", watchlist: "Обране" };
-    
     Object.keys(textMap).forEach(cat => {
         const btn = scannerControls.querySelector(`.scanner-button[data-cat="${cat}"]`);
         if (btn) {
@@ -89,11 +93,34 @@ function updateScannerButtons(stateDict) {
 function displayLiveSignal(signalData) {
     const signalDiv = document.createElement('div');
     signalDiv.className = 'live-signal';
+    
+    const score = signalData.score || 50;
+    const typeClass = score >= 65 ? 'buy' : (score <= 35 ? 'sell' : 'neutral');
+    signalDiv.classList.add(typeClass);
+
+    signalDiv.innerHTML = `
+        <div class="live-signal-content">
+            <strong>${signalData.pair}</strong>: ${signalData.verdict_text} (${score}%)
+        </div>
+        <div class="live-signal-timer"></div>
+    `;
+
     signalDiv.onclick = () => {
         signalOutput.innerHTML = formatSignalAsHtml(signalData, currentExpiration);
         signalContainer.scrollIntoView({ behavior: 'smooth' });
+        signalDiv.remove();
     };
+
     liveSignalsContainer.prepend(signalDiv);
+
+    // Видаляємо через 15 секунд
+    setTimeout(() => {
+        if (signalDiv.parentElement) {
+            signalDiv.style.opacity = '0';
+            signalDiv.style.transform = 'translateX(100px)';
+            setTimeout(() => signalDiv.remove(), 500);
+        }
+    }, 15000);
 }
 
 function populateLists(data, query = '') {
@@ -120,7 +147,6 @@ function populateLists(data, query = '') {
     html += createSection('🥇 Сировина', data.commodities);
     html += createSection('📈 Акції/Індекси', data.stocks);
     listsContainer.innerHTML = html;
-    
     listsContainer.querySelectorAll('.pair-button').forEach(btn => {
         btn.addEventListener('click', (e) => debouncedFetchSignal(e.currentTarget.dataset.pair));
     });
@@ -152,7 +178,7 @@ function fetchSignal(pair) {
             signalOutput.innerHTML = formatSignalAsHtml(data, currentExpiration);
             setTimeout(() => { signalContainer.scrollIntoView({ behavior: 'smooth' }); }, 100);
         })
-        .catch(err => signalOutput.innerHTML = `❌ Помилка: ${err}`)
+        .catch(() => signalOutput.innerHTML = "❌ Помилка завантаження")
         .finally(() => showLoader(false));
 }
 
@@ -170,8 +196,9 @@ function formatSignalAsHtml(signalData, exp) {
             <div class="v-text ${cClass}" style="font-size:42px;">${verdict_text}</div>
             <div class="price">${price ? price.toFixed(5) : 'N/A'}</div>
         </div>
-        ${sentiment ? `<div class="ai-verdict">${sentiment}</div>` : ""}
+        ${sentiment ? `<div class="ai-verdict" style="padding:10px; border-radius:8px; text-align:center; font-weight:bold; margin:10px 0; border:1px solid; background:rgba(0,0,0,0.1); color:${sentiment==='GO'?'#26a69a':'#ef5350'}">${sentiment==='GO'?'✅':'🚨'} ШІ Новини: ${sentiment}</div>` : ""}
         <div class="power-balance">🐂 ${score}% | 🐃 ${100-score}%</div>
+        ${reasons && reasons.length ? '<div class="reasons"><ul>' + reasons.map(r => `<li>${r}</li>`).join('') + '</ul></div>' : ''}
     `;
 }
 
