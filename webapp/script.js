@@ -1,5 +1,4 @@
 ﻿const API_BASE_URL = window.API_BASE_URL || "https://fallback.example.com";
-
 const loader = document.getElementById("loader");
 const listsContainer = document.getElementById("listsContainer");
 const signalOutput = document.getElementById("signalOutput");
@@ -32,7 +31,7 @@ document.addEventListener('DOMContentLoaded', function() {
             populateLists(allData);
             showLoader(false);
         }).catch(err => {
-            signalOutput.innerHTML = `<h3 style="color: #ef5350;">❌ Помилка завантаження списків пар.</h3>`;
+            signalOutput.innerHTML = `<h3>❌ Помилка завантаження</h3>`;
             showLoader(false);
         });
 
@@ -45,15 +44,12 @@ document.addEventListener('DOMContentLoaded', function() {
         if (!button) return;
         const category = button.dataset.cat;
         const toggleUrl = `${API_BASE_URL}/api/scanner/toggle?category=${category}${initDataQuery.replace('?','&')}`;
-        
         const tempState = {};
         scannerControls.querySelectorAll('.scanner-button').forEach(btn => {
-            const cat = btn.dataset.cat;
-            tempState[cat] = btn.classList.contains('enabled');
+            tempState[btn.dataset.cat] = btn.classList.contains('enabled');
         });
         tempState[category] = !tempState[category];
         updateScannerButtons(tempState);
-
         fetch(toggleUrl, { method: 'POST' }).then(res => res.json()).then(newState => updateScannerButtons(newState));
     });
 
@@ -61,21 +57,17 @@ document.addEventListener('DOMContentLoaded', function() {
     eventSource.onmessage = function(event) {
         const signalData = JSON.parse(event.data);
         if (signalData._ping) return;
-
-        // --- ОСЬ ЦЕ Я ДОДАВ: ОНОВЛЕННЯ ЦІНИ НА КНОПЦІ В РЕАЛЬНОМУ ЧАСІ ---
         if (signalData.pair && signalData.price) {
             const pId = signalData.pair.replace(/\//g, "");
             const el = document.getElementById(`price-${pId}`);
             if (el) {
                 el.textContent = signalData.price.toFixed(5);
-                el.style.color = "#00ff00"; // Зелений спалах
+                el.style.color = "#00ff00";
                 setTimeout(() => { el.style.color = "#3390ec"; }, 300);
             }
         }
-
         displayLiveSignal(signalData);
     };
-    eventSource.onerror = function(err) { console.error("EventSource failed:", err); };
 
     const expirationButtons = document.querySelectorAll('.tf-button');
     expirationButtons.forEach(button => {
@@ -83,9 +75,7 @@ document.addEventListener('DOMContentLoaded', function() {
             expirationButtons.forEach(btn => btn.classList.remove('active'));
             button.classList.add('active');
             currentExpiration = button.dataset.exp;
-            if(lastSelectedPair) {
-                fetchSignal(lastSelectedPair);
-            }
+            if(lastSelectedPair) fetchSignal(lastSelectedPair);
         });
     });
 
@@ -99,8 +89,7 @@ function updateScannerButtons(stateDict) {
         const button = scannerControls.querySelector(`.scanner-button[data-cat="${category}"]`);
         if (button) {
             const isEnabled = stateDict[category];
-            const icon = isEnabled ? '✅' : '❌';
-            button.textContent = `${icon} ${textMap[category]}`;
+            button.textContent = `${isEnabled ? '✅' : '❌'} ${textMap[category]}`;
             button.classList.toggle('enabled', isEnabled);
         }
     }
@@ -112,207 +101,105 @@ function displayLiveSignal(signalData) {
     signalDiv.id = signalId;
     signalDiv.className = 'live-signal';
     signalDiv.style.cursor = 'pointer';
-    
     signalDiv.onclick = () => {
-        const expiration = document.querySelector('#expirationSelector .tf-button.active')?.dataset.exp || '5m';
-        signalOutput.innerHTML = formatSignalAsHtml(signalData, expiration);
+        signalOutput.innerHTML = formatSignalAsHtml(signalData, currentExpiration);
         signalContainer.scrollIntoView({ behavior: 'smooth' });
     };
-
-    const verdict = signalData.verdict_text || '...';
-    const pair = signalData.pair || 'N/A';
     const score = signalData.score || 50;
-    
-    let signalClass = 'neutral';
-    if (score >= 65) signalClass = 'buy';
-    if (score <= 35) signalClass = 'sell';
-    
-    signalDiv.classList.add(signalClass);
-    signalDiv.innerHTML = `<div class="live-signal-content">${verdict} по ${pair} (Оцінка: ${score})</div><button class="live-signal-close" onclick="event.stopPropagation(); this.parentElement.remove()">×</button>`;
-    
+    signalDiv.classList.add(score >= 65 ? 'buy' : (score <= 35 ? 'sell' : 'neutral'));
+    signalDiv.innerHTML = `<div class="live-signal-content">${signalData.verdict_text} по ${signalData.pair} (${score}%)</div><button class="live-signal-close" onclick="event.stopPropagation(); this.parentElement.remove()">×</button>`;
     liveSignalsContainer.prepend(signalDiv);
-
-    setTimeout(() => {
-        const el = document.getElementById(signalId);
-        if (el) {
-            el.classList.add('fade-out');
-            setTimeout(() => el.remove(), 500);
-        }
-    }, 300000);
+    setTimeout(() => { const el = document.getElementById(signalId); if (el) el.remove(); }, 300000);
 }
 
-// --- ОСЬ ЦЕ Я МОДИФІКУВАВ: ДОДАНО ID ДЛЯ ЦІНИ ---
 function createPairButton(pair) {
     const pId = pair.replace(/\//g, "");
-    return `<div class="pair-item">
-        <button class="pair-button" data-pair="${pair}" style="display:flex; justify-content:space-between; align-items:center;">
-            <span>${pair}</span>
-            <span id="price-${pId}" style="font-family:monospace; color:#3390ec; font-size:0.85em; background:rgba(0,0,0,0.2); padding:2px 5px; border-radius:4px;">---</span>
-        </button>
-        ${renderFavoriteButton(pair)}
-    </div>`;
+    return `<div class="pair-item"><button class="pair-button" data-pair="${pair}" style="display:flex; justify-content:space-between; align-items:center;"><span>${pair}</span><span id="price-${pId}" style="font-family:monospace; color:#3390ec; font-size:0.85em; background:rgba(0,0,0,0.2); padding:2px 5px; border-radius:4px;">---</span></button>${renderFavoriteButton(pair)}</div>`;
 }
 
 function populateLists(data, query = '') {
     let html = '';
     const queryLower = query.toLowerCase();
-
     function createSection(title, pairs) {
-        if (!Array.isArray(pairs) || pairs.length === 0) return '';
-        const filteredPairs = pairs.filter(p => p.toLowerCase().includes(queryLower));
-        if (filteredPairs.length === 0) return '';
-        
-        let sectionHtml = `<div class="category"><div class="category-title">${title}</div><div class="pair-list">`;
-        filteredPairs.forEach(pair => sectionHtml += createPairButton(pair));
-        sectionHtml += '</div></div>';
-        return sectionHtml;
+        if (!Array.isArray(pairs)) return '';
+        const fps = pairs.filter(p => p.toLowerCase().includes(queryLower));
+        if (fps.length === 0) return '';
+        let sHtml = `<div class="category"><div class="category-title">${title}</div><div class="pair-list">`;
+        fps.forEach(pair => sHtml += createPairButton(pair));
+        return sHtml + '</div></div>';
     }
-    
-    const allKnownPairs = [...(data.forex || []).map(session => session.pairs).flat(), ...(data.crypto || []), ...(data.stocks || []), ...(data.commodities || [])];
-    let watchlistDisplay = currentWatchlist.map(p_normalized => allKnownPairs.find(p_display => p_display.replace(/\//g, '') === p_normalized) || p_normalized);
-    
-    if (queryLower) {
-        watchlistDisplay = watchlistDisplay.filter(p => p.toLowerCase().includes(queryLower));
-    }
-
-    if (watchlistDisplay.length > 0) {
-        html += createSection('⭐ Обране', watchlistDisplay);
-    }
-    
-    if (Array.isArray(data.forex)) {
-        data.forex.forEach(session => {
-            const filteredSessionPairs = session.pairs.filter(p => p.toLowerCase().includes(queryLower));
-            if (filteredSessionPairs.length > 0) {
-                html += createSection(session.title, filteredSessionPairs);
-            }
-        });
-    }
-
+    const allP = [...(data.forex || []).map(s => s.pairs).flat(), ...(data.crypto || []), ...(data.stocks || []), ...(data.commodities || [])];
+    let wl = currentWatchlist.map(p => allP.find(pd => pd.replace(/\//g, '') === p) || p);
+    if (queryLower) wl = wl.filter(p => p.toLowerCase().includes(queryLower));
+    if (wl.length > 0) html += createSection('⭐ Обране', wl);
+    if (data.forex) data.forex.forEach(s => html += createSection(s.title, s.pairs));
     html += createSection('💎 Криптовалюти', data.crypto);
     html += createSection('🥇 Сировина', data.commodities);
     html += createSection('📈 Акції/Індекси', data.stocks);
-
     listsContainer.innerHTML = html;
-    listsContainer.querySelectorAll('.pair-button').forEach(button => {
-        button.addEventListener('click', (event) => {
-            const pair = event.currentTarget.dataset.pair;
-            debouncedFetchSignal(pair);
-        });
-    });
+    listsContainer.querySelectorAll('.pair-button').forEach(btn => btn.addEventListener('click', (e) => debouncedFetchSignal(e.currentTarget.dataset.pair)));
 }
 
 function renderFavoriteButton(pair) {
-    const pairNormalized = pair.replace(/\//g, '');
-    const isFavorite = currentWatchlist.includes(pairNormalized);
-    const icon = isFavorite ? '✅' : '⭐';
-    return `<button class="fav-btn" onclick="toggleFavorite(event, this, '${pair}')">${icon}</button>`;
+    const pn = pair.replace(/\//g, '');
+    return `<button class="fav-btn" onclick="toggleFavorite(event, this, '${pair}')">${currentWatchlist.includes(pn) ? '✅' : '⭐'}</button>`;
 }
 
 function toggleFavorite(event, button, pair) {
     event.stopPropagation();
-    const isCurrentlyFavorite = button.innerHTML.includes('✅');
-    const initDataString = initData ? `&initData=${encodeURIComponent(initData)}` : '';
-    const url = `${API_BASE_URL}/api/toggle_watchlist?pair=${pair}${initDataString}`;
-    
-    button.innerHTML = isCurrentlyFavorite ? '⭐' : '✅';
-    
-    fetch(url)
-        .then(res => res.json())
-        .then(data => {
-            if (!data.success) {
-                button.innerHTML = isCurrentlyFavorite ? '✅' : '⭐';
-            } else {
-                const pairNormalized = pair.replace(/\//g, '');
-                if (isCurrentlyFavorite) {
-                    currentWatchlist = currentWatchlist.filter(p => p !== pairNormalized);
-                } else {
-                    currentWatchlist.push(pairNormalized);
-                }
-                const currentQuery = document.getElementById('searchInput').value;
-                populateLists(allData, currentQuery);
-            }
-        });
+    const isFav = button.innerHTML.includes('✅');
+    const iData = initData ? `&initData=${encodeURIComponent(initData)}` : '';
+    button.innerHTML = isFav ? '⭐' : '✅';
+    fetch(`${API_BASE_URL}/api/toggle_watchlist?pair=${pair}${iData}`).then(res => res.json()).then(data => {
+        if (data.success) {
+            const pn = pair.replace(/\//g, '');
+            if (isFav) currentWatchlist = currentWatchlist.filter(p => p !== pn);
+            else currentWatchlist.push(pn);
+            populateLists(allData, document.getElementById('searchInput').value);
+        } else button.innerHTML = isFav ? '✅' : '⭐';
+    });
 }
 
 function fetchSignal(pair) {
     lastSelectedPair = pair;
     showLoader(true);
     signalOutput.innerHTML = `⏳ Аналіз ${pair}...`;
-    signalOutput.style.textAlign = 'left';
-
-    const activeBtn = document.querySelector('#expirationSelector .tf-button.active');
-    const expiration = activeBtn ? activeBtn.dataset.exp : '1m';
-    
-    const initDataQuery = initData ? `?initData=${encodeURIComponent(initData)}` : '';
-    const signalApiUrl = `${API_BASE_URL}/api/signal?pair=${pair}&timeframe=${expiration}${initDataQuery.replace('?', '&')}`;
-
-    fetch(signalApiUrl)
-        .then(res => {
-            if (!res.ok) {
-                return res.json().then(errData => { throw new Error(errData.error || `HTTP ${res.status}`) });
-            }
-            return res.json();
-        })
-        .then(signalData => {
-            let html = formatSignalAsHtml(signalData, expiration);
-            signalOutput.innerHTML = html;
-            setTimeout(() => { signalContainer.scrollIntoView({ behavior: 'smooth' }); }, 150);
-        })
-        .catch(err => {
-            signalOutput.innerHTML = `❌ Помилка: ${err.message}`;
-        })
-        .finally(() => {
-            showLoader(false);
-        });
+    const exp = document.querySelector('#expirationSelector .tf-button.active')?.dataset.exp || '1m';
+    const iData = initData ? `?initData=${encodeURIComponent(initData)}` : '';
+    fetch(`${API_BASE_URL}/api/signal?pair=${pair}&timeframe=${exp}${iData.replace('?', '&')}`)
+        .then(res => res.json())
+        .then(data => { signalOutput.innerHTML = formatSignalAsHtml(data, exp); })
+        .catch(err => { signalOutput.innerHTML = `❌ Помилка: ${err.message}`; })
+        .finally(() => showLoader(false));
 }
 
-function formatSignalAsHtml(signalData, expiration) {
-    if (!signalData || Object.keys(signalData).length === 0) return "Немає даних для відображення.";
-    if (signalData.error) return `❌ Помилка: ${signalData.error}`;
-
+function formatSignalAsHtml(signalData, exp) {
+    if (!signalData || signalData.error) return `❌ Помилка: ${signalData?.error || 'Немає даних'}`;
     const { pair, price, verdict_text, reasons, score, sentiment } = signalData;
-    const priceStr = price ? price.toFixed(5) : "N/A";
-
-    let priceClass = 'price-neutral';
-    if (score >= 65) priceClass = 'price-call';
-    if (score <= 35) priceClass = 'price-put';
-
-    let reasonsHtml = '';
-    if (reasons && reasons.length > 0) {
-        reasonsHtml = '<div class="reasons"><strong>Ключові фактори:</strong><ul>';
-        reasons.forEach(r => { reasonsHtml += `<li>${r}</li>`; });
-        reasonsHtml += '</ul></div>';
-    }
-
-    const aiHtml = sentiment ? `<div class="ai-verdict ${sentiment==='GO'?'ai-go':'ai-block'}" style="padding:10px; border-radius:8px; text-align:center; font-weight:bold; margin:10px 0; border:1px solid; background:rgba(0,0,0,0.1); color:${sentiment==='GO'?'#26a69a':'#ef5350'}">${sentiment==='GO'?'✅':'🚨'} ШІ Новини: ${sentiment}</div>` : "";
+    const pStr = price ? price.toFixed(5) : "N/A";
+    let arrow = "➡️", cClass = "neutral";
+    if (score >= 65) { arrow = "⬆️"; cClass = "buy"; }
+    else if (score <= 35) { arrow = "⬇️"; cClass = "sell"; }
 
     return `
-        <div class="signal-header">
-            <strong>${pair} (Експірація: ${expiration})</strong>
+        <div class="signal-header" style="text-align:center; font-size:1.2em; margin-bottom:15px;">
+            <strong>${pair}</strong> <span style="color:#64748b; font-size:0.8em;">(Exp: ${exp})</span>
         </div>
-
-        <div class="price-display-manual">
-            <div class="price-label">Ціна входу</div>
-            <div class="signal-price ${priceClass}">${priceStr}</div>
+        <div class="verdict-container" style="text-align:center; margin:20px 0;">
+            <div class="arrow" style="font-size:95px; line-height:1;">${arrow}</div>
+            <div class="v-text ${cClass}" style="font-size:42px; font-weight:900;">${verdict_text}</div>
+            <div style="font-size:24px; color:#3390ec; font-family:monospace; margin-top:10px;">${pStr}</div>
         </div>
-        
-        <div class="verdict">${verdict_text}</div>
-        
-        ${aiHtml}
-
-        <div class="power-balance">
-            <span>🐂 Бики: ${score}%</span>
-            <span>🐃 Ведмеді: ${100 - score}%</span>
+        ${sentiment ? `<div class="ai-verdict" style="padding:10px; border-radius:8px; text-align:center; font-weight:bold; margin:10px 0; border:1px solid; background:rgba(0,0,0,0.1); color:${sentiment==='GO'?'#26a69a':'#ef5350'}">${sentiment==='GO'?'✅':'🚨'} ШІ Новини: ${sentiment}</div>` : ""}
+        <div class="power-balance" style="display:flex; justify-content:space-around; margin:15px 0; font-weight:bold;">
+            <span style="color:#26a69a;">🐂 ${score}%</span>
+            <span style="color:#ef5350;">🐃 ${100 - score}%</span>
         </div>
-        
-        ${reasonsHtml}
+        ${reasons && reasons.length ? '<div class="reasons"><strong>Фактори:</strong><ul>' + reasons.map(r => `<li>${r}</li>`).join('') + '</ul></div>' : ''}
     `;
 }
 
-function showLoader(visible) {
-    loader.className = visible ? '' : 'hidden';
-}
-
+function showLoader(visible) { loader.className = visible ? '' : 'hidden'; }
 function debounce(func, delay) {
     let timeout;
     return function(...args) {
