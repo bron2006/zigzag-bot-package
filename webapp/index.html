@@ -3,50 +3,151 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>ZigZag AI Analytics</title>
+    <title>ZigZag AI Analytics PRO</title>
     <style>
-        body { font-family: -apple-system, sans-serif; background-color: #0f172a; color: #f8fafc; margin: 0; padding: 15px; display: flex; flex-direction: column; align-items: center; }
-        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; width: 100%; max-width: 480px; margin-top: 20px; }
-        .btn { background-color: #1e293b; border: 1px solid #334155; border-radius: 18px; padding: 25px 10px; color: #fff; font-weight: 800; font-size: 18px; cursor: pointer; min-height: 85px; display: flex; justify-content: center; align-items: center; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
-        .btn:active { transform: scale(0.95); background: #334155; }
-        #res-container { width: 100%; max-width: 480px; background: #1e293b; border-radius: 25px; padding: 30px; margin-top: 30px; border: 2px solid #3b82f6; text-align: center; box-sizing: border-box; }
-        .big-arrow { font-size: 90px; line-height: 1; display: block; margin-bottom: 10px; }
-        .buy { color: #22c55e; }
-        .sell { color: #ef4444; }
-        .v-text { font-size: 38px; font-weight: 900; text-transform: uppercase; }
-        #det { margin-top: 20px; font-size: 16px; line-height: 1.6; color: #94a3b8; text-align: left; border-top: 1px solid #334155; padding-top: 20px; }
+        :root {
+            --bg: #0b0f1a;
+            --card: #161b2c;
+            --accent: #3b82f6;
+            --text: #e2e8f0;
+            --buy: #10b981;
+            --sell: #ef4444;
+        }
+
+        body {
+            font-family: -apple-system, system-ui, sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            margin: 0;
+            padding: 15px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+        }
+
+        .header h2 { color: var(--accent); margin: 20px 0; font-size: 24px; text-transform: uppercase; letter-spacing: 2px; }
+
+        h3 { 
+            width: 100%; 
+            max-width: 480px; 
+            color: #64748b; 
+            font-size: 12px; 
+            text-transform: uppercase; 
+            margin: 25px 0 10px 5px; 
+            letter-spacing: 1px;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            width: 100%;
+            max-width: 480px;
+        }
+
+        .btn {
+            background: var(--card);
+            border: 1px solid #2d3748;
+            border-radius: 20px;
+            padding: 25px 10px;
+            color: #fff;
+            font-weight: 700;
+            font-size: 17px;
+            cursor: pointer;
+            transition: 0.2s;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 90px;
+        }
+
+        .btn:active { transform: scale(0.95); background: #1e2538; }
+
+        #analysis-box {
+            width: 100%;
+            max-width: 480px;
+            background: var(--card);
+            border-radius: 30px;
+            padding: 35px 25px;
+            margin-top: 30px;
+            border: 1px solid var(--accent);
+            box-sizing: border-box;
+            text-align: center;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+        }
+
+        .verdict-box { display: flex; flex-direction: column; align-items: center; justify-content: center; margin-bottom: 25px; }
+        .big-arrow { font-size: 90px; line-height: 1; margin-bottom: 10px; filter: drop-shadow(0 0 10px rgba(255,255,255,0.1)); }
+        .v-text { font-size: 40px; font-weight: 900; letter-spacing: 2px; }
+        .buy-clr { color: var(--buy); }
+        .sell-clr { color: var(--sell); }
+
+        #details {
+            font-size: 16px;
+            line-height: 1.8;
+            color: #94a3b8;
+            text-align: left;
+            border-top: 1px solid #2d3748;
+            padding-top: 25px;
+        }
     </style>
 </head>
 <body>
-    <h2 style="color:#3b82f6; margin: 15px 0;">ZigZag AI Analytics</h2>
+
+    <div class="header"><h2>ZigZag AI Analytics</h2></div>
+
+    <h3>Криптовалюти</h3>
     <div class="grid">
-        <button class="btn" onclick="ask('BTCUSD')">BTC / USD</button>
-        <button class="btn" onclick="ask('ETHUSD')">ETH / USD</button>
-        <button class="btn" onclick="ask('XAUUSD')">GOLD</button>
-        <button class="btn" onclick="ask('WTI')">OIL</button>
+        <button class="btn" onclick="runAnalysis('BTCUSD')">BTC / USD</button>
+        <button class="btn" onclick="runAnalysis('ETHUSD')">ETH / USD</button>
+        <button class="btn" onclick="runAnalysis('SOLUSD')">SOL / USD</button>
+        <button class="btn" onclick="runAnalysis('BNBUSD')">BNB / USD</button>
     </div>
-    <div id="res-container">
-        <div id="out"><span style="color:#475569;">Оберіть актив</span></div>
-        <div id="det"></div>
+
+    <h3>Сировина та Метали</h3>
+    <div class="grid">
+        <button class="btn" onclick="runAnalysis('XAUUSD')">GOLD (XAU)</button>
+        <button class="btn" onclick="runAnalysis('WTI')">OIL (WTI)</button>
     </div>
+
+    <div id="analysis-box">
+        <div id="verdict-ui" class="verdict-box">
+            <span style="color: #475569; font-size: 18px;">Оберіть пару для аналізу</span>
+        </div>
+        <div id="details">Система готова. Очікування вибору активу...</div>
+    </div>
+
     <script>
-        async function ask(p) {
-            const out = document.getElementById('out');
-            const det = document.getElementById('det');
-            out.innerHTML = "Аналізую...";
-            det.innerHTML = "";
+        async function runAnalysis(pair) {
+            const vUI = document.getElementById('verdict-ui');
+            const det = document.getElementById('details');
+            
+            vUI.innerHTML = '<span style="font-size: 22px; color: var(--accent);">Аналізую...</span>';
+            det.innerHTML = "Зчитування ZigZag, RSI та новинних фільтрів...";
+
             try {
-                const r = await fetch('/analyze', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({pair: p}) });
-                const data = await r.json();
+                const response = await fetch('/analyze', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ pair: pair })
+                });
+                const data = await response.json();
+
                 if (data.signal === 'BUY') {
-                    out.innerHTML = '<span class="big-arrow buy">⬆️</span><span class="v-text buy">BUY</span>';
+                    vUI.innerHTML = '<span class="big-arrow buy-clr">⬆️</span><span class="v-text buy-clr">BUY</span>';
                 } else if (data.signal === 'SELL') {
-                    out.innerHTML = '<span class="big-arrow sell">⬇️</span><span class="v-text sell">SELL</span>';
+                    vUI.innerHTML = '<span class="big-arrow sell-clr">⬇️</span><span class="v-text sell-clr">SELL</span>';
                 } else {
-                    out.innerHTML = '<span class="v-text">NEUTRAL</span>';
+                    vUI.innerHTML = '<span class="v-text">NEUTRAL</span>';
                 }
-                det.innerHTML = data.analysis;
-            } catch (e) { out.innerHTML = "Помилка API"; }
+                det.innerHTML = data.analysis || "Аналіз завершено успішно.";
+
+            } catch (err) {
+                vUI.innerHTML = '<span style="color:var(--sell); font-size:18px;">Помилка сервера</span>';
+                det.innerHTML = "Перевірте підключення до API або статус Fly.io.";
+            }
         }
     </script>
 </body>
