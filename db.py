@@ -1,10 +1,8 @@
-# db.py
-import logging
+﻿import logging
 from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, func
 from sqlalchemy.orm import sessionmaker, declarative_base
 from sqlalchemy.exc import SQLAlchemyError
 from contextlib import contextmanager
-
 from config import get_database_url
 
 logger = logging.getLogger(__name__)
@@ -16,7 +14,6 @@ if not DATABASE_URL:
     SessionLocal = None
 else:
     try:
-        # Додаємо опції для кращого керування з'єднаннями
         engine = create_engine(
             DATABASE_URL,
             pool_pre_ping=True,
@@ -31,7 +28,6 @@ else:
 
 Base = declarative_base()
 
-# Модель для історії сигналів
 class SignalHistory(Base):
     __tablename__ = "signal_history"
     id = Column(Integer, primary_key=True, index=True)
@@ -41,15 +37,13 @@ class SignalHistory(Base):
     price = Column(Float)
     bull_percentage = Column(Integer)
 
-# Модель для налаштувань користувача (список обраного)
-class UserSettings(Base):
-    __tablename__ = "user_settings"
-    user_id = Column(Integer, primary_key=True, index=True)
-    subscribed_pairs = Column(String, default="")
+class UserWatchlist(Base):
+    __tablename__ = "user_watchlist"
+    user_id = Column(Integer, primary_key=True)
+    pair = Column(String, primary_key=True)
 
 @contextmanager
 def get_db():
-    """Створює сесію бази даних і гарантує її закриття."""
     if not SessionLocal:
         yield None
         return
@@ -60,7 +54,6 @@ def get_db():
         db_session.close()
 
 def initialize_database():
-    """Створює таблиці в базі даних, якщо їх не існує."""
     if not engine:
         logger.warning("Database engine not initialized. Skipping table creation.")
         return
@@ -91,10 +84,8 @@ def get_watchlist(user_id: int) -> list:
     try:
         with get_db() as db:
             if not db: return []
-            user_settings = db.get(UserSettings, user_id)
-            if user_settings and user_settings.subscribed_pairs:
-                return [item.strip() for item in user_settings.subscribed_pairs.split(',') if item.strip()]
-            return []
+            results = db.query(UserWatchlist).filter(UserWatchlist.user_id == user_id).all()
+            return [item.pair for item in results]
     except SQLAlchemyError as e:
         logger.error(f"Error getting watchlist for user_id {user_id}: {e}", exc_info=True)
         return []
@@ -105,29 +96,20 @@ def toggle_watchlist(user_id: int, pair: str) -> bool:
         with get_db() as db:
             if not db: return False
             cleaned_pair = pair.strip()
-            
-            user_settings = db.get(UserSettings, user_id)
-            if not user_settings:
-                user_settings = UserSettings(user_id=user_id, subscribed_pairs="")
-                db.add(user_settings)
-            
-            current_pairs_str = user_settings.subscribed_pairs or ""
-            current_set = set([item.strip() for item in current_pairs_str.split(',') if item.strip()])
-
-            if cleaned_pair in current_set:
-                current_set.remove(cleaned_pair)
+            existing = db.query(UserWatchlist).filter(
+                UserWatchlist.user_id == user_id, 
+                UserWatchlist.pair == cleaned_pair
+            ).first()
+            if existing:
+                db.delete(existing)
             else:
-                current_set.add(cleaned_pair)
-            
-            user_settings.subscribed_pairs = ",".join(sorted(list(current_set)))
-            
+                new_entry = UserWatchlist(user_id=user_id, pair=cleaned_pair)
+                db.add(new_entry)
             db.commit()
-            logger.info(f"Updated watchlist for user_id {user_id}: '{user_settings.subscribed_pairs}'")
             return True
     except SQLAlchemyError as e:
-        logger.error(f"Error toggling watchlist for user_id {user_id}: {e}", exc_info=True)
-        db.rollback() # Відкат змін у разі помилки
+        logger.error(f"Error toggling watchlist: {e}", exc_info=True)
+        if db: db.rollback()
         return False
 
-# Ініціалізуємо базу даних при старті додатку
 initialize_database()
