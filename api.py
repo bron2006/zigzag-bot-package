@@ -10,6 +10,7 @@ from state import app_state
 import db
 from auth import is_valid_init_data, get_user_id_from_init_data
 import analysis as analysis_module
+import ml_models
 from config import (
     FOREX_SESSIONS, get_fly_app_name, CRYPTO_PAIRS, STOCK_TICKERS,
     COMMODITIES, TRADING_HOURS
@@ -54,6 +55,17 @@ def register_routes(app):
     def static_files(filename):
         return send_from_directory(WEBAPP_DIR, filename)
 
+    @app.route("/api/health")
+    def health_check():
+        status = {
+            "status": "ok",
+            "ctrader_connected": app_state.client is not None and hasattr(app_state.client, '_client'),
+            "ml_model_loaded": ml_models.LGBM_MODEL is not None,
+            "uptime": int(time.time() - getattr(app_state, 'start_time', time.time()))
+        }
+        code = 200 if status["ctrader_connected"] else 503
+        return jsonify(status), code
+
     @app.route("/api/get_pairs")
     @protected_route
     def get_pairs():
@@ -75,26 +87,23 @@ def register_routes(app):
         timeframe = request.args.get("timeframe", "15m")
         if not pair:
             return jsonify({"error": "pair is required"}), 400
-        pair_normalized = pair.replace("/", "")
+        pair_norm = pair.replace("/", "")
         user_id = get_user_id_from_init_data(request.args.get("initData"))
-        logger.info(f"On-demand analysis for {pair_normalized} timeframe {timeframe}")
 
         try:
-            d = get_api_detailed_signal_data(app_state.client, app_state.symbol_cache, pair_normalized, user_id, timeframe)
+            d = get_api_detailed_signal_data(app_state.client, app_state.symbol_cache, pair_norm, user_id, timeframe)
             done_q = queue.Queue()
             d.addCallbacks(lambda res: done_q.put(res), lambda f: done_q.put({"error": str(f)}))
             result = done_q.get(timeout=30)
+            
             if result.get("error"):
-                logger.error(f"On-demand analysis failed for {pair_normalized}: {result.get('error')}")
                 return jsonify(result), 500
-            app_state.latest_analysis_cache[pair_normalized] = result
+            
+            app_state.latest_analysis_cache[pair_norm] = result
             return jsonify(result)
-        except queue.Empty:
-            logger.error(f"On-demand analysis timeout for {pair_normalized}")
-            return jsonify({"error": "Request timed out."}), 504
-        except Exception:
-            logger.exception("api_signal critical error")
-            return jsonify({"error": "Internal server error"}), 500
+        except Exception as e:
+            logger.error(f"Analysis error: {e}")
+            return jsonify({"error": "Internal error"}), 500
 
     @app.route("/api/toggle_watchlist")
     @protected_route
@@ -102,17 +111,16 @@ def register_routes(app):
         pair = request.args.get("pair")
         user_id = get_user_id_from_init_data(request.args.get("initData"))
         if not pair or not user_id:
-            return jsonify({"success": False, "error": "User ID and pair are required."}), 400
+            return jsonify({"success": False, "error": "Missing data"}), 400
         success = db.toggle_watchlist(user_id, pair)
-        if success:
-            return jsonify({"success": True})
-        else:
-            return jsonify({"success": False, "error": "Failed to update watchlist."}), 500
+        return jsonify({"success": success})
 
     @app.route("/api/scanner/status")
     @protected_route
     def scanner_status():
-        return jsonify(app_state.SCANNER_STATE)
+        # Віддаємо статус сканерів зі state.py
+        state = getattr(app_state, 'SCANNER_STATE', {})
+        return jsonify(state)
 
     @app.route("/api/scanner/toggle", methods=['POST'])
     @protected_route
@@ -120,25 +128,21 @@ def register_routes(app):
         category = request.args.get("category")
         if not category or category not in app_state.SCANNER_STATE:
             return jsonify({"error": "Invalid category"}), 400
-        app_state.set_scanner_state(category, not app_state.get_scanner_state(category))
-        logger.info(f"Scanner for '{category}' toggled to {app_state.SCANNER_STATE[category]}")
+        new_val = not app_state.get_scanner_state(category)
+        app_state.set_scanner_state(category, new_val)
         return jsonify(app_state.SCANNER_STATE)
 
     @app.route("/api/signal-stream")
     @protected_route
     def signal_stream():
         def generate():
-            logger.info("DEBUG: Web client connected to SSE stream.")
             while True:
                 try:
                     data = app_state.sse_queue.get(timeout=20)
-                    # Додаємо лог відправки ціни
-                    logger.info(f"SSE SEND: {data.get('pair')} - {data.get('price')}")
                     yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
                 except queue.Empty:
                     yield ": ping\n\n"
         response = Response(stream_with_context(generate()), mimetype='text/event-stream')
         response.headers['Cache-Control'] = 'no-cache'
         response.headers['Connection'] = 'keep-alive'
-        response.headers['X-Accel-Buffering'] = 'no'
         return response
