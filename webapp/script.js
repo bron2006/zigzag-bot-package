@@ -21,19 +21,14 @@ const debouncedFetchSignal = debounce(fetchSignal, 300);
 document.addEventListener('DOMContentLoaded', function() {
     showLoader(true);
     const initDataQuery = initData ? `?initData=${encodeURIComponent(initData)}` : '';
-    const staticPairsUrl = `${API_BASE_URL}/api/get_pairs${initDataQuery}`;
-    
-    fetch(staticPairsUrl)
+    fetch(`${API_BASE_URL}/api/get_pairs${initDataQuery}`)
         .then(res => res.json())
         .then(staticData => {
             allData = staticData;
             currentWatchlist = (staticData.watchlist || []).map(p => p.replace(/\//g, ''));
             populateLists(allData);
             showLoader(false);
-        }).catch(err => {
-            signalOutput.innerHTML = `<h3>❌ Помилка завантаження</h3>`;
-            showLoader(false);
-        });
+        }).catch(() => showLoader(false));
 
     fetch(`${API_BASE_URL}/api/scanner/status${initDataQuery}`)
         .then(res => res.json())
@@ -57,15 +52,6 @@ document.addEventListener('DOMContentLoaded', function() {
     eventSource.onmessage = function(event) {
         const signalData = JSON.parse(event.data);
         if (signalData._ping) return;
-        if (signalData.pair && signalData.price) {
-            const pId = signalData.pair.replace(/\//g, "");
-            const el = document.getElementById(`price-${pId}`);
-            if (el) {
-                el.textContent = signalData.price.toFixed(5);
-                el.style.color = "#00ff00";
-                setTimeout(() => { el.style.color = "#3390ec"; }, 300);
-            }
-        }
         displayLiveSignal(signalData);
     };
 
@@ -100,7 +86,6 @@ function displayLiveSignal(signalData) {
     const signalDiv = document.createElement('div');
     signalDiv.id = signalId;
     signalDiv.className = 'live-signal';
-    signalDiv.style.cursor = 'pointer';
     signalDiv.onclick = () => {
         signalOutput.innerHTML = formatSignalAsHtml(signalData, currentExpiration);
         signalContainer.scrollIntoView({ behavior: 'smooth' });
@@ -109,12 +94,17 @@ function displayLiveSignal(signalData) {
     signalDiv.classList.add(score >= 65 ? 'buy' : (score <= 35 ? 'sell' : 'neutral'));
     signalDiv.innerHTML = `<div class="live-signal-content">${signalData.verdict_text} по ${signalData.pair} (${score}%)</div><button class="live-signal-close" onclick="event.stopPropagation(); this.parentElement.remove()">×</button>`;
     liveSignalsContainer.prepend(signalDiv);
-    setTimeout(() => { const el = document.getElementById(signalId); if (el) el.remove(); }, 300000);
+    setTimeout(() => { if (document.getElementById(signalId)) document.getElementById(signalId).remove(); }, 300000);
 }
 
+// --- ВИДАЛИЛИ ЦІНУ ТА РИСОЧКИ З КНОПКИ ТУТ ---
 function createPairButton(pair) {
-    const pId = pair.replace(/\//g, "");
-    return `<div class="pair-item"><button class="pair-button" data-pair="${pair}" style="display:flex; justify-content:space-between; align-items:center;"><span>${pair}</span><span id="price-${pId}" style="font-family:monospace; color:#3390ec; font-size:0.85em; background:rgba(0,0,0,0.2); padding:2px 5px; border-radius:4px;">---</span></button>${renderFavoriteButton(pair)}</div>`;
+    return `<div class="pair-item">
+        <button class="pair-button" data-pair="${pair}">
+            <span>${pair}</span>
+        </button>
+        ${renderFavoriteButton(pair)}
+    </div>`;
 }
 
 function populateLists(data, query = '') {
