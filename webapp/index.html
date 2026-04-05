@@ -13,7 +13,6 @@
             --buy: #10b981;
             --sell: #ef4444;
         }
-
         body {
             font-family: -apple-system, system-ui, sans-serif;
             background-color: var(--bg);
@@ -23,131 +22,95 @@
             display: flex;
             flex-direction: column;
             align-items: center;
-            min-height: 100vh;
         }
-
-        .header h2 { color: var(--accent); margin: 20px 0; font-size: 24px; text-transform: uppercase; letter-spacing: 2px; }
-
-        h3 { 
-            width: 100%; 
-            max-width: 480px; 
-            color: #64748b; 
-            font-size: 12px; 
-            text-transform: uppercase; 
-            margin: 25px 0 10px 5px; 
-            letter-spacing: 1px;
-        }
-
-        .grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 15px;
-            width: 100%;
-            max-width: 480px;
-        }
-
+        .header { text-align: center; margin: 20px 0; }
+        .header h2 { color: var(--accent); margin: 0; font-size: 22px; text-transform: uppercase; letter-spacing: 2px; }
+        h3 { width: 100%; max-width: 500px; color: #64748b; font-size: 12px; text-transform: uppercase; margin: 25px 0 10px 5px; letter-spacing: 1px; }
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; width: 100%; max-width: 500px; }
         .btn {
             background: var(--card);
             border: 1px solid #2d3748;
-            border-radius: 20px;
-            padding: 25px 10px;
+            border-radius: 16px;
+            padding: 22px 10px;
             color: #fff;
             font-weight: 700;
-            font-size: 17px;
+            font-size: 16px;
             cursor: pointer;
             transition: 0.2s;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
             display: flex;
             justify-content: center;
             align-items: center;
-            min-height: 90px;
+            min-height: 80px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.2);
         }
-
         .btn:active { transform: scale(0.95); background: #1e2538; }
-
-        #analysis-box {
+        #result-box {
             width: 100%;
-            max-width: 480px;
+            max-width: 500px;
             background: var(--card);
-            border-radius: 30px;
-            padding: 35px 25px;
+            border-radius: 24px;
+            padding: 30px 20px;
             margin-top: 30px;
             border: 1px solid var(--accent);
             box-sizing: border-box;
             text-align: center;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
         }
-
-        .verdict-box { display: flex; flex-direction: column; align-items: center; justify-content: center; margin-bottom: 25px; }
-        .big-arrow { font-size: 90px; line-height: 1; margin-bottom: 10px; filter: drop-shadow(0 0 10px rgba(255,255,255,0.1)); }
-        .v-text { font-size: 40px; font-weight: 900; letter-spacing: 2px; }
-        .buy-clr { color: var(--buy); }
-        .sell-clr { color: var(--sell); }
-
-        #details {
-            font-size: 16px;
-            line-height: 1.8;
+        .verdict { display: flex; flex-direction: column; align-items: center; justify-content: center; margin-bottom: 20px; }
+        .arrow { font-size: 85px; line-height: 1; margin-bottom: 5px; }
+        .v-text { font-size: 36px; font-weight: 900; text-transform: uppercase; }
+        .buy { color: var(--buy); }
+        .sell { color: var(--sell); }
+        #description {
+            font-size: 15px;
+            line-height: 1.7;
             color: #94a3b8;
             text-align: left;
             border-top: 1px solid #2d3748;
-            padding-top: 25px;
+            padding-top: 20px;
         }
     </style>
 </head>
 <body>
-
     <div class="header"><h2>ZigZag AI Analytics</h2></div>
-
     <h3>Криптовалюти</h3>
     <div class="grid">
-        <button class="btn" onclick="runAnalysis('BTCUSD')">BTC / USD</button>
-        <button class="btn" onclick="runAnalysis('ETHUSD')">ETH / USD</button>
-        <button class="btn" onclick="runAnalysis('SOLUSD')">SOL / USD</button>
-        <button class="btn" onclick="runAnalysis('BNBUSD')">BNB / USD</button>
+        <button class="btn" onclick="send('BTCUSD')">BTC / USD</button>
+        <button class="btn" onclick="send('ETHUSD')">ETH / USD</button>
+        <button class="btn" onclick="send('SOLUSD')">SOL / USD</button>
+        <button class="btn" onclick="send('BNBUSD')">BNB / USD</button>
     </div>
-
-    <h3>Сировина та Метали</h3>
+    <h3>Сировина</h3>
     <div class="grid">
-        <button class="btn" onclick="runAnalysis('XAUUSD')">GOLD (XAU)</button>
-        <button class="btn" onclick="runAnalysis('WTI')">OIL (WTI)</button>
+        <button class="btn" onclick="send('XAUUSD')">GOLD (XAU)</button>
+        <button class="btn" onclick="send('WTI')">OIL (WTI)</button>
     </div>
-
-    <div id="analysis-box">
-        <div id="verdict-ui" class="verdict-box">
-            <span style="color: #475569; font-size: 18px;">Оберіть пару для аналізу</span>
+    <div id="result-box">
+        <div class="verdict" id="v-ui">
+            <span style="color: #475569; font-size: 16px;">Оберіть пару</span>
         </div>
-        <div id="details">Система готова. Очікування вибору активу...</div>
+        <div id="description">Чекаю на дані...</div>
     </div>
-
     <script>
-        async function runAnalysis(pair) {
-            const vUI = document.getElementById('verdict-ui');
-            const det = document.getElementById('details');
-            
-            vUI.innerHTML = '<span style="font-size: 22px; color: var(--accent);">Аналізую...</span>';
-            det.innerHTML = "Зчитування ZigZag, RSI та новинних фільтрів...";
-
+        async function send(pair) {
+            const v = document.getElementById('v-ui');
+            const d = document.getElementById('description');
+            v.innerHTML = '<span style="font-size: 18px;">Аналіз...</span>';
             try {
-                const response = await fetch('/analyze', {
+                const r = await fetch('/analyze', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({ pair: pair })
                 });
-                const data = await response.json();
-
+                const data = await r.json();
                 if (data.signal === 'BUY') {
-                    vUI.innerHTML = '<span class="big-arrow buy-clr">⬆️</span><span class="v-text buy-clr">BUY</span>';
+                    v.innerHTML = '<span class="arrow buy">⬆️</span><span class="v-text buy">BUY</span>';
                 } else if (data.signal === 'SELL') {
-                    vUI.innerHTML = '<span class="big-arrow sell-clr">⬇️</span><span class="v-text sell-clr">SELL</span>';
+                    v.innerHTML = '<span class="arrow sell">⬇️</span><span class="v-text sell">SELL</span>';
                 } else {
-                    vUI.innerHTML = '<span class="v-text">NEUTRAL</span>';
+                    v.innerHTML = '<span class="v-text">NEUTRAL</span>';
                 }
-                det.innerHTML = data.analysis || "Аналіз завершено успішно.";
-
-            } catch (err) {
-                vUI.innerHTML = '<span style="color:var(--sell); font-size:18px;">Помилка сервера</span>';
-                det.innerHTML = "Перевірте підключення до API або статус Fly.io.";
-            }
+                d.innerHTML = data.analysis;
+            } catch (e) { v.innerHTML = 'Error'; }
         }
     </script>
 </body>
