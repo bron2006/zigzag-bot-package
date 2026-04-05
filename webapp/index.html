@@ -1,41 +1,53 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="uk">
 <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no"/>
-    <title>ZigZag | Binary Options</title>
-    <link rel="stylesheet" href="style.css">
-    <script src="https://telegram.org/js/telegram-web-app.js"></script>
-    <script>
-        window.API_BASE_URL = "{{API_BASE_URL}}";
-    </script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>ZigZag AI Analytics</title>
+    <style>
+        body { font-family: -apple-system, sans-serif; background-color: #0f172a; color: #f8fafc; margin: 0; padding: 15px; display: flex; flex-direction: column; align-items: center; }
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; width: 100%; max-width: 480px; margin-top: 20px; }
+        .btn { background-color: #1e293b; border: 1px solid #334155; border-radius: 18px; padding: 25px 10px; color: #fff; font-weight: 800; font-size: 18px; cursor: pointer; min-height: 85px; display: flex; justify-content: center; align-items: center; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
+        .btn:active { transform: scale(0.95); background: #334155; }
+        #res-container { width: 100%; max-width: 480px; background: #1e293b; border-radius: 25px; padding: 30px; margin-top: 30px; border: 2px solid #3b82f6; text-align: center; box-sizing: border-box; }
+        .big-arrow { font-size: 90px; line-height: 1; display: block; margin-bottom: 10px; }
+        .buy { color: #22c55e; }
+        .sell { color: #ef4444; }
+        .v-text { font-size: 38px; font-weight: 900; text-transform: uppercase; }
+        #det { margin-top: 20px; font-size: 16px; line-height: 1.6; color: #94a3b8; text-align: left; border-top: 1px solid #334155; padding-top: 20px; }
+    </style>
 </head>
 <body>
-    <div class="container">
-        <h1>Термінал | Бінарні Опціони</h1>
-        <div class="controls-panel">
-            <input type="search" id="searchInput" class="search-input" placeholder="🔍 Пошук...">
-            <div id="expirationSelector" class="timeframe-selector">
-                <button class="tf-button active" data-exp="1m">Експірація 1m</button>
-                <button class="tf-button" data-exp="5m">Експірація 5m</button>
-            </div>
-            <div id="scannerControls" class="scanner-controls">
-                <button class="scanner-button" data-cat="forex"></button>
-                <button class="scanner-button" data-cat="crypto"></button>
-                <button class="scanner-button" data-cat="commodities"></button>
-                <button class="scanner-button" data-cat="watchlist"></button>
-            </div>
-            </div>
-
-        <div id="liveSignalsContainer"></div>
-
-        <div id="listsContainer"></div>
-        <div class="separator"></div>
-        <div id="signalContainer">
-            <div id="signalOutput">Оберіть актив для аналізу...</div>
-        </div>
-        <div id="loader" class="hidden"></div>
+    <h2 style="color:#3b82f6; margin: 15px 0;">ZigZag AI Analytics</h2>
+    <div class="grid">
+        <button class="btn" onclick="ask('BTCUSD')">BTC / USD</button>
+        <button class="btn" onclick="ask('ETHUSD')">ETH / USD</button>
+        <button class="btn" onclick="ask('XAUUSD')">GOLD</button>
+        <button class="btn" onclick="ask('WTI')">OIL</button>
     </div>
-    <script src="script.js"></script>
+    <div id="res-container">
+        <div id="out"><span style="color:#475569;">Оберіть актив</span></div>
+        <div id="det"></div>
+    </div>
+    <script>
+        async function ask(p) {
+            const out = document.getElementById('out');
+            const det = document.getElementById('det');
+            out.innerHTML = "Аналізую...";
+            det.innerHTML = "";
+            try {
+                const r = await fetch('/analyze', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({pair: p}) });
+                const data = await r.json();
+                if (data.signal === 'BUY') {
+                    out.innerHTML = '<span class="big-arrow buy">⬆️</span><span class="v-text buy">BUY</span>';
+                } else if (data.signal === 'SELL') {
+                    out.innerHTML = '<span class="big-arrow sell">⬇️</span><span class="v-text sell">SELL</span>';
+                } else {
+                    out.innerHTML = '<span class="v-text">NEUTRAL</span>';
+                }
+                det.innerHTML = data.analysis;
+            } catch (e) { out.innerHTML = "Помилка API"; }
+        }
+    </script>
 </body>
 </html>
