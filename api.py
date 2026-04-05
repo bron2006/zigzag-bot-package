@@ -1,135 +1,91 @@
-﻿import os
-import json
-import time
-import queue
-import logging
+﻿import os, json, time, queue, logging
 from functools import wraps
 from flask import jsonify, send_from_directory, Response, request, stream_with_context
-
 from state import app_state
 import db
 from auth import is_valid_init_data, get_user_id_from_init_data
 import analysis as analysis_module
 import ml_models
-from config import (
-    FOREX_SESSIONS, get_fly_app_name, CRYPTO_PAIRS, STOCK_TICKERS,
-    COMMODITIES, TRADING_HOURS
-)
+from config import FOREX_SESSIONS, get_fly_app_name, CRYPTO_PAIRS, STOCK_TICKERS, COMMODITIES, TRADING_HOURS
 
 logger = logging.getLogger("api")
 get_api_detailed_signal_data = analysis_module.get_api_detailed_signal_data
 WEBAPP_DIR = os.path.join(os.path.dirname(__file__), "webapp")
 
 def register_routes(app):
-    
     def protected_route(f):
         @wraps(f)
         def decorated_function(*args, **kwargs):
             init_data = request.args.get("initData")
             if not is_valid_init_data(init_data):
-                logger.warning(f"Unauthorized API access attempt. Path: {request.path}")
                 return jsonify({"success": False, "error": "Unauthorized"}), 401
             return f(*args, **kwargs)
         return decorated_function
 
     @app.route("/")
     def home():
-        try:
-            index_path = os.path.join(WEBAPP_DIR, "index.html")
-            if os.path.exists(index_path):
-                with open(index_path, "r", encoding="utf-8") as f:
-                    content = f.read()
-                app_name = get_fly_app_name() or "zigzag-bot-package"
-                api_base_url = f"https://{app_name}.fly.dev"
-                content = content.replace("{{API_BASE_URL}}", api_base_url)
-                cache_buster = int(time.time())
-                content = content.replace("script.js", f"script.js?v={cache_buster}")
-                content = content.replace("style.css", f"style.css?v={cache_buster}")
-                return Response(content, mimetype='text/html')
-            return "Web UI not found", 404
-        except Exception:
-            logger.exception("Error serving index")
-            return "Internal Server Error", 500
+        index_path = os.path.join(WEBAPP_DIR, "index.html")
+        if os.path.exists(index_path):
+            with open(index_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            app_name = get_fly_app_name() or "zigzag-bot-package"
+            content = content.replace("{{API_BASE_URL}}", f"https://{app_name}.fly.dev")
+            cache_buster = int(time.time())
+            content = content.replace("script.js", f"script.js?v={cache_buster}")
+            return Response(content, mimetype='text/html')
+        return "Web UI not found", 404
+
+    @app.route("/api/health")
+    def health():
+        status = {
+            "ctrader": app_state.client is not None,
+            "ml": ml_models.LGBM_MODEL is not None,
+            "uptime": int(time.time() - getattr(app_state, 'start_time', time.time()))
+        }
+        return jsonify(status)
 
     @app.route("/<path:filename>")
     def static_files(filename):
         return send_from_directory(WEBAPP_DIR, filename)
-
-    @app.route("/api/health")
-    def health_check():
-        status = {
-            "status": "ok",
-            "ctrader_connected": app_state.client is not None and hasattr(app_state.client, '_client'),
-            "ml_model_loaded": ml_models.LGBM_MODEL is not None,
-            "uptime": int(time.time() - getattr(app_state, 'start_time', time.time()))
-        }
-        code = 200 if status["ctrader_connected"] else 503
-        return jsonify(status), code
 
     @app.route("/api/get_pairs")
     @protected_route
     def get_pairs():
         user_id = get_user_id_from_init_data(request.args.get("initData"))
         watchlist = db.get_watchlist(user_id) if user_id else []
-        forex_data = [
-            {"title": f"{name} {TRADING_HOURS.get(name, '')}".strip(), "pairs": pairs}
-            for name, pairs in FOREX_SESSIONS.items()
-        ]
-        return jsonify({
-            "forex": forex_data, "crypto": CRYPTO_PAIRS, "stocks": STOCK_TICKERS,
-            "commodities": COMMODITIES, "watchlist": watchlist
-        })
+        forex_data = [{"title": f"{n} {TRADING_HOURS.get(n, '')}".strip(), "pairs": p} for n, p in FOREX_SESSIONS.items()]
+        return jsonify({"forex": forex_data, "crypto": CRYPTO_PAIRS, "stocks": STOCK_TICKERS, "commodities": COMMODITIES, "watchlist": watchlist})
 
     @app.route("/api/signal")
     @protected_route
     def api_signal():
         pair = request.args.get("pair")
-        timeframe = request.args.get("timeframe", "15m")
-        if not pair:
-            return jsonify({"error": "pair is required"}), 400
-        pair_norm = pair.replace("/", "")
+        tf = request.args.get("timeframe", "15m")
         user_id = get_user_id_from_init_data(request.args.get("initData"))
-
-        try:
-            d = get_api_detailed_signal_data(app_state.client, app_state.symbol_cache, pair_norm, user_id, timeframe)
-            done_q = queue.Queue()
-            d.addCallbacks(lambda res: done_q.put(res), lambda f: done_q.put({"error": str(f)}))
-            result = done_q.get(timeout=30)
-            
-            if result.get("error"):
-                return jsonify(result), 500
-            
-            app_state.latest_analysis_cache[pair_norm] = result
-            return jsonify(result)
-        except Exception as e:
-            logger.error(f"Analysis error: {e}")
-            return jsonify({"error": "Internal error"}), 500
+        d = get_api_detailed_signal_data(app_state.client, app_state.symbol_cache, pair.replace("/", ""), user_id, tf)
+        done_q = queue.Queue()
+        d.addCallbacks(lambda res: done_q.put(res), lambda f: done_q.put({"error": str(f)}))
+        return jsonify(done_q.get(timeout=30))
 
     @app.route("/api/toggle_watchlist")
     @protected_route
     def toggle_watchlist_api():
         pair = request.args.get("pair")
         user_id = get_user_id_from_init_data(request.args.get("initData"))
-        if not pair or not user_id:
-            return jsonify({"success": False, "error": "Missing data"}), 400
         success = db.toggle_watchlist(user_id, pair)
         return jsonify({"success": success})
 
     @app.route("/api/scanner/status")
     @protected_route
     def scanner_status():
-        # Віддаємо статус сканерів зі state.py
-        state = getattr(app_state, 'SCANNER_STATE', {})
-        return jsonify(state)
+        return jsonify(app_state.SCANNER_STATE)
 
     @app.route("/api/scanner/toggle", methods=['POST'])
     @protected_route
     def scanner_toggle():
-        category = request.args.get("category")
-        if not category or category not in app_state.SCANNER_STATE:
-            return jsonify({"error": "Invalid category"}), 400
-        new_val = not app_state.get_scanner_state(category)
-        app_state.set_scanner_state(category, new_val)
+        cat = request.args.get("category")
+        if cat in app_state.SCANNER_STATE:
+            app_state.set_scanner_state(cat, not app_state.get_scanner_state(cat))
         return jsonify(app_state.SCANNER_STATE)
 
     @app.route("/api/signal-stream")
@@ -142,7 +98,4 @@ def register_routes(app):
                     yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
                 except queue.Empty:
                     yield ": ping\n\n"
-        response = Response(stream_with_context(generate()), mimetype='text/event-stream')
-        response.headers['Cache-Control'] = 'no-cache'
-        response.headers['Connection'] = 'keep-alive'
-        return response
+        return Response(stream_with_context(generate()), mimetype='text/event-stream')

@@ -21,6 +21,7 @@ const debouncedFetchSignal = debounce(fetchSignal, 300);
 document.addEventListener('DOMContentLoaded', function() {
     showLoader(true);
     const initDataQuery = initData ? `?initData=${encodeURIComponent(initData)}` : '';
+    
     fetch(`${API_BASE_URL}/api/get_pairs${initDataQuery}`)
         .then(res => res.json())
         .then(staticData => {
@@ -29,6 +30,19 @@ document.addEventListener('DOMContentLoaded', function() {
             populateLists(allData);
             showLoader(false);
         }).catch(() => showLoader(false));
+
+    fetch(`${API_BASE_URL}/api/scanner/status${initDataQuery}`)
+        .then(res => res.json())
+        .then(data => updateScannerButtons(data));
+
+    scannerControls.addEventListener('click', (event) => {
+        const button = event.target.closest('.scanner-button');
+        if (!button) return;
+        const category = button.dataset.cat;
+        fetch(`${API_BASE_URL}/api/scanner/toggle?category=${category}${initDataQuery.replace('?','&')}`, { method: 'POST' })
+            .then(res => res.json())
+            .then(newState => updateScannerButtons(newState));
+    });
 
     const expirationButtons = document.querySelectorAll('.tf-button');
     expirationButtons.forEach(button => {
@@ -41,8 +55,20 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 
     const searchInput = document.getElementById('searchInput');
-    searchInput.addEventListener('input', debounce((event) => { populateLists(allData, event.target.value); }, 300));
+    searchInput.addEventListener('input', debounce((e) => populateLists(allData, e.target.value), 300));
 });
+
+function updateScannerButtons(stateDict) {
+    const textMap = { forex: "💹 Forex", crypto: "💎 Crypto", commodities: "🥇 Сировина", watchlist: "⭐ Обране" };
+    for (const category in textMap) {
+        const button = scannerControls.querySelector(`.scanner-button[data-cat="${category}"]`);
+        if (button) {
+            const isEnabled = stateDict[category];
+            button.textContent = `${isEnabled ? '✅' : '❌'} ${textMap[category]}`;
+            button.classList.toggle('enabled', isEnabled);
+        }
+    }
+}
 
 function displayLiveSignal(signalData) {
     const signalId = `signal-${signalData.pair.replace('/', '')}-${Date.now()}`;
@@ -50,8 +76,11 @@ function displayLiveSignal(signalData) {
     signalDiv.className = 'live-signal';
     signalDiv.onclick = () => {
         signalOutput.innerHTML = formatSignalAsHtml(signalData, currentExpiration);
-        signalContainer.scrollIntoView({ behavior: 'smooth' }); // ПОВЕРНУТО СКРОЛ
+        signalContainer.scrollIntoView({ behavior: 'smooth' });
     };
+    const score = signalData.score || 50;
+    signalDiv.classList.add(score >= 65 ? 'buy' : (score <= 35 ? 'sell' : 'neutral'));
+    signalDiv.innerHTML = `<div class="live-signal-content">${signalData.verdict_text} по ${signalData.pair} (${score}%)</div><button class="live-signal-close" onclick="event.stopPropagation(); this.parentElement.remove()">×</button>`;
     liveSignalsContainer.prepend(signalDiv);
 }
 
@@ -89,12 +118,16 @@ function renderFavoriteButton(pair) {
 
 function toggleFavorite(event, button, pair) {
     event.stopPropagation();
+    const isFav = button.innerHTML.includes('✅');
     const iData = initData ? `&initData=${encodeURIComponent(initData)}` : '';
-    fetch(`${API_BASE_URL}/api/toggle_watchlist?pair=${pair}${iData}`).then(() => {
-        const pn = pair.replace(/\//g, '');
-        if (currentWatchlist.includes(pn)) currentWatchlist = currentWatchlist.filter(p => p !== pn);
-        else currentWatchlist.push(pn);
-        populateLists(allData, document.getElementById('searchInput').value);
+    button.innerHTML = isFav ? '⭐' : '✅';
+    fetch(`${API_BASE_URL}/api/toggle_watchlist?pair=${pair}${iData}`).then(res => res.json()).then(data => {
+        if (data.success) {
+            const pn = pair.replace(/\//g, '');
+            if (isFav) currentWatchlist = currentWatchlist.filter(p => p !== pn);
+            else currentWatchlist.push(pn);
+            populateLists(allData, document.getElementById('searchInput').value);
+        }
     });
 }
 
@@ -107,8 +140,8 @@ function fetchSignal(pair) {
     fetch(`${API_BASE_URL}/api/signal?pair=${pair}&timeframe=${exp}${iData.replace('?', '&')}`)
         .then(res => res.json())
         .then(data => { 
-            signalOutput.innerHTML = formatSignalAsHtml(data, exp);
-            setTimeout(() => { signalContainer.scrollIntoView({ behavior: 'smooth' }); }, 100); // ПОВЕРНУТО СКРОЛ
+            signalOutput.innerHTML = formatSignalAsHtml(data, exp); 
+            setTimeout(() => { signalContainer.scrollIntoView({ behavior: 'smooth' }); }, 100);
         })
         .finally(() => showLoader(false));
 }
@@ -117,7 +150,8 @@ function formatSignalAsHtml(signalData, exp) {
     if (!signalData || signalData.error) return `❌ Помилка: ${signalData?.error || 'Немає даних'}`;
     const { pair, price, verdict_text, reasons, score, sentiment } = signalData;
     const pStr = price ? price.toFixed(5) : "N/A";
-    let arrow = "➡️", cClass = "neutral";
+    
+    let arrow = "↔️", cClass = "neutral";
     if (score >= 65) { arrow = "⬆️"; cClass = "buy"; }
     else if (score <= 35) { arrow = "⬇️"; cClass = "sell"; }
 
