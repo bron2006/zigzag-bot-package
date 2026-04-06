@@ -19,14 +19,10 @@ from notifier import send_signal
 
 logger = logging.getLogger("scanner")
 
-STALE_PRICE_THRESHOLD = 300   # секунд — має збігатись з ctrader._STALE_THRESHOLD
+STALE_PRICE_THRESHOLD = 300
 
 get_api_detailed_signal_data = analysis_module.get_api_detailed_signal_data
 
-
-# ---------------------------------------------------------------------------
-# Сесії та активи
-# ---------------------------------------------------------------------------
 
 def _get_active_forex_sessions() -> list:
     SESSION_TIMES_UTC = {
@@ -61,15 +57,10 @@ def _collect_assets_to_scan() -> list:
     if app_state.get_scanner_state("watchlist"):
         user_id = get_chat_id()
         if user_id:
-            logger.info(f"Скануємо watchlist для: {user_id}")
             assets.extend(db.get_watchlist(user_id))
     seen = set()
     return [a for a in assets if not (a in seen or seen.add(a))]
 
-
-# ---------------------------------------------------------------------------
-# Обробка результату аналізу
-# ---------------------------------------------------------------------------
 
 @safe_twisted("handle_analysis_result", threshold=10)
 def _handle_analysis_result(pair_norm: str, result: dict) -> None:
@@ -109,22 +100,11 @@ def _handle_analysis_result(pair_norm: str, result: dict) -> None:
         expiration = result.get('timeframe', '1m')
         message    = telegram_ui._format_signal_message(result, expiration)
         kb         = telegram_ui.get_main_menu_kb()
-        sent_ok    = send_signal(chat_id, message, reply_markup=kb)
-
-        if sent_ok and app_state.updater:
-            # Відстежуємо повідомлення для подальшого очищення
-            try:
-                pass  # send_signal не повертає message_id — при потребі розширити
-            except Exception:
-                logger.exception("Не вдалося зберегти message_id в bot_data")
+        send_signal(chat_id, message, reply_markup=kb)
 
     app_state.scanner_cooldown_cache[pair_norm] = now
     logger.info(f"SCANNER: Сигнал надіслано для {pair_norm} (score={score})")
 
-
-# ---------------------------------------------------------------------------
-# Обробка одного активу
-# ---------------------------------------------------------------------------
 
 @safe_call("process_asset", threshold=10, default=None)
 def _process_one_asset(pair: str) -> None:
@@ -134,7 +114,6 @@ def _process_one_asset(pair: str) -> None:
         logger.debug("Символи ще не завантажені, пропускаємо.")
         return
 
-    # Перевірка стейл цін перед аналізом
     price_data = app_state.live_prices.get(pair_norm)
     if price_data is None:
         raise StaleDataError(f"Немає живої ціни для {pair_norm}", pair=pair_norm)
@@ -158,10 +137,6 @@ def _process_one_asset(pair: str) -> None:
     )
 
 
-# ---------------------------------------------------------------------------
-# Головний цикл сканера
-# ---------------------------------------------------------------------------
-
 @safe_call("scanner_loop", threshold=5, default=None)
 def scan_markets_once() -> None:
     if not any(app_state.SCANNER_STATE.values()):
@@ -175,8 +150,7 @@ def scan_markets_once() -> None:
 
     logger.info(f"SCANNER: Планую скан для {len(assets)} активів...")
     for i, pair in enumerate(assets):
-        delay = i * 2.0
         try:
-            reactor.callLater(delay, _process_one_asset, pair)
+            reactor.callLater(i * 2.0, _process_one_asset, pair)
         except Exception:
             logger.exception(f"Не вдалося запланувати скан для {pair}")

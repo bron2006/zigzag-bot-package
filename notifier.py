@@ -12,14 +12,10 @@ _SEND_FAIL_THRESHOLD = 5
 _ALERT_COOLDOWN      = 300.0
 _TG_API_URL          = "https://api.telegram.org/bot{token}/sendMessage"
 
-_lock              = threading.Lock()
-_send_fail_count   = 0
-_last_alert_times  : dict = {}
+_lock             = threading.Lock()
+_send_fail_count  = 0
+_last_alert_times : dict = {}
 
-
-# ---------------------------------------------------------------------------
-# Внутрішні помічники
-# ---------------------------------------------------------------------------
 
 def _get_bot_token() -> str:
     try:
@@ -60,10 +56,6 @@ def _http_fallback(chat_id, text: str) -> bool:
         return False
 
 
-# ---------------------------------------------------------------------------
-# Публічний API
-# ---------------------------------------------------------------------------
-
 def send_signal(chat_id, text: str, parse_mode: str = "Markdown", reply_markup=None) -> bool:
     global _send_fail_count
     if not chat_id:
@@ -89,7 +81,7 @@ def send_signal(chat_id, text: str, parse_mode: str = "Markdown", reply_markup=N
             if current_fails >= _SEND_FAIL_THRESHOLD:
                 _on_send_threshold_reached(current_fails)
     else:
-        logger.warning("send_signal: app_state.updater is None — бот не запущений?")
+        logger.warning("send_signal: app_state.updater is None")
     return False
 
 
@@ -106,7 +98,7 @@ def notify_admin(text: str, alert_key: str = None) -> bool:
             app_state.updater.bot.send_message(chat_id=chat_id, text=text)
             return True
         except Exception as e:
-            logger.warning(f"notify_admin через updater failed: {e}. Спробую HTTP fallback...")
+            logger.warning(f"notify_admin через updater failed: {e}. HTTP fallback...")
     return _http_fallback(chat_id, text)
 
 
@@ -120,32 +112,26 @@ def notify_bot_failed(reason: str) -> None:
     _http_fallback(chat_id, msg)
 
 
-# ---------------------------------------------------------------------------
-# Внутрішній обробник порогу помилок
-# ---------------------------------------------------------------------------
-
 def _on_send_threshold_reached(fail_count: int) -> None:
     global _send_fail_count
     if not _cooldown_ok("send_fail_threshold"):
         return
     msg = (
         f"🚨 ZigZag Bot: {fail_count} помилок send_message підряд.\n"
-        "Telegram-з'єднання може бути розірване. Спробую перезапустити polling..."
+        "Спробую перезапустити polling..."
     )
     logger.error(msg)
-    chat_id = _get_admin_chat_id()
-    _http_fallback(chat_id, msg)
+    _http_fallback(_get_admin_chat_id(), msg)
     _restart_polling()
     with _lock:
         _send_fail_count = 0
 
 
 def _restart_polling() -> None:
-    logger.warning("Спроба перезапустити Telegram bot polling...")
+    logger.warning("Перезапуск Telegram bot polling...")
     if app_state.updater:
         try:
             app_state.updater.stop()
-            logger.info("Старий updater зупинено.")
         except Exception:
             logger.exception("Не вдалося зупинити старий updater")
         app_state.updater = None
@@ -153,13 +139,10 @@ def _restart_polling() -> None:
     try:
         from bot import start_telegram_bot
         start_telegram_bot()
-        logger.info("Telegram bot перезапущено успішно.")
-        chat_id = _get_admin_chat_id()
-        _http_fallback(chat_id, "✅ ZigZag Bot: Telegram polling перезапущено успішно.")
+        _http_fallback(_get_admin_chat_id(), "✅ ZigZag Bot: Telegram polling перезапущено.")
     except Exception:
         logger.exception("Не вдалося перезапустити Telegram bot")
-        chat_id = _get_admin_chat_id()
         _http_fallback(
-            chat_id,
-            "🛑 ZigZag Bot: не вдалося перезапустити Telegram polling. Потрібне ручне втручання."
+            _get_admin_chat_id(),
+            "🛑 ZigZag Bot: не вдалося перезапустити polling. Потрібне ручне втручання."
         )

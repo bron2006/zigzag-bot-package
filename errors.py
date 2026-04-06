@@ -8,10 +8,6 @@ import traceback
 logger = logging.getLogger("errors")
 
 
-# ---------------------------------------------------------------------------
-# Ієрархія винятків
-# ---------------------------------------------------------------------------
-
 class ZigZagError(Exception):
     def __init__(self, message: str, *, recoverable: bool = True, alert: bool = False):
         super().__init__(message)
@@ -51,10 +47,6 @@ class StaleDataError(ZigZagError):
         self.pair = pair
         self.age_seconds = age_seconds
 
-
-# ---------------------------------------------------------------------------
-# Реєстр лічильників помилок
-# ---------------------------------------------------------------------------
 
 class _ErrorRegistry:
     def __init__(self):
@@ -97,10 +89,6 @@ class _ErrorRegistry:
 _registry = _ErrorRegistry()
 
 
-# ---------------------------------------------------------------------------
-# Alerting
-# ---------------------------------------------------------------------------
-
 def _alert(text: str, alert_key: str = None) -> None:
     try:
         from notifier import notify_admin
@@ -127,10 +115,6 @@ def _check_threshold(context, count, threshold, alert_cooldown, on_threshold):
         except Exception:
             logger.exception(f"[{context}] on_threshold callback впав")
 
-
-# ---------------------------------------------------------------------------
-# Декоратор @safe_twisted  — для Twisted callbacks
-# ---------------------------------------------------------------------------
 
 def safe_twisted(
     context: str,
@@ -177,10 +161,6 @@ def safe_twisted(
     return decorator
 
 
-# ---------------------------------------------------------------------------
-# Декоратор @safe_call  — для синхронних функцій
-# ---------------------------------------------------------------------------
-
 def safe_call(
     context: str,
     *,
@@ -215,10 +195,6 @@ def safe_call(
         return wrapper
     return decorator
 
-
-# ---------------------------------------------------------------------------
-# Публічний API для /health
-# ---------------------------------------------------------------------------
 
 def get_error_stats() -> dict:
     with _registry._lock:

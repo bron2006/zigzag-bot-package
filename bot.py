@@ -33,8 +33,8 @@ def start_telegram_bot():
         dp = updater.dispatcher
         dp.add_handler(CommandHandler("start",   telegram_ui.start))
         dp.add_handler(CommandHandler("symbols", telegram_ui.symbols_command))
-        dp.add_handler(MessageHandler(Filters.regex('^МЕНЮ$'),             telegram_ui.menu))
-        dp.add_handler(MessageHandler(Filters.text & ~Filters.command,     telegram_ui.reset_ui))
+        dp.add_handler(MessageHandler(Filters.regex('^МЕНЮ$'),         telegram_ui.menu))
+        dp.add_handler(MessageHandler(Filters.text & ~Filters.command, telegram_ui.reset_ui))
         dp.add_handler(CallbackQueryHandler(telegram_ui.button_handler))
 
         reactor.callInThread(updater.start_polling)
