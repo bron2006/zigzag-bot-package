@@ -3,6 +3,7 @@ import json
 import time
 import queue
 import logging
+import threading
 from flask import jsonify, send_from_directory, Response, request
 from state import app_state
 import db
@@ -10,36 +11,79 @@ from auth import get_user_id_from_init_data
 import analysis as analysis_module
 from config import FOREX_SESSIONS, get_fly_app_name, CRYPTO_PAIRS, STOCK_TICKERS, COMMODITIES
 from errors import get_error_stats
-import ctrader  # Додали імпорт для перепідписки
+import ctrader
 
 logger = logging.getLogger("api")
 WEBAPP_DIR = os.path.join(os.path.dirname(__file__), "webapp")
 
-MODULE_MAP = {
-    "spot_event": "Потік цін cTrader",
-    "scanner_loop": "Цикл сканування",
-    "process_asset": "Аналіз активу",
-    "handle_analysis_result": "Відправка сигналів",
-    "collect_assets": "Збір активів",
-    "telegram": "Зв'язок з Telegram"
-}
+# Список активних підключень (браузерів)
+_listeners = []
+_listeners_lock = threading.Lock()
+
+def _broadcaster():
+    """Фоновий потік: бере сигнал з черги і розсилає КОПІЇ всім відкритим вкладкам"""
+    logger.info("Broadcaster запущенний: очікування сигналів для Вебу...")
+    while True:
+        try:
+            # Чекаємо сигнал від сканера (блокуюче отримання)
+            signal_data = app_state.sse_queue.get()
+            
+            with _listeners_lock:
+                if not _listeners:
+                    continue
+                
+                # Розсилаємо всім, хто зараз тримає відкриту сторінку
+                msg = f"data: {json.dumps(signal_data)}\n\n"
+                for q in _listeners[:]:
+                    try:
+                        q.put_nowait(msg)
+                    except queue.Full:
+                        pass
+        except Exception as e:
+            logger.error(f"Помилка в Broadcaster: {e}")
+            time.sleep(1)
+
+# Запускаємо розсилку в окремому потоці один раз при імпорті
+threading.Thread(target=_broadcaster, daemon=True).start()
 
 def register_routes(app):
+    @app.route("/api/events")
+    def sse_events():
+        """Точка підключення браузера до потоку живих сигналів"""
+        q = queue.Queue(maxsize=50)
+        with _listeners_lock:
+            _listeners.append(q)
+            logger.info(f"Нове підключення до Веб-панелі. Активних вкладок: {len(_listeners)}")
+        
+        def stream():
+            try:
+                while True:
+                    yield q.get() # Віддаємо сигнал у браузер
+            except GeneratorExit:
+                with _listeners_lock:
+                    if q in _listeners:
+                        _listeners.remove(q)
+                logger.info(f"Вкладка закрита. Активних вкладок: {len(_listeners)}")
+
+        return Response(stream(), mimetype='text/event-stream')
+
     @app.route("/api/health")
     def health_check():
         prices = app_state.live_prices
         now = time.time()
         stale_count = sum(1 for d in prices.values() if now - d.get("ts", 0) > 300)
         err_stats = get_error_stats()
-        rows = ""
-        if err_stats:
-            for ctx, data in err_stats.items():
-                friendly_name = MODULE_MAP.get(ctx, ctx)
-                count = data.get("consecutive_errors", 0)
-                if count > 0:
-                    rows += f"<tr><td>{friendly_name}</td><td style='color:#ef5350;font-weight:bold;'>{count}</td></tr>"
+        rows = "".join([f"<tr><td>{ctx}</td><td>{d.get('consecutive_errors', 0)}</td></tr>" for ctx, d in err_stats.items() if d.get('consecutive_errors', 0) > 0])
         
-        html = f"""<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>ZigZag Health</title><style>body {{ background:#121212; color:#e0e0e0; font-family: -apple-system, sans-serif; padding: 20px; }} .card {{ background:#1e1e1e; border-radius:12px; padding:20px; border:1px solid #333; max-width:500px; margin:auto; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }} h1 {{ color:#3390ec; font-size:22px; margin-top:0; border-bottom:1px solid #333; padding-bottom:10px; }} .stat {{ display:flex; justify-content:space-between; margin: 12px 0; font-size:16px; }} .val {{ font-weight:bold; }} .ok {{ color:#4caf50; }} .err {{ color:#ef5350; }} table {{ width:100%; border-collapse:collapse; margin-top:20px; }} th, td {{ padding:10px; text-align:left; border-bottom:1px solid #333; }} th {{ color:#888; font-size:12px; text-transform:uppercase; }}</style></head><body><div class="card"><h1>📊 Стан Системи ZigZag</h1><div class="stat"><span>cTrader (Символи):</span><span class="val">{'✅ ЗАВАНТАЖЕНО' if app_state.SYMBOLS_LOADED else '❌ ПОМИЛКА'}</span></div><div class="stat"><span>Telegram Бот:</span><span class="val">{'✅ АКТИВНИЙ' if app_state.updater else '❌ ВИМКНЕНО'}</span></div><div class="stat"><span>Цін в ефірі:</span><span class="val">{len(prices)}</span></div><div class="stat"><span>Застарілих цін:</span><span class="val {'err' if stale_count > 0 else 'ok'}">{stale_count}</span></div><table><thead><tr><th>Модуль</th><th>Помилок підряд</th></tr></thead><tbody>{rows if rows else "<tr><td colspan='2' style='color:#4caf50;text-align:center;'>Всі системи працюють стабільно</td></tr>"}</tbody></table><p style="color:#555; font-size:11px; margin-top:20px; text-align:center;">Останнє оновлення: {time.strftime('%H:%M:%S')}</p></div></body></html>"""
+        html = f"""<html><head><meta charset="UTF-8"></head><body style='background:#121212;color:#eee;font-family:sans-serif;'>
+            <div style='max-width:400px;margin:20px auto;padding:20px;border:1px solid #333;border-radius:10px;'>
+            <h2>📊 Стан Системи ZigZag</h2>
+            <p>Цін в ефірі: <b>{len(prices)}</b></p>
+            <p>Активних вкладок Веб: <b>{len(_listeners)}</b></p>
+            <p>cTrader: <b>{'✅ OK' if app_state.SYMBOLS_LOADED else '❌ ERROR'}</b></p>
+            <hr>
+            <table style='width:100%;'><tr><th style='text-align:left'>Модуль</th><th style='text-align:left'>Помилок</th></tr>{rows if rows else "<tr><td colspan='2'>Помилок немає</td></tr>"}</table>
+            </div></body></html>"""
         return Response(html, mimetype='text/html')
 
     @app.route("/api/scanner/toggle")
@@ -47,7 +91,6 @@ def register_routes(app):
         cat = request.args.get("category")
         if cat in app_state.SCANNER_STATE:
             app_state.set_scanner_state(cat, not app_state.get_scanner_state(cat))
-            # ЦЕЙ РЯДОК ВСЕ ВИПРАВЛЯЄ: змушуємо cTrader підписатися на нові ціни
             from twisted.internet import reactor
             reactor.callLater(0.5, ctrader.start_price_subscriptions)
         return jsonify(app_state.SCANNER_STATE)
@@ -60,13 +103,6 @@ def register_routes(app):
         d = analysis_module.get_api_detailed_signal_data(app_state.client, app_state.symbol_cache, pair.replace("/", ""), uid, tf)
         q = queue.Queue(); d.addBoth(q.put)
         return jsonify(q.get(timeout=30))
-
-    @app.route("/api/watchlist/toggle")
-    def toggle_watchlist_api():
-        pair = request.args.get("pair")
-        uid = get_user_id_from_init_data(request.args.get("initData"))
-        if uid and pair: return jsonify({"success": db.toggle_watchlist(uid, pair)})
-        return jsonify({"success": False}), 400
 
     @app.route("/api/get_pairs")
     def get_pairs():
@@ -83,7 +119,7 @@ def register_routes(app):
         if os.path.exists(idx):
             with open(idx, "r", encoding="utf-8") as f:
                 return Response(f.read().replace("{{API_BASE_URL}}", f"https://{get_fly_app_name()}.fly.dev"), mimetype='text/html')
-        return "Не знайдено", 404
+        return "Not found", 404
 
     @app.route("/<path:filename>")
     def static_files(filename): return send_from_directory(WEBAPP_DIR, filename)
