@@ -106,8 +106,12 @@ def _handle_analysis_result(pair_norm: str, result: dict) -> None:
     logger.info(f"SCANNER: Сигнал надіслано для {pair_norm} (score={score})")
 
 
-@safe_call("process_asset", threshold=10, default=None)
 def _process_one_asset(pair: str) -> None:
+    """
+    ВИПРАВЛЕНО: без @safe_call.
+    StaleDataError — очікувана ситуація під час старту, не помилка системи.
+    Просто логуємо як debug і пропускаємо без збільшення лічильника.
+    """
     pair_norm = pair.replace("/", "")
 
     if not app_state.SYMBOLS_LOADED:
@@ -116,25 +120,28 @@ def _process_one_asset(pair: str) -> None:
 
     price_data = app_state.live_prices.get(pair_norm)
     if price_data is None:
-        raise StaleDataError(f"Немає живої ціни для {pair_norm}", pair=pair_norm)
+        logger.debug(f"Немає живої ціни для {pair_norm} — ще не прийшла, пропускаємо.")
+        return
 
     age = time.time() - price_data.get("ts", 0)
     if age > STALE_PRICE_THRESHOLD:
-        raise StaleDataError(
-            f"Ціна {pair_norm} застаріла ({age:.0f}s, поріг={STALE_PRICE_THRESHOLD}s)",
-            pair=pair_norm,
-            age_seconds=age,
+        logger.warning(
+            f"{pair_norm}: ціна застаріла ({age:.0f}s > {STALE_PRICE_THRESHOLD}s), пропускаємо."
         )
+        return
 
-    d = get_api_detailed_signal_data(
-        app_state.client, app_state.symbol_cache, pair_norm, 0, SCANNER_TIMEFRAME
-    )
-    d.addCallback(lambda result, p=pair_norm: _handle_analysis_result(p, result))
-    d.addErrback(
-        lambda failure, p=pair_norm: logger.error(
-            f"Критична помилка в ланцюгу аналізу для {p}: {failure.getErrorMessage()}"
+    try:
+        d = get_api_detailed_signal_data(
+            app_state.client, app_state.symbol_cache, pair_norm, 0, SCANNER_TIMEFRAME
         )
-    )
+        d.addCallback(lambda result, p=pair_norm: _handle_analysis_result(p, result))
+        d.addErrback(
+            lambda failure, p=pair_norm: logger.error(
+                f"Критична помилка в ланцюгу аналізу для {p}: {failure.getErrorMessage()}"
+            )
+        )
+    except Exception:
+        logger.exception(f"Виняток при підготовці аналізу для {pair}")
 
 
 @safe_call("scanner_loop", threshold=5, default=None)
@@ -147,6 +154,15 @@ def scan_markets_once() -> None:
     if not assets:
         logger.info("Немає активів для сканування.")
         return
+
+    # Якщо live_prices порожній але символи завантажені — щось не так з підпискою
+    if not app_state.live_prices and app_state.SYMBOLS_LOADED:
+        logger.warning("live_prices порожній але символи завантажені — перезапускаємо підписку")
+        try:
+            from ctrader import start_price_subscriptions
+            reactor.callLater(0, start_price_subscriptions)
+        except Exception:
+            logger.exception("Не вдалося перезапустити підписку")
 
     logger.info(f"SCANNER: Планую скан для {len(assets)} активів...")
     for i, pair in enumerate(assets):
