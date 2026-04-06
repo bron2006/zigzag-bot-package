@@ -3,132 +3,126 @@ import json
 import time
 import queue
 import logging
-from functools import wraps
-from flask import jsonify, send_from_directory, Response, request, stream_with_context
-
+from flask import jsonify, send_from_directory, Response, request
 from state import app_state
 import db
-from auth import is_valid_init_data, get_user_id_from_init_data
+from auth import get_user_id_from_init_data
 import analysis as analysis_module
-import ml_models
-from config import (
-    FOREX_SESSIONS, get_fly_app_name, CRYPTO_PAIRS, STOCK_TICKERS,
-    COMMODITIES, TRADING_HOURS
-)
+from config import FOREX_SESSIONS, get_fly_app_name, CRYPTO_PAIRS, STOCK_TICKERS, COMMODITIES
+from errors import get_error_stats
 
 logger = logging.getLogger("api")
-get_api_detailed_signal_data = analysis_module.get_api_detailed_signal_data
 WEBAPP_DIR = os.path.join(os.path.dirname(__file__), "webapp")
 
+# Мапа перекладу для модулів помилок
+MODULE_MAP = {
+    "spot_event": "Потік цін cTrader",
+    "scanner_loop": "Цикл сканування",
+    "process_asset": "Аналіз активу",
+    "handle_analysis_result": "Відправка сигналів",
+    "collect_assets": "Збір активів",
+    "telegram": "Зв'язок з Telegram"
+}
+
 def register_routes(app):
-    
-    def protected_route(f):
-        @wraps(f)
-        def decorated_function(*args, **kwargs):
-            init_data = request.args.get("initData")
-            if not is_valid_init_data(init_data):
-                logger.warning(f"Unauthorized API access: {request.path}")
-                return jsonify({"success": False, "error": "Unauthorized"}), 401
-            return f(*args, **kwargs)
-        return decorated_function
+    @app.route("/api/health")
+    def health_check():
+        prices = app_state.live_prices
+        now = time.time()
+        # Рахуємо застарілі ціни (більше 5 хвилин)
+        stale_count = sum(1 for d in prices.values() if now - d.get("ts", 0) > 300)
+        
+        err_stats = get_error_stats()
+        rows = ""
+        if err_stats:
+            for ctx, data in err_stats.items():
+                friendly_name = MODULE_MAP.get(ctx, ctx)
+                count = data.get("consecutive_errors", 0)
+                if count > 0:
+                    rows += f"<tr><td>{friendly_name}</td><td style='color:#ef5350;font-weight:bold;'>{count}</td></tr>"
+        
+        html = f"""<html>
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>ZigZag Health</title>
+            <style>
+                body {{ background:#121212; color:#e0e0e0; font-family: -apple-system, sans-serif; padding: 20px; }}
+                .card {{ background:#1e1e1e; border-radius:12px; padding:20px; border:1px solid #333; max-width:500px; margin:auto; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }}
+                h1 {{ color:#3390ec; font-size:22px; margin-top:0; border-bottom:1px solid #333; padding-bottom:10px; }}
+                .stat {{ display:flex; justify-content:space-between; margin: 12px 0; font-size:16px; }}
+                .val {{ font-weight:bold; }}
+                .ok {{ color:#4caf50; }}
+                .err {{ color:#ef5350; }}
+                table {{ width:100%; border-collapse:collapse; margin-top:20px; }}
+                th, td {{ padding:10px; text-align:left; border-bottom:1px solid #333; }}
+                th {{ color:#888; font-size:12px; text-transform:uppercase; }}
+            </style>
+        </head>
+        <body>
+            <div class="card">
+                <h1>📊 Стан Системи ZigZag</h1>
+                
+                <div class="stat"><span>cTrader (Символи):</span><span class="val">{'✅ ЗАВАНТАЖЕНО' if app_state.SYMBOLS_LOADED else '❌ ПОМИЛКА'}</span></div>
+                <div class="stat"><span>Telegram Бот:</span><span class="val">{'✅ АКТИВНИЙ' if app_state.updater else '❌ ВИМКНЕНО'}</span></div>
+                <div class="stat"><span>Цін в ефірі:</span><span class="val">{len(prices)}</span></div>
+                <div class="stat"><span>Застарілих цін:</span><span class="val {'err' if stale_count > 0 else 'ok'}">{stale_count}</span></div>
+                
+                <table>
+                    <thead><tr><th>Модуль</th><th>Помилок підряд</th></tr></thead>
+                    <tbody>
+                        {rows if rows else "<tr><td colspan='2' style='color:#4caf50;text-align:center;'>Всі системи працюють стабільно</td></tr>"}
+                    </tbody>
+                </table>
+                <p style="color:#555; font-size:11px; margin-top:20px; text-align:center;">Останнє оновлення: {time.strftime('%H:%M:%S')}</p>
+            </div>
+        </body></html>"""
+        return Response(html, mimetype='text/html')
+
+    @app.route("/api/signal")
+    def api_signal():
+        pair = request.args.get("pair")
+        tf = request.args.get("timeframe", "15m")
+        uid = get_user_id_from_init_data(request.args.get("initData"))
+        d = analysis_module.get_api_detailed_signal_data(app_state.client, app_state.symbol_cache, pair.replace("/", ""), uid, tf)
+        q = queue.Queue()
+        d.addBoth(q.put)
+        return jsonify(q.get(timeout=30))
+
+    @app.route("/api/watchlist/toggle")
+    def toggle_watchlist_api():
+        pair = request.args.get("pair")
+        uid = get_user_id_from_init_data(request.args.get("initData"))
+        if uid and pair:
+            return jsonify({"success": db.toggle_watchlist(uid, pair)})
+        return jsonify({"success": False}), 400
+
+    @app.route("/api/get_pairs")
+    def get_pairs():
+        uid = get_user_id_from_init_data(request.args.get("initData"))
+        watchlist = db.get_watchlist(uid) if uid else []
+        return jsonify({
+            "forex": [{"title": k, "pairs": v} for k, v in FOREX_SESSIONS.items()],
+            "crypto": CRYPTO_PAIRS, "stocks": STOCK_TICKERS, "commodities": COMMODITIES, "watchlist": watchlist
+        })
+
+    @app.route("/api/scanner/status")
+    def scanner_status(): return jsonify(app_state.SCANNER_STATE)
+
+    @app.route("/api/scanner/toggle")
+    def scanner_toggle():
+        cat = request.args.get("category")
+        if cat in app_state.SCANNER_STATE:
+            app_state.set_scanner_state(cat, not app_state.get_scanner_state(cat))
+        return jsonify(app_state.SCANNER_STATE)
 
     @app.route("/")
     def home():
-        try:
-            index_path = os.path.join(WEBAPP_DIR, "index.html")
-            if os.path.exists(index_path):
-                with open(index_path, "r", encoding="utf-8") as f:
-                    content = f.read()
-                app_name = get_fly_app_name() or "zigzag-bot-package"
-                api_base_url = f"https://{app_name}.fly.dev"
-                content = content.replace("{{API_BASE_URL}}", api_base_url)
-                cache_buster = int(time.time())
-                content = content.replace("script.js", f"script.js?v={cache_buster}")
-                content = content.replace("style.css", f"style.css?v={cache_buster}")
-                return Response(content, mimetype='text/html')
-            return "Web UI not found", 404
-        except Exception:
-            logger.exception("Error serving index")
-            return "Internal Error", 500
-
-    @app.route("/api/health")
-    def health_check():
-        status = {
-            "status": "ok",
-            "ctrader_connected": app_state.client is not None,
-            "ml_model_loaded": ml_models.LGBM_MODEL is not None,
-            "uptime": int(time.time() - getattr(app_state, 'start_time', time.time()))
-        }
-        return jsonify(status)
+        idx = os.path.join(WEBAPP_DIR, "index.html")
+        if os.path.exists(idx):
+            with open(idx, "r", encoding="utf-8") as f:
+                return Response(f.read().replace("{{API_BASE_URL}}", f"https://{get_fly_app_name()}.fly.dev"), mimetype='text/html')
+        return "Не знайдено", 404
 
     @app.route("/<path:filename>")
-    def static_files(filename):
-        return send_from_directory(WEBAPP_DIR, filename)
-
-    @app.route("/api/get_pairs")
-    @protected_route
-    def get_pairs():
-        user_id = get_user_id_from_init_data(request.args.get("initData"))
-        watchlist = db.get_watchlist(user_id) if user_id else []
-        forex_data = [
-            {"title": f"{name} {TRADING_HOURS.get(name, '')}".strip(), "pairs": pairs}
-            for name, pairs in FOREX_SESSIONS.items()
-        ]
-        return jsonify({
-            "forex": forex_data, "crypto": CRYPTO_PAIRS, "stocks": STOCK_TICKERS,
-            "commodities": COMMODITIES, "watchlist": watchlist
-        })
-
-    @app.route("/api/signal")
-    @protected_route
-    def api_signal():
-        pair = request.args.get("pair")
-        timeframe = request.args.get("timeframe", "15m")
-        if not pair: return jsonify({"error": "No pair"}), 400
-        user_id = get_user_id_from_init_data(request.args.get("initData"))
-        
-        d = get_api_detailed_signal_data(app_state.client, app_state.symbol_cache, pair.replace("/", ""), user_id, timeframe)
-        done_q = queue.Queue()
-        d.addCallbacks(lambda res: done_q.put(res), lambda f: done_q.put({"error": str(f)}))
-        try:
-            return jsonify(done_q.get(timeout=30))
-        except queue.Empty:
-            return jsonify({"error": "Timeout"}), 504
-
-    @app.route("/api/toggle_watchlist")
-    @protected_route
-    def toggle_watchlist_api():
-        pair = request.args.get("pair")
-        user_id = get_user_id_from_init_data(request.args.get("initData"))
-        success = db.toggle_watchlist(user_id, pair)
-        return jsonify({"success": success})
-
-    @app.route("/api/scanner/status")
-    @protected_route
-    def scanner_status():
-        return jsonify(app_state.SCANNER_STATE)
-
-    @app.route("/api/scanner/toggle", methods=['GET', 'POST'])
-    @protected_route
-    def scanner_toggle():
-        category = request.args.get("category")
-        if not category or category not in app_state.SCANNER_STATE:
-            logger.error(f"Invalid category for toggle: {category}")
-            return jsonify({"error": "Invalid category"}), 400
-        
-        current = app_state.get_scanner_state(category)
-        app_state.set_scanner_state(category, not current)
-        logger.info(f"Scanner {category} toggled to {not current}")
-        return jsonify(app_state.SCANNER_STATE)
-
-    @app.route("/api/signal-stream")
-    @protected_route
-    def signal_stream():
-        def generate():
-            while True:
-                try:
-                    data = app_state.sse_queue.get(timeout=20)
-                    yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
-                except queue.Empty:
-                    yield ": ping\n\n"
-        return Response(stream_with_context(generate()), mimetype='text/event-stream')
+    def static_files(filename): return send_from_directory(WEBAPP_DIR, filename)
