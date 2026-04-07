@@ -25,7 +25,6 @@ _listeners = []
 _listeners_lock = threading.Lock()
 
 def _broadcaster():
-    """Фоновий потік для розсилки сигналів на всі вкладки"""
     while True:
         try:
             signal_data = app_state.sse_queue.get()
@@ -38,7 +37,7 @@ def _broadcaster():
                     except queue.Full:
                         try: q.get_nowait(); q.put_nowait(msg)
                         except: pass
-        except Exception as e:
+        except Exception:
             time.sleep(1)
 
 threading.Thread(target=_broadcaster, daemon=True).start()
@@ -57,7 +56,6 @@ def register_routes(app):
     @app.route("/api/signal-stream")
     @protected_route
     def signal_stream():
-        """SSE потік для Вебу"""
         q = queue.Queue(maxsize=100)
         with _listeners_lock:
             _listeners.append(q)
@@ -77,10 +75,12 @@ def register_routes(app):
 
     @app.route("/api/health")
     def health_check():
-        """Адмінка (виправлено 500 помилку)"""
+        """Адмінка з повернутим статусом Telegram бота"""
         try:
             prices = app_state.live_prices
             stale_count = sum(1 for d in prices.values() if time.time() - d.get("ts", 0) > 300)
+            # Перевіряємо чи живий Telegram updater
+            tg_status = "✅ АКТИВНИЙ" if app_state.updater else "❌ ВИМКНЕНО"
             
             html = f"""
             <html><head><meta charset="UTF-8"><style>
@@ -89,12 +89,13 @@ def register_routes(app):
                 h1 {{ color:#3390ec; border-bottom:1px solid #333; padding-bottom:10px; font-size:22px; }}
                 .stat {{ display:flex; justify-content:space-between; padding:10px 0; border-bottom:1px solid #252525; }}
                 .val {{ font-weight:bold; color:#fff; }}
-                .ok {{ color:#4caf50; }} .info {{ color:#3390ec; }}
+                .ok {{ color:#4caf50; }} .info {{ color:#3390ec; }} .err {{ color:#ef5350; }}
             </style></head>
             <body><div class="card">
                 <h1>📊 Стан ZigZag</h1>
                 <div class="stat"><span>cTrader:</span><span class="val {'ok' if app_state.SYMBOLS_LOADED else ''}">{'✅ OK' if app_state.SYMBOLS_LOADED else '❌ ERROR'}</span></div>
-                <div class="stat"><span>Активних вкладок:</span><span class="val info">{len(_listeners)}</span></div>
+                <div class="stat"><span>Telegram Бот:</span><span class="val {'ok' if app_state.updater else 'err'}">{tg_status}</span></div>
+                <div class="stat"><span>Вкладок Веб:</span><span class="val info">{len(_listeners)}</span></div>
                 <div class="stat"><span>Цін в ефірі:</span><span class="val">{len(prices)}</span></div>
                 <div class="stat"><span>Застарілих:</span><span class="val">{stale_count}</span></div>
                 <p style='text-align:center;color:#555;font-size:11px;margin-top:20px;'>Оновлено: {time.strftime('%H:%M:%S')}</p>
