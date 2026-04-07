@@ -21,7 +21,6 @@ EXPIRATIONS = ["1m", "5m"]
 def _get_chat_id(update: Update) -> int:
     if update.effective_chat: return update.effective_chat.id
     if update.callback_query and update.callback_query.message: return update.callback_query.message.chat_id
-    if update.effective_user: return update.effective_user.id
     return 0
 
 def _safe_delete(bot, chat_id: int, message_id: int):
@@ -32,7 +31,6 @@ def get_reply_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup([[KeyboardButton("МЕНЮ")]], resize_keyboard=True)
 
 def get_main_menu_kb() -> InlineKeyboardMarkup:
-    # ПОВЕРНУТО: Кнопка перегляду обраного
     keyboard = [
         [InlineKeyboardButton("⭐ Мій список (Обране)", callback_data="category_watchlist")],
         [InlineKeyboardButton("💹 Валютні пари (Forex)",  callback_data="category_forex")],
@@ -40,7 +38,6 @@ def get_main_menu_kb() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("📈 Акції/Індекси",           callback_data="category_stocks")],
         [InlineKeyboardButton("🥇 Сировина",                callback_data="category_commodities")],
     ]
-    # Кнопки ввімкнення сканерів
     scanner_map = {"watchlist": "⭐ Обране", "forex": "💹 Forex", "crypto": "💎 Crypto", "commodities": "🥇 Сировина"}
     for key, text in scanner_map.items():
         status = "✅" if app_state.get_scanner_state(key) else "❌"
@@ -48,38 +45,41 @@ def get_main_menu_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(keyboard)
 
 def get_expiration_kb(category: str) -> InlineKeyboardMarkup:
-    kb = [[InlineKeyboardButton(exp, callback_data=f"exp_{category}_{exp}") for exp in EXPIRATIONS]]
-    kb.append([InlineKeyboardButton("⬅️ Назад до меню", callback_data="main_menu")])
-    return InlineKeyboardMarkup(kb)
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(exp, callback_data=f"exp_{category}_{exp}") for exp in EXPIRATIONS],
+        [InlineKeyboardButton("⬅️ Назад до меню", callback_data="main_menu")]
+    ])
 
 def get_assets_kb(asset_list: list, category: str, expiration: str) -> InlineKeyboardMarkup:
     kb, row = [], []
     for asset in asset_list:
-        cd = f"analyze_{expiration}_{asset.replace('/', '')}"
+        clean_asset = asset.replace('/', '')
+        cd = f"analyze_{expiration}_{clean_asset}"
         row.append(InlineKeyboardButton(asset, callback_data=cd))
         if len(row) == 2:
             kb.append(row); row = []
     if row: kb.append(row)
-    
     back_cd = "main_menu" if category == 'watchlist' else f"category_{category}"
     kb.append([InlineKeyboardButton("⬅️ Назад", callback_data=back_cd)])
     return InlineKeyboardMarkup(kb)
 
 def _format_signal_message(result: dict, expiration: str) -> str:
-    if result.get("error"): return f"❌ Помилка: {result['error']}"
+    if not isinstance(result, dict) or result.get("error"):
+        err = result.get("error") if isinstance(result, dict) else "Помилка аналізу"
+        return f"❌ *Помилка:* {err}"
+    
     pair = result.get('pair', 'N/A')
     verdict = result.get('verdict_text', 'WAIT')
     price = result.get('price', 0)
     emoji = {"BUY": "📈 BUY", "SELL": "📉 SELL", "NEUTRAL": "⏸ NEUTRAL", "NEWS_WAIT": "📰 NEWS WAIT"}.get(verdict, verdict)
     
-    msg = f"🎯 *Сигнал: {pair}* ({expiration})\n*Прогноз:* {emoji}\n*Ціна:* `{price:.5f}`\n\n📑 *Аналіз:*"
+    msg = f"🎯 *Сигнал: {pair}* ({expiration})\n*Прогноз:* {emoji}\n*Ціна:* `{price if price else 0:.5f}`\n\n📑 *Аналіз:*"
     for r in result.get('reasons', []): msg += f"\n• _{r}_"
     return msg
 
 def start(update: Update, context: CallbackContext):
     chat_id = _get_chat_id(update)
-    sent = update.message.reply_text("🏠 Вітаю в ZigZag! Використовуйте меню:", reply_markup=get_reply_keyboard())
-    bot_track_message(context.bot_data, chat_id, sent.message_id)
+    update.message.reply_text("🏠 Вітаю в ZigZag! Використовуйте кнопки:", reply_markup=get_reply_keyboard())
     menu(update, context)
 
 def menu(update: Update, context: CallbackContext):
@@ -89,28 +89,23 @@ def menu(update: Update, context: CallbackContext):
     bot_track_message(context.bot_data, chat_id, sent.message_id)
 
 def stats_command(update: Update, context: CallbackContext):
-    chat_id = _get_chat_id(update)
     now = time.time()
-    cache = app_state.latest_analysis_cache
     lines = [f"📊 *Статистика за 1 год:*"]
     count = 0
-    for p, r in cache.items():
+    for p, r in app_state.latest_analysis_cache.items():
         if now - r.get("ts", 0) < 3600:
             lines.append(f"• {p}: {r.get('verdict_text')}")
             count += 1
-    if count == 0: lines.append("Сигналів поки немає.")
-    update.message.reply_text("\n".join(lines), parse_mode='Markdown')
+    update.message.reply_text("\n".join(lines) if count > 0 else "Сигналів поки немає.", parse_mode='Markdown')
 
 def live_command(update: Update, context: CallbackContext):
-    prices = app_state.live_prices
-    if not prices:
+    if not app_state.live_prices:
         update.message.reply_text("💹 Ефір порожній.")
         return
     lines = ["💹 *Ціни:*"]
-    for p, d in prices.items():
+    for p, d in app_state.live_prices.items():
         age = time.time() - d.get("ts", 0)
-        status = "🟢" if age < 30 else "🔴"
-        lines.append(f"{status} `{p}`: {d.get('mid'):.5f} ({age:.0f}s)")
+        lines.append(f"{'🟢' if age < 30 else '🔴'} `{p}`: {d.get('mid', 0):.5f} ({age:.0f}s)")
     update.message.reply_text("\n".join(lines), parse_mode='Markdown')
 
 def button_handler(update: Update, context: CallbackContext):
@@ -123,67 +118,67 @@ def button_handler(update: Update, context: CallbackContext):
     parts = data.split('_')
     action = parts[0]
 
-    if action == "toggle" and parts[2] in app_state.SCANNER_STATE:
-        app_state.set_scanner_state(parts[2], not app_state.get_scanner_state(parts[2]))
-        if app_state.get_scanner_state(parts[2]):
-            from ctrader import start_price_subscriptions
-            reactor.callLater(0.5, start_price_subscriptions)
-        menu(update, context)
-
-    elif action == "main_menu":
-        menu(update, context)
-
-    elif action == "category":
-        category = parts[1]
-        # ЛОГІКА ДЛЯ ОБРАНОГО
-        if category == "watchlist":
-            user_watchlist = db.get_watchlist(chat_id)
-            if not user_watchlist:
-                sent = context.bot.send_message(chat_id, "📭 Ваш список обраного порожній. Додайте пари через Веб-панель.", reply_markup=get_main_menu_kb())
-                bot_track_message(context.bot_data, chat_id, sent.message_id)
-            else:
-                sent = context.bot.send_message(chat_id, "⭐ Ваше обране. Оберіть експірацію:", reply_markup=get_expiration_kb("watchlist"))
-                bot_track_message(context.bot_data, chat_id, sent.message_id)
-        else:
-            sent = context.bot.send_message(chat_id, f"Оберіть експірацію для {category}:", reply_markup=get_expiration_kb(category))
-            bot_track_message(context.bot_data, chat_id, sent.message_id)
-
-    elif action == "exp":
-        _, category, expiration = parts
-        if category == "watchlist":
-            assets = db.get_watchlist(chat_id)
-            sent = context.bot.send_message(chat_id, f"⭐ Обране ({expiration}):", reply_markup=get_assets_kb(assets, "watchlist", expiration))
-        elif category == "forex":
-            from config import FOREX_SESSIONS
-            kb = []
-            for s in FOREX_SESSIONS: kb.append([InlineKeyboardButton(s, callback_data=f"session_forex_{expiration}_{s}")])
-            kb.append([InlineKeyboardButton("⬅️ Назад", callback_data="category_forex")])
-            sent = context.bot.send_message(chat_id, "Сесії Forex:", reply_markup=InlineKeyboardMarkup(kb))
-        else:
-            asset_map = {'crypto': CRYPTO_PAIRS, 'stocks': STOCK_TICKERS, 'commodities': COMMODITIES}
-            sent = context.bot.send_message(chat_id, "Оберіть актив:", reply_markup=get_assets_kb(asset_map.get(category, []), category, expiration))
-        bot_track_message(context.bot_data, chat_id, sent.message_id)
-
-    elif action == "session":
-        _, _, exp, session = parts
-        sent = context.bot.send_message(chat_id, f"Пари {session}:", reply_markup=get_assets_kb(FOREX_SESSIONS.get(session, []), "forex", exp))
-        bot_track_message(context.bot_data, chat_id, sent.message_id)
-
-    elif action == "analyze":
-        _, exp, symbol = parts
-        loading = context.bot.send_message(chat_id, f"⏳ Аналіз {symbol}...")
-        
-        def on_res(res):
-            _safe_delete(context.bot, chat_id, loading.message_id)
-            sent = context.bot.send_message(chat_id, _format_signal_message(res, exp), parse_mode='Markdown')
-            bot_track_message(context.bot_data, chat_id, sent.message_id)
+    try:
+        if action == "toggle" and len(parts) > 2:
+            cat = parts[2]
+            app_state.set_scanner_state(cat, not app_state.get_scanner_state(cat))
+            if app_state.get_scanner_state(cat):
+                from ctrader import start_price_subscriptions
+                reactor.callLater(0.5, start_price_subscriptions)
             menu(update, context)
 
-        d = get_api_detailed_signal_data(app_state.client, app_state.symbol_cache, symbol, chat_id, exp)
-        d.addBoth(on_res)
+        elif action == "main": menu(update, context)
 
-def reset_ui(update, context):
-    update.message.reply_text("Використовуйте кнопки меню.")
+        elif action == "category":
+            cat = parts[1]
+            if cat == "watchlist":
+                assets = db.get_watchlist(chat_id)
+                if not assets:
+                    sent = context.bot.send_message(chat_id, "📭 Список порожній.", reply_markup=get_main_menu_kb())
+                else:
+                    sent = context.bot.send_message(chat_id, "⭐ Обране. Таймфрейм:", reply_markup=get_expiration_kb("watchlist"))
+            else:
+                sent = context.bot.send_message(chat_id, f"Оберіть експірацію для {cat}:", reply_markup=get_expiration_kb(cat))
+            bot_track_message(context.bot_data, chat_id, sent.message_id)
 
-def symbols_command(update, context):
-    update.message.reply_text(f"Доступно символів: {len(getattr(app_state, 'all_symbol_names', []))}")
+        elif action == "exp":
+            _, cat, exp = parts
+            if cat == "watchlist":
+                kb = get_assets_kb(db.get_watchlist(chat_id), "watchlist", exp)
+                sent = context.bot.send_message(chat_id, f"⭐ Обране ({exp}):", reply_markup=kb)
+            elif cat == "forex":
+                kb = InlineKeyboardMarkup([[InlineKeyboardButton(s, callback_data=f"session_forex_{exp}_{s}")] for s in FOREX_SESSIONS] + [[InlineKeyboardButton("⬅️ Назад", callback_data="category_forex")]])
+                sent = context.bot.send_message(chat_id, f"Форекс сесії ({exp}):", reply_markup=kb)
+            else:
+                asset_map = {'crypto': CRYPTO_PAIRS, 'stocks': STOCK_TICKERS, 'commodities': COMMODITIES}
+                kb = get_assets_kb(asset_map.get(cat, []), cat, exp)
+                sent = context.bot.send_message(chat_id, f"Активи {cat} ({exp}):", reply_markup=kb)
+            bot_track_message(context.bot_data, chat_id, sent.message_id)
+
+        elif action == "session":
+            _, _, exp, session = parts
+            sent = context.bot.send_message(chat_id, f"Пари {session}:", reply_markup=get_assets_kb(FOREX_SESSIONS.get(session, []), "forex", exp))
+            bot_track_message(context.bot_data, chat_id, sent.message_id)
+
+        elif action == "analyze":
+            exp = parts[1]
+            symbol = "_".join(parts[2:]) # ФІКС: Підтримка назв з підкресленням
+            loading = context.bot.send_message(chat_id, f"⏳ Аналіз {symbol}...")
+            
+            def on_res(res):
+                _safe_delete(context.bot, chat_id, loading.message_id)
+                msg = _format_signal_message(res, exp)
+                sent = context.bot.send_message(chat_id, msg, parse_mode='Markdown')
+                bot_track_message(context.bot_data, chat_id, sent.message_id)
+                menu(update, context)
+
+            d = get_api_detailed_signal_data(app_state.client, app_state.symbol_cache, symbol, chat_id, exp)
+            d.addBoth(on_res)
+            
+    except Exception as e:
+        logger.exception("Помилка в button_handler")
+        context.bot.send_message(chat_id, f"❌ Сталася помилка: {str(e)}")
+        menu(update, context)
+
+def reset_ui(update, context): update.message.reply_text("Використовуйте МЕНЮ.")
+def symbols_command(update, context): update.message.reply_text(f"Символів: {len(getattr(app_state, 'all_symbol_names', []))}")
