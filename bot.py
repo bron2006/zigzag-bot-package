@@ -26,19 +26,21 @@ def start_telegram_bot():
         updater = Updater(
             token=TELEGRAM_BOT_TOKEN,
             use_context=True,
-            persistence=persistence
+            persistence=persistence,
         )
         app_state.updater = updater
 
         dp = updater.dispatcher
         dp.add_handler(CommandHandler("start",   telegram_ui.start))
         dp.add_handler(CommandHandler("symbols", telegram_ui.symbols_command))
+        dp.add_handler(CommandHandler("stats",   telegram_ui.stats_command))   # НОВЕ
+        dp.add_handler(CommandHandler("live",    telegram_ui.live_command))    # НОВЕ
         dp.add_handler(MessageHandler(Filters.regex('^МЕНЮ$'),         telegram_ui.menu))
         dp.add_handler(MessageHandler(Filters.text & ~Filters.command, telegram_ui.reset_ui))
         dp.add_handler(CallbackQueryHandler(telegram_ui.button_handler))
 
         reactor.callInThread(updater.start_polling)
-        logger.info("Telegram bot запущено (polling у фоновому потоці).")
+        logger.info("Telegram bot запущено. Команди: /start /symbols /stats /live")
         notify_bot_started()
 
     except ConfigError:
@@ -46,4 +48,4 @@ def start_telegram_bot():
     except Exception as e:
         logger.exception("Не вдалося запустити Telegram bot")
         notify_bot_failed(str(e))
-        raise TelegramError(f"Не вдалося запустити Telegram bot: {e}", recoverable=False) from e
+        raise TelegramError(f"Не вдалося запустити: {e}", recoverable=False) from e
