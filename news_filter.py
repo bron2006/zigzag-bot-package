@@ -1,9 +1,8 @@
 import json
 import logging
-import os
 import threading
 import time
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 
 from twisted.internet import reactor
 from twisted.internet.defer import Deferred, succeed
@@ -23,19 +22,9 @@ except Exception as e:
     types = None
     _GENAI_IMPORT_ERROR = e
 
-# Актуальні кандидати моделей. Будемо пробувати по черзі.
-_DEFAULT_MODEL_CANDIDATES = [
-    "gemini-2.0-flash",
-    "gemini-2.0-flash-lite",
-    "gemini-1.5-flash-latest",
-    "gemini-1.5-flash",
-]
-
-_env_models = os.getenv("GEMINI_MODELS", "").strip()
-if _env_models:
-    GEMINI_MODEL_CANDIDATES = [m.strip() for m in _env_models.split(",") if m.strip()]
-else:
-    GEMINI_MODEL_CANDIDATES = list(_DEFAULT_MODEL_CANDIDATES)
+# ФІКСОВАНА МОДЕЛЬ, ЯКУ ТИ ПОПРОСИВ ПОВЕРНУТИ
+_GEMINI_MODEL = "gemini-flash-latest"
+_GEMINI_API_VERSION = "v1beta"
 
 _cache: Dict[str, dict] = {}
 _cache_lock = threading.RLock()
@@ -43,9 +32,6 @@ _client_local = threading.local()
 
 _CACHE_TTL = 600
 _ERROR_CACHE_TTL = 30
-
-_last_working_model = None
-_last_working_model_lock = threading.RLock()
 
 _PROMPT = """You are a financial news risk filter for short-term trading.
 Asset: {pair}
@@ -99,33 +85,32 @@ def _store_cache(pair: str, result: dict, ttl: int) -> dict:
     return dict(payload)
 
 
-def _get_thread_local_client():
+def _build_client():
     if _GENAI_IMPORT_ERROR is not None:
         raise RuntimeError(f"google-genai import failed: {_GENAI_IMPORT_ERROR}")
-
-    client = getattr(_client_local, "client", None)
-    if client is not None:
-        return client
 
     if not GEMINI_API_KEY:
         raise RuntimeError("GEMINI_API_KEY is not configured")
 
-    client = genai.Client(api_key=GEMINI_API_KEY)
+    # ЯВНО ФІКСУЄМО API VERSION
+    try:
+        return genai.Client(
+            api_key=GEMINI_API_KEY,
+            http_options=types.HttpOptions(api_version=_GEMINI_API_VERSION),
+        )
+    except Exception:
+        logger.exception("Не вдалося створити Gemini client з HttpOptions")
+        raise
+
+
+def _get_thread_local_client():
+    client = getattr(_client_local, "client", None)
+    if client is not None:
+        return client
+
+    client = _build_client()
     _client_local.client = client
     return client
-
-
-def _get_model_candidates() -> List[str]:
-    with _last_working_model_lock:
-        if _last_working_model and _last_working_model in GEMINI_MODEL_CANDIDATES:
-            return [_last_working_model] + [m for m in GEMINI_MODEL_CANDIDATES if m != _last_working_model]
-    return list(GEMINI_MODEL_CANDIDATES)
-
-
-def _set_last_working_model(model_name: str) -> None:
-    global _last_working_model
-    with _last_working_model_lock:
-        _last_working_model = model_name
 
 
 def _extract_text(response) -> str:
@@ -154,14 +139,26 @@ def _parse_gemini_payload(raw: str) -> dict:
     cleaned = cleaned.replace("```json", "").replace("```", "").strip()
 
     if not cleaned:
-        return {"verdict": "GO", "reason": "Empty model response", "source": "fallback"}
+        return {
+            "verdict": "GO",
+            "reason": "Empty model response",
+            "source": "fallback",
+            "model": _GEMINI_MODEL,
+            "api_version": _GEMINI_API_VERSION,
+        }
 
     try:
         data = json.loads(cleaned)
         verdict = str(data.get("verdict", "GO")).upper().strip()
         reason = str(data.get("reason", "")).strip()
         verdict = "BLOCK" if verdict == "BLOCK" else "GO"
-        return {"verdict": verdict, "reason": reason, "source": "gemini"}
+        return {
+            "verdict": verdict,
+            "reason": reason,
+            "source": "gemini",
+            "model": _GEMINI_MODEL,
+            "api_version": _GEMINI_API_VERSION,
+        }
     except json.JSONDecodeError:
         upper = cleaned.upper()
         verdict = "BLOCK" if "BLOCK" in upper else "GO"
@@ -169,53 +166,34 @@ def _parse_gemini_payload(raw: str) -> dict:
             "verdict": verdict,
             "reason": cleaned[:240],
             "source": "fallback_parse",
+            "model": _GEMINI_MODEL,
+            "api_version": _GEMINI_API_VERSION,
         }
-
-
-def _is_model_not_found_error(exc: Exception) -> bool:
-    text = str(exc).lower()
-    return (
-        "404" in text
-        or "not_found" in text
-        or "model" in text and "not found" in text
-        or "is not supported for generatecontent" in text
-    )
 
 
 def _call_gemini_sync(pair: str) -> dict:
     client = _get_thread_local_client()
-    last_exc = None
 
-    for model_name in _get_model_candidates():
-        try:
-            logger.info(f"Gemini request for {pair} using model={model_name}")
-            response = client.models.generate_content(
-                model=model_name,
-                contents=_PROMPT.format(pair=pair),
-                config=types.GenerateContentConfig(
-                    max_output_tokens=120,
-                    temperature=0,
-                ),
-            )
+    logger.info(
+        "Gemini request for %s using model=%s api_version=%s",
+        pair,
+        _GEMINI_MODEL,
+        _GEMINI_API_VERSION,
+    )
 
-            raw = _extract_text(response)
-            logger.info(f"Gemini raw response for {pair} [{model_name}]: {raw}")
+    response = client.models.generate_content(
+        model=_GEMINI_MODEL,
+        contents=_PROMPT.format(pair=pair),
+        config=types.GenerateContentConfig(
+            max_output_tokens=120,
+            temperature=0,
+        ),
+    )
 
-            parsed = _parse_gemini_payload(raw)
-            parsed["model"] = model_name
-            _set_last_working_model(model_name)
-            return parsed
+    raw = _extract_text(response)
+    logger.info("Gemini raw response for %s [%s]: %s", pair, _GEMINI_MODEL, raw)
 
-        except Exception as e:
-            last_exc = e
-            if _is_model_not_found_error(e):
-                logger.warning(f"Gemini model not available: {model_name}. Пробую наступну.")
-                continue
-
-            logger.error(f"Gemini hard error for {pair} on model {model_name}: {e}")
-            raise
-
-    raise RuntimeError(f"Жодна Gemini модель не підійшла. Last error: {last_exc}")
+    return _parse_gemini_payload(raw)
 
 
 def get_latest_news_sentiment(pair: str) -> str:
@@ -229,8 +207,10 @@ def get_latest_news_sentiment_async(pair: str) -> Deferred:
     cached = _get_cached(pair)
     if cached:
         logger.debug(
-            f"news_filter cache hit for {pair} "
-            f"(age={_now() - cached.get('ts', 0):.0f}s, source={cached.get('source')})"
+            "news_filter cache hit for %s (age=%ss, source=%s)",
+            pair,
+            int(_now() - cached.get("ts", 0)),
+            cached.get("source"),
         )
         return succeed(cached)
 
@@ -241,7 +221,8 @@ def get_latest_news_sentiment_async(pair: str) -> Deferred:
                 "verdict": "GO",
                 "reason": "GEMINI_API_KEY не налаштований",
                 "source": "fallback_no_key",
-                "model": None,
+                "model": _GEMINI_MODEL,
+                "api_version": _GEMINI_API_VERSION,
             },
             _ERROR_CACHE_TTL,
         )
@@ -258,20 +239,26 @@ def get_latest_news_sentiment_async(pair: str) -> Deferred:
         ttl = _CACHE_TTL if result.get("source") == "gemini" else _ERROR_CACHE_TTL
         cached_result = _store_cache(pair, result, ttl)
         logger.info(
-            f"Gemini [{pair}]: {cached_result['verdict']} — {cached_result.get('reason', '')} "
-            f"(source={cached_result.get('source')}, model={cached_result.get('model')})"
+            "Gemini [%s]: %s — %s (source=%s, model=%s, api_version=%s)",
+            pair,
+            cached_result["verdict"],
+            cached_result.get("reason", ""),
+            cached_result.get("source"),
+            cached_result.get("model"),
+            cached_result.get("api_version"),
         )
         return cached_result
 
     def _on_error(failure):
-        logger.error(f"Gemini error for {pair}: {failure.getErrorMessage()}")
+        logger.error("Gemini error for %s: %s", pair, failure.getErrorMessage())
         return _store_cache(
             pair,
             {
                 "verdict": "GO",
                 "reason": "API error — temporary fail-open",
                 "source": "fallback_error",
-                "model": None,
+                "model": _GEMINI_MODEL,
+                "api_version": _GEMINI_API_VERSION,
             },
             _ERROR_CACHE_TTL,
         )
@@ -294,7 +281,8 @@ def _get_cached_or_fresh_sync(pair: str) -> dict:
                 "verdict": "GO",
                 "reason": "GEMINI_API_KEY не налаштований",
                 "source": "fallback_no_key",
-                "model": None,
+                "model": _GEMINI_MODEL,
+                "api_version": _GEMINI_API_VERSION,
             },
             _ERROR_CACHE_TTL,
         )
@@ -304,14 +292,15 @@ def _get_cached_or_fresh_sync(pair: str) -> dict:
         ttl = _CACHE_TTL if result.get("source") == "gemini" else _ERROR_CACHE_TTL
         return _store_cache(pair, result, ttl)
     except Exception as e:
-        logger.error(f"Gemini sync error for {pair}: {e}")
+        logger.error("Gemini sync error for %s: %s", pair, e)
         return _store_cache(
             pair,
             {
                 "verdict": "GO",
                 "reason": "API error — temporary fail-open",
                 "source": "fallback_error",
-                "model": None,
+                "model": _GEMINI_MODEL,
+                "api_version": _GEMINI_API_VERSION,
             },
             _ERROR_CACHE_TTL,
         )
@@ -331,14 +320,11 @@ def get_cache_stats() -> dict:
         if now - v.get("ts", 0) >= v.get("_ttl", _CACHE_TTL)
     }
 
-    with _last_working_model_lock:
-        last_model = _last_working_model
-
     return {
         "fresh": len(fresh),
         "stale": len(stale),
         "total": len(items),
-        "candidate_models": list(GEMINI_MODEL_CANDIDATES),
-        "last_working_model": last_model,
+        "model": _GEMINI_MODEL,
+        "api_version": _GEMINI_API_VERSION,
         "sdk_ok": _GENAI_IMPORT_ERROR is None,
     }
