@@ -1,69 +1,80 @@
 # analysis.py
-#
-# ВИПРАВЛЕННЯ 1: sklearn warning — _prepare_features тепер передає
-#                pandas DataFrame з іменованими колонками.
-# ВИПРАВЛЕННЯ 2: Gemini викликається через get_latest_news_sentiment_async()
-#                — не блокує reactor.
-# ВИПРАВЛЕННЯ 3: Multi-timeframe підтвердження — M1 + M5 паралельно.
-#                Сигнал надсилається тільки якщо обидва погоджуються.
-# ВИПРАВЛЕННЯ 4: reason від Gemini включається в результат сигналу.
-
 import logging
 import time
-import pandas as pd
-import numpy as np
-import pandas_ta as ta
-from typing import Optional
-from twisted.internet.defer import Deferred, DeferredList
-from twisted.internet import reactor
+from typing import Optional, Tuple
 
-from ctrader_open_api.messages.OpenApiMessages_pb2 import (
-    ProtoOAGetTrendbarsReq, ProtoOAGetTrendbarsRes
-)
-from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOATrendbarPeriod as TrendbarPeriod
-from state import app_state
-from price_utils import resolve_price_divisor
+import pandas as pd
+import pandas_ta as ta
+from twisted.internet import reactor
+from twisted.internet.defer import Deferred, DeferredList
+from twisted.internet.threads import deferToThreadPool
+
 import ml_models
 import news_filter
+from ctrader_open_api.messages.OpenApiMessages_pb2 import (
+    ProtoOAGetTrendbarsReq,
+    ProtoOAGetTrendbarsRes,
+)
+from ctrader_open_api.messages.OpenApiModelMessages_pb2 import (
+    ProtoOATrendbarPeriod as TrendbarPeriod,
+)
+from price_utils import resolve_price_divisor
+from state import app_state
 
 logger = logging.getLogger("analysis")
 
 PERIOD_MAP = {
-    "1m":  TrendbarPeriod.M1,
-    "5m":  TrendbarPeriod.M5,
+    "1m": TrendbarPeriod.M1,
+    "5m": TrendbarPeriod.M5,
     "15m": TrendbarPeriod.M15,
 }
 
-# ---------------------------------------------------------------------------
-# ВИПРАВЛЕННЯ: _prepare_features повертає DataFrame з іменами колонок
-# ---------------------------------------------------------------------------
-
 FEATURE_NAMES = ["ATRr_14", "ADX_14", "RSI_14", "EMA_50", "EMA_200"]
 
+
+def _blocking_pool():
+    return app_state.blocking_pool or reactor.getThreadPool()
+
+
+def _normalize_pair(pair: str) -> str:
+    return pair.replace("/", "").upper()
+
+
+def _resolve_symbol_details(symbol_cache, pair: str):
+    norm = _normalize_pair(pair)
+    with_slash = f"{norm[:3]}/{norm[3:]}" if len(norm) >= 6 else None
+
+    for candidate in [
+        pair,
+        pair.upper(),
+        norm,
+        with_slash,
+        pair.replace("/", ""),
+        pair.replace("/", "").upper(),
+    ]:
+        if candidate and candidate in symbol_cache:
+            return symbol_cache[candidate]
+
+    return app_state.get_symbol_details(norm)
+
+
 def _prepare_features(df: pd.DataFrame) -> Optional[pd.DataFrame]:
-    """
-    Розраховує технічні індикатори і повертає pd.DataFrame з іменованими
-    колонками — щоб sklearn StandardScaler не видавав UserWarning.
-    """
     df = df.copy()
+
     try:
         df.ta.rsi(length=14, append=True)
         df.ta.adx(length=14, append=True)
         df.ta.atr(length=14, append=True)
-        df.ta.ema(length=50,  append=True)
+        df.ta.ema(length=50, append=True)
         df.ta.ema(length=200, append=True)
 
         latest = df.tail(1)
-
-        # Перевіряємо що всі колонки є
         missing = [col for col in FEATURE_NAMES if col not in latest.columns]
         if missing:
             logger.warning(f"Відсутні колонки індикаторів: {missing}")
             return None
 
-        # Повертаємо DataFrame з іменами — sklearn більше не скаржиться
         features_df = latest[FEATURE_NAMES].copy()
-
         if features_df.isnull().any().any():
             logger.debug("NaN в фічах — недостатньо барів для індикаторів")
             return None
@@ -75,15 +86,7 @@ def _prepare_features(df: pd.DataFrame) -> Optional[pd.DataFrame]:
         return None
 
 
-# ---------------------------------------------------------------------------
-# Технічний аналіз одного таймфрейму (повертає score 0-100)
-# ---------------------------------------------------------------------------
-
-def _run_technical_analysis(df: pd.DataFrame) -> tuple[int, str]:
-    """
-    Повертає (score, verdict) на основі ML моделі.
-    score: 0-100, verdict: BUY | SELL | NEUTRAL
-    """
+def _run_technical_analysis(df: pd.DataFrame) -> Tuple[int, str]:
     if df is None or df.empty or len(df) < 250:
         return 50, "NEUTRAL"
 
@@ -107,133 +110,193 @@ def _run_technical_analysis(df: pd.DataFrame) -> tuple[int, str]:
             verdict = "NEUTRAL"
 
         return score, verdict
-
     except Exception as e:
         logger.error(f"ML inference error: {e}")
         return 50, "NEUTRAL"
 
 
-# ---------------------------------------------------------------------------
-# ВИПРАВЛЕННЯ: Multi-timeframe підтвердження (M1 + M5 паралельно)
-# ---------------------------------------------------------------------------
+def _select_timeframes(requested_timeframe: str) -> tuple[str, str]:
+    requested = (requested_timeframe or "5m").strip()
+    if requested == "15m":
+        return "5m", "15m"
+    if requested == "1m":
+        return "1m", "5m"
+    return "1m", "5m"
+
+
+def _combine_verdicts_sync(
+    symbol: str,
+    requested_timeframe: str,
+    tf_a: str,
+    df_a: pd.DataFrame,
+    tf_b: str,
+    df_b: pd.DataFrame,
+) -> dict:
+    score_a, verdict_a = _run_technical_analysis(df_a)
+    score_b, verdict_b = _run_technical_analysis(df_b)
+
+    logger.info(
+        f"[{_normalize_pair(symbol)}] {tf_a}: {verdict_a}({score_a}) | "
+        f"{tf_b}: {verdict_b}({score_b})"
+    )
+
+    if verdict_a == "BUY" and verdict_b in ("BUY", "NEUTRAL"):
+        final_verdict = "BUY"
+        final_score = score_a
+    elif verdict_a == "SELL" and verdict_b in ("SELL", "NEUTRAL"):
+        final_verdict = "SELL"
+        final_score = score_a
+    elif verdict_a == verdict_b and verdict_a != "NEUTRAL":
+        final_verdict = verdict_a
+        final_score = int((score_a + score_b) / 2)
+    else:
+        final_verdict = "NEUTRAL"
+        final_score = 50
+
+    last_close = float(df_a["Close"].iloc[-1]) if df_a is not None and not df_a.empty else 0.0
+
+    reasons = [
+        f"{tf_a.upper()}: {verdict_a} ({score_a}%) | {tf_b.upper()}: {verdict_b} ({score_b}%)"
+    ]
+
+    return {
+        "pair": symbol,
+        "price": last_close,
+        "verdict_text": final_verdict,
+        "score": final_score,
+        "reasons": reasons,
+        "ts": time.time(),
+        "timeframe": requested_timeframe,
+        "sentiment": "GO",
+        "is_trade_allowed": final_verdict in ("BUY", "SELL"),
+    }
+
 
 def get_api_detailed_signal_data(client, symbol_cache, symbol, user_id, timeframe="5m"):
-    """
-    Запитує дані для M1 і M5 паралельно через DeferredList.
-    Сигнал BUY/SELL надсилається тільки якщо обидва ТФ погоджуються.
-    Якщо M1=BUY але M5=SELL → NEUTRAL (суперечність).
-    """
-    pair_norm = symbol.replace("/", "")
-    main_d    = Deferred()
+    pair_norm = _normalize_pair(symbol)
+    main_d = Deferred()
 
-    # Паралельний запит двох таймфреймів
-    d_m1 = get_market_data(client, symbol_cache, pair_norm, "1m",  300)
-    d_m5 = get_market_data(client, symbol_cache, pair_norm, "5m",  300)
+    tf_a, tf_b = _select_timeframes(timeframe)
+    d_a = get_market_data(client, symbol_cache, pair_norm, tf_a, 300)
+    d_b = get_market_data(client, symbol_cache, pair_norm, tf_b, 300)
 
-    dl = DeferredList([d_m1, d_m5], consumeErrors=True)
+    dl = DeferredList([d_a, d_b], consumeErrors=True)
 
-    def process_both(results):
+    def process_market_data(results):
         try:
-            ok_m1, df_m1 = results[0]
-            ok_m5, df_m5 = results[1]
+            ok_a, df_a = results[0]
+            ok_b, df_b = results[1]
 
-            if not ok_m1 or not ok_m5:
-                main_d.callback({
-                    "pair": symbol, "verdict_text": "WAIT", "price": 0.0,
-                    "score": 50, "reasons": ["Не вдалося завантажити дані"],
-                    "timeframe": timeframe
-                })
+            if not ok_a or not ok_b:
+                main_d.callback(
+                    {
+                        "pair": symbol,
+                        "verdict_text": "WAIT",
+                        "price": 0.0,
+                        "score": 50,
+                        "reasons": ["Не вдалося завантажити дані"],
+                        "timeframe": timeframe,
+                        "sentiment": "GO",
+                        "is_trade_allowed": False,
+                    }
+                )
                 return
 
-            score_m1, verdict_m1 = _run_technical_analysis(df_m1 if ok_m1 else None)
-            score_m5, verdict_m5 = _run_technical_analysis(df_m5 if ok_m5 else None)
+            d_cpu = deferToThreadPool(
+                reactor,
+                _blocking_pool(),
+                _combine_verdicts_sync,
+                symbol,
+                timeframe,
+                tf_a,
+                df_a,
+                tf_b,
+                df_b,
+            )
 
-            logger.info(f"[{pair_norm}] M1: {verdict_m1}({score_m1}) | M5: {verdict_m5}({score_m5})")
+            def on_cpu_result(base_result: dict):
+                news_d = news_filter.get_latest_news_sentiment_async(pair_norm)
 
-            # Multi-TF логіка:
-            # BUY  — обидва погоджуються на ріст
-            # SELL — обидва погоджуються на падіння
-            # NEUTRAL — суперечність або обидва нейтральні
-            if verdict_m1 == "BUY" and verdict_m5 in ("BUY", "NEUTRAL"):
-                final_verdict = "BUY"
-                final_score   = score_m1
-            elif verdict_m1 == "SELL" and verdict_m5 in ("SELL", "NEUTRAL"):
-                final_verdict = "SELL"
-                final_score   = score_m1
-            elif verdict_m1 == verdict_m5 and verdict_m1 != "NEUTRAL":
-                final_verdict = verdict_m1
-                final_score   = (score_m1 + score_m5) // 2
-            else:
-                final_verdict = "NEUTRAL"
-                final_score   = 50
+                def apply_news(news_result):
+                    result = dict(base_result)
+                    news_verdict = news_result.get("verdict", "GO")
+                    news_reason = news_result.get("reason", "")
+                    result["sentiment"] = news_verdict
 
-            last_close = float(df_m1['Close'].iloc[-1]) if ok_m1 and not df_m1.empty else 0.0
-            reasons    = [f"M1: {verdict_m1} ({score_m1}%) | M5: {verdict_m5} ({score_m5}%)"]
+                    if news_verdict == "BLOCK":
+                        result["is_trade_allowed"] = False
+                        if result.get("verdict_text") in ("BUY", "SELL"):
+                            result["verdict_text"] = "NEWS_WAIT"
 
-            # ВИПРАВЛЕННЯ: async Gemini — не блокує reactor
-            news_d = news_filter.get_latest_news_sentiment_async(pair_norm)
+                        result["reasons"].append(
+                            f"ШІ: BLOCK — {news_reason}"
+                            if news_reason
+                            else "ШІ: Ризиковані новини. Вхід заблоковано."
+                        )
+                    else:
+                        result["reasons"].append(
+                            f"ШІ: GO — {news_reason}"
+                            if news_reason
+                            else "ШІ: Новини ок"
+                        )
+                        result["is_trade_allowed"] = result.get("verdict_text") in ("BUY", "SELL")
 
-            def apply_news(news_result):
-                nonlocal final_verdict, reasons
-                news_verdict = news_result.get("verdict", "GO")
-                news_reason  = news_result.get("reason", "")
+                    result["ts"] = time.time()
+                    main_d.callback(result)
 
-                if news_verdict == "BLOCK":
-                    logger.info(f"[{pair_norm}] BLOCKED by news: {news_reason}")
-                    if final_verdict != "NEUTRAL":
-                        final_verdict = "NEWS_WAIT"
-                    reasons.append(f"ШІ: BLOCK — {news_reason}" if news_reason else "ШІ: Ризиковані новини. Вхід заборонено.")
-                else:
-                    news_text = f"ШІ: GO — {news_reason}" if news_reason else f"ШІ: Новини ок. Score: {final_score}%"
-                    reasons.append(news_text)
+                def news_error(failure):
+                    logger.warning(
+                        f"News filter error for {pair_norm}: {failure.getErrorMessage()}"
+                    )
+                    result = dict(base_result)
+                    result["sentiment"] = "GO"
+                    result["reasons"].append("ШІ: недоступний, аналіз без новин")
+                    result["is_trade_allowed"] = result.get("verdict_text") in ("BUY", "SELL")
+                    result["ts"] = time.time()
+                    main_d.callback(result)
 
-                main_d.callback({
-                    "pair":         symbol,
-                    "price":        last_close,
-                    "verdict_text": final_verdict,
-                    "score":        final_score,
-                    "reasons":      reasons,
-                    "ts":           time.time(),
-                    "timeframe":    timeframe,
-                    "sentiment":    news_verdict,
-                })
+                news_d.addCallbacks(apply_news, news_error)
 
-            def news_error(failure):
-                logger.warning(f"News filter error for {pair_norm}: {failure.getErrorMessage()}")
-                reasons.append("ШІ: недоступний, аналіз без новин")
-                main_d.callback({
-                    "pair":         symbol,
-                    "price":        last_close,
-                    "verdict_text": final_verdict,
-                    "score":        final_score,
-                    "reasons":      reasons,
-                    "ts":           time.time(),
-                    "timeframe":    timeframe,
-                    "sentiment":    "GO",
-                })
+            def on_cpu_error(failure):
+                logger.error(f"CPU analysis error for {symbol}: {failure.getErrorMessage()}")
+                main_d.callback(
+                    {
+                        "pair": symbol,
+                        "verdict_text": "ERROR",
+                        "price": 0.0,
+                        "score": 50,
+                        "reasons": [failure.getErrorMessage()],
+                        "timeframe": timeframe,
+                        "sentiment": "GO",
+                        "is_trade_allowed": False,
+                    }
+                )
 
-            news_d.addCallback(apply_news)
-            news_d.addErrback(news_error)
+            d_cpu.addCallbacks(on_cpu_result, on_cpu_error)
 
         except Exception as e:
             logger.exception(f"Analysis error for {symbol}")
-            main_d.callback({
-                "pair": symbol, "verdict_text": "ERROR",
-                "score": 50, "reasons": [str(e)], "timeframe": timeframe
-            })
+            main_d.callback(
+                {
+                    "pair": symbol,
+                    "verdict_text": "ERROR",
+                    "price": 0.0,
+                    "score": 50,
+                    "reasons": [str(e)],
+                    "timeframe": timeframe,
+                    "sentiment": "GO",
+                    "is_trade_allowed": False,
+                }
+            )
 
-    dl.addCallback(process_both)
+    dl.addCallback(process_market_data)
     return main_d
 
-
-# ---------------------------------------------------------------------------
-# Завантаження ринкових даних
-# ---------------------------------------------------------------------------
 
 def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: int):
     d = Deferred()
 
-    symbol_details = symbol_cache.get(norm_pair)
+    symbol_details = _resolve_symbol_details(symbol_cache, norm_pair)
     if not symbol_details:
         reactor.callLater(0, d.errback, Exception(f"Символ {norm_pair} не знайдено."))
         return d
@@ -243,9 +306,9 @@ def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: in
         reactor.callLater(0, d.errback, Exception(f"Невідомий таймфрейм: {period}"))
         return d
 
-    now      = int(time.time() * 1000)
-    seconds  = {'1m': 60, '5m': 300, '15m': 900}.get(period, 300)
-    from_ts  = now - (count * seconds * 1000)
+    now = int(time.time() * 1000)
+    seconds = {"1m": 60, "5m": 300, "15m": 900}.get(period, 300)
+    from_ts = now - (count * seconds * 1000)
 
     req = ProtoOAGetTrendbarsReq(
         ctidTraderAccountId=client._client.account_id,
@@ -263,20 +326,23 @@ def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: in
             res.ParseFromString(msg.payload)
 
             if not res.trendbar:
-                return d.callback(pd.DataFrame())
+                d.callback(pd.DataFrame())
+                return
 
-            div  = resolve_price_divisor(symbol_details)
+            div = resolve_price_divisor(symbol_details)
             bars = [
                 {
-                    'ts':    pd.to_datetime(b.utcTimestampInMinutes * 60, unit='s', utc=True),
-                    'Open':  (b.low + b.deltaOpen)  / div,
-                    'High':  (b.low + b.deltaHigh)  / div,
-                    'Low':    b.low                  / div,
-                    'Close': (b.low + b.deltaClose)  / div,
+                    "ts": pd.to_datetime(b.utcTimestampInMinutes * 60, unit="s", utc=True),
+                    "Open": (b.low + b.deltaOpen) / div,
+                    "High": (b.low + b.deltaHigh) / div,
+                    "Low": b.low / div,
+                    "Close": (b.low + b.deltaClose) / div,
                 }
                 for b in res.trendbar
             ]
-            d.callback(pd.DataFrame(bars).sort_values('ts'))
+
+            df = pd.DataFrame(bars).sort_values("ts")
+            d.callback(df)
 
         except Exception as e:
             d.errback(e)

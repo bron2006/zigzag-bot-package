@@ -1,45 +1,42 @@
 # ctrader.py
 import logging
 import time
+from typing import Optional
+
 from twisted.internet import reactor
-from state import app_state
+
 import config
-from config import STOCK_TICKERS, get_ct_client_id, get_ct_client_secret
-from spotware_connect import SpotwareConnect
-from ctrader_open_api.messages.OpenApiMessages_pb2 import (
-    ProtoOASymbolsListRes, ProtoOASubscribeSpotsReq, ProtoOASpotEvent
-)
 import scanner
-from price_utils import resolve_price_divisor
-from errors import safe_twisted, SpotEventError
+from config import STOCK_TICKERS, get_ct_client_id, get_ct_client_secret
+from ctrader_open_api.messages.OpenApiMessages_pb2 import (
+    ProtoOASpotEvent,
+    ProtoOASubscribeSpotsReq,
+    ProtoOASymbolsListRes,
+)
+from errors import SpotEventError, safe_twisted
 from notifier import notify_admin
+from price_utils import resolve_price_divisor
+from spotware_connect import SpotwareConnect
+from state import app_state
 
 logger = logging.getLogger("ctrader")
 
-# ---------------------------------------------------------------------------
-# Константи
-# ---------------------------------------------------------------------------
-
 _RECONNECT_BASE_DELAY = 5
-_RECONNECT_MAX_DELAY  = 120
-_RECONNECT_MAX_TRIES  = 10
-_STALE_THRESHOLD      = 300
+_RECONNECT_MAX_DELAY = 120
+_RECONNECT_MAX_TRIES = 10
+
+_STALE_THRESHOLD = 300
 _STALE_CHECK_INTERVAL = 60
 
-# ---------------------------------------------------------------------------
-# Внутрішній стан
-# ---------------------------------------------------------------------------
-
-_reconnect_attempt   : int  = 0
-_reconnect_scheduled : bool = False
-_subscribed_symbols  : set  = set()
+_reconnect_attempt: int = 0
+_reconnect_scheduled: bool = False
+_subscribed_symbols: set[str] = set()
+_stale_check_call = None
 
 
-# ---------------------------------------------------------------------------
-# Spot event handler
-# ВИПРАВЛЕНО: підписка тепер на "spot_event" — саме такий івент
-# емітує SpotwareConnect після нашого виправлення.
-# ---------------------------------------------------------------------------
+def _normalize_pair(pair: str) -> str:
+    return pair.replace("/", "").upper()
+
 
 @safe_twisted(
     "spot_event",
@@ -55,66 +52,55 @@ def _on_spot_event(event: ProtoOASpotEvent) -> None:
     if not name:
         return
 
-    details = app_state.symbol_cache.get(name)
+    details = app_state.get_symbol_details(name)
     if not details:
         raise SpotEventError(
-            f"Немає кешу для symbolId={event.symbolId}", symbol_id=event.symbolId
+            f"Немає кешу для symbolId={event.symbolId}",
+            symbol_id=event.symbolId,
         )
 
     div = resolve_price_divisor(details)
     bid = event.bid / div if event.HasField("bid") else None
     ask = event.ask / div if event.HasField("ask") else None
-    mid = (bid + ask) / 2.0 if bid and ask else None
+    mid = (bid + ask) / 2.0 if bid is not None and ask is not None else bid or ask
 
-    app_state.live_prices[name] = {
-        "bid": bid, "ask": ask, "mid": mid, "ts": time.time()
+    pair_norm = _normalize_pair(name)
+    payload = {
+        "bid": bid,
+        "ask": ask,
+        "mid": mid,
+        "ts": time.time(),
     }
 
+    app_state.update_live_price(pair_norm, payload)
 
-# ---------------------------------------------------------------------------
-# Підписка на ціни
-# ВИПРАВЛЕНО: пошук символу у кеші — пробуємо кілька варіантів назви
-# (BTCUSD, BTC/USD, btcusd) щоб знайти незалежно від формату.
-# ---------------------------------------------------------------------------
+    app_state.publish_sse(
+        {
+            "type": "price",
+            "pair": pair_norm,
+            "bid": bid,
+            "ask": ask,
+            "mid": mid,
+            "ts": payload["ts"],
+        }
+    )
+
 
 def _find_in_cache(pair: str):
-    """
-    Шукає символ у symbol_cache незалежно від формату назви.
-    Пробує: BTCUSD → BTC/USD → btcusd → і навпаки.
-    """
-    pair_no_slash  = pair.replace("/", "")
-    pair_with_slash = None
-    # Спробуємо вставити "/" після 3 символів (EURUSD → EUR/USD)
-    if len(pair_no_slash) >= 6:
-        pair_with_slash = pair_no_slash[:3] + "/" + pair_no_slash[3:]
-
-    for variant in [pair_no_slash, pair, pair_with_slash, pair.upper(), pair_no_slash.upper()]:
-        if variant and variant in app_state.symbol_cache:
-            return app_state.symbol_cache[variant]
-    return None
+    return app_state.get_symbol_details(pair)
 
 
 def start_price_subscriptions() -> None:
-    """
-    Збирає всі активи з поточного стану сканерів і підписується
-    лише на нові котирування. Безпечно викликати повторно.
-    """
     global _subscribed_symbols
 
     if not app_state.SYMBOLS_LOADED:
         logger.warning("start_price_subscriptions: символи ще не завантажені, відкладаємо на 5s")
-        try:
-            reactor.callLater(5, start_price_subscriptions)
-        except Exception:
-            logger.exception("Не вдалося відкласти start_price_subscriptions")
+        reactor.callLater(5, start_price_subscriptions)
         return
 
-    if not app_state.client or not app_state.client._client.account_id:
+    if not app_state.client or not getattr(app_state.client._client, "account_id", None):
         logger.warning("start_price_subscriptions: client не готовий, відкладаємо на 5s")
-        try:
-            reactor.callLater(5, start_price_subscriptions)
-        except Exception:
-            logger.exception("Не вдалося відкласти start_price_subscriptions")
+        reactor.callLater(5, start_price_subscriptions)
         return
 
     try:
@@ -123,8 +109,8 @@ def start_price_subscriptions() -> None:
         logger.exception("Не вдалося зібрати активи для підписки")
         scanner_assets = []
 
-    all_assets = sorted(set(scanner_assets + STOCK_TICKERS))
-    new_assets = [p for p in all_assets if p.replace("/", "") not in _subscribed_symbols]
+    all_assets = sorted({_normalize_pair(p) for p in (scanner_assets + STOCK_TICKERS)})
+    new_assets = [p for p in all_assets if p not in _subscribed_symbols]
 
     if not new_assets:
         logger.info("start_price_subscriptions: всі активи вже підписані.")
@@ -136,36 +122,34 @@ def start_price_subscriptions() -> None:
     )
 
     for i, pair in enumerate(new_assets):
-        def sub(p=pair):
-            pair_norm = p.replace("/", "")
-            details   = _find_in_cache(p)   # ← ВИПРАВЛЕНО: використовуємо розумний пошук
-            if details:
-                try:
-                    req = ProtoOASubscribeSpotsReq(
-                        ctidTraderAccountId=app_state.client._client.account_id,
-                        symbolId=[details.symbolId]
-                    )
-                    app_state.client.send(req)
-                    _subscribed_symbols.add(pair_norm)
-                    logger.debug(f"Підписано: {pair_norm} (symbolId={details.symbolId})")
-                except Exception:
-                    logger.exception(f"Помилка підписки на {pair_norm}")
-            else:
-                # Логуємо доступні символи щоб допомогти відлагодженню
-                available = [k for k in list(app_state.symbol_cache.keys())[:10]]
-                logger.warning(
-                    f"Символ '{pair_norm}' не знайдено в кеші. "
-                    f"Приклади доступних: {available}"
-                )
-        try:
-            reactor.callLater(i * 0.1, sub)
-        except Exception:
-            logger.exception(f"Не вдалося запланувати підписку для {pair}")
+        reactor.callLater(i * 0.1, _subscribe_one_asset, pair)
 
 
-# ---------------------------------------------------------------------------
-# Reconnect з exponential backoff
-# ---------------------------------------------------------------------------
+def _subscribe_one_asset(pair_norm: str) -> None:
+    details = _find_in_cache(pair_norm)
+    if not details:
+        available = list(app_state.symbol_cache.keys())[:10]
+        logger.warning(
+            f"Символ '{pair_norm}' не знайдено в кеші. "
+            f"Приклади доступних: {available}"
+        )
+        return
+
+    try:
+        req = ProtoOASubscribeSpotsReq(
+            ctidTraderAccountId=app_state.client._client.account_id,
+            symbolId=[details.symbolId],
+        )
+        app_state.client.send(req).addErrback(
+            lambda failure, pair=pair_norm: logger.error(
+                f"Помилка підписки на {pair}: {failure.getErrorMessage()}"
+            )
+        )
+        _subscribed_symbols.add(pair_norm)
+        logger.debug(f"Підписано: {pair_norm} (symbolId={details.symbolId})")
+    except Exception:
+        logger.exception(f"Помилка підписки на {pair_norm}")
+
 
 def _schedule_reconnect() -> None:
     global _reconnect_scheduled, _reconnect_attempt
@@ -175,21 +159,22 @@ def _schedule_reconnect() -> None:
         return
 
     if _reconnect_attempt >= _RECONNECT_MAX_TRIES:
-        msg = f"🛑 cTrader: вичерпано {_RECONNECT_MAX_TRIES} спроб реконнекту. Потрібне ручне втручання."
+        msg = (
+            f"🛑 cTrader: вичерпано {_RECONNECT_MAX_TRIES} спроб реконнекту. "
+            "Потрібне ручне втручання."
+        )
         logger.critical(msg)
         notify_admin(msg, alert_key="ctrader_reconnect_exhausted")
         return
 
     delay = min(_RECONNECT_BASE_DELAY * (2 ** _reconnect_attempt), _RECONNECT_MAX_DELAY)
-    _reconnect_attempt  += 1
+    _reconnect_attempt += 1
     _reconnect_scheduled = True
-    logger.warning(f"Reconnect через {delay}s (спроба {_reconnect_attempt}/{_RECONNECT_MAX_TRIES})")
 
-    try:
-        reactor.callLater(delay, _do_reconnect)
-    except Exception:
-        logger.exception("Не вдалося запланувати reconnect")
-        _reconnect_scheduled = False
+    logger.warning(
+        f"Reconnect через {delay}s (спроба {_reconnect_attempt}/{_RECONNECT_MAX_TRIES})"
+    )
+    reactor.callLater(delay, _do_reconnect)
 
 
 def _do_reconnect() -> None:
@@ -198,10 +183,17 @@ def _do_reconnect() -> None:
     _reconnect_scheduled = False
     logger.info(f"Виконую reconnect #{_reconnect_attempt}...")
 
-    app_state.SYMBOLS_LOADED = False
-    app_state.symbol_cache.clear()
-    app_state.symbol_id_map.clear()
+    _cancel_stale_check()
+
+    old_client = app_state.client
+    app_state.clear_symbol_state()
     _subscribed_symbols = set()
+
+    if old_client:
+        try:
+            old_client.stop()
+        except Exception:
+            logger.exception("Не вдалося зупинити старий cTrader client")
 
     try:
         start_ctrader_client()
@@ -214,31 +206,27 @@ def _on_ctrader_disconnected(reason: str) -> None:
     msg = f"⚡ cTrader відключився: {reason}"
     logger.error(msg)
     notify_admin(msg, alert_key="ctrader_disconnected")
-    app_state.SYMBOLS_LOADED = False
+    app_state.mark_symbols_loaded(False)
     _schedule_reconnect()
 
 
-# ---------------------------------------------------------------------------
-# Перевірка застарілих цін
-# ---------------------------------------------------------------------------
-
 def _check_stale_prices() -> None:
+    _schedule_stale_check()
+
     if not app_state.SYMBOLS_LOADED:
-        _schedule_stale_check()
         return
 
-    prices = app_state.live_prices
+    prices = app_state.get_live_prices_snapshot()
     if not prices:
         if _subscribed_symbols:
             logger.warning(
                 f"Є {len(_subscribed_symbols)} підписок але live_prices порожній — "
                 "можливо з'єднання мертве"
             )
-        _schedule_stale_check()
         return
 
-    now         = time.time()
-    stale       = [n for n, d in prices.items() if (now - d.get("ts", 0)) > _STALE_THRESHOLD]
+    now = time.time()
+    stale = [n for n, d in prices.items() if (now - d.get("ts", 0)) > _STALE_THRESHOLD]
     fresh_count = len(prices) - len(stale)
     logger.debug(f"Stale check: {fresh_count} свіжих, {len(stale)} застарілих")
 
@@ -253,30 +241,53 @@ def _check_stale_prices() -> None:
     elif stale:
         logger.warning(f"Застарілі: {', '.join(stale[:10])}")
 
-    _schedule_stale_check()
-
 
 def _schedule_stale_check() -> None:
-    try:
-        reactor.callLater(_STALE_CHECK_INTERVAL, _check_stale_prices)
-    except Exception:
-        logger.exception("Не вдалося запланувати перевірку stale цін")
+    global _stale_check_call
+
+    if _stale_check_call and _stale_check_call.active():
+        return
+
+    _stale_check_call = reactor.callLater(_STALE_CHECK_INTERVAL, _check_stale_prices)
 
 
-# ---------------------------------------------------------------------------
-# Callbacks від SpotwareConnect
-# ---------------------------------------------------------------------------
+def _cancel_stale_check() -> None:
+    global _stale_check_call
+
+    if _stale_check_call and _stale_check_call.active():
+        try:
+            _stale_check_call.cancel()
+        except Exception:
+            logger.exception("Не вдалося скасувати stale check")
+    _stale_check_call = None
+
 
 def _on_symbols_loaded(raw) -> None:
     res = ProtoOASymbolsListRes()
     res.ParseFromString(raw.payload)
+
+    app_state.clear_symbol_state()
+
     for s in res.symbol:
         app_state.symbol_cache[s.symbolName] = s
-        app_state.symbol_id_map[s.symbolId]  = s.symbolName
-    app_state.SYMBOLS_LOADED = True
-    logger.info(f"Символи завантажено: {len(app_state.symbol_cache)}")
+        app_state.symbol_id_map[s.symbolId] = s.symbolName
+        app_state.client.symbol_map[s.symbolName] = s.symbolId
 
-    # Логуємо кілька прикладів щоб бачити формат назв у кеші
+        norm = _normalize_pair(s.symbolName)
+        if norm not in app_state.symbol_cache:
+            app_state.symbol_cache[norm] = s
+
+        if len(norm) >= 6:
+            slash = f"{norm[:3]}/{norm[3:]}"
+            if slash not in app_state.symbol_cache:
+                app_state.symbol_cache[slash] = s
+
+    app_state.all_symbol_names = sorted(
+        {k for k in app_state.symbol_cache.keys() if isinstance(k, str)}
+    )
+    app_state.mark_symbols_loaded(True)
+
+    logger.info(f"Символи завантажено: {len(res.symbol)}")
     sample = list(app_state.symbol_cache.keys())[:15]
     logger.info(f"Приклади назв символів у кеші: {sample}")
 
@@ -285,27 +296,41 @@ def _on_symbols_loaded(raw) -> None:
 
 def on_ctrader_ready() -> None:
     global _reconnect_attempt
+
     logger.info("cTrader авторизований і готовий.")
     _reconnect_attempt = 0
-    reactor.callLater(_STALE_CHECK_INTERVAL, _check_stale_prices)
-    app_state.client.get_all_symbols().addCallback(_on_symbols_loaded)
+    _cancel_stale_check()
+    _schedule_stale_check()
 
+    d = app_state.client.get_all_symbols()
+    d.addCallback(_on_symbols_loaded)
+    d.addErrback(
+        lambda failure: logger.error(
+            f"Не вдалося завантажити символи: {failure.getErrorMessage()}"
+        )
+    )
 
-# ---------------------------------------------------------------------------
-# Точка входу
-# ---------------------------------------------------------------------------
 
 def start_ctrader_client() -> None:
-    client_id     = get_ct_client_id()
+    client_id = get_ct_client_id()
     client_secret = get_ct_client_secret()
 
     if not client_id or not client_secret:
         from errors import ConfigError
-        raise ConfigError("CTRADER_CLIENT_ID або CTRADER_CLIENT_SECRET не налаштовані")
+        raise ConfigError("CT_CLIENT_ID або CT_CLIENT_SECRET не налаштовані")
+
+    old_client = app_state.client
+    if old_client:
+        try:
+            old_client.stop()
+        except Exception:
+            logger.exception("Не вдалося зупинити попередній cTrader client")
 
     client = SpotwareConnect(client_id, client_secret)
     app_state.client = client
-    client.on("ready",      on_ctrader_ready)
-    client.on("spot_event", _on_spot_event)   # ← тепер це працює після виправлення emit
-    client.on("error",      lambda reason: _on_ctrader_disconnected(str(reason)))
+
+    client.on("ready", on_ctrader_ready)
+    client.on("spot_event", _on_spot_event)
+    client.on("error", lambda reason: _on_ctrader_disconnected(str(reason)))
+
     reactor.callWhenRunning(client.start)

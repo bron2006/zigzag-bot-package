@@ -1,19 +1,26 @@
-# spotware_connect.py
 import logging
+import threading
+from typing import Any, Callable, Dict, List, Optional
+
 import requests
-from twisted.internet import reactor
+from twisted.internet import defer, reactor
 from twisted.internet.defer import Deferred, TimeoutError
+from twisted.internet.threads import deferToThreadPool
+from twisted.python.failure import Failure
+
+from config import get_ctrader_refresh_token, get_demo_account_id
 from ctrader_open_api.client import Client as SpotwareClientBase
-from ctrader_open_api.tcpProtocol import TcpProtocol
 from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import ProtoMessage
 from ctrader_open_api.messages.OpenApiMessages_pb2 import (
-    ProtoOAApplicationAuthReq, ProtoOAApplicationAuthRes,
-    ProtoOAAccountAuthReq, ProtoOAAccountAuthRes,
-    ProtoOASymbolsListReq, ProtoOASymbolsListRes,
-    ProtoOAErrorRes, ProtoOASpotEvent
+    ProtoOAAccountAuthReq,
+    ProtoOAAccountAuthRes,
+    ProtoOAApplicationAuthReq,
+    ProtoOAErrorRes,
+    ProtoOASpotEvent,
+    ProtoOASymbolsListReq,
 )
 from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOAPayloadType
-from config import get_demo_account_id, get_ctrader_refresh_token
+from ctrader_open_api.tcpProtocol import TcpProtocol
 from state import app_state
 
 logger = logging.getLogger(__name__)
@@ -21,190 +28,258 @@ logger = logging.getLogger(__name__)
 TOKEN_REFRESH_URL = "https://connect.spotware.com/apps/token"
 
 
+def _blocking_pool():
+    return app_state.blocking_pool or reactor.getThreadPool()
+
+
 class EventEmitter:
     def __init__(self):
-        self._events = {}
+        self._events: Dict[str, List[Callable]] = {}
+        self._events_lock = threading.RLock()
 
-    def on(self, event, func):
-        if event not in self._events:
-            self._events[event] = []
-        self._events[event].append(func)
+    def on(self, event: str, func: Callable) -> None:
+        with self._events_lock:
+            self._events.setdefault(event, []).append(func)
 
-    def emit(self, event, *args, **kwargs):
-        if event in self._events:
-            for func in self._events[event]:
+    def remove_listener(self, event: str, func: Callable) -> None:
+        with self._events_lock:
+            if event in self._events and func in self._events[event]:
+                self._events[event].remove(func)
+
+    def emit(self, event: str, *args, **kwargs) -> None:
+        with self._events_lock:
+            listeners = list(self._events.get(event, []))
+
+        for func in listeners:
+            try:
                 reactor.callFromThread(func, *args, **kwargs)
-
-    def remove_listener(self, event, func):
-        if event in self._events and func in self._events[event]:
-            self._events[event].remove(func)
+            except Exception:
+                logger.exception(f"Не вдалося емітити event '{event}'")
 
 
 class SpotwareConnect(EventEmitter):
-    def __init__(self, client_id, client_secret):
+    def __init__(self, client_id: str, client_secret: str):
         super().__init__()
-        self.host            = "demo.ctraderapi.com"
-        self.port            = 5035
-        self._client_id      = client_id
-        self._client_secret  = client_secret
-        self.is_authorized   = False
-        self._client         = SpotwareClientBase(self.host, self.port, TcpProtocol)
+        self.host = "demo.ctraderapi.com"
+        self.port = 5035
+
+        self._client_id = client_id
+        self._client_secret = client_secret
+
+        self.is_authorized = False
+        self.is_refreshing_token = False
+        self._refresh_lock = threading.Lock()
+
+        self._client = SpotwareClientBase(self.host, self.port, TcpProtocol)
         self._client.setConnectedCallback(self._on_connected)
         self._client.setMessageReceivedCallback(self._on_message_received)
         self._client.setDisconnectedCallback(self._on_disconnected)
         self._client.account_id = None
-        self.symbol_map         = {}
-        self.is_refreshing_token = False
 
-    def start(self):
+        self.symbol_map: Dict[str, int] = {}
+
+    def start(self) -> None:
+        logger.info("Запуск Spotware client service...")
         self._client.startService()
 
-    def send(self, message, client_msg_id=None, timeout=30):
-        deferred         = self._client.send(message, clientMsgId=client_msg_id)
-        timeout_deferred = Deferred()
-        timeout_call     = reactor.callLater(
-            timeout, lambda: deferred.cancel() if not deferred.called else None
+    def stop(self) -> None:
+        logger.info("Зупинка Spotware client service...")
+        try:
+            self.is_authorized = False
+            stop_method = getattr(self._client, "stopService", None)
+            if callable(stop_method):
+                stop_method()
+        except Exception:
+            logger.exception("Не вдалося зупинити Spotware client")
+
+    def send(self, message, client_msg_id=None, timeout: int = 30) -> Deferred:
+        base_d = self._client.send(message, clientMsgId=client_msg_id)
+        result_d: Deferred = Deferred()
+
+        def _on_timeout():
+            if result_d.called:
+                return
+            err = Failure(TimeoutError(f"Таймаут ({timeout}s) для {type(message).__name__}"))
+            try:
+                if not base_d.called:
+                    base_d.cancel()
+            except Exception:
+                logger.exception("Не вдалося скасувати base deferred після таймауту")
+            result_d.errback(err)
+
+        timeout_call = reactor.callLater(timeout, _on_timeout)
+
+        def _finish_success(result):
+            if timeout_call.active():
+                timeout_call.cancel()
+            if not result_d.called:
+                result_d.callback(result)
+            return result
+
+        def _finish_error(failure):
+            if timeout_call.active():
+                timeout_call.cancel()
+            if not result_d.called:
+                result_d.errback(failure)
+            return failure
+
+        base_d.addCallbacks(_finish_success, _finish_error)
+        return result_d
+
+    def _refresh_access_token(self) -> None:
+        with self._refresh_lock:
+            if self.is_refreshing_token:
+                logger.info("Token refresh already in progress.")
+                return
+            self.is_refreshing_token = True
+
+        logger.info("Attempting to refresh access token asynchronously...")
+
+        d = deferToThreadPool(
+            reactor,
+            _blocking_pool(),
+            self._refresh_access_token_sync,
         )
 
-        def on_success(result):
-            if not timeout_call.called:
-                timeout_call.cancel()
-            if not timeout_deferred.called:
-                timeout_deferred.callback(result)
+        def _done(result):
+            self.is_refreshing_token = False
+            if not result:
+                logger.error("Token refresh failed: empty result")
+                return None
 
-        def on_error(failure):
-            if not timeout_call.called:
-                timeout_call.cancel()
-            if not timeout_deferred.called:
-                if failure.check(TimeoutError):
-                    err_msg = f"Таймаут ({timeout}s) для {type(message).__name__}"
-                    logger.error(err_msg)
-                    timeout_deferred.errback(Exception(err_msg))
-                else:
-                    timeout_deferred.errback(failure)
+            new_access_token = result.get("accessToken")
+            if not new_access_token:
+                logger.error(f"Token refresh response missing accessToken: {result}")
+                return None
 
-        deferred.addCallbacks(on_success, on_error)
-        return timeout_deferred
+            app_state.access_token = new_access_token
+            logger.info("✅ Access token has been successfully refreshed.")
+            reactor.callLater(0, self._authorize_account)
+            return result
 
-    def _refresh_access_token(self):
-        if self.is_refreshing_token:
-            logger.info("Token refresh already in progress.")
-            return
-        self.is_refreshing_token = True
-        logger.info("Attempting to refresh access token...")
+        def _failed(failure):
+            self.is_refreshing_token = False
+            logger.error(f"Refresh token request failed: {failure.getErrorMessage()}")
+            return None
+
+        d.addCallbacks(_done, _failed)
+
+    def _refresh_access_token_sync(self) -> Optional[dict]:
         refresh_token = get_ctrader_refresh_token()
         if not refresh_token:
             logger.error("CRITICAL: CTRADER_REFRESH_TOKEN is not set. Cannot refresh.")
-            self.is_refreshing_token = False
-            return
+            return None
+
         params = {
-            "grant_type":    "refresh_token",
+            "grant_type": "refresh_token",
             "refresh_token": refresh_token,
-            "client_id":     self._client_id,
+            "client_id": self._client_id,
             "client_secret": self._client_secret,
         }
-        try:
-            response = requests.post(TOKEN_REFRESH_URL, data=params)
-            response.raise_for_status()
-            data             = response.json()
-            new_access_token = data.get("accessToken")
-            if not new_access_token:
-                logger.error(f"Failed to refresh: 'accessToken' missing. Response: {data}")
-                raise Exception("Response is missing 'accessToken'")
-            app_state.access_token = new_access_token
-            logger.info("✅ Access token has been successfully refreshed.")
-            self._authorize_account()
-        except requests.exceptions.RequestException as e:
-            logger.error(f"HTTP error during token refresh: {e}")
-            if e.response is not None:
-                logger.error(f"cTrader response content: {e.response.text}")
-        except Exception as e:
-            logger.error(f"Failed to parse refresh token response: {e}")
-        finally:
-            self.is_refreshing_token = False
 
-    def _on_connected(self, client):
+        response = requests.post(TOKEN_REFRESH_URL, data=params, timeout=20)
+        response.raise_for_status()
+        return response.json()
+
+    def _on_connected(self, client) -> None:
         logger.info("Connection successful. Authorizing application...")
-        self.send(ProtoOAApplicationAuthReq(
-            clientId=self._client_id, clientSecret=self._client_secret
-        ))
+        self.send(
+            ProtoOAApplicationAuthReq(
+                clientId=self._client_id,
+                clientSecret=self._client_secret,
+            )
+        ).addErrback(self._log_send_error, "application_auth")
 
-    def _on_disconnected(self, client, reason):
+    def _on_disconnected(self, client, reason) -> None:
         self.is_authorized = False
-        logger.warning(f"Disconnected. Reason: {reason.getErrorMessage()}")
-        self.emit("error", f"Disconnected: {reason.getErrorMessage()}")
+        msg = self._reason_to_text(reason)
+        logger.warning(f"Disconnected. Reason: {msg}")
+        self.emit("error", f"Disconnected: {msg}")
 
-    def _on_message_received(self, client, message: ProtoMessage):
+    def _on_message_received(self, client, message: ProtoMessage) -> None:
         pt = message.payloadType
 
         if pt == ProtoOAPayloadType.PROTO_OA_APPLICATION_AUTH_RES:
             logger.info("Application authorized. Authorizing account...")
             self._authorize_account()
+            return
 
-        elif pt == ProtoOAPayloadType.PROTO_OA_ACCOUNT_AUTH_RES:
+        if pt == ProtoOAPayloadType.PROTO_OA_ACCOUNT_AUTH_RES:
             res = ProtoOAAccountAuthRes()
             res.ParseFromString(message.payload)
             self._client.account_id = res.ctidTraderAccountId
-            self.is_authorized      = True
+            self.is_authorized = True
             logger.info(f"✅ Account {res.ctidTraderAccountId} authorized.")
-            self.get_all_symbols().addCallback(self._on_symbols_list)
             self.emit("ready")
+            return
 
-        elif pt == ProtoOAPayloadType.PROTO_OA_ERROR_RES:
+        if pt == ProtoOAPayloadType.PROTO_OA_ERROR_RES:
             res = ProtoOAErrorRes()
             res.ParseFromString(message.payload)
             logger.error(f"API Error: {res.errorCode} - {res.description}")
+
             if res.errorCode == "CH_ACCESS_TOKEN_INVALID" or (
                 res.errorCode == "INVALID_REQUEST"
                 and "Trading account is not authorized" in res.description
             ):
                 self._refresh_access_token()
+            return
 
-        elif pt == ProtoOAPayloadType.PROTO_OA_SPOT_EVENT:
+        if pt == ProtoOAPayloadType.PROTO_OA_SPOT_EVENT:
             spot_event = ProtoOASpotEvent()
             spot_event.ParseFromString(message.payload)
-
-            # ✅ ВИПРАВЛЕНО: емітуємо ОБИДВА події —
-            # загальний "spot_event" (для ctrader._on_spot_event)
-            # і специфічний "spot_event_{id}" (для subscribe_ticks)
             self.emit("spot_event", spot_event)
             self.emit(f"spot_event_{spot_event.symbolId}", spot_event)
+            return
 
-    def _authorize_account(self):
+    def _authorize_account(self) -> None:
         acc_id = get_demo_account_id()
-        token  = app_state.access_token
+        token = app_state.access_token
+
         logger.info(f"Authorizing account ID: {acc_id}...")
         if not acc_id or not token:
             logger.error("CRITICAL: Account ID or Access Token is missing.")
             return
-        self.send(ProtoOAAccountAuthReq(
-            ctidTraderAccountId=acc_id, accessToken=token
-        ))
 
-    def get_all_symbols(self):
-        logger.info("Requesting light symbol list...")
-        return self.send(ProtoOASymbolsListReq(
-            ctidTraderAccountId=self._client.account_id
-        ))
+        self.send(
+            ProtoOAAccountAuthReq(
+                ctidTraderAccountId=acc_id,
+                accessToken=token,
+            )
+        ).addErrback(self._log_send_error, "account_auth")
 
-    def _on_symbols_list(self, message: ProtoMessage):
-        res = ProtoOASymbolsListRes()
-        res.ParseFromString(message.payload)
-        for symbol in res.symbol:
-            self.symbol_map[symbol.symbolName] = symbol.symbolId
-        logger.info(f"Loaded {len(self.symbol_map)} symbols from cTrader.")
+    def get_all_symbols(self) -> Deferred:
+        logger.info("Requesting symbol list...")
+        return self.send(
+            ProtoOASymbolsListReq(
+                ctidTraderAccountId=self._client.account_id,
+            ),
+            timeout=30,
+        )
 
-    def subscribe_ticks(self, symbol_name, callback):
+    def subscribe_ticks(self, symbol_name: str, callback: Callable) -> None:
         if symbol_name not in self.symbol_map:
             logger.error(f"Symbol {symbol_name} not found in cTrader symbol list.")
             return
+
         symbol_id = self.symbol_map[symbol_name]
 
         def handler(event: ProtoOASpotEvent):
-            divisor = 10 ** 5
-            bid     = event.bid / divisor if event.HasField("bid") else None
-            ask     = event.ask / divisor if event.HasField("ask") else None
-            callback(symbol_name, bid, ask)
+            callback(symbol_name, event)
 
         self.on(f"spot_event_{symbol_id}", handler)
         logger.info(f"Subscribed to ticks for {symbol_name} (ID {symbol_id})")
+
+    @staticmethod
+    def _reason_to_text(reason: Any) -> str:
+        try:
+            if hasattr(reason, "getErrorMessage"):
+                return reason.getErrorMessage()
+            return str(reason)
+        except Exception:
+            return "unknown disconnect reason"
+
+    @staticmethod
+    def _log_send_error(failure, context: str):
+        logger.error(f"Send error [{context}]: {failure.getErrorMessage()}")
+        return failure

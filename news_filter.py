@@ -1,29 +1,30 @@
 # news_filter.py
-#
-# ВИПРАВЛЕННЯ 1: Gemini викликається в окремому потоці (deferToThread)
-#                щоб не блокувати Twisted reactor.
-# ВИПРАВЛЕННЯ 2: Кеш з TTL 10 хвилин — не викликаємо Gemini частіше
-#                ніж раз на 10 хв для одного символу.
-# ВИПРАВЛЕННЯ 3: Gemini повертає JSON з verdict + reason,
-#                щоб трейдер бачив пояснення.
-
-import os
 import json
-import time
 import logging
-from twisted.internet.threads import deferToThread
+import os
+import threading
+import time
+from typing import Dict, Optional
+
 from google import genai
 from google.genai import types
+from twisted.internet import reactor
+from twisted.internet.defer import Deferred, succeed
+from twisted.internet.threads import deferToThreadPool
+
+from config import GEMINI_API_KEY
+from state import app_state
 
 logger = logging.getLogger("news_filter")
 
-_gemini_client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+_GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
 
-# ---------------------------------------------------------------------------
-# Кеш результатів: { "EURUSD": {"verdict": "GO", "reason": "...", "ts": 1234} }
-# ---------------------------------------------------------------------------
-_cache: dict = {}
-_CACHE_TTL   = 600   # 10 хвилин
+_cache: Dict[str, dict] = {}
+_cache_lock = threading.RLock()
+_client_local = threading.local()
+
+_CACHE_TTL = 600
+_ERROR_CACHE_TTL = 30
 
 _PROMPT = """You are a financial news risk filter for short-term trading.
 Asset: {pair}
@@ -34,106 +35,237 @@ Respond ONLY with valid JSON, no markdown, no explanation outside JSON:
 or
 {{"verdict": "BLOCK", "reason": "NFP report in 15 minutes, high volatility expected"}}
 
-verdict must be exactly GO or BLOCK."""
+verdict must be exactly GO or BLOCK.
+"""
+
+
+def _blocking_pool():
+    return app_state.blocking_pool or reactor.getThreadPool()
+
+
+def _now() -> float:
+    return time.time()
+
+
+def _normalize_pair(pair: str) -> str:
+    return (pair or "").replace("/", "").upper().strip()
+
+
+def _get_cached(pair: str) -> Optional[dict]:
+    key = _normalize_pair(pair)
+    with _cache_lock:
+        cached = _cache.get(key)
+
+    if not cached:
+        return None
+
+    ttl = cached.get("_ttl", _CACHE_TTL)
+    if (_now() - cached.get("ts", 0)) < ttl:
+        return dict(cached)
+
+    return None
+
+
+def _store_cache(pair: str, result: dict, ttl: int) -> dict:
+    key = _normalize_pair(pair)
+    payload = dict(result)
+    payload["ts"] = _now()
+    payload["_ttl"] = ttl
+
+    with _cache_lock:
+        _cache[key] = payload
+
+    return dict(payload)
+
+
+def _get_thread_local_client():
+    client = getattr(_client_local, "client", None)
+    if client is not None:
+        return client
+
+    if not GEMINI_API_KEY:
+        raise RuntimeError("GEMINI_API_KEY is not configured")
+
+    client = genai.Client(api_key=GEMINI_API_KEY)
+    _client_local.client = client
+    return client
+
+
+def _extract_text(response) -> str:
+    text = getattr(response, "text", None)
+    if text:
+        return text.strip()
+
+    try:
+        candidates = getattr(response, "candidates", None) or []
+        chunks = []
+        for candidate in candidates:
+            content = getattr(candidate, "content", None)
+            parts = getattr(content, "parts", None) or []
+            for part in parts:
+                part_text = getattr(part, "text", None)
+                if part_text:
+                    chunks.append(part_text)
+        return "\n".join(chunks).strip()
+    except Exception:
+        logger.exception("Не вдалося витягнути текст із Gemini response")
+        return ""
+
+
+def _parse_gemini_payload(raw: str) -> dict:
+    cleaned = (raw or "").strip()
+    cleaned = cleaned.replace("```json", "").replace("```", "").strip()
+
+    if not cleaned:
+        return {"verdict": "GO", "reason": "Empty model response", "source": "fallback"}
+
+    try:
+        data = json.loads(cleaned)
+        verdict = str(data.get("verdict", "GO")).upper().strip()
+        reason = str(data.get("reason", "")).strip()
+        verdict = "BLOCK" if verdict == "BLOCK" else "GO"
+        return {"verdict": verdict, "reason": reason, "source": "gemini"}
+    except json.JSONDecodeError:
+        upper = cleaned.upper()
+        verdict = "BLOCK" if "BLOCK" in upper else "GO"
+        return {
+            "verdict": verdict,
+            "reason": cleaned[:240],
+            "source": "fallback_parse",
+        }
 
 
 def _call_gemini_sync(pair: str) -> dict:
-    """
-    Синхронний виклик Gemini — запускається в окремому потоці через deferToThread.
-    Повертає dict: {"verdict": "GO"|"BLOCK", "reason": str}
-    """
-    try:
-        response = _gemini_client.models.generate_content(
-            model="gemini-flash-latest",
-            contents=_PROMPT.format(pair=pair),
-            config=types.GenerateContentConfig(
-                max_output_tokens=80,
-                temperature=0,
-            )
-        )
-        raw = response.text.strip()
-        logger.info(f"Gemini raw response for {pair}: {raw}")
+    client = _get_thread_local_client()
 
-        # Чистимо markdown-огорожі якщо є
-        raw = raw.replace("```json", "").replace("```", "").strip()
-        data = json.loads(raw)
+    response = client.models.generate_content(
+        model=_GEMINI_MODEL,
+        contents=_PROMPT.format(pair=pair),
+        config=types.GenerateContentConfig(
+            max_output_tokens=120,
+            temperature=0,
+        ),
+    )
 
-        verdict = str(data.get("verdict", "GO")).upper()
-        reason  = str(data.get("reason", ""))
-        verdict = "BLOCK" if "BLOCK" in verdict else "GO"
-
-        return {"verdict": verdict, "reason": reason}
-
-    except json.JSONDecodeError:
-        # Gemini повернув не-JSON — fallback до простого парсингу
-        text = response.text.strip().upper() if 'response' in dir() else ""
-        verdict = "BLOCK" if "BLOCK" in text else "GO"
-        logger.warning(f"Gemini returned non-JSON for {pair}: {text!r}, using verdict={verdict}")
-        return {"verdict": verdict, "reason": ""}
-
-    except Exception as e:
-        logger.error(f"Gemini error for {pair}: {e}")
-        return {"verdict": "GO", "reason": "API error — defaulting to GO"}
+    raw = _extract_text(response)
+    logger.info(f"Gemini raw response for {pair}: {raw}")
+    return _parse_gemini_payload(raw)
 
 
-def get_latest_news_sentiment(pair: str):
-    """
-    ЗАСТАРІЛИЙ синхронний інтерфейс — залишений для сумісності з ручним запитом.
-    Для автосканера використовуй get_latest_news_sentiment_async().
-
-    Повертає рядок "GO" або "BLOCK" (зворотна сумісність з analysis.py).
-    """
+def get_latest_news_sentiment(pair: str) -> str:
     result = _get_cached_or_fresh_sync(pair)
     return result["verdict"]
 
 
-def get_latest_news_sentiment_async(pair: str):
-    """
-    Async версія для автосканера.
-    Повертає Deferred → {"verdict": "GO"|"BLOCK", "reason": str}
-
-    Якщо результат є в кеші — повертає одразу без HTTP запиту.
-    """
-    cached = _cache.get(pair)
-    if cached and (time.time() - cached["ts"]) < _CACHE_TTL:
-        logger.debug(f"news_filter cache hit for {pair} (age={time.time()-cached['ts']:.0f}s)")
-        from twisted.internet.defer import succeed
+def get_latest_news_sentiment_async(pair: str) -> Deferred:
+    pair = _normalize_pair(pair)
+    cached = _get_cached(pair)
+    if cached:
+        logger.debug(
+            f"news_filter cache hit for {pair} "
+            f"(age={_now() - cached.get('ts', 0):.0f}s, source={cached.get('source')})"
+        )
         return succeed(cached)
 
-    logger.info(f"Gemini async запит для {pair}...")
+    if not GEMINI_API_KEY:
+        result = _store_cache(
+            pair,
+            {
+                "verdict": "GO",
+                "reason": "GEMINI_API_KEY не налаштований",
+                "source": "fallback_no_key",
+            },
+            _ERROR_CACHE_TTL,
+        )
+        return succeed(result)
 
-    def _cache_and_return(result: dict):
-        result["ts"] = time.time()
-        _cache[pair] = result
-        logger.info(f"Gemini [{pair}]: {result['verdict']} — {result['reason']}")
-        return result
+    logger.info(f"Gemini async запит для {pair} через blocking pool...")
+
+    d = deferToThreadPool(
+        reactor,
+        _blocking_pool(),
+        _call_gemini_sync,
+        pair,
+    )
+    d.addTimeout(20, reactor)
+
+    def _cache_success(result: dict):
+        ttl = _CACHE_TTL if result.get("source") == "gemini" else _ERROR_CACHE_TTL
+        cached = _store_cache(pair, result, ttl)
+        logger.info(
+            f"Gemini [{pair}]: {cached['verdict']} — {cached.get('reason', '')} "
+            f"(source={cached.get('source')})"
+        )
+        return cached
 
     def _on_error(failure):
-        logger.error(f"deferToThread Gemini error for {pair}: {failure.getErrorMessage()}")
-        fallback = {"verdict": "GO", "reason": "API error — defaulting to GO", "ts": time.time()}
-        _cache[pair] = fallback
-        return fallback
+        logger.error(f"Gemini error for {pair}: {failure.getErrorMessage()}")
+        return _store_cache(
+            pair,
+            {
+                "verdict": "GO",
+                "reason": "API error — temporary fail-open",
+                "source": "fallback_error",
+            },
+            _ERROR_CACHE_TTL,
+        )
 
-    d = deferToThread(_call_gemini_sync, pair)
-    d.addCallback(_cache_and_return)
-    d.addErrback(_on_error)
+    d.addCallbacks(_cache_success, _on_error)
     return d
 
 
 def _get_cached_or_fresh_sync(pair: str) -> dict:
-    """Синхронна версія з кешем — для ручних запитів з Telegram."""
-    cached = _cache.get(pair)
-    if cached and (time.time() - cached["ts"]) < _CACHE_TTL:
+    pair = _normalize_pair(pair)
+
+    cached = _get_cached(pair)
+    if cached:
         return cached
-    result = _call_gemini_sync(pair)
-    result["ts"] = time.time()
-    _cache[pair] = result
-    return result
+
+    if not GEMINI_API_KEY:
+        return _store_cache(
+            pair,
+            {
+                "verdict": "GO",
+                "reason": "GEMINI_API_KEY не налаштований",
+                "source": "fallback_no_key",
+            },
+            _ERROR_CACHE_TTL,
+        )
+
+    try:
+        result = _call_gemini_sync(pair)
+        ttl = _CACHE_TTL if result.get("source") == "gemini" else _ERROR_CACHE_TTL
+        return _store_cache(pair, result, ttl)
+    except Exception as e:
+        logger.error(f"Gemini sync error for {pair}: {e}")
+        return _store_cache(
+            pair,
+            {
+                "verdict": "GO",
+                "reason": "API error — temporary fail-open",
+                "source": "fallback_error",
+            },
+            _ERROR_CACHE_TTL,
+        )
 
 
 def get_cache_stats() -> dict:
-    """Для /health endpoint — скільки записів у кеші і які застаріли."""
-    now   = time.time()
-    fresh = {k: v for k, v in _cache.items() if now - v["ts"] < _CACHE_TTL}
-    stale = {k: v for k, v in _cache.items() if now - v["ts"] >= _CACHE_TTL}
-    return {"fresh": len(fresh), "stale": len(stale), "total": len(_cache)}
+    now = _now()
+    with _cache_lock:
+        items = dict(_cache)
+
+    fresh = {
+        k: v for k, v in items.items()
+        if now - v.get("ts", 0) < v.get("_ttl", _CACHE_TTL)
+    }
+    stale = {
+        k: v for k, v in items.items()
+        if now - v.get("ts", 0) >= v.get("_ttl", _CACHE_TTL)
+    }
+
+    return {
+        "fresh": len(fresh),
+        "stale": len(stale),
+        "total": len(items),
+        "model": _GEMINI_MODEL,
+    }
