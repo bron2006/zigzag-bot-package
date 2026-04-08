@@ -1,257 +1,279 @@
 # news_filter.py
 import json
 import logging
-import queue
 import threading
 import time
+from typing import Dict, Optional
 
-import requests as _requests
+from twisted.internet import reactor
+from twisted.internet.defer import Deferred, succeed
+from twisted.internet.threads import deferToThreadPool
 
+from config import GEMINI_API_KEY
 from state import app_state
 
-logger = logging.getLogger("notifier")
+logger = logging.getLogger("news_filter")
 
-_SEND_FAIL_THRESHOLD = 5
-_ALERT_COOLDOWN = 300.0
-_TG_API_URL = "https://api.telegram.org/bot{token}/sendMessage"
+try:
+    from google import genai
+    from google.genai import types
+    _GENAI_IMPORT_ERROR = None
+except Exception as e:
+    genai = None
+    types = None
+    _GENAI_IMPORT_ERROR = e
 
-_queue: queue.Queue = queue.Queue(maxsize=1000)
-_lock = threading.RLock()
-_send_fail_count = 0
-_last_alert_times: dict = {}
+_GEMINI_MODEL = "gemini-1.5-flash"
+
+_cache: Dict[str, dict] = {}
+_cache_lock = threading.RLock()
+_client_local = threading.local()
+
+_CACHE_TTL = 600
+_ERROR_CACHE_TTL = 30
+
+_PROMPT = """You are a financial news risk filter for short-term trading.
+Asset: {pair}
+Task: Check if there are any high-impact news events, economic releases, or market events in the NEXT 30 MINUTES that would make trading this asset RISKY.
+
+Respond ONLY with valid JSON, no markdown, no explanation outside JSON:
+{{"verdict": "GO", "reason": "No major events expected"}}
+or
+{{"verdict": "BLOCK", "reason": "NFP report in 15 minutes, high volatility expected"}}
+
+verdict must be exactly GO or BLOCK.
+"""
 
 
-def _get_bot_token() -> str:
-    try:
-        from config import TELEGRAM_BOT_TOKEN
-        return TELEGRAM_BOT_TOKEN or ""
-    except Exception:
-        return ""
+def _blocking_pool():
+    return app_state.blocking_pool or reactor.getThreadPool()
 
 
-def _get_admin_chat_id():
-    try:
-        from config import get_chat_id
-        return get_chat_id()
-    except Exception:
+def _now() -> float:
+    return time.time()
+
+
+def _normalize_pair(pair: str) -> str:
+    return (pair or "").replace("/", "").upper().strip()
+
+
+def _get_cached(pair: str) -> Optional[dict]:
+    key = _normalize_pair(pair)
+    with _cache_lock:
+        cached = _cache.get(key)
+
+    if not cached:
         return None
 
-
-def _cooldown_ok(key: str) -> bool:
-    with _lock:
-        last = _last_alert_times.get(key, 0)
-        if time.time() - last >= _ALERT_COOLDOWN:
-            _last_alert_times[key] = time.time()
-            return True
-        return False
-
-
-def _serialize_reply_markup(reply_markup):
-    if reply_markup is None:
-        return None
-
-    try:
-        if hasattr(reply_markup, "to_dict"):
-            return reply_markup.to_dict()
-        if hasattr(reply_markup, "to_json"):
-            return json.loads(reply_markup.to_json())
-    except Exception:
-        logger.exception("Не вдалося серіалізувати reply_markup")
+    ttl = cached.get("_ttl", _CACHE_TTL)
+    if (_now() - cached.get("ts", 0)) < ttl:
+        return dict(cached)
 
     return None
 
 
-def _http_fallback(chat_id, text: str, parse_mode: str = None, reply_markup=None) -> bool:
-    token = _get_bot_token()
-    if not token or not chat_id:
-        return False
+def _store_cache(pair: str, result: dict, ttl: int) -> dict:
+    key = _normalize_pair(pair)
+    payload = dict(result)
+    payload["ts"] = _now()
+    payload["_ttl"] = ttl
 
-    payload = {
-        "chat_id": chat_id,
-        "text": text,
-        "disable_web_page_preview": True,
-    }
+    with _cache_lock:
+        _cache[key] = payload
 
-    if parse_mode:
-        payload["parse_mode"] = parse_mode
-
-    serialized_reply_markup = _serialize_reply_markup(reply_markup)
-    if serialized_reply_markup:
-        payload["reply_markup"] = serialized_reply_markup
-
-    try:
-        url = _TG_API_URL.format(token=token)
-        resp = _requests.post(url, json=payload, timeout=10)
-        if resp.ok:
-            logger.info("HTTP fallback: повідомлення надіслано.")
-            return True
-
-        logger.warning(f"HTTP fallback failed: {resp.status_code} {resp.text[:200]}")
-        return False
-    except Exception:
-        logger.exception("HTTP fallback exception")
-        return False
+    return dict(payload)
 
 
-def _deliver_message(payload: dict) -> bool:
-    chat_id = payload.get("chat_id")
-    text = payload.get("text", "")
-    parse_mode = payload.get("parse_mode")
-    reply_markup = payload.get("reply_markup")
+def _get_thread_local_client():
+    if _GENAI_IMPORT_ERROR is not None:
+        raise RuntimeError(f"google-genai import failed: {_GENAI_IMPORT_ERROR}")
 
-    if not chat_id:
-        logger.warning("deliver_message: chat_id порожній")
-        return False
+    client = getattr(_client_local, "client", None)
+    if client is not None:
+        return client
 
-    updater = app_state.updater
-    if updater:
-        try:
-            kwargs = {
-                "chat_id": chat_id,
-                "text": text,
-                "disable_web_page_preview": True,
-            }
-            if parse_mode:
-                kwargs["parse_mode"] = parse_mode
-            if reply_markup is not None:
-                kwargs["reply_markup"] = reply_markup
+    if not GEMINI_API_KEY:
+        raise RuntimeError("GEMINI_API_KEY is not configured")
 
-            updater.bot.send_message(**kwargs)
-            return True
-        except Exception as e:
-            logger.warning(f"deliver_message через updater failed: {e}. HTTP fallback...")
-            return _http_fallback(chat_id, text, parse_mode=parse_mode, reply_markup=reply_markup)
-
-    return _http_fallback(chat_id, text, parse_mode=parse_mode, reply_markup=reply_markup)
+    client = genai.Client(api_key=GEMINI_API_KEY)
+    _client_local.client = client
+    return client
 
 
-def _restart_polling_async() -> None:
-    thread = threading.Thread(target=_restart_polling, name="tg-polling-restart", daemon=True)
-    thread.start()
-
-
-def _restart_polling() -> None:
-    logger.warning("Перезапуск Telegram bot polling...")
-    updater = app_state.updater
-
-    if updater:
-        try:
-            updater.stop()
-        except Exception:
-            logger.exception("Не вдалося зупинити старий updater")
-        finally:
-            app_state.updater = None
-
-    time.sleep(3)
+def _extract_text(response) -> str:
+    text = getattr(response, "text", None)
+    if text:
+        return text.strip()
 
     try:
-        from bot import start_telegram_bot
-        start_telegram_bot()
-        _http_fallback(_get_admin_chat_id(), "✅ ZigZag Bot: Telegram polling перезапущено.")
+        candidates = getattr(response, "candidates", None) or []
+        chunks = []
+        for candidate in candidates:
+            content = getattr(candidate, "content", None)
+            parts = getattr(content, "parts", None) or []
+            for part in parts:
+                part_text = getattr(part, "text", None)
+                if part_text:
+                    chunks.append(part_text)
+        return "\n".join(chunks).strip()
     except Exception:
-        logger.exception("Не вдалося перезапустити Telegram bot")
-        _http_fallback(
-            _get_admin_chat_id(),
-            "🛑 ZigZag Bot: не вдалося перезапустити polling. Потрібне ручне втручання.",
+        logger.exception("Не вдалося витягнути текст із Gemini response")
+        return ""
+
+
+def _parse_gemini_payload(raw: str) -> dict:
+    cleaned = (raw or "").strip()
+    cleaned = cleaned.replace("```json", "").replace("```", "").strip()
+
+    if not cleaned:
+        return {"verdict": "GO", "reason": "Empty model response", "source": "fallback"}
+
+    try:
+        data = json.loads(cleaned)
+        verdict = str(data.get("verdict", "GO")).upper().strip()
+        reason = str(data.get("reason", "")).strip()
+        verdict = "BLOCK" if verdict == "BLOCK" else "GO"
+        return {"verdict": verdict, "reason": reason, "source": "gemini"}
+    except json.JSONDecodeError:
+        upper = cleaned.upper()
+        verdict = "BLOCK" if "BLOCK" in upper else "GO"
+        return {
+            "verdict": verdict,
+            "reason": cleaned[:240],
+            "source": "fallback_parse",
+        }
+
+
+def _call_gemini_sync(pair: str) -> dict:
+    client = _get_thread_local_client()
+
+    response = client.models.generate_content(
+        model=_GEMINI_MODEL,
+        contents=_PROMPT.format(pair=pair),
+        config=types.GenerateContentConfig(
+            max_output_tokens=120,
+            temperature=0,
+        ),
+    )
+
+    raw = _extract_text(response)
+    logger.info(f"Gemini raw response for {pair}: {raw}")
+    return _parse_gemini_payload(raw)
+
+
+def get_latest_news_sentiment(pair: str) -> str:
+    result = _get_cached_or_fresh_sync(pair)
+    return result["verdict"]
+
+
+def get_latest_news_sentiment_async(pair: str) -> Deferred:
+    pair = _normalize_pair(pair)
+
+    cached = _get_cached(pair)
+    if cached:
+        logger.debug(
+            f"news_filter cache hit for {pair} "
+            f"(age={_now() - cached.get('ts', 0):.0f}s, source={cached.get('source')})"
+        )
+        return succeed(cached)
+
+    if not GEMINI_API_KEY:
+        result = _store_cache(
+            pair,
+            {
+                "verdict": "GO",
+                "reason": "GEMINI_API_KEY не налаштований",
+                "source": "fallback_no_key",
+            },
+            _ERROR_CACHE_TTL,
+        )
+        return succeed(result)
+
+    d = deferToThreadPool(
+        reactor,
+        _blocking_pool(),
+        _call_gemini_sync,
+        pair,
+    )
+
+    def _cache_success(result: dict):
+        ttl = _CACHE_TTL if result.get("source") == "gemini" else _ERROR_CACHE_TTL
+        cached_result = _store_cache(pair, result, ttl)
+        logger.info(
+            f"Gemini [{pair}]: {cached_result['verdict']} — {cached_result.get('reason', '')} "
+            f"(source={cached_result.get('source')})"
+        )
+        return cached_result
+
+    def _on_error(failure):
+        logger.error(f"Gemini error for {pair}: {failure.getErrorMessage()}")
+        return _store_cache(
+            pair,
+            {
+                "verdict": "GO",
+                "reason": "API error — temporary fail-open",
+                "source": "fallback_error",
+            },
+            _ERROR_CACHE_TTL,
+        )
+
+    d.addCallbacks(_cache_success, _on_error)
+    return d
+
+
+def _get_cached_or_fresh_sync(pair: str) -> dict:
+    pair = _normalize_pair(pair)
+
+    cached = _get_cached(pair)
+    if cached:
+        return cached
+
+    if not GEMINI_API_KEY:
+        return _store_cache(
+            pair,
+            {
+                "verdict": "GO",
+                "reason": "GEMINI_API_KEY не налаштований",
+                "source": "fallback_no_key",
+            },
+            _ERROR_CACHE_TTL,
+        )
+
+    try:
+        result = _call_gemini_sync(pair)
+        ttl = _CACHE_TTL if result.get("source") == "gemini" else _ERROR_CACHE_TTL
+        return _store_cache(pair, result, ttl)
+    except Exception as e:
+        logger.error(f"Gemini sync error for {pair}: {e}")
+        return _store_cache(
+            pair,
+            {
+                "verdict": "GO",
+                "reason": "API error — temporary fail-open",
+                "source": "fallback_error",
+            },
+            _ERROR_CACHE_TTL,
         )
 
 
-def _on_send_threshold_reached(fail_count: int) -> None:
-    global _send_fail_count
+def get_cache_stats() -> dict:
+    now = _now()
+    with _cache_lock:
+        items = dict(_cache)
 
-    if not _cooldown_ok("send_fail_threshold"):
-        return
-
-    msg = (
-        f"🚨 ZigZag Bot: {fail_count} помилок send_message підряд.\n"
-        "Спробую перезапустити polling..."
-    )
-    logger.error(msg)
-    _http_fallback(_get_admin_chat_id(), msg)
-    _restart_polling_async()
-
-    with _lock:
-        _send_fail_count = 0
-
-
-def _worker_loop():
-    global _send_fail_count
-
-    while True:
-        try:
-            payload = _queue.get()
-            ok = _deliver_message(payload)
-
-            with _lock:
-                if ok:
-                    if _send_fail_count > 0:
-                        logger.info(f"send_message відновлено (було {_send_fail_count} помилок)")
-                    _send_fail_count = 0
-                else:
-                    _send_fail_count += 1
-                    current_fails = _send_fail_count
-
-            if not ok:
-                logger.error(f"send_message failed ({current_fails}/{_SEND_FAIL_THRESHOLD})")
-                if current_fails >= _SEND_FAIL_THRESHOLD:
-                    _on_send_threshold_reached(current_fails)
-
-        except Exception:
-            logger.exception("Помилка в notifier worker")
-            time.sleep(1)
-
-
-_worker_thread = threading.Thread(
-    target=_worker_loop,
-    name="notifier-worker",
-    daemon=True,
-)
-_worker_thread.start()
-
-
-def _enqueue(chat_id, text: str, parse_mode: str = None, reply_markup=None) -> bool:
-    if not chat_id:
-        logger.warning("_enqueue: chat_id порожній, пропускаємо.")
-        return False
-
-    payload = {
-        "chat_id": chat_id,
-        "text": text,
-        "parse_mode": parse_mode,
-        "reply_markup": reply_markup,
+    fresh = {
+        k: v for k, v in items.items()
+        if now - v.get("ts", 0) < v.get("_ttl", _CACHE_TTL)
+    }
+    stale = {
+        k: v for k, v in items.items()
+        if now - v.get("ts", 0) >= v.get("_ttl", _CACHE_TTL)
     }
 
-    try:
-        _queue.put_nowait(payload)
-        return True
-    except queue.Full:
-        logger.error("Notifier queue переповнена — повідомлення скинуто")
-        return False
-
-
-def send_signal(chat_id, text: str, parse_mode: str = "HTML", reply_markup=None) -> bool:
-    return _enqueue(chat_id, text, parse_mode=parse_mode, reply_markup=reply_markup)
-
-
-def notify_admin(text: str, alert_key: str = None) -> bool:
-    if alert_key and not _cooldown_ok(alert_key):
-        logger.debug(f"notify_admin пропущено (cooldown): {alert_key}")
-        return False
-
-    chat_id = _get_admin_chat_id()
-    if not chat_id:
-        logger.warning("notify_admin: chat_id адміна не налаштований.")
-        return False
-
-    return _enqueue(chat_id, text, parse_mode=None, reply_markup=None)
-
-
-def notify_bot_started() -> None:
-    notify_admin("✅ ZigZag Bot запущено і готовий до роботи.", alert_key="bot_started")
-
-
-def notify_bot_failed(reason: str) -> None:
-    chat_id = _get_admin_chat_id()
-    msg = f"🛑 ZigZag Bot: Telegram updater не запустився!\n\nПричина: {reason}"
-    logger.critical(msg)
-    _http_fallback(chat_id, msg)
+    return {
+        "fresh": len(fresh),
+        "stale": len(stale),
+        "total": len(items),
+        "model": _GEMINI_MODEL,
+        "sdk_ok": _GENAI_IMPORT_ERROR is None,
+    }

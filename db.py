@@ -1,8 +1,6 @@
 ﻿# db.py
-
 import logging
 from contextlib import contextmanager
-from datetime import datetime
 
 from sqlalchemy import Column, DateTime, Float, Integer, String, create_engine, event, func
 from sqlalchemy.exc import OperationalError, SQLAlchemyError
@@ -36,7 +34,6 @@ class UserWatchlist(Base):
 
     user_id = Column(Integer, primary_key=True)
     pair = Column(String, primary_key=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
 def _is_sqlite_url(url: str) -> bool:

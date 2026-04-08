@@ -29,11 +29,28 @@ PERIOD_MAP = {
     "15m": TrendbarPeriod.M15,
 }
 
-FEATURE_NAMES = ["ATRr_14", "ADX_14", "RSI_14", "EMA_50", "EMA_200"]
+MARKET_DATA_TIMEOUT = 18
+CPU_ANALYSIS_TIMEOUT = 12
+NEWS_TIMEOUT = 8
 
-_MARKET_DATA_TIMEOUT = 18
-_CPU_ANALYSIS_TIMEOUT = 12
-_NEWS_TIMEOUT = 8
+# ---------------------------------------------------------------------------
+# ВАЖЛИВО:
+# Модель навчена на колонках:
+# ADX, RSI, ATR, EMA50, EMA200
+# А pandas_ta повертає:
+# ADX_14, RSI_14, ATRr_14, EMA_50, EMA_200
+# Тут ми робимо нормальне перейменування перед scaler/model.
+# ---------------------------------------------------------------------------
+
+MODEL_FEATURE_NAMES = ["ATR", "ADX", "RSI", "EMA50", "EMA200"]
+
+FEATURE_SOURCE_MAP = {
+    "ATR": ["ATRr_14", "ATR_14"],
+    "ADX": ["ADX_14"],
+    "RSI": ["RSI_14"],
+    "EMA50": ["EMA_50"],
+    "EMA200": ["EMA_200"],
+}
 
 
 def _blocking_pool():
@@ -73,14 +90,32 @@ def _prepare_features(df: pd.DataFrame) -> Optional[pd.DataFrame]:
         df.ta.ema(length=200, append=True)
 
         latest = df.tail(1)
-        missing = [col for col in FEATURE_NAMES if col not in latest.columns]
+
+        prepared = {}
+        missing = []
+
+        for target_name, source_candidates in FEATURE_SOURCE_MAP.items():
+            found_value = None
+            for source_name in source_candidates:
+                if source_name in latest.columns:
+                    value = latest[source_name].iloc[0]
+                    if pd.notna(value):
+                        found_value = value
+                        break
+
+            if found_value is None:
+                missing.append(f"{target_name} <- {source_candidates}")
+            else:
+                prepared[target_name] = found_value
+
         if missing:
-            logger.warning(f"Відсутні колонки індикаторів: {missing}")
+            logger.warning(f"Відсутні фічі для моделі: {missing}")
             return None
 
-        features_df = latest[FEATURE_NAMES].copy()
+        features_df = pd.DataFrame([prepared], columns=MODEL_FEATURE_NAMES)
+
         if features_df.isnull().any().any():
-            logger.debug("NaN в фічах — недостатньо барів для індикаторів")
+            logger.debug("NaN в підготовлених фічах — недостатньо барів для індикаторів")
             return None
 
         return features_df
@@ -114,6 +149,7 @@ def _run_technical_analysis(df: pd.DataFrame) -> Tuple[int, str]:
             verdict = "NEUTRAL"
 
         return score, verdict
+
     except Exception as e:
         logger.error(f"ML inference error: {e}")
         return 50, "NEUTRAL"
@@ -207,8 +243,8 @@ def _analysis_flow(client, symbol_cache, symbol, user_id, timeframe="5m"):
         d_a = get_market_data(client, symbol_cache, pair_norm, tf_a, 300)
         d_b = get_market_data(client, symbol_cache, pair_norm, tf_b, 300)
 
-        d_a.addTimeout(_MARKET_DATA_TIMEOUT, reactor)
-        d_b.addTimeout(_MARKET_DATA_TIMEOUT, reactor)
+        d_a.addTimeout(MARKET_DATA_TIMEOUT, reactor)
+        d_b.addTimeout(MARKET_DATA_TIMEOUT, reactor)
 
         results = yield DeferredList([d_a, d_b], consumeErrors=True)
 
@@ -234,7 +270,7 @@ def _analysis_flow(client, symbol_cache, symbol, user_id, timeframe="5m"):
             tf_b,
             df_b,
         )
-        d_cpu.addTimeout(_CPU_ANALYSIS_TIMEOUT, reactor)
+        d_cpu.addTimeout(CPU_ANALYSIS_TIMEOUT, reactor)
 
         try:
             base_result = yield d_cpu
@@ -244,7 +280,7 @@ def _analysis_flow(client, symbol_cache, symbol, user_id, timeframe="5m"):
 
         try:
             news_d = news_filter.get_latest_news_sentiment_async(pair_norm)
-            news_d.addTimeout(_NEWS_TIMEOUT, reactor)
+            news_d.addTimeout(NEWS_TIMEOUT, reactor)
             news_result = yield news_d
         except Exception as e:
             logger.warning(f"News filter timeout/error for {pair_norm}: {e}")
