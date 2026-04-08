@@ -1,5 +1,5 @@
-import json
 import logging
+import re
 import threading
 import time
 from typing import Dict, Optional
@@ -22,7 +22,6 @@ except Exception as e:
     types = None
     _GENAI_IMPORT_ERROR = e
 
-# ФІКСОВАНА МОДЕЛЬ, ЯКУ ТИ ПОПРОСИВ ПОВЕРНУТИ
 _GEMINI_MODEL = "gemini-flash-latest"
 _GEMINI_API_VERSION = "v1beta"
 
@@ -33,16 +32,22 @@ _client_local = threading.local()
 _CACHE_TTL = 600
 _ERROR_CACHE_TTL = 30
 
-_PROMPT = """You are a financial news risk filter for short-term trading.
+# НАВМИСНО МАКСИМАЛЬНО ПРОСТИЙ ПРОМПТ
+_PROMPT = """You are a news risk filter for short-term trading.
+
 Asset: {pair}
-Task: Check if there are any high-impact news events, economic releases, or market events in the NEXT 30 MINUTES that would make trading this asset RISKY.
 
-Respond ONLY with valid JSON, no markdown, no explanation outside JSON:
-{{"verdict": "GO", "reason": "No major events expected"}}
+Check whether there are high-impact news/events in the next 30 minutes that make trading risky.
+
+Reply with EXACTLY ONE WORD ONLY:
+GO
 or
-{{"verdict": "BLOCK", "reason": "NFP report in 15 minutes, high volatility expected"}}
+BLOCK
 
-verdict must be exactly GO or BLOCK.
+Do not output JSON.
+Do not explain.
+Do not add punctuation.
+Do not add markdown.
 """
 
 
@@ -92,15 +97,10 @@ def _build_client():
     if not GEMINI_API_KEY:
         raise RuntimeError("GEMINI_API_KEY is not configured")
 
-    # ЯВНО ФІКСУЄМО API VERSION
-    try:
-        return genai.Client(
-            api_key=GEMINI_API_KEY,
-            http_options=types.HttpOptions(api_version=_GEMINI_API_VERSION),
-        )
-    except Exception:
-        logger.exception("Не вдалося створити Gemini client з HttpOptions")
-        raise
+    return genai.Client(
+        api_key=GEMINI_API_KEY,
+        http_options=types.HttpOptions(api_version=_GEMINI_API_VERSION),
+    )
 
 
 def _get_thread_local_client():
@@ -135,40 +135,49 @@ def _extract_text(response) -> str:
 
 
 def _parse_gemini_payload(raw: str) -> dict:
+    """
+    Максимально толерантний парсер.
+    Шукає BLOCK/GO у будь-якому тексті.
+    Навіть якщо модель повернула обірваний JSON типу:
+    {"verdict": "
+    — ми не падаємо.
+    """
     cleaned = (raw or "").strip()
-    cleaned = cleaned.replace("```json", "").replace("```", "").strip()
+    upper = cleaned.upper()
 
-    if not cleaned:
+    # 1. Найсуворіше правило: якщо є BLOCK — це BLOCK
+    if "BLOCK" in upper:
+        return {
+            "verdict": "BLOCK",
+            "reason": "",
+            "source": "gemini_keyword",
+            "model": _GEMINI_MODEL,
+            "api_version": _GEMINI_API_VERSION,
+            "raw": cleaned[:120],
+        }
+
+    # 2. Якщо є окреме слово GO — це GO
+    if re.search(r"\bGO\b", upper):
         return {
             "verdict": "GO",
-            "reason": "Empty model response",
-            "source": "fallback",
+            "reason": "",
+            "source": "gemini_keyword",
             "model": _GEMINI_MODEL,
             "api_version": _GEMINI_API_VERSION,
+            "raw": cleaned[:120],
         }
 
-    try:
-        data = json.loads(cleaned)
-        verdict = str(data.get("verdict", "GO")).upper().strip()
-        reason = str(data.get("reason", "")).strip()
-        verdict = "BLOCK" if verdict == "BLOCK" else "GO"
-        return {
-            "verdict": verdict,
-            "reason": reason,
-            "source": "gemini",
-            "model": _GEMINI_MODEL,
-            "api_version": _GEMINI_API_VERSION,
-        }
-    except json.JSONDecodeError:
-        upper = cleaned.upper()
-        verdict = "BLOCK" if "BLOCK" in upper else "GO"
-        return {
-            "verdict": verdict,
-            "reason": cleaned[:240],
-            "source": "fallback_parse",
-            "model": _GEMINI_MODEL,
-            "api_version": _GEMINI_API_VERSION,
-        }
+    # 3. Якщо модель повернула щось дивне/обірване — fail-open, але без сміття в reason
+    logger.warning("Gemini malformed response, fallback to GO. Raw=%r", cleaned[:120])
+
+    return {
+        "verdict": "GO",
+        "reason": "Malformed model output",
+        "source": "fallback_malformed",
+        "model": _GEMINI_MODEL,
+        "api_version": _GEMINI_API_VERSION,
+        "raw": cleaned[:120],
+    }
 
 
 def _call_gemini_sync(pair: str) -> dict:
@@ -185,7 +194,7 @@ def _call_gemini_sync(pair: str) -> dict:
         model=_GEMINI_MODEL,
         contents=_PROMPT.format(pair=pair),
         config=types.GenerateContentConfig(
-            max_output_tokens=120,
+            max_output_tokens=8,
             temperature=0,
         ),
     )
@@ -236,13 +245,12 @@ def get_latest_news_sentiment_async(pair: str) -> Deferred:
     )
 
     def _cache_success(result: dict):
-        ttl = _CACHE_TTL if result.get("source") == "gemini" else _ERROR_CACHE_TTL
+        ttl = _CACHE_TTL if result.get("source", "").startswith("gemini") else _ERROR_CACHE_TTL
         cached_result = _store_cache(pair, result, ttl)
         logger.info(
-            "Gemini [%s]: %s — %s (source=%s, model=%s, api_version=%s)",
+            "Gemini [%s]: %s (source=%s, model=%s, api_version=%s)",
             pair,
             cached_result["verdict"],
-            cached_result.get("reason", ""),
             cached_result.get("source"),
             cached_result.get("model"),
             cached_result.get("api_version"),
@@ -289,7 +297,7 @@ def _get_cached_or_fresh_sync(pair: str) -> dict:
 
     try:
         result = _call_gemini_sync(pair)
-        ttl = _CACHE_TTL if result.get("source") == "gemini" else _ERROR_CACHE_TTL
+        ttl = _CACHE_TTL if result.get("source", "").startswith("gemini") else _ERROR_CACHE_TTL
         return _store_cache(pair, result, ttl)
     except Exception as e:
         logger.error("Gemini sync error for %s: %s", pair, e)
