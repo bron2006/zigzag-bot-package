@@ -33,15 +33,6 @@ MARKET_DATA_TIMEOUT = 18
 CPU_ANALYSIS_TIMEOUT = 12
 NEWS_TIMEOUT = 8
 
-# ---------------------------------------------------------------------------
-# ВАЖЛИВО:
-# Модель навчена на колонках:
-# ADX, RSI, ATR, EMA50, EMA200
-# А pandas_ta повертає:
-# ADX_14, RSI_14, ATRr_14, EMA_50, EMA_200
-# Тут ми робимо нормальне перейменування перед scaler/model.
-# ---------------------------------------------------------------------------
-
 MODEL_FEATURE_NAMES = ["ATR", "ADX", "RSI", "EMA50", "EMA200"]
 
 FEATURE_SOURCE_MAP = {
@@ -180,6 +171,8 @@ def _combine_verdicts_sync(
         f"{tf_b}: {verdict_b}({score_b})"
     )
 
+    avg_score = int(round((score_a + score_b) / 2.0))
+
     if verdict_a == "BUY" and verdict_b in ("BUY", "NEUTRAL"):
         final_verdict = "BUY"
         final_score = score_a
@@ -188,12 +181,17 @@ def _combine_verdicts_sync(
         final_score = score_a
     elif verdict_a == verdict_b and verdict_a != "NEUTRAL":
         final_verdict = verdict_a
-        final_score = int((score_a + score_b) / 2)
+        final_score = avg_score
     else:
         final_verdict = "NEUTRAL"
-        final_score = 50
+        final_score = avg_score
 
     last_close = float(df_a["Close"].iloc[-1]) if df_a is not None and not df_a.empty else 0.0
+
+    timeframe_details = {
+        tf_a: {"score": score_a, "verdict": verdict_a},
+        tf_b: {"score": score_b, "verdict": verdict_b},
+    }
 
     reasons = [
         f"{tf_a.upper()}: {verdict_a} ({score_a}%) | {tf_b.upper()}: {verdict_b} ({score_b}%)"
@@ -209,6 +207,7 @@ def _combine_verdicts_sync(
         "timeframe": requested_timeframe,
         "sentiment": "GO",
         "is_trade_allowed": final_verdict in ("BUY", "SELL"),
+        "timeframe_details": timeframe_details,
     }
 
 
@@ -224,6 +223,7 @@ def _fallback_result(symbol: str, timeframe: str, reason: str, verdict_text: str
         "sentiment": "GO",
         "is_trade_allowed": False,
         "error": reason if verdict_text == "ERROR" else None,
+        "timeframe_details": {},
     }
 
 
@@ -288,11 +288,13 @@ def _analysis_flow(client, symbol_cache, symbol, user_id, timeframe="5m"):
                 "verdict": "GO",
                 "reason": "ШІ недоступний, аналіз без новин",
                 "source": "fallback_timeout",
+                "model": None,
             }
 
         result = dict(base_result)
         news_verdict = news_result.get("verdict", "GO")
         news_reason = news_result.get("reason", "")
+        news_model = news_result.get("model")
         result["sentiment"] = news_verdict
 
         if news_verdict == "BLOCK":
@@ -306,9 +308,10 @@ def _analysis_flow(client, symbol_cache, symbol, user_id, timeframe="5m"):
                 else "ШІ: Ризиковані новини. Вхід заблоковано."
             )
         else:
-            result["reasons"].append(
-                f"ШІ: GO — {news_reason}" if news_reason else "ШІ: Новини ок"
-            )
+            go_reason = news_reason or "Новини ок"
+            if news_model:
+                go_reason = f"{go_reason} [{news_model}]"
+            result["reasons"].append(f"ШІ: GO — {go_reason}")
             result["is_trade_allowed"] = result.get("verdict_text") in ("BUY", "SELL")
 
         result["ts"] = time.time()

@@ -486,6 +486,35 @@ async function fetchSignal(pair) {
     }
 }
 
+function renderTimeframeDetails(signalData) {
+    const details = signalData?.timeframe_details || {};
+    const entries = Object.entries(details);
+    if (!entries.length) return "";
+
+    const rows = entries.map(([tf, item]) => {
+        const verdict = escapeHtml(item?.verdict || "N/A");
+        const score = Number.isFinite(Number(item?.score)) ? Number(item.score) : 50;
+
+        let color = "#94a3b8";
+        if (verdict === "BUY") color = "#26a69a";
+        else if (verdict === "SELL") color = "#ef5350";
+
+        return `
+            <div style="flex:1; min-width:120px; padding:10px; border:1px solid rgba(255,255,255,0.08); border-radius:10px; background:rgba(255,255,255,0.02);">
+                <div style="font-size:12px; color:#94a3b8; margin-bottom:4px;">${escapeHtml(tf.toUpperCase())}</div>
+                <div style="font-size:20px; font-weight:800; color:${color};">${verdict}</div>
+                <div style="font-size:16px; color:#fff;">${score}%</div>
+            </div>
+        `;
+    }).join("");
+
+    return `
+        <div style="display:flex; gap:10px; flex-wrap:wrap; margin:16px 0 8px;">
+            ${rows}
+        </div>
+    `;
+}
+
 function formatSignalAsHtml(signalData, exp) {
     if (!signalData || signalData.error) {
         return `
@@ -542,6 +571,7 @@ function formatSignalAsHtml(signalData, exp) {
             <span style="color:#26a69a;">🐂 ${score}%</span>
             <span style="color:#ef5350;">🐃 ${100 - score}%</span>
         </div>
+        ${renderTimeframeDetails(signalData)}
         <div style="text-align:center; margin-top:10px; font-weight:bold; color:${tradeAllowed ? "#26a69a" : "#ef5350"};">
             ${tradeAllowed ? "✅ Вхід дозволено" : "⛔ Вхід не рекомендований"}
         </div>

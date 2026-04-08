@@ -131,6 +131,19 @@ def _safe_html(value) -> str:
     return html.escape("" if value is None else str(value))
 
 
+def _format_timeframe_details(result: dict) -> str:
+    details = result.get("timeframe_details") or {}
+    if not details:
+        return ""
+
+    lines = ["", "🧠 <b>Таймфрейми:</b>"]
+    for tf, item in details.items():
+        verdict = _safe_html(item.get("verdict", "N/A"))
+        score = item.get("score", "N/A")
+        lines.append(f"• <b>{_safe_html(tf.upper())}</b>: {verdict} ({_safe_html(score)}%)")
+    return "\n".join(lines)
+
+
 def _format_signal_message(result: dict, expiration: str) -> str:
     if result.get("error"):
         return f"❌ Помилка: <code>{_safe_html(result['error'])}</code>"
@@ -151,7 +164,12 @@ def _format_signal_message(result: dict, expiration: str) -> str:
         f"<b>Ціна:</b> <code>{price_str}</code>",
         f"<b>Новини:</b> {sentiment}",
         f"<b>Вхід дозволено:</b> {trade_allowed}",
+        f"<b>Підсумковий score:</b> {_safe_html(result.get('score', 'N/A'))}%",
     ]
+
+    tf_block = _format_timeframe_details(result)
+    if tf_block:
+        lines.append(tf_block)
 
     reasons = result.get("reasons", [])
     if reasons:
@@ -189,7 +207,8 @@ def stats_command(update, context):
     for pair, result in cache.items():
         if now - result.get("ts", 0) < 3600:
             verdict = _safe_html(result.get("verdict_text", "N/A"))
-            lines.append(f"• <b>{_safe_html(pair)}</b>: {verdict}")
+            score = _safe_html(result.get("score", "N/A"))
+            lines.append(f"• <b>{_safe_html(pair)}</b>: {verdict} ({score}%)")
 
     update.message.reply_text(
         "\n".join(lines) if len(lines) > 1 else "Немає даних",

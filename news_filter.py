@@ -1,9 +1,9 @@
-# news_filter.py
 import json
 import logging
+import os
 import threading
 import time
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from twisted.internet import reactor
 from twisted.internet.defer import Deferred, succeed
@@ -23,7 +23,19 @@ except Exception as e:
     types = None
     _GENAI_IMPORT_ERROR = e
 
-_GEMINI_MODEL = "gemini-1.5-flash"
+# Актуальні кандидати моделей. Будемо пробувати по черзі.
+_DEFAULT_MODEL_CANDIDATES = [
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-lite",
+    "gemini-1.5-flash-latest",
+    "gemini-1.5-flash",
+]
+
+_env_models = os.getenv("GEMINI_MODELS", "").strip()
+if _env_models:
+    GEMINI_MODEL_CANDIDATES = [m.strip() for m in _env_models.split(",") if m.strip()]
+else:
+    GEMINI_MODEL_CANDIDATES = list(_DEFAULT_MODEL_CANDIDATES)
 
 _cache: Dict[str, dict] = {}
 _cache_lock = threading.RLock()
@@ -31,6 +43,9 @@ _client_local = threading.local()
 
 _CACHE_TTL = 600
 _ERROR_CACHE_TTL = 30
+
+_last_working_model = None
+_last_working_model_lock = threading.RLock()
 
 _PROMPT = """You are a financial news risk filter for short-term trading.
 Asset: {pair}
@@ -100,6 +115,19 @@ def _get_thread_local_client():
     return client
 
 
+def _get_model_candidates() -> List[str]:
+    with _last_working_model_lock:
+        if _last_working_model and _last_working_model in GEMINI_MODEL_CANDIDATES:
+            return [_last_working_model] + [m for m in GEMINI_MODEL_CANDIDATES if m != _last_working_model]
+    return list(GEMINI_MODEL_CANDIDATES)
+
+
+def _set_last_working_model(model_name: str) -> None:
+    global _last_working_model
+    with _last_working_model_lock:
+        _last_working_model = model_name
+
+
 def _extract_text(response) -> str:
     text = getattr(response, "text", None)
     if text:
@@ -144,21 +172,50 @@ def _parse_gemini_payload(raw: str) -> dict:
         }
 
 
-def _call_gemini_sync(pair: str) -> dict:
-    client = _get_thread_local_client()
-
-    response = client.models.generate_content(
-        model=_GEMINI_MODEL,
-        contents=_PROMPT.format(pair=pair),
-        config=types.GenerateContentConfig(
-            max_output_tokens=120,
-            temperature=0,
-        ),
+def _is_model_not_found_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return (
+        "404" in text
+        or "not_found" in text
+        or "model" in text and "not found" in text
+        or "is not supported for generatecontent" in text
     )
 
-    raw = _extract_text(response)
-    logger.info(f"Gemini raw response for {pair}: {raw}")
-    return _parse_gemini_payload(raw)
+
+def _call_gemini_sync(pair: str) -> dict:
+    client = _get_thread_local_client()
+    last_exc = None
+
+    for model_name in _get_model_candidates():
+        try:
+            logger.info(f"Gemini request for {pair} using model={model_name}")
+            response = client.models.generate_content(
+                model=model_name,
+                contents=_PROMPT.format(pair=pair),
+                config=types.GenerateContentConfig(
+                    max_output_tokens=120,
+                    temperature=0,
+                ),
+            )
+
+            raw = _extract_text(response)
+            logger.info(f"Gemini raw response for {pair} [{model_name}]: {raw}")
+
+            parsed = _parse_gemini_payload(raw)
+            parsed["model"] = model_name
+            _set_last_working_model(model_name)
+            return parsed
+
+        except Exception as e:
+            last_exc = e
+            if _is_model_not_found_error(e):
+                logger.warning(f"Gemini model not available: {model_name}. Пробую наступну.")
+                continue
+
+            logger.error(f"Gemini hard error for {pair} on model {model_name}: {e}")
+            raise
+
+    raise RuntimeError(f"Жодна Gemini модель не підійшла. Last error: {last_exc}")
 
 
 def get_latest_news_sentiment(pair: str) -> str:
@@ -184,6 +241,7 @@ def get_latest_news_sentiment_async(pair: str) -> Deferred:
                 "verdict": "GO",
                 "reason": "GEMINI_API_KEY не налаштований",
                 "source": "fallback_no_key",
+                "model": None,
             },
             _ERROR_CACHE_TTL,
         )
@@ -201,7 +259,7 @@ def get_latest_news_sentiment_async(pair: str) -> Deferred:
         cached_result = _store_cache(pair, result, ttl)
         logger.info(
             f"Gemini [{pair}]: {cached_result['verdict']} — {cached_result.get('reason', '')} "
-            f"(source={cached_result.get('source')})"
+            f"(source={cached_result.get('source')}, model={cached_result.get('model')})"
         )
         return cached_result
 
@@ -213,6 +271,7 @@ def get_latest_news_sentiment_async(pair: str) -> Deferred:
                 "verdict": "GO",
                 "reason": "API error — temporary fail-open",
                 "source": "fallback_error",
+                "model": None,
             },
             _ERROR_CACHE_TTL,
         )
@@ -235,6 +294,7 @@ def _get_cached_or_fresh_sync(pair: str) -> dict:
                 "verdict": "GO",
                 "reason": "GEMINI_API_KEY не налаштований",
                 "source": "fallback_no_key",
+                "model": None,
             },
             _ERROR_CACHE_TTL,
         )
@@ -251,6 +311,7 @@ def _get_cached_or_fresh_sync(pair: str) -> dict:
                 "verdict": "GO",
                 "reason": "API error — temporary fail-open",
                 "source": "fallback_error",
+                "model": None,
             },
             _ERROR_CACHE_TTL,
         )
@@ -270,10 +331,14 @@ def get_cache_stats() -> dict:
         if now - v.get("ts", 0) >= v.get("_ttl", _CACHE_TTL)
     }
 
+    with _last_working_model_lock:
+        last_model = _last_working_model
+
     return {
         "fresh": len(fresh),
         "stale": len(stale),
         "total": len(items),
-        "model": _GEMINI_MODEL,
+        "candidate_models": list(GEMINI_MODEL_CANDIDATES),
+        "last_working_model": last_model,
         "sdk_ok": _GENAI_IMPORT_ERROR is None,
     }

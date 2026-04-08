@@ -29,6 +29,16 @@ _STALE_CHECK_INTERVAL = 60
 
 _PRICE_SSE_THROTTLE_SECONDS = 0.5
 
+_SYMBOL_ALIASES = {
+    "US100": ["USTEC", "NAS100", "US100", "US100USD", "USTECH"],
+    "US30": ["US30", "DJ30", "DJI30", "WALLSTREET"],
+    "SPX500": ["US500", "SPX500", "SP500", "US500USD"],
+    "GER40": ["GER40", "DE40", "DAX40"],
+    "UK100": ["UK100", "FTSE100"],
+    "JP225": ["JP225", "JPN225", "NI225"],
+    "AUS200": ["AUS200", "AU200"],
+}
+
 _reconnect_attempt: int = 0
 _reconnect_scheduled: bool = False
 _reconnect_call = None
@@ -121,14 +131,21 @@ def _find_in_cache(pair: str):
     norm = _normalize_pair(pair)
     canon = _canonical_symbol_key(pair)
 
-    # 1. Прямий прохід по кешу з canonical-порівнянням
+    # 1. alias-map
+    for alias in _SYMBOL_ALIASES.get(norm, []):
+        alias_details = app_state.get_symbol_details(alias)
+        if alias_details:
+            logger.info(f"Alias-матч символу '{norm}' -> '{alias}'")
+            return alias_details
+
+    # 2. canonical exact match
     for key, value in app_state.symbol_cache.items():
         if not isinstance(key, str):
             continue
         if _canonical_symbol_key(key) == canon:
             return value
 
-    # 2. Слабший fallback: шукаємо за префіксом/входженням canonical key
+    # 3. soft contains match
     candidates = []
     for key, value in app_state.symbol_cache.items():
         if not isinstance(key, str):
@@ -245,7 +262,6 @@ def _do_reconnect(scheduled_attempt: Optional[int] = None) -> None:
     _reconnect_call = None
     _reconnect_scheduled = False
 
-    # Якщо з моменту планування клієнт уже ожив — не чіпаємо його
     if app_state.client and getattr(app_state.client, "is_authorized", False):
         logger.info(
             "Пропускаю запланований reconnect #%s: клієнт уже авторизований.",
@@ -278,23 +294,13 @@ def _do_reconnect(scheduled_attempt: Optional[int] = None) -> None:
 
 
 def _on_ctrader_disconnected(client: SpotwareConnect, reason: str) -> None:
-    # Ігноруємо disconnect від старого клієнта
     if client is not app_state.client:
         logger.info("Ігноруємо disconnect від неактуального cTrader client: %s", reason)
         return
 
-    # Ігноруємо штатне ручне закриття
     if getattr(client, "_intentional_shutdown", False):
         logger.info("Ігноруємо штатний disconnect після intentional shutdown: %s", reason)
         return
-
-    # Якщо клієнт уже встиг повторно авторизуватись — теж не панікуємо
-    if getattr(client, "is_authorized", False):
-        logger.warning(
-            "Отримано disconnect від поточного клієнта, але він ще позначений як authorized. "
-            "Reason: %s",
-            reason,
-        )
 
     msg = f"⚡ cTrader відключився: {reason}"
     logger.error(msg)
@@ -399,8 +405,6 @@ def _on_symbols_loaded(raw) -> None:
 
 def on_ctrader_ready() -> None:
     logger.info("cTrader авторизований і готовий.")
-
-    # Головний фікс: прибираємо старі заплановані реконекти
     _cancel_reconnect()
     _reconnect_attempt_reset()
 
@@ -424,7 +428,6 @@ def start_ctrader_client() -> None:
         from errors import ConfigError
         raise ConfigError("CT_CLIENT_ID або CT_CLIENT_SECRET не налаштовані")
 
-    # Головний фікс: перед новим стартом прибираємо pending reconnect
     _cancel_reconnect()
 
     old_client = app_state.client
