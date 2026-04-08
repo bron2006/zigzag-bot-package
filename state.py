@@ -45,8 +45,13 @@ class AppState:
         self.scan_in_progress: bool = False
         self.scan_generation: int = 0
 
-        self.sse_queue: queue.Queue = queue.Queue(maxsize=2000)
-        self._sse_listeners: Dict[int, queue.Queue] = {}
+        self.signal_sse_queue: queue.Queue = queue.Queue(maxsize=1000)
+        self.price_sse_queue: queue.Queue = queue.Queue(maxsize=2000)
+
+        self._sse_listeners: Dict[str, Dict[int, queue.Queue]] = {
+            "signal": {},
+            "price": {},
+        }
         self._next_listener_id: int = 1
 
         self.IDEAL_ENTRY_THRESHOLD = IDEAL_ENTRY_THRESHOLD
@@ -170,58 +175,90 @@ class AppState:
     # SSE
     # ------------------------------------------------------------------
 
-    def publish_sse(self, payload: dict) -> bool:
+    @staticmethod
+    def _queue_for_channel(channel: str):
+        if channel == "price":
+            return "price_sse_queue"
+        return "signal_sse_queue"
+
+    def _put_sse(self, channel: str, payload: dict) -> bool:
         if payload is None:
             return False
 
+        q: queue.Queue = getattr(self, self._queue_for_channel(channel))
+
         try:
-            self.sse_queue.put_nowait(payload)
+            q.put_nowait(payload)
             return True
         except queue.Full:
             try:
-                _ = self.sse_queue.get_nowait()
+                _ = q.get_nowait()
             except queue.Empty:
                 pass
 
             try:
-                self.sse_queue.put_nowait(payload)
-                logger.warning("SSE queue була переповнена — найстаріший елемент видалено")
+                q.put_nowait(payload)
+                logger.warning(f"{channel} SSE queue була переповнена — найстаріший елемент видалено")
                 return True
             except queue.Full:
-                logger.warning("SSE queue переповнена — подію скинуто")
+                logger.warning(f"{channel} SSE queue переповнена — подію скинуто")
                 return False
 
-    def pop_pending_sse_events(self, limit: int = 500) -> List[dict]:
+    def publish_sse(self, payload: dict) -> bool:
+        """
+        Зворотна сумісність: старі виклики publish_sse() вважаємо сигналами.
+        """
+        return self._put_sse("signal", payload)
+
+    def publish_signal_sse(self, payload: dict) -> bool:
+        return self._put_sse("signal", payload)
+
+    def publish_price_sse(self, payload: dict) -> bool:
+        return self._put_sse("price", payload)
+
+    def pop_pending_sse_events(self, channel: str, limit: int = 500) -> List[dict]:
         events: List[dict] = []
+        q: queue.Queue = getattr(self, self._queue_for_channel(channel))
+
         for _ in range(limit):
             try:
-                events.append(self.sse_queue.get_nowait())
+                events.append(q.get_nowait())
             except queue.Empty:
                 break
+
         return events
 
-    def register_sse_listener(self, maxsize: int = 200) -> Tuple[int, queue.Queue]:
+    def register_sse_listener(self, channel: str, maxsize: int = 200) -> Tuple[int, queue.Queue]:
         q: queue.Queue = queue.Queue(maxsize=maxsize)
+
         with self._listeners_lock:
             listener_id = self._next_listener_id
             self._next_listener_id += 1
-            self._sse_listeners[listener_id] = q
-            logger.info(f"SSE listener #{listener_id} підключено. Всього: {len(self._sse_listeners)}")
+            self._sse_listeners[channel][listener_id] = q
+            logger.info(
+                f"SSE listener #{listener_id} підключено до каналу '{channel}'. "
+                f"Всього: {len(self._sse_listeners[channel])}"
+            )
             return listener_id, q
 
-    def unregister_sse_listener(self, listener_id: int) -> None:
+    def unregister_sse_listener(self, channel: str, listener_id: int) -> None:
         with self._listeners_lock:
-            if listener_id in self._sse_listeners:
-                self._sse_listeners.pop(listener_id, None)
-                logger.info(f"SSE listener #{listener_id} відключено. Всього: {len(self._sse_listeners)}")
+            if listener_id in self._sse_listeners[channel]:
+                self._sse_listeners[channel].pop(listener_id, None)
+                logger.info(
+                    f"SSE listener #{listener_id} відключено від каналу '{channel}'. "
+                    f"Всього: {len(self._sse_listeners[channel])}"
+                )
 
-    def sse_listener_count(self) -> int:
+    def sse_listener_count(self, channel: Optional[str] = None) -> int:
         with self._listeners_lock:
-            return len(self._sse_listeners)
+            if channel:
+                return len(self._sse_listeners.get(channel, {}))
+            return sum(len(v) for v in self._sse_listeners.values())
 
-    def broadcast_sse_message(self, message: str) -> None:
+    def broadcast_sse_message(self, channel: str, message: str) -> None:
         with self._listeners_lock:
-            listeners = list(self._sse_listeners.items())
+            listeners = list(self._sse_listeners[channel].items())
 
         if not listeners:
             return
@@ -241,7 +278,7 @@ class AppState:
                 stale_ids.append(listener_id)
 
         for listener_id in stale_ids:
-            self.unregister_sse_listener(listener_id)
+            self.unregister_sse_listener(channel, listener_id)
 
     # ------------------------------------------------------------------
     # Telegram helper

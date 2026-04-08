@@ -1,11 +1,9 @@
 # ctrader.py
 import logging
 import time
-from typing import Optional
 
 from twisted.internet import reactor
 
-import config
 import scanner
 from config import STOCK_TICKERS, get_ct_client_id, get_ct_client_secret
 from ctrader_open_api.messages.OpenApiMessages_pb2 import (
@@ -28,10 +26,13 @@ _RECONNECT_MAX_TRIES = 10
 _STALE_THRESHOLD = 300
 _STALE_CHECK_INTERVAL = 60
 
+_PRICE_SSE_THROTTLE_SECONDS = 0.5
+
 _reconnect_attempt: int = 0
 _reconnect_scheduled: bool = False
 _subscribed_symbols: set[str] = set()
 _stale_check_call = None
+_last_price_sse_ts: dict[str, float] = {}
 
 
 def _normalize_pair(pair: str) -> str:
@@ -65,25 +66,30 @@ def _on_spot_event(event: ProtoOASpotEvent) -> None:
     mid = (bid + ask) / 2.0 if bid is not None and ask is not None else bid or ask
 
     pair_norm = _normalize_pair(name)
+    now = time.time()
+
     payload = {
         "bid": bid,
         "ask": ask,
         "mid": mid,
-        "ts": time.time(),
+        "ts": now,
     }
 
     app_state.update_live_price(pair_norm, payload)
 
-    app_state.publish_sse(
-        {
-            "type": "price",
-            "pair": pair_norm,
-            "bid": bid,
-            "ask": ask,
-            "mid": mid,
-            "ts": payload["ts"],
-        }
-    )
+    last_push = _last_price_sse_ts.get(pair_norm, 0.0)
+    if (now - last_push) >= _PRICE_SSE_THROTTLE_SECONDS:
+        _last_price_sse_ts[pair_norm] = now
+        app_state.publish_price_sse(
+            {
+                "type": "price",
+                "pair": pair_norm,
+                "bid": bid,
+                "ask": ask,
+                "mid": mid,
+                "ts": now,
+            }
+        )
 
 
 def _find_in_cache(pair: str):
@@ -178,7 +184,7 @@ def _schedule_reconnect() -> None:
 
 
 def _do_reconnect() -> None:
-    global _reconnect_scheduled, _subscribed_symbols
+    global _reconnect_scheduled, _subscribed_symbols, _last_price_sse_ts
 
     _reconnect_scheduled = False
     logger.info(f"Виконую reconnect #{_reconnect_attempt}...")
@@ -188,6 +194,7 @@ def _do_reconnect() -> None:
     old_client = app_state.client
     app_state.clear_symbol_state()
     _subscribed_symbols = set()
+    _last_price_sse_ts = {}
 
     if old_client:
         try:

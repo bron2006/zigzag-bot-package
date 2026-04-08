@@ -11,7 +11,6 @@ from telegram import (
     ReplyKeyboardMarkup,
     Update,
 )
-from telegram.error import BadRequest
 from telegram.ext import CallbackContext
 from twisted.internet import reactor
 from twisted.internet.threads import deferToThreadPool
@@ -195,6 +194,7 @@ def stats_command(update, context):
     update.message.reply_text(
         "\n".join(lines) if len(lines) > 1 else "Немає даних",
         parse_mode="HTML",
+        reply_markup=get_reply_keyboard(),
     )
 
 
@@ -213,6 +213,7 @@ def live_command(update, context):
     update.message.reply_text(
         "\n".join(lines) if len(lines) > 1 else "Ефір порожній",
         parse_mode="HTML",
+        reply_markup=get_reply_keyboard(),
     )
 
 
@@ -241,7 +242,11 @@ def button_handler(update: Update, context: CallbackContext):
         if cat == "watchlist":
             assets = db.get_watchlist(chat_id)
             if not assets:
-                context.bot.send_message(chat_id, "📭 Список порожній.", reply_markup=get_main_menu_kb())
+                context.bot.send_message(
+                    chat_id,
+                    "📭 Список порожній.",
+                    reply_markup=get_main_menu_kb(),
+                )
             else:
                 context.bot.send_message(
                     chat_id,
@@ -299,9 +304,10 @@ def button_handler(update: Update, context: CallbackContext):
         )
 
         def on_res(res):
-            result_message = _format_signal_message(res if isinstance(res, dict) else {}, exp)
+            result = res if isinstance(res, dict) else {}
+            result_message = _format_signal_message(result, exp)
 
-            d1 = _bot_call_async(
+            chain = _bot_call_async(
                 context.bot.delete_message,
                 chat_id=chat_id,
                 message_id=loading.message_id,
@@ -314,6 +320,7 @@ def button_handler(update: Update, context: CallbackContext):
                     text=result_message,
                     parse_mode="HTML",
                     disable_web_page_preview=True,
+                    reply_markup=get_reply_keyboard(),
                 )
 
             def _send_menu(_):
@@ -324,20 +331,23 @@ def button_handler(update: Update, context: CallbackContext):
                     reply_markup=get_main_menu_kb(),
                 )
 
-            d1.addBoth(_send_result)
-            d1.addBoth(_send_menu)
+            chain.addBoth(_send_result)
+            chain.addBoth(_send_menu)
 
             def _final_error(failure):
-                logger.error(f"Помилка надсилання результату analyze для {symbol}: {failure.getErrorMessage()}")
+                logger.error(
+                    f"Помилка надсилання результату analyze для {symbol}: "
+                    f"{failure.getErrorMessage()}"
+                )
                 return None
 
-            d1.addErrback(_final_error)
+            chain.addErrback(_final_error)
             return res
 
         def on_err(failure):
             logger.error(f"Помилка аналізу {symbol}: {failure.getErrorMessage()}")
 
-            d2 = _bot_call_async(
+            chain = _bot_call_async(
                 context.bot.delete_message,
                 chat_id=chat_id,
                 message_id=loading.message_id,
@@ -349,9 +359,19 @@ def button_handler(update: Update, context: CallbackContext):
                     chat_id=chat_id,
                     text=f"❌ Помилка аналізу для <b>{_safe_html(symbol)}</b>",
                     parse_mode="HTML",
+                    reply_markup=get_reply_keyboard(),
                 )
 
-            d2.addBoth(_send_error)
+            def _send_menu(_):
+                return _bot_call_async(
+                    context.bot.send_message,
+                    chat_id=chat_id,
+                    text="🏠 Головне меню:",
+                    reply_markup=get_main_menu_kb(),
+                )
+
+            chain.addBoth(_send_error)
+            chain.addBoth(_send_menu)
             return None
 
         d.addCallbacks(on_res, on_err)
@@ -363,4 +383,7 @@ def reset_ui(update, context):
 
 
 def symbols_command(update, context):
-    update.message.reply_text(f"Символів: {len(getattr(app_state, 'all_symbol_names', []))}")
+    update.message.reply_text(
+        f"Символів: {len(getattr(app_state, 'all_symbol_names', []))}",
+        reply_markup=get_reply_keyboard(),
+    )

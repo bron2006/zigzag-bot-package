@@ -50,21 +50,35 @@ def _safe_json_dumps(data: dict) -> str:
     return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
 
 
-def drain_sse_events() -> None:
-    events = app_state.pop_pending_sse_events(limit=500)
+def _drain_channel(channel: str) -> None:
+    events = app_state.pop_pending_sse_events(channel, limit=500)
     if not events:
         return
 
     for event in events:
         try:
             msg = f"data: {_safe_json_dumps(event)}\n\n"
-            app_state.broadcast_sse_message(msg)
+            app_state.broadcast_sse_message(channel, msg)
         except Exception:
-            logger.exception("Не вдалося транслювати SSE event")
+            logger.exception(f"Не вдалося транслювати SSE event каналу '{channel}'")
+
+
+def drain_sse_events() -> None:
+    """
+    Викликається з app.py. Дрейнить обидва канали:
+    - signal
+    - price
+    """
+    _drain_channel("signal")
+    _drain_channel("price")
 
 
 class SSEStreamResource(Resource):
     isLeaf = True
+
+    def __init__(self, channel: str):
+        super().__init__()
+        self.channel = channel
 
     def render_GET(self, request):
         init_data = self._get_query_arg(request, b"initData")
@@ -79,7 +93,7 @@ class SSEStreamResource(Resource):
         request.setHeader(b"X-Accel-Buffering", b"no")
         request.write(b": connected\n\n")
 
-        listener_id, listener_queue = app_state.register_sse_listener(maxsize=200)
+        listener_id, listener_queue = app_state.register_sse_listener(self.channel, maxsize=200)
         flusher = LoopingCall(self._flush_queue, request, listener_queue)
         flusher.clock = reactor
 
@@ -89,7 +103,7 @@ class SSEStreamResource(Resource):
                     flusher.stop()
             except Exception:
                 logger.exception("Помилка зупинки SSE flusher")
-            app_state.unregister_sse_listener(listener_id)
+            app_state.unregister_sse_listener(self.channel, listener_id)
             return None
 
         request.notifyFinish().addBoth(_cleanup)
@@ -97,7 +111,9 @@ class SSEStreamResource(Resource):
         d = flusher.start(0.25, now=False)
 
         def _flusher_failed(failure):
-            logger.warning(f"SSE flusher failure: {failure.getErrorMessage()}")
+            logger.warning(
+                f"SSE flusher failure [{self.channel}]: {failure.getErrorMessage()}"
+            )
             _cleanup()
 
         d.addErrback(_flusher_failed)
@@ -115,8 +131,6 @@ class SSEStreamResource(Resource):
 
     @staticmethod
     def _flush_queue(request, listener_queue: queue.Queue) -> None:
-        wrote_any = False
-
         for _ in range(100):
             try:
                 message = listener_queue.get_nowait()
@@ -127,34 +141,32 @@ class SSEStreamResource(Resource):
                 message = message.encode("utf-8")
 
             request.write(message)
-            wrote_any = True
-
-        if wrote_any:
-            try:
-                request.channel.transport.setTcpNoDelay(True)
-            except Exception:
-                pass
 
 
 class HybridRootResource(Resource):
     isLeaf = True
 
-    def __init__(self, wsgi_resource: WSGIResource, sse_resource: Resource):
+    def __init__(self, wsgi_resource: WSGIResource):
         super().__init__()
         self._wsgi_resource = wsgi_resource
-        self._sse_resource = sse_resource
+        self._signal_resource = SSEStreamResource("signal")
+        self._price_resource = SSEStreamResource("price")
 
     def render(self, request):
         path = request.path.rstrip(b"/") or b"/"
+
         if path == b"/api/signal-stream":
-            return self._sse_resource.render(request)
+            return self._signal_resource.render(request)
+
+        if path == b"/api/price-stream":
+            return self._price_resource.render(request)
+
         return self._wsgi_resource.render(request)
 
 
 def build_root_resource(flask_app, reactor_obj, wsgi_pool):
     wsgi_resource = WSGIResource(reactor_obj, wsgi_pool, flask_app)
-    sse_resource = SSEStreamResource()
-    return HybridRootResource(wsgi_resource, sse_resource)
+    return HybridRootResource(wsgi_resource)
 
 
 def register_routes(app):
@@ -164,12 +176,11 @@ def register_routes(app):
             prices = app_state.get_live_prices_snapshot()
             stale_count = sum(1 for d in prices.values() if time.time() - d.get("ts", 0) > 300)
             tg_status = "✅ АКТИВНИЙ" if app_state.updater else "❌ ВИМКНЕНО"
-            listener_count = app_state.sse_listener_count()
 
             html = f"""
             <html><head><meta charset="UTF-8"><style>
                 body {{ background:#0f0f0f; color:#e0e0e0; font-family:sans-serif; padding:20px; display:flex; justify-content:center; }}
-                .card {{ background:#1a1a1a; border-radius:16px; padding:24px; border:1px solid #333; width:480px; }}
+                .card {{ background:#1a1a1a; border-radius:16px; padding:24px; border:1px solid #333; width:500px; }}
                 h1 {{ color:#3390ec; border-bottom:1px solid #333; padding-bottom:10px; font-size:22px; }}
                 .stat {{ display:flex; justify-content:space-between; padding:10px 0; border-bottom:1px solid #252525; }}
                 .val {{ font-weight:bold; color:#fff; }}
@@ -179,7 +190,8 @@ def register_routes(app):
                 <h1>📊 Стан ZigZag</h1>
                 <div class="stat"><span>cTrader:</span><span class="val {'ok' if app_state.SYMBOLS_LOADED else 'err'}">{'✅ OK' if app_state.SYMBOLS_LOADED else '❌ ERROR'}</span></div>
                 <div class="stat"><span>Telegram Бот:</span><span class="val {'ok' if app_state.updater else 'err'}">{tg_status}</span></div>
-                <div class="stat"><span>SSE клієнтів:</span><span class="val info">{listener_count}</span></div>
+                <div class="stat"><span>SSE signal-клієнтів:</span><span class="val info">{app_state.sse_listener_count('signal')}</span></div>
+                <div class="stat"><span>SSE price-клієнтів:</span><span class="val info">{app_state.sse_listener_count('price')}</span></div>
                 <div class="stat"><span>Цін в ефірі:</span><span class="val">{len(prices)}</span></div>
                 <div class="stat"><span>Застарілих:</span><span class="val">{stale_count}</span></div>
                 <p style='text-align:center;color:#555;font-size:11px;margin-top:20px;'>Оновлено: {time.strftime('%H:%M:%S')}</p>
@@ -232,22 +244,35 @@ def register_routes(app):
             return jsonify({"success": False, "error": "pair is required"}), 400
 
         try:
-            result = blockingCallFromThread(
-                reactor,
-                _run_analysis_and_wait,
-                pair,
-                uid,
-                tf,
-            )
+            def _call():
+                d = analysis_module.get_api_detailed_signal_data(
+                    app_state.client,
+                    app_state.symbol_cache,
+                    pair.replace("/", ""),
+                    uid,
+                    tf,
+                )
+                d.addTimeout(45, reactor)
+                return d
+
+            result = blockingCallFromThread(reactor, _call)
             return jsonify(result)
+
         except Exception as e:
             logger.exception("api_signal failed")
+            msg = str(e)
+            if "Timed out" in msg or "timeout" in msg.lower():
+                msg = "Час очікування аналізу вичерпано"
+
             return jsonify(
                 {
                     "success": False,
-                    "error": str(e),
+                    "error": msg,
                     "pair": pair,
                     "timeframe": tf,
+                    "verdict_text": "ERROR",
+                    "score": 50,
+                    "reasons": [msg],
                 }
             ), 500
 
@@ -269,52 +294,3 @@ def register_routes(app):
     @app.route("/<path:filename>")
     def static_files(filename):
         return send_from_directory(WEBAPP_DIR, filename)
-
-
-def _run_analysis_and_wait(pair: str, uid: int | None, tf: str) -> dict:
-    result_queue: queue.Queue = queue.Queue(maxsize=1)
-
-    d = analysis_module.get_api_detailed_signal_data(
-        app_state.client,
-        app_state.symbol_cache,
-        pair.replace("/", ""),
-        uid,
-        tf,
-    )
-
-    def _store_result(result):
-        try:
-            result_queue.put_nowait(result)
-        except queue.Full:
-            pass
-        return result
-
-    d.addBoth(_store_result)
-
-    try:
-        result = result_queue.get(timeout=35)
-    except queue.Empty:
-        return {
-            "pair": pair,
-            "timeframe": tf,
-            "verdict_text": "ERROR",
-            "score": 50,
-            "reasons": ["Час очікування аналізу вичерпано"],
-        }
-
-    if hasattr(result, "getErrorMessage"):
-        return {
-            "pair": pair,
-            "timeframe": tf,
-            "verdict_text": "ERROR",
-            "score": 50,
-            "reasons": [result.getErrorMessage()],
-        }
-
-    return result if isinstance(result, dict) else {
-        "pair": pair,
-        "timeframe": tf,
-        "verdict_text": "ERROR",
-        "score": 50,
-        "reasons": ["Невідомий формат відповіді"],
-    }
