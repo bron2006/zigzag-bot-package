@@ -1,6 +1,7 @@
 # ctrader.py
 import logging
 import time
+from typing import Optional
 
 from twisted.internet import reactor
 
@@ -30,13 +31,33 @@ _PRICE_SSE_THROTTLE_SECONDS = 0.5
 
 _reconnect_attempt: int = 0
 _reconnect_scheduled: bool = False
+_reconnect_call = None
+
 _subscribed_symbols: set[str] = set()
 _stale_check_call = None
 _last_price_sse_ts: dict[str, float] = {}
 
 
 def _normalize_pair(pair: str) -> str:
-    return pair.replace("/", "").upper()
+    return pair.replace("/", "").upper().strip()
+
+
+def _canonical_symbol_key(pair: str) -> str:
+    return "".join(ch for ch in _normalize_pair(pair) if ch.isalnum())
+
+
+def _cancel_reconnect() -> None:
+    global _reconnect_call, _reconnect_scheduled
+
+    if _reconnect_call and _reconnect_call.active():
+        try:
+            _reconnect_call.cancel()
+            logger.info("Скасовано запланований reconnect.")
+        except Exception:
+            logger.exception("Не вдалося скасувати reconnect call")
+
+    _reconnect_call = None
+    _reconnect_scheduled = False
 
 
 @safe_twisted(
@@ -93,7 +114,35 @@ def _on_spot_event(event: ProtoOASpotEvent) -> None:
 
 
 def _find_in_cache(pair: str):
-    return app_state.get_symbol_details(pair)
+    details = app_state.get_symbol_details(pair)
+    if details:
+        return details
+
+    norm = _normalize_pair(pair)
+    canon = _canonical_symbol_key(pair)
+
+    # 1. Прямий прохід по кешу з canonical-порівнянням
+    for key, value in app_state.symbol_cache.items():
+        if not isinstance(key, str):
+            continue
+        if _canonical_symbol_key(key) == canon:
+            return value
+
+    # 2. Слабший fallback: шукаємо за префіксом/входженням canonical key
+    candidates = []
+    for key, value in app_state.symbol_cache.items():
+        if not isinstance(key, str):
+            continue
+        ck = _canonical_symbol_key(key)
+        if ck.startswith(canon) or canon.startswith(ck):
+            candidates.append((key, value))
+
+    if candidates:
+        chosen_key, chosen_value = candidates[0]
+        logger.info(f"Fallback-матч символу '{norm}' -> '{chosen_key}'")
+        return chosen_value
+
+    return None
 
 
 def start_price_subscriptions() -> None:
@@ -134,7 +183,7 @@ def start_price_subscriptions() -> None:
 def _subscribe_one_asset(pair_norm: str) -> None:
     details = _find_in_cache(pair_norm)
     if not details:
-        available = list(app_state.symbol_cache.keys())[:10]
+        available = list(app_state.symbol_cache.keys())[:20]
         logger.warning(
             f"Символ '{pair_norm}' не знайдено в кеші. "
             f"Приклади доступних: {available}"
@@ -158,10 +207,14 @@ def _subscribe_one_asset(pair_norm: str) -> None:
 
 
 def _schedule_reconnect() -> None:
-    global _reconnect_scheduled, _reconnect_attempt
+    global _reconnect_scheduled, _reconnect_attempt, _reconnect_call
 
     if _reconnect_scheduled:
         logger.debug("Reconnect вже заплановано, пропускаємо.")
+        return
+
+    if app_state.client and getattr(app_state.client, "is_authorized", False):
+        logger.info("Клієнт уже авторизований — reconnect не плануємо.")
         return
 
     if _reconnect_attempt >= _RECONNECT_MAX_TRIES:
@@ -174,20 +227,34 @@ def _schedule_reconnect() -> None:
         return
 
     delay = min(_RECONNECT_BASE_DELAY * (2 ** _reconnect_attempt), _RECONNECT_MAX_DELAY)
+    scheduled_attempt = _reconnect_attempt + 1
+
     _reconnect_attempt += 1
     _reconnect_scheduled = True
 
     logger.warning(
-        f"Reconnect через {delay}s (спроба {_reconnect_attempt}/{_RECONNECT_MAX_TRIES})"
+        f"Reconnect через {delay}s (спроба {scheduled_attempt}/{_RECONNECT_MAX_TRIES})"
     )
-    reactor.callLater(delay, _do_reconnect)
+
+    _reconnect_call = reactor.callLater(delay, _do_reconnect, scheduled_attempt)
 
 
-def _do_reconnect() -> None:
-    global _reconnect_scheduled, _subscribed_symbols, _last_price_sse_ts
+def _do_reconnect(scheduled_attempt: Optional[int] = None) -> None:
+    global _reconnect_scheduled, _subscribed_symbols, _last_price_sse_ts, _reconnect_call
 
+    _reconnect_call = None
     _reconnect_scheduled = False
-    logger.info(f"Виконую reconnect #{_reconnect_attempt}...")
+
+    # Якщо з моменту планування клієнт уже ожив — не чіпаємо його
+    if app_state.client and getattr(app_state.client, "is_authorized", False):
+        logger.info(
+            "Пропускаю запланований reconnect #%s: клієнт уже авторизований.",
+            scheduled_attempt,
+        )
+        _reconnect_attempt_reset()
+        return
+
+    logger.info(f"Виконую reconnect #{scheduled_attempt or _reconnect_attempt}...")
 
     _cancel_stale_check()
 
@@ -198,6 +265,7 @@ def _do_reconnect() -> None:
 
     if old_client:
         try:
+            setattr(old_client, "_intentional_shutdown", True)
             old_client.stop()
         except Exception:
             logger.exception("Не вдалося зупинити старий cTrader client")
@@ -209,7 +277,25 @@ def _do_reconnect() -> None:
         _schedule_reconnect()
 
 
-def _on_ctrader_disconnected(reason: str) -> None:
+def _on_ctrader_disconnected(client: SpotwareConnect, reason: str) -> None:
+    # Ігноруємо disconnect від старого клієнта
+    if client is not app_state.client:
+        logger.info("Ігноруємо disconnect від неактуального cTrader client: %s", reason)
+        return
+
+    # Ігноруємо штатне ручне закриття
+    if getattr(client, "_intentional_shutdown", False):
+        logger.info("Ігноруємо штатний disconnect після intentional shutdown: %s", reason)
+        return
+
+    # Якщо клієнт уже встиг повторно авторизуватись — теж не панікуємо
+    if getattr(client, "is_authorized", False):
+        logger.warning(
+            "Отримано disconnect від поточного клієнта, але він ще позначений як authorized. "
+            "Reason: %s",
+            reason,
+        )
+
     msg = f"⚡ cTrader відключився: {reason}"
     logger.error(msg)
     notify_admin(msg, alert_key="ctrader_disconnected")
@@ -269,6 +355,11 @@ def _cancel_stale_check() -> None:
     _stale_check_call = None
 
 
+def _reconnect_attempt_reset() -> None:
+    global _reconnect_attempt
+    _reconnect_attempt = 0
+
+
 def _on_symbols_loaded(raw) -> None:
     res = ProtoOASymbolsListRes()
     res.ParseFromString(raw.payload)
@@ -281,8 +372,13 @@ def _on_symbols_loaded(raw) -> None:
         app_state.client.symbol_map[s.symbolName] = s.symbolId
 
         norm = _normalize_pair(s.symbolName)
+        canon = _canonical_symbol_key(s.symbolName)
+
         if norm not in app_state.symbol_cache:
             app_state.symbol_cache[norm] = s
+
+        if canon and canon not in app_state.symbol_cache:
+            app_state.symbol_cache[canon] = s
 
         if len(norm) >= 6:
             slash = f"{norm[:3]}/{norm[3:]}"
@@ -295,17 +391,19 @@ def _on_symbols_loaded(raw) -> None:
     app_state.mark_symbols_loaded(True)
 
     logger.info(f"Символи завантажено: {len(res.symbol)}")
-    sample = list(app_state.symbol_cache.keys())[:15]
+    sample = list(app_state.symbol_cache.keys())[:20]
     logger.info(f"Приклади назв символів у кеші: {sample}")
 
     start_price_subscriptions()
 
 
 def on_ctrader_ready() -> None:
-    global _reconnect_attempt
-
     logger.info("cTrader авторизований і готовий.")
-    _reconnect_attempt = 0
+
+    # Головний фікс: прибираємо старі заплановані реконекти
+    _cancel_reconnect()
+    _reconnect_attempt_reset()
+
     _cancel_stale_check()
     _schedule_stale_check()
 
@@ -326,18 +424,25 @@ def start_ctrader_client() -> None:
         from errors import ConfigError
         raise ConfigError("CT_CLIENT_ID або CT_CLIENT_SECRET не налаштовані")
 
+    # Головний фікс: перед новим стартом прибираємо pending reconnect
+    _cancel_reconnect()
+
     old_client = app_state.client
     if old_client:
         try:
+            setattr(old_client, "_intentional_shutdown", True)
             old_client.stop()
         except Exception:
             logger.exception("Не вдалося зупинити попередній cTrader client")
 
     client = SpotwareConnect(client_id, client_secret)
+    setattr(client, "_intentional_shutdown", False)
+
     app_state.client = client
+    app_state.mark_symbols_loaded(False)
 
     client.on("ready", on_ctrader_ready)
     client.on("spot_event", _on_spot_event)
-    client.on("error", lambda reason: _on_ctrader_disconnected(str(reason)))
+    client.on("error", lambda reason, c=client: _on_ctrader_disconnected(c, str(reason)))
 
     reactor.callWhenRunning(client.start)
