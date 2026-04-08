@@ -1,203 +1,575 @@
 ﻿const API_BASE_URL = window.API_BASE_URL || "";
+
 const loader = document.getElementById("loader");
 const listsContainer = document.getElementById("listsContainer");
 const signalOutput = document.getElementById("signalOutput");
-const scannerControls = document.getElementById('scannerControls');
-const liveSignalsContainer = document.getElementById('liveSignalsContainer');
-const signalContainer = document.getElementById('signalContainer');
+const scannerControls = document.getElementById("scannerControls");
+const liveSignalsContainer = document.getElementById("liveSignalsContainer");
+const signalContainer = document.getElementById("signalContainer");
 
 let tg = window.Telegram.WebApp;
 tg.ready();
 tg.expand();
 
 let currentWatchlist = [];
-let initData = tg.initData || '';
-let currentExpiration = '1m';
+let initData = tg.initData || "";
+let currentExpiration = "1m";
 let allData = {};
 let lastSelectedPair = null;
+let currentSignalData = null;
+let latestPrices = {};
+
+let signalEventSource = null;
+let priceEventSource = null;
 
 const debouncedFetchSignal = debounce(fetchSignal, 300);
 
-document.addEventListener('DOMContentLoaded', function() {
+document.addEventListener("DOMContentLoaded", function () {
     showLoader(true);
-    const initDataQuery = initData ? `?initData=${encodeURIComponent(initData)}` : '';
-    
-    fetch(`${API_BASE_URL}/api/get_pairs${initDataQuery}`)
-        .then(res => res.json())
-        .then(staticData => {
-            allData = staticData;
-            currentWatchlist = (staticData.watchlist || []).map(p => p.replace(/\//g, ''));
-            populateLists(allData);
-            showLoader(false);
-        }).catch(err => {
-            console.error("Pairs load error:", err);
-            showLoader(false);
-        });
 
-    fetch(`${API_BASE_URL}/api/scanner/status${initDataQuery}`)
-        .then(res => res.json())
-        .then(state => updateScannerButtons(state));
-
-    const eventSource = new EventSource(`${API_BASE_URL}/api/signal-stream${initDataQuery}`);
-    eventSource.onmessage = function(event) {
-        const data = JSON.parse(event.data);
-        if (data && !data._ping) {
-            displayLiveSignal(data);
-        }
-    };
-
-    scannerControls.addEventListener('click', (event) => {
-        const button = event.target.closest('.scanner-button');
-        if (!button) return;
-        const category = button.dataset.cat;
-        fetch(`${API_BASE_URL}/api/scanner/toggle?category=${category}${initDataQuery.replace('?','&')}`)
-            .then(res => res.json())
-            .then(newState => updateScannerButtons(newState));
-    });
-
-    const expirationButtons = document.querySelectorAll('.tf-button');
-    expirationButtons.forEach(button => {
-        button.addEventListener('click', () => {
-            expirationButtons.forEach(btn => btn.classList.remove('active'));
-            button.classList.add('active');
-            currentExpiration = button.dataset.exp;
-            if(lastSelectedPair) fetchSignal(lastSelectedPair);
-        });
-    });
-
-    const searchInput = document.getElementById('searchInput');
-    searchInput.addEventListener('input', debounce((e) => populateLists(allData, e.target.value), 300));
+    loadInitialData();
+    bindScannerControls();
+    bindTimeframeButtons();
+    bindSearch();
+    connectSignalStream();
+    connectPriceStream();
 });
 
-function updateScannerButtons(stateDict) {
-    if (!stateDict) return;
-    const textMap = { forex: "Forex", crypto: "Crypto", commodities: "Сировина", watchlist: "Обране" };
-    Object.keys(textMap).forEach(cat => {
-        const btn = scannerControls.querySelector(`.scanner-button[data-cat="${cat}"]`);
-        if (btn) {
-            const isEnabled = stateDict[cat] === true;
-            btn.textContent = `${isEnabled ? '✅' : '❌'} ${textMap[cat]}`;
-            btn.classList.toggle('enabled', isEnabled);
+function buildQuery(params = {}) {
+    const search = new URLSearchParams();
+
+    if (initData) {
+        search.set("initData", initData);
+    }
+
+    Object.entries(params).forEach(([key, value]) => {
+        if (value !== undefined && value !== null && value !== "") {
+            search.set(key, String(value));
         }
+    });
+
+    const qs = search.toString();
+    return qs ? `?${qs}` : "";
+}
+
+async function apiGet(path, params = {}) {
+    const url = `${API_BASE_URL}${path}${buildQuery(params)}`;
+    const response = await fetch(url);
+
+    if (!response.ok) {
+        throw new Error(`HTTP ${response.status} for ${path}`);
+    }
+
+    return response.json();
+}
+
+async function loadInitialData() {
+    try {
+        const staticData = await apiGet("/api/get_pairs");
+        allData = staticData || {};
+        currentWatchlist = ((staticData && staticData.watchlist) || []).map(normalizePair);
+
+        populateLists(allData);
+        showLoader(false);
+    } catch (err) {
+        console.error("Pairs load error:", err);
+        showLoader(false);
+    }
+
+    try {
+        const state = await apiGet("/api/scanner/status");
+        updateScannerButtons(state);
+    } catch (err) {
+        console.warn("Scanner status unavailable:", err);
+        updateScannerButtons({
+            forex: false,
+            crypto: false,
+            commodities: false,
+            watchlist: false,
+        });
+    }
+}
+
+function bindScannerControls() {
+    if (!scannerControls) return;
+
+    scannerControls.addEventListener("click", async (event) => {
+        const button = event.target.closest(".scanner-button");
+        if (!button) return;
+
+        const category = button.dataset.cat;
+        if (!category) return;
+
+        try {
+            const url = `${API_BASE_URL}/api/scanner/toggle${buildQuery({ category })}`;
+            const response = await fetch(url, { method: "GET" });
+
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+
+            const newState = await response.json();
+            updateScannerButtons(newState);
+        } catch (err) {
+            console.error("Scanner toggle error:", err);
+        }
+    });
+}
+
+function bindTimeframeButtons() {
+    const expirationButtons = document.querySelectorAll(".tf-button");
+    expirationButtons.forEach((button) => {
+        button.addEventListener("click", () => {
+            expirationButtons.forEach((btn) => btn.classList.remove("active"));
+            button.classList.add("active");
+            currentExpiration = button.dataset.exp;
+
+            if (lastSelectedPair) {
+                fetchSignal(lastSelectedPair);
+            }
+        });
+    });
+}
+
+function bindSearch() {
+    const searchInput = document.getElementById("searchInput");
+    if (!searchInput) return;
+
+    searchInput.addEventListener(
+        "input",
+        debounce((e) => populateLists(allData, e.target.value), 300)
+    );
+}
+
+function connectSignalStream() {
+    try {
+        const url = `${API_BASE_URL}/api/signal-stream${buildQuery()}`;
+        signalEventSource = new EventSource(url);
+
+        signalEventSource.onmessage = function (event) {
+            try {
+                const data = JSON.parse(event.data);
+
+                if (!data || data._ping) return;
+                if (data.type && data.type !== "signal") return;
+                if (!isSignalPayload(data)) return;
+
+                displayLiveSignal(data);
+            } catch (err) {
+                console.error("Signal stream parse error:", err, event.data);
+            }
+        };
+
+        signalEventSource.onerror = function (err) {
+            console.warn("Signal stream error:", err);
+        };
+    } catch (err) {
+        console.error("Failed to connect signal stream:", err);
+    }
+}
+
+function connectPriceStream() {
+    try {
+        const url = `${API_BASE_URL}/api/price-stream${buildQuery()}`;
+        priceEventSource = new EventSource(url);
+
+        priceEventSource.onmessage = function (event) {
+            try {
+                const data = JSON.parse(event.data);
+
+                if (!data || data._ping) return;
+                if (data.type !== "price") return;
+                if (!isPricePayload(data)) return;
+
+                const pairNorm = normalizePair(data.pair);
+                latestPrices[pairNorm] = data;
+
+                updatePairPriceInList(pairNorm, data);
+                updateOpenSignalPrice(pairNorm, data);
+            } catch (err) {
+                console.error("Price stream parse error:", err, event.data);
+            }
+        };
+
+        priceEventSource.onerror = function (err) {
+            console.warn("Price stream error:", err);
+        };
+    } catch (err) {
+        console.error("Failed to connect price stream:", err);
+    }
+}
+
+function normalizePair(pair) {
+    return String(pair || "").replace(/\//g, "").toUpperCase();
+}
+
+function escapeHtml(value) {
+    return String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+}
+
+function isSignalPayload(data) {
+    return (
+        data &&
+        typeof data === "object" &&
+        typeof data.pair !== "undefined" &&
+        typeof data.verdict_text !== "undefined" &&
+        typeof data.score !== "undefined"
+    );
+}
+
+function isPricePayload(data) {
+    return (
+        data &&
+        typeof data === "object" &&
+        typeof data.pair !== "undefined" &&
+        (
+            typeof data.mid === "number" ||
+            typeof data.bid === "number" ||
+            typeof data.ask === "number"
+        )
+    );
+}
+
+function updateScannerButtons(stateDict) {
+    if (!stateDict || !scannerControls) return;
+
+    const textMap = {
+        forex: "Forex",
+        crypto: "Crypto",
+        commodities: "Сировина",
+        watchlist: "Обране",
+    };
+
+    Object.keys(textMap).forEach((cat) => {
+        const btn = scannerControls.querySelector(`.scanner-button[data-cat="${cat}"]`);
+        if (!btn) return;
+
+        const isEnabled = stateDict[cat] === true;
+        btn.textContent = `${isEnabled ? "✅" : "❌"} ${textMap[cat]}`;
+        btn.classList.toggle("enabled", isEnabled);
     });
 }
 
 function displayLiveSignal(signalData) {
-    const signalDiv = document.createElement('div');
-    signalDiv.className = 'live-signal';
-    const typeClass = signalData.verdict_text === "BUY" ? 'buy' : (signalData.verdict_text === "SELL" ? 'sell' : 'neutral');
-    signalDiv.classList.add(typeClass);
-    signalDiv.innerHTML = `<div class="live-signal-content" style="text-align:center;"><strong>${signalData.pair}</strong>: ${signalData.verdict_text} (${signalData.score}%)</div><div class="live-signal-timer"></div>`;
-    signalDiv.onclick = () => {
-        signalOutput.innerHTML = formatSignalAsHtml(signalData, currentExpiration);
-        signalContainer.scrollIntoView({ behavior: 'smooth' });
-        signalDiv.remove();
-    };
-    liveSignalsContainer.prepend(signalDiv);
-    setTimeout(() => { if (signalDiv.parentElement) signalDiv.remove(); }, 15000);
-}
+    if (!liveSignalsContainer) return;
 
-function populateLists(data, query = '') {
-    let html = '';
-    const queryLower = query.toLowerCase();
-    
-    function createSection(title, pairs) {
-        if (!Array.isArray(pairs)) return '';
-        const fps = pairs.filter(p => p.toLowerCase().includes(queryLower));
-        if (fps.length === 0) return '';
-        let sHtml = `<div class="category"><div class="category-title">${title}</div><div class="pair-list">`;
-        fps.forEach(pair => {
-            const pn = pair.replace(/\//g, '');
-            const isFav = currentWatchlist.includes(pn);
-            sHtml += `<div class="pair-item"><button class="pair-button" data-pair="${pair}"><span>${pair}</span></button><button class="fav-btn" onclick="toggleFavorite(event, this, '${pair}')">${isFav ? '✅' : '⭐'}</button></div>`;
-        });
-        return sHtml + '</div></div>';
+    const pairNorm = normalizePair(signalData.pair);
+    const existing = liveSignalsContainer.querySelector(`.live-signal[data-pair="${pairNorm}"]`);
+
+    const typeClass =
+        signalData.verdict_text === "BUY"
+            ? "buy"
+            : signalData.verdict_text === "SELL"
+                ? "sell"
+                : "neutral";
+
+    const html = `
+        <div class="live-signal-content" style="text-align:center;">
+            <strong>${escapeHtml(signalData.pair)}</strong>: ${escapeHtml(signalData.verdict_text)} (${Number(signalData.score) || 0}%)
+        </div>
+        <div class="live-signal-timer"></div>
+    `;
+
+    let signalDiv = existing;
+    if (!signalDiv) {
+        signalDiv = document.createElement("div");
+        signalDiv.className = "live-signal";
+        signalDiv.dataset.pair = pairNorm;
+        liveSignalsContainer.prepend(signalDiv);
     }
 
-    const allP = [
-        ...(data.forex ? data.forex.map(s => s.pairs).flat() : []),
+    signalDiv.className = "live-signal";
+    signalDiv.classList.add(typeClass);
+    signalDiv.innerHTML = html;
+
+    signalDiv.onclick = () => {
+        currentSignalData = { ...signalData };
+        signalOutput.innerHTML = formatSignalAsHtml(currentSignalData, currentExpiration);
+        signalContainer.scrollIntoView({ behavior: "smooth" });
+        signalDiv.remove();
+    };
+
+    clearTimeout(signalDiv._removeTimer);
+    signalDiv._removeTimer = setTimeout(() => {
+        if (signalDiv.parentElement) {
+            signalDiv.remove();
+        }
+    }, 15000);
+}
+
+function populateLists(data, query = "") {
+    if (!listsContainer) return;
+
+    let html = "";
+    const queryLower = String(query || "").toLowerCase();
+
+    function createSection(title, pairs) {
+        if (!Array.isArray(pairs)) return "";
+
+        const filteredPairs = pairs.filter((p) => String(p).toLowerCase().includes(queryLower));
+        if (filteredPairs.length === 0) return "";
+
+        let sectionHtml = `<div class="category"><div class="category-title">${escapeHtml(title)}</div><div class="pair-list">`;
+
+        filteredPairs.forEach((pair) => {
+            const pairNorm = normalizePair(pair);
+            const isFav = currentWatchlist.includes(pairNorm);
+            const price = latestPrices[pairNorm];
+            const priceText =
+                price && typeof price.mid === "number"
+                    ? price.mid.toFixed(5)
+                    : "—";
+
+            sectionHtml += `
+                <div class="pair-item">
+                    <button class="pair-button" data-pair="${escapeHtml(pair)}">
+                        <span>${escapeHtml(pair)}</span>
+                        <span class="pair-price" id="price-${pairNorm}" data-pair="${pairNorm}">${priceText}</span>
+                    </button>
+                    <button class="fav-btn" onclick="toggleFavorite(event, this, '${escapeJsString(pair)}')">
+                        ${isFav ? "✅" : "⭐"}
+                    </button>
+                </div>
+            `;
+        });
+
+        return sectionHtml + "</div></div>";
+    }
+
+    const allPairs = [
+        ...(data.forex ? data.forex.map((s) => s.pairs).flat() : []),
         ...(data.crypto || []),
         ...(data.stocks || []),
-        ...(data.commodities || [])
+        ...(data.commodities || []),
     ];
 
     if (currentWatchlist.length > 0) {
-        let wl = currentWatchlist.map(pn => allP.find(p => p.replace(/\//g, '') === pn) || pn);
-        html += createSection('⭐ Обране', wl);
+        const wl = currentWatchlist.map(
+            (pairNorm) => allPairs.find((p) => normalizePair(p) === pairNorm) || pairNorm
+        );
+        html += createSection("⭐ Обране", wl);
     }
 
-    if (data.forex) data.forex.forEach(s => { html += createSection(s.title, s.pairs); });
-    if (data.crypto) html += createSection('💎 Криптовалюти', data.crypto);
-    if (data.commodities) html += createSection('🥇 Сировина', data.commodities);
-    if (data.stocks) html += createSection('📈 Акції/Індекси', data.stocks);
+    if (data.forex) {
+        data.forex.forEach((session) => {
+            html += createSection(session.title, session.pairs);
+        });
+    }
+
+    if (data.crypto) html += createSection("💎 Криптовалюти", data.crypto);
+    if (data.commodities) html += createSection("🥇 Сировина", data.commodities);
+    if (data.stocks) html += createSection("📈 Акції/Індекси", data.stocks);
 
     listsContainer.innerHTML = html;
-    listsContainer.querySelectorAll('.pair-button').forEach(btn => {
-        btn.addEventListener('click', (e) => debouncedFetchSignal(e.currentTarget.dataset.pair));
+
+    listsContainer.querySelectorAll(".pair-button").forEach((btn) => {
+        btn.addEventListener("click", (e) => debouncedFetchSignal(e.currentTarget.dataset.pair));
     });
 }
 
-function toggleFavorite(event, button, pair) {
-    event.stopPropagation();
-    const iData = initData ? `&initData=${encodeURIComponent(initData)}` : '';
-    const pn = pair.replace(/\//g, '');
-    
-    fetch(`${API_BASE_URL}/api/toggle_watchlist?pair=${pair}${iData}`)
-        .then(res => res.json())
-        .then(res => {
-            if (res.success) {
-                if (currentWatchlist.includes(pn)) currentWatchlist = currentWatchlist.filter(p => p !== pn);
-                else currentWatchlist.push(pn);
-                populateLists(allData, document.getElementById('searchInput').value);
-            }
-        });
+function updatePairPriceInList(pairNorm, priceData) {
+    const priceNode = document.getElementById(`price-${pairNorm}`);
+    if (!priceNode) return;
+
+    let priceText = "—";
+    if (typeof priceData.mid === "number") {
+        priceText = priceData.mid.toFixed(5);
+    } else if (typeof priceData.bid === "number") {
+        priceText = priceData.bid.toFixed(5);
+    } else if (typeof priceData.ask === "number") {
+        priceText = priceData.ask.toFixed(5);
+    }
+
+    if (priceNode.textContent !== priceText) {
+        priceNode.textContent = priceText;
+    }
 }
 
-function fetchSignal(pair) {
+function updateOpenSignalPrice(pairNorm, priceData) {
+    if (!currentSignalData || !lastSelectedPair) return;
+
+    const selectedNorm = normalizePair(lastSelectedPair);
+    if (selectedNorm !== pairNorm) return;
+
+    const nextPrice =
+        typeof priceData.mid === "number"
+            ? priceData.mid
+            : typeof priceData.bid === "number"
+                ? priceData.bid
+                : typeof priceData.ask === "number"
+                    ? priceData.ask
+                    : null;
+
+    if (typeof nextPrice !== "number") return;
+
+    currentSignalData = {
+        ...currentSignalData,
+        price: nextPrice,
+    };
+
+    signalOutput.innerHTML = formatSignalAsHtml(currentSignalData, currentExpiration);
+}
+
+async function toggleFavorite(event, button, pair) {
+    event.stopPropagation();
+
+    const pairNorm = normalizePair(pair);
+
+    try {
+        const url = `${API_BASE_URL}/api/toggle_watchlist${buildQuery({ pair })}`;
+        const response = await fetch(url, { method: "GET" });
+
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+
+        const res = await response.json();
+
+        if (res.success) {
+            if (currentWatchlist.includes(pairNorm)) {
+                currentWatchlist = currentWatchlist.filter((p) => p !== pairNorm);
+            } else {
+                currentWatchlist.push(pairNorm);
+            }
+
+            try {
+                const refreshed = await apiGet("/api/get_pairs");
+                allData = refreshed || allData;
+                currentWatchlist = ((refreshed && refreshed.watchlist) || []).map(normalizePair);
+            } catch (refreshErr) {
+                console.warn("Watchlist refresh failed, using local state:", refreshErr);
+            }
+
+            const searchInput = document.getElementById("searchInput");
+            populateLists(allData, searchInput ? searchInput.value : "");
+        }
+    } catch (err) {
+        console.error("Toggle favorite error:", err);
+    }
+}
+
+async function fetchSignal(pair) {
     lastSelectedPair = pair;
     showLoader(true);
-    signalOutput.innerHTML = `<div style="text-align:center; padding:20px;">⏳ Аналіз ${pair}...</div>`;
-    const iDataQuery = initData ? `&initData=${encodeURIComponent(initData)}` : '';
-    fetch(`${API_BASE_URL}/api/signal?pair=${pair}&timeframe=${currentExpiration}${iDataQuery}`)
-        .then(res => res.json())
-        .then(data => {
-            signalOutput.innerHTML = formatSignalAsHtml(data, currentExpiration);
-            setTimeout(() => { signalContainer.scrollIntoView({ behavior: 'smooth' }); }, 100);
-        })
-        .finally(() => showLoader(false));
+    signalOutput.innerHTML = `<div style="text-align:center; padding:20px;">⏳ Аналіз ${escapeHtml(pair)}...</div>`;
+
+    try {
+        const url = `${API_BASE_URL}/api/signal${buildQuery({
+            pair,
+            timeframe: currentExpiration,
+        })}`;
+
+        const res = await fetch(url);
+        const data = await res.json();
+
+        currentSignalData = data;
+        signalOutput.innerHTML = formatSignalAsHtml(data, currentExpiration);
+
+        setTimeout(() => {
+            signalContainer.scrollIntoView({ behavior: "smooth" });
+        }, 100);
+    } catch (err) {
+        console.error("Fetch signal error:", err);
+        currentSignalData = null;
+        signalOutput.innerHTML = `
+            <div style="text-align:center; color:#ef5350; padding:20px;">
+                ❌ Помилка запиту до сервера
+            </div>
+        `;
+    } finally {
+        showLoader(false);
+    }
 }
 
 function formatSignalAsHtml(signalData, exp) {
-    if (!signalData || signalData.error) return `<div style="text-align:center; color:#ef5350; padding:20px;">❌ Помилка: ${signalData?.error || 'Немає даних'}</div>`;
-    const { pair, price, verdict_text, score, sentiment, reasons } = signalData;
-    
-    let arrow = "↔️", cClass = "neutral";
-    if (verdict_text === "BUY") { arrow = "⬆️"; cClass = "buy"; }
-    else if (verdict_text === "SELL") { arrow = "⬇️"; cClass = "sell"; }
+    if (!signalData || signalData.error) {
+        return `
+            <div style="text-align:center; color:#ef5350; padding:20px;">
+                ❌ Помилка: ${escapeHtml(signalData?.error || "Немає даних")}
+            </div>
+        `;
+    }
+
+    const pair = escapeHtml(signalData.pair || "N/A");
+    const price = signalData.price;
+    const verdictText = escapeHtml(signalData.verdict_text || "WAIT");
+    const score = Number.isFinite(Number(signalData.score)) ? Number(signalData.score) : 50;
+    const sentiment = signalData.sentiment ? escapeHtml(signalData.sentiment) : "";
+    const reasons = Array.isArray(signalData.reasons) ? signalData.reasons : [];
+    const tradeAllowed = Boolean(signalData.is_trade_allowed);
+
+    let arrow = "↔️";
+    let cClass = "neutral";
+
+    if (signalData.verdict_text === "BUY") {
+        arrow = "⬆️";
+        cClass = "buy";
+    } else if (signalData.verdict_text === "SELL") {
+        arrow = "⬇️";
+        cClass = "sell";
+    } else if (signalData.verdict_text === "NEWS_WAIT") {
+        arrow = "⏸️";
+        cClass = "neutral";
+    }
+
+    const safePrice =
+        typeof price === "number"
+            ? price.toFixed(5)
+            : "N/A";
 
     return `
         <div class="signal-header" style="text-align:center; font-size:1.2em; margin-bottom:15px;">
-            <strong>${pair}</strong> <span style="color:#64748b; font-size:0.8em;">(Exp: ${exp})</span>
+            <strong>${pair}</strong> <span style="color:#64748b; font-size:0.8em;">(Exp: ${escapeHtml(exp)})</span>
         </div>
         <div class="verdict-container" style="text-align:center; margin:20px 0;">
             <div class="arrow" style="font-size:95px; line-height:1; display:block;">${arrow}</div>
-            <div class="v-text ${cClass}" style="font-size:42px; font-weight:900; display:block;">${verdict_text}</div>
-            <div style="font-size:24px; color:#3390ec; font-family:monospace; margin-top:10px; display:block;">${price ? price.toFixed(5) : 'N/A'}</div>
+            <div class="v-text ${cClass}" style="font-size:42px; font-weight:900; display:block;">${verdictText}</div>
+            <div style="font-size:24px; color:#3390ec; font-family:monospace; margin-top:10px; display:block;">${safePrice}</div>
         </div>
-        ${sentiment ? `<div class="ai-verdict" style="padding:10px; border-radius:8px; text-align:center; font-weight:bold; margin:10px auto; border:1px solid; background:rgba(0,0,0,0.1); color:${sentiment==='GO'?'#26a69a':'#ef5350'}; width:fit-content;">${sentiment==='GO'?'✅':'🚨'} ШІ Новини: ${sentiment}</div>` : ""}
+        ${
+            sentiment
+                ? `<div class="ai-verdict" style="padding:10px; border-radius:8px; text-align:center; font-weight:bold; margin:10px auto; border:1px solid; background:rgba(0,0,0,0.1); color:${sentiment === "GO" ? "#26a69a" : "#ef5350"}; width:fit-content;">
+                    ${sentiment === "GO" ? "✅" : "🚨"} ШІ Новини: ${sentiment}
+                   </div>`
+                : ""
+        }
         <div class="power-balance" style="display:flex; justify-content:space-around; margin:15px 0; font-weight:bold; text-align:center;">
             <span style="color:#26a69a;">🐂 ${score}%</span>
-            <span style="color:#ef5350;">🐃 ${100-score}%</span>
+            <span style="color:#ef5350;">🐃 ${100 - score}%</span>
         </div>
-        ${reasons && reasons.length ? `<div class="reasons" style="text-align:left; margin-top:15px; border-top:1px solid rgba(255,255,255,0.1); padding-top:10px;">${reasons.map(r => `<div style="margin-bottom:5px;">• ${r}</div>`).join('')}</div>` : ''}
+        <div style="text-align:center; margin-top:10px; font-weight:bold; color:${tradeAllowed ? "#26a69a" : "#ef5350"};">
+            ${tradeAllowed ? "✅ Вхід дозволено" : "⛔ Вхід не рекомендований"}
+        </div>
+        ${
+            reasons.length
+                ? `<div class="reasons" style="text-align:left; margin-top:15px; border-top:1px solid rgba(255,255,255,0.1); padding-top:10px;">
+                    ${reasons.map((r) => `<div style="margin-bottom:5px;">• ${escapeHtml(r)}</div>`).join("")}
+                   </div>`
+                : ""
+        }
     `;
 }
 
-function showLoader(visible) { loader.className = visible ? '' : 'hidden'; }
+function showLoader(visible) {
+    if (!loader) return;
+    loader.className = visible ? "" : "hidden";
+}
+
 function debounce(func, delay) {
     let timeout;
-    return function(...args) {
+    return function (...args) {
         clearTimeout(timeout);
         timeout = setTimeout(() => func.apply(this, args), delay);
     };
+}
+
+function escapeJsString(value) {
+    return String(value ?? "")
+        .replace(/\\/g, "\\\\")
+        .replace(/'/g, "\\'");
 }
