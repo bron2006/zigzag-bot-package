@@ -5,7 +5,7 @@ from typing import Optional, Tuple
 
 import pandas as pd
 import pandas_ta as ta
-from twisted.internet import reactor
+from twisted.internet import defer, reactor
 from twisted.internet.defer import Deferred, DeferredList
 from twisted.internet.threads import deferToThreadPool
 
@@ -30,6 +30,10 @@ PERIOD_MAP = {
 }
 
 FEATURE_NAMES = ["ATRr_14", "ADX_14", "RSI_14", "EMA_50", "EMA_200"]
+
+_MARKET_DATA_TIMEOUT = 18
+_CPU_ANALYSIS_TIMEOUT = 12
+_NEWS_TIMEOUT = 8
 
 
 def _blocking_pool():
@@ -172,125 +176,115 @@ def _combine_verdicts_sync(
     }
 
 
-def get_api_detailed_signal_data(client, symbol_cache, symbol, user_id, timeframe="5m"):
+def _fallback_result(symbol: str, timeframe: str, reason: str, verdict_text: str = "WAIT") -> dict:
+    return {
+        "pair": symbol,
+        "price": 0.0,
+        "verdict_text": verdict_text,
+        "score": 50,
+        "reasons": [reason],
+        "ts": time.time(),
+        "timeframe": timeframe,
+        "sentiment": "GO",
+        "is_trade_allowed": False,
+        "error": reason if verdict_text == "ERROR" else None,
+    }
+
+
+@defer.inlineCallbacks
+def _analysis_flow(client, symbol_cache, symbol, user_id, timeframe="5m"):
     pair_norm = _normalize_pair(symbol)
-    main_d = Deferred()
 
-    tf_a, tf_b = _select_timeframes(timeframe)
-    d_a = get_market_data(client, symbol_cache, pair_norm, tf_a, 300)
-    d_b = get_market_data(client, symbol_cache, pair_norm, tf_b, 300)
+    try:
+        if client is None or getattr(client, "_client", None) is None:
+            return _fallback_result(symbol, timeframe, "Клієнт cTrader не ініціалізований", "ERROR")
 
-    dl = DeferredList([d_a, d_b], consumeErrors=True)
+        if not getattr(client._client, "account_id", None):
+            return _fallback_result(symbol, timeframe, "Акаунт cTrader ще не авторизований", "WAIT")
 
-    def process_market_data(results):
+        tf_a, tf_b = _select_timeframes(timeframe)
+
+        d_a = get_market_data(client, symbol_cache, pair_norm, tf_a, 300)
+        d_b = get_market_data(client, symbol_cache, pair_norm, tf_b, 300)
+
+        d_a.addTimeout(_MARKET_DATA_TIMEOUT, reactor)
+        d_b.addTimeout(_MARKET_DATA_TIMEOUT, reactor)
+
+        results = yield DeferredList([d_a, d_b], consumeErrors=True)
+
+        ok_a, df_a = results[0]
+        ok_b, df_b = results[1]
+
+        if not ok_a or not ok_b:
+            reasons = []
+            if not ok_a:
+                reasons.append(f"Не вдалося завантажити {tf_a.upper()}")
+            if not ok_b:
+                reasons.append(f"Не вдалося завантажити {tf_b.upper()}")
+            return _fallback_result(symbol, timeframe, "; ".join(reasons) or "Не вдалося завантажити дані", "WAIT")
+
+        d_cpu = deferToThreadPool(
+            reactor,
+            _blocking_pool(),
+            _combine_verdicts_sync,
+            symbol,
+            timeframe,
+            tf_a,
+            df_a,
+            tf_b,
+            df_b,
+        )
+        d_cpu.addTimeout(_CPU_ANALYSIS_TIMEOUT, reactor)
+
         try:
-            ok_a, df_a = results[0]
-            ok_b, df_b = results[1]
-
-            if not ok_a or not ok_b:
-                main_d.callback(
-                    {
-                        "pair": symbol,
-                        "verdict_text": "WAIT",
-                        "price": 0.0,
-                        "score": 50,
-                        "reasons": ["Не вдалося завантажити дані"],
-                        "timeframe": timeframe,
-                        "sentiment": "GO",
-                        "is_trade_allowed": False,
-                    }
-                )
-                return
-
-            d_cpu = deferToThreadPool(
-                reactor,
-                _blocking_pool(),
-                _combine_verdicts_sync,
-                symbol,
-                timeframe,
-                tf_a,
-                df_a,
-                tf_b,
-                df_b,
-            )
-
-            def on_cpu_result(base_result: dict):
-                news_d = news_filter.get_latest_news_sentiment_async(pair_norm)
-
-                def apply_news(news_result):
-                    result = dict(base_result)
-                    news_verdict = news_result.get("verdict", "GO")
-                    news_reason = news_result.get("reason", "")
-                    result["sentiment"] = news_verdict
-
-                    if news_verdict == "BLOCK":
-                        result["is_trade_allowed"] = False
-                        if result.get("verdict_text") in ("BUY", "SELL"):
-                            result["verdict_text"] = "NEWS_WAIT"
-
-                        result["reasons"].append(
-                            f"ШІ: BLOCK — {news_reason}"
-                            if news_reason
-                            else "ШІ: Ризиковані новини. Вхід заблоковано."
-                        )
-                    else:
-                        result["reasons"].append(
-                            f"ШІ: GO — {news_reason}"
-                            if news_reason
-                            else "ШІ: Новини ок"
-                        )
-                        result["is_trade_allowed"] = result.get("verdict_text") in ("BUY", "SELL")
-
-                    result["ts"] = time.time()
-                    main_d.callback(result)
-
-                def news_error(failure):
-                    logger.warning(
-                        f"News filter error for {pair_norm}: {failure.getErrorMessage()}"
-                    )
-                    result = dict(base_result)
-                    result["sentiment"] = "GO"
-                    result["reasons"].append("ШІ: недоступний, аналіз без новин")
-                    result["is_trade_allowed"] = result.get("verdict_text") in ("BUY", "SELL")
-                    result["ts"] = time.time()
-                    main_d.callback(result)
-
-                news_d.addCallbacks(apply_news, news_error)
-
-            def on_cpu_error(failure):
-                logger.error(f"CPU analysis error for {symbol}: {failure.getErrorMessage()}")
-                main_d.callback(
-                    {
-                        "pair": symbol,
-                        "verdict_text": "ERROR",
-                        "price": 0.0,
-                        "score": 50,
-                        "reasons": [failure.getErrorMessage()],
-                        "timeframe": timeframe,
-                        "sentiment": "GO",
-                        "is_trade_allowed": False,
-                    }
-                )
-
-            d_cpu.addCallbacks(on_cpu_result, on_cpu_error)
-
+            base_result = yield d_cpu
         except Exception as e:
-            logger.exception(f"Analysis error for {symbol}")
-            main_d.callback(
-                {
-                    "pair": symbol,
-                    "verdict_text": "ERROR",
-                    "price": 0.0,
-                    "score": 50,
-                    "reasons": [str(e)],
-                    "timeframe": timeframe,
-                    "sentiment": "GO",
-                    "is_trade_allowed": False,
-                }
-            )
+            logger.error(f"CPU analysis timeout/error for {symbol}: {e}")
+            return _fallback_result(symbol, timeframe, "Технічний аналіз перевищив час очікування", "WAIT")
 
-    dl.addCallback(process_market_data)
-    return main_d
+        try:
+            news_d = news_filter.get_latest_news_sentiment_async(pair_norm)
+            news_d.addTimeout(_NEWS_TIMEOUT, reactor)
+            news_result = yield news_d
+        except Exception as e:
+            logger.warning(f"News filter timeout/error for {pair_norm}: {e}")
+            news_result = {
+                "verdict": "GO",
+                "reason": "ШІ недоступний, аналіз без новин",
+                "source": "fallback_timeout",
+            }
+
+        result = dict(base_result)
+        news_verdict = news_result.get("verdict", "GO")
+        news_reason = news_result.get("reason", "")
+        result["sentiment"] = news_verdict
+
+        if news_verdict == "BLOCK":
+            result["is_trade_allowed"] = False
+            if result.get("verdict_text") in ("BUY", "SELL"):
+                result["verdict_text"] = "NEWS_WAIT"
+
+            result["reasons"].append(
+                f"ШІ: BLOCK — {news_reason}"
+                if news_reason
+                else "ШІ: Ризиковані новини. Вхід заблоковано."
+            )
+        else:
+            result["reasons"].append(
+                f"ШІ: GO — {news_reason}" if news_reason else "ШІ: Новини ок"
+            )
+            result["is_trade_allowed"] = result.get("verdict_text") in ("BUY", "SELL")
+
+        result["ts"] = time.time()
+        return result
+
+    except Exception as e:
+        logger.exception(f"Analysis error for {symbol}")
+        return _fallback_result(symbol, timeframe, str(e), "ERROR")
+
+
+def get_api_detailed_signal_data(client, symbol_cache, symbol, user_id, timeframe="5m"):
+    return defer.maybeDeferred(_analysis_flow, client, symbol_cache, symbol, user_id, timeframe)
 
 
 def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: int):
@@ -306,6 +300,14 @@ def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: in
         reactor.callLater(0, d.errback, Exception(f"Невідомий таймфрейм: {period}"))
         return d
 
+    if client is None or getattr(client, "_client", None) is None:
+        reactor.callLater(0, d.errback, Exception("cTrader client is not ready"))
+        return d
+
+    if not getattr(client._client, "account_id", None):
+        reactor.callLater(0, d.errback, Exception("cTrader account_id is missing"))
+        return d
+
     now = int(time.time() * 1000)
     seconds = {"1m": 60, "5m": 300, "15m": 900}.get(period, 300)
     from_ts = now - (count * seconds * 1000)
@@ -318,7 +320,7 @@ def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: in
         toTimestamp=now,
     )
 
-    api_deferred = client.send(req, timeout=20)
+    api_deferred = client.send(req, timeout=15)
 
     def on_res(msg):
         try:
@@ -347,5 +349,8 @@ def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: in
         except Exception as e:
             d.errback(e)
 
-    api_deferred.addCallbacks(on_res, d.errback)
+    def on_err(failure):
+        d.errback(failure)
+
+    api_deferred.addCallbacks(on_res, on_err)
     return d

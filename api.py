@@ -7,7 +7,7 @@ import time
 from functools import wraps
 
 from flask import Response, jsonify, request, send_from_directory
-from twisted.internet import reactor
+from twisted.internet import defer, reactor
 from twisted.internet.task import LoopingCall
 from twisted.internet.threads import blockingCallFromThread
 from twisted.web.resource import Resource
@@ -64,11 +64,6 @@ def _drain_channel(channel: str) -> None:
 
 
 def drain_sse_events() -> None:
-    """
-    Викликається з app.py. Дрейнить обидва канали:
-    - signal
-    - price
-    """
     _drain_channel("signal")
     _drain_channel("price")
 
@@ -169,6 +164,20 @@ def build_root_resource(flask_app, reactor_obj, wsgi_pool):
     return HybridRootResource(wsgi_resource)
 
 
+@defer.inlineCallbacks
+def _call_analysis_in_reactor(pair: str, uid: int | None, tf: str):
+    d = analysis_module.get_api_detailed_signal_data(
+        app_state.client,
+        app_state.symbol_cache,
+        pair.replace("/", ""),
+        uid,
+        tf,
+    )
+    d.addTimeout(50, reactor)
+    result = yield d
+    return result
+
+
 def register_routes(app):
     @app.route("/api/health")
     def health_check():
@@ -180,7 +189,7 @@ def register_routes(app):
             html = f"""
             <html><head><meta charset="UTF-8"><style>
                 body {{ background:#0f0f0f; color:#e0e0e0; font-family:sans-serif; padding:20px; display:flex; justify-content:center; }}
-                .card {{ background:#1a1a1a; border-radius:16px; padding:24px; border:1px solid #333; width:500px; }}
+                .card {{ background:#1a1a1a; border-radius:16px; padding:24px; border:1px solid #333; width:520px; }}
                 h1 {{ color:#3390ec; border-bottom:1px solid #333; padding-bottom:10px; font-size:22px; }}
                 .stat {{ display:flex; justify-content:space-between; padding:10px 0; border-bottom:1px solid #252525; }}
                 .val {{ font-weight:bold; color:#fff; }}
@@ -224,6 +233,11 @@ def register_routes(app):
             }
         )
 
+    @app.route("/api/scanner/status", methods=["GET"])
+    @_protected_route
+    def scanner_status():
+        return jsonify(app_state.get_scanner_state_snapshot())
+
     @app.route("/api/scanner/toggle", methods=["GET", "POST"])
     @_protected_route
     def scanner_toggle():
@@ -232,6 +246,29 @@ def register_routes(app):
             app_state.set_scanner_state(cat, not app_state.get_scanner_state(cat))
             reactor.callLater(0.5, ctrader.start_price_subscriptions)
         return jsonify(app_state.get_scanner_state_snapshot())
+
+    @app.route("/api/toggle_watchlist", methods=["GET", "POST"])
+    @_protected_route
+    def toggle_watchlist():
+        uid = get_user_id_from_init_data(_request_init_data())
+        pair = (request.values.get("pair") or "").strip()
+
+        if not uid:
+            return jsonify({"success": False, "error": "User not resolved"}), 400
+
+        if not pair:
+            return jsonify({"success": False, "error": "pair is required"}), 400
+
+        ok = db.toggle_watchlist(uid, pair.replace("/", "").upper())
+        watchlist = db.get_watchlist(uid) if ok else []
+
+        return jsonify(
+            {
+                "success": bool(ok),
+                "watchlist": watchlist,
+                "pair": pair.replace("/", "").upper(),
+            }
+        )
 
     @app.route("/api/signal")
     @_protected_route
@@ -244,24 +281,34 @@ def register_routes(app):
             return jsonify({"success": False, "error": "pair is required"}), 400
 
         try:
-            def _call():
-                d = analysis_module.get_api_detailed_signal_data(
-                    app_state.client,
-                    app_state.symbol_cache,
-                    pair.replace("/", ""),
-                    uid,
-                    tf,
-                )
-                d.addTimeout(45, reactor)
-                return d
+            result = blockingCallFromThread(
+                reactor,
+                _call_analysis_in_reactor,
+                pair,
+                uid,
+                tf,
+            )
 
-            result = blockingCallFromThread(reactor, _call)
+            if not isinstance(result, dict):
+                result = {
+                    "pair": pair,
+                    "timeframe": tf,
+                    "verdict_text": "ERROR",
+                    "score": 50,
+                    "reasons": ["Невірний формат відповіді аналізу"],
+                    "error": "Невірний формат відповіді аналізу",
+                    "is_trade_allowed": False,
+                }
+
             return jsonify(result)
 
         except Exception as e:
             logger.exception("api_signal failed")
+
             msg = str(e)
-            if "Timed out" in msg or "timeout" in msg.lower():
+            if msg in {"(45, 'Deferred')", "(50, 'Deferred')"} or "Deferred" in msg:
+                msg = "Час очікування аналізу вичерпано"
+            elif "Timed out" in msg or "timeout" in msg.lower():
                 msg = "Час очікування аналізу вичерпано"
 
             return jsonify(
@@ -273,6 +320,7 @@ def register_routes(app):
                     "verdict_text": "ERROR",
                     "score": 50,
                     "reasons": [msg],
+                    "is_trade_allowed": False,
                 }
             ), 500
 
