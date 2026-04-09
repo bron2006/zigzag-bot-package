@@ -31,7 +31,6 @@ PERIOD_MAP = {
 
 MARKET_DATA_TIMEOUT = 18
 CPU_ANALYSIS_TIMEOUT = 12
-NEWS_TIMEOUT = 8
 
 MODEL_FEATURE_NAMES = ["ATR", "ADX", "RSI", "EMA50", "EMA200"]
 
@@ -67,7 +66,11 @@ def _resolve_symbol_details(symbol_cache, pair: str):
         if candidate and candidate in symbol_cache:
             return symbol_cache[candidate]
 
-    return app_state.get_symbol_details(norm)
+    get_symbol_details = getattr(app_state, "get_symbol_details", None)
+    if callable(get_symbol_details):
+        return get_symbol_details(norm)
+
+    return None
 
 
 def _prepare_features(df: pd.DataFrame) -> Optional[pd.DataFrame]:
@@ -281,15 +284,14 @@ def _analysis_flow(client, symbol_cache, symbol, user_id, timeframe="5m"):
             return _fallback_result(symbol, timeframe, "Технічний аналіз перевищив час очікування", "WAIT")
 
         try:
-            news_d = news_filter.get_latest_news_sentiment_async(pair_norm)
-            news_d.addTimeout(NEWS_TIMEOUT, reactor)
-            news_result = yield news_d
+            # КРИТИЧНО: без addTimeout зверху, бо news_filter сам контролює timeouts через requests
+            news_result = yield news_filter.get_latest_news_sentiment_async(pair_norm)
         except Exception as e:
             logger.warning(f"News filter timeout/error for {pair_norm}: {e}")
             news_result = {
                 "verdict": "GO",
-                "reason": "ШІ недоступний",
-                "source": "fallback_timeout",
+                "reason": "Помилка запиту до Gemini",
+                "source": "fallback_error",
                 "model": "gemini-flash-latest",
                 "available": False,
                 "http_status": None,
@@ -305,7 +307,6 @@ def _analysis_flow(client, symbol_cache, symbol, user_id, timeframe="5m"):
 
         result["news_source"] = news_source
 
-        # Якщо Gemini реально відповів нормально
         if news_available:
             result["sentiment"] = news_verdict
 
@@ -323,8 +324,6 @@ def _analysis_flow(client, symbol_cache, symbol, user_id, timeframe="5m"):
                     reason_text = f"{reason_text} [{news_model}]"
                 result["reasons"].append(f"ШІ: GO — {reason_text}")
                 result["is_trade_allowed"] = result.get("verdict_text") in ("BUY", "SELL")
-
-        # Якщо Gemini недоступний/порожній/перевантажений
         else:
             result["sentiment"] = "UNAVAILABLE"
             result["is_trade_allowed"] = result.get("verdict_text") in ("BUY", "SELL")

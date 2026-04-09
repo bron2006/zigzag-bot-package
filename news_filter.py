@@ -39,7 +39,9 @@ or
 BLOCK
 """
 
-_REQUEST_TIMEOUT = 20
+# Робимо адекватний timeout на рівні requests, а не Deferred timeout зверху
+_REQUEST_TIMEOUT = (5, 8)  # connect, read
+_RETRY_REQUEST_TIMEOUT = (5, 5)
 
 
 def _blocking_pool():
@@ -89,7 +91,7 @@ def _store_cache(pair: str, result: dict, ttl: int) -> dict:
     return dict(payload)
 
 
-def _build_payload(pair: str, prompt_text: str) -> dict:
+def _build_payload(prompt_text: str) -> dict:
     return {
         "contents": [
             {
@@ -133,7 +135,7 @@ def _extract_text_from_response_json(data: dict) -> str:
         return ""
 
 
-def _success_result(verdict: str, raw: str, source: str) -> dict:
+def _success_result(verdict: str, raw: str, source: str, http_status: int = 200) -> dict:
     return {
         "verdict": verdict,
         "reason": "",
@@ -142,7 +144,7 @@ def _success_result(verdict: str, raw: str, source: str) -> dict:
         "api_version": _GEMINI_API_VERSION,
         "raw": (raw or "")[:120],
         "available": True,
-        "http_status": 200,
+        "http_status": http_status,
     }
 
 
@@ -169,32 +171,30 @@ def _parse_gemini_payload(raw: str) -> dict:
     if re.search(r"\bGO\b", upper):
         return _success_result("GO", cleaned, "gemini_keyword")
 
-    logger.warning("Gemini malformed/empty response. Raw=%r", cleaned[:120])
-
     if not cleaned:
+        logger.warning("Gemini empty response")
         return _fallback_result(
-            reason="Порожня відповідь від моделі",
+            reason="Порожня відповідь від Gemini",
             source="fallback_empty",
             http_status=200,
-            raw=cleaned,
+            raw="",
         )
 
+    logger.warning("Gemini malformed response. Raw=%r", cleaned[:120])
     return _fallback_result(
-        reason="Некоректний формат відповіді моделі",
+        reason="Некоректний формат відповіді Gemini",
         source="fallback_malformed",
         http_status=200,
         raw=cleaned,
     )
 
 
-def _rest_call(pair: str, prompt_text: str) -> tuple[int, str, dict]:
-    payload = _build_payload(pair, prompt_text)
-
+def _rest_call(prompt_text: str, timeout_value) -> tuple[int, str, dict]:
     response = requests.post(
         _GEMINI_ENDPOINT,
         params={"key": GEMINI_API_KEY},
-        json=payload,
-        timeout=_REQUEST_TIMEOUT,
+        json=_build_payload(prompt_text),
+        timeout=timeout_value,
     )
 
     body_text = response.text[:500]
@@ -203,19 +203,14 @@ def _rest_call(pair: str, prompt_text: str) -> tuple[int, str, dict]:
     except Exception:
         body_json = {}
 
-    logger.info(
-        "Gemini HTTP for %s: status=%s key=%s",
-        pair,
-        response.status_code,
-        _mask_key(GEMINI_API_KEY),
-    )
-
     return response.status_code, body_text, body_json
 
 
 def _do_rest_call(pair: str) -> dict:
     if not GEMINI_API_KEY:
         raise RuntimeError("GEMINI_API_KEY is not configured")
+
+    prompt_text = _PROMPT.format(pair=pair)
 
     logger.info(
         "Gemini REST request for %s using model=%s api_version=%s",
@@ -224,7 +219,29 @@ def _do_rest_call(pair: str) -> dict:
         _GEMINI_API_VERSION,
     )
 
-    status_code, body_text, body_json = _rest_call(pair, _PROMPT.format(pair=pair))
+    try:
+        status_code, body_text, body_json = _rest_call(prompt_text, _REQUEST_TIMEOUT)
+    except requests.exceptions.Timeout:
+        logger.warning("Gemini timeout for %s on first request", pair)
+        return _fallback_result(
+            reason="Таймаут Gemini",
+            source="fallback_timeout",
+            http_status=None,
+        )
+    except requests.exceptions.RequestException as e:
+        logger.error("Gemini network error for %s: %s", pair, e)
+        return _fallback_result(
+            reason="Мережева помилка Gemini",
+            source="fallback_network_error",
+            http_status=None,
+        )
+
+    logger.info(
+        "Gemini HTTP for %s: status=%s key=%s",
+        pair,
+        status_code,
+        _mask_key(GEMINI_API_KEY),
+    )
 
     if status_code != 200:
         logger.error(
@@ -249,35 +266,60 @@ def _do_rest_call(pair: str) -> dict:
         raw,
     )
 
-    if not raw:
-        logger.warning("Gemini returned empty text for %s. Retrying with shorter prompt...", pair)
+    if raw:
+        return _parse_gemini_payload(raw)
 
-        retry_prompt = f"Asset: {pair}\nReply exactly one word: GO or BLOCK"
-        retry_status, retry_body_text, retry_body_json = _rest_call(pair, retry_prompt)
+    logger.warning("Gemini returned empty text for %s. Retrying with shorter prompt...", pair)
 
-        if retry_status != 200:
-            logger.error(
-                "Gemini retry HTTP error for %s: %s %s",
-                pair,
-                retry_status,
-                retry_body_text,
-            )
-            return _fallback_result(
-                reason=f"HTTP {retry_status} від Gemini при повторі",
-                source="fallback_retry_http_error",
-                http_status=retry_status,
-                raw=retry_body_text,
-            )
+    retry_prompt = f"Asset: {pair}\nReply exactly one word: GO or BLOCK"
 
-        raw = _extract_text_from_response_json(retry_body_json)
-        logger.info(
-            "Gemini retry raw response for %s [%s]: %s",
-            pair,
-            _GEMINI_MODEL,
-            raw,
+    try:
+        retry_status, retry_body_text, retry_body_json = _rest_call(retry_prompt, _RETRY_REQUEST_TIMEOUT)
+    except requests.exceptions.Timeout:
+        logger.warning("Gemini retry timeout for %s", pair)
+        return _fallback_result(
+            reason="Таймаут Gemini при повторі",
+            source="fallback_retry_timeout",
+            http_status=None,
+        )
+    except requests.exceptions.RequestException as e:
+        logger.error("Gemini retry network error for %s: %s", pair, e)
+        return _fallback_result(
+            reason="Мережева помилка Gemini при повторі",
+            source="fallback_retry_network_error",
+            http_status=None,
         )
 
-    return _parse_gemini_payload(raw)
+    logger.info(
+        "Gemini HTTP for %s: status=%s key=%s",
+        pair,
+        retry_status,
+        _mask_key(GEMINI_API_KEY),
+    )
+
+    if retry_status != 200:
+        logger.error(
+            "Gemini retry HTTP error for %s: %s %s",
+            pair,
+            retry_status,
+            retry_body_text,
+        )
+        return _fallback_result(
+            reason=f"HTTP {retry_status} від Gemini при повторі",
+            source="fallback_retry_http_error",
+            http_status=retry_status,
+            raw=retry_body_text,
+        )
+
+    retry_raw = _extract_text_from_response_json(retry_body_json)
+    logger.info(
+        "Gemini retry raw response for %s [%s]: %s",
+        pair,
+        _GEMINI_MODEL,
+        retry_raw,
+    )
+
+    return _parse_gemini_payload(retry_raw)
 
 
 def get_latest_news_sentiment(pair: str) -> str:
