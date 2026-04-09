@@ -1,9 +1,11 @@
+import json
 import logging
 import re
 import threading
 import time
 from typing import Dict, Optional
 
+import requests
 from twisted.internet import reactor
 from twisted.internet.defer import Deferred, succeed
 from twisted.internet.threads import deferToThreadPool
@@ -13,26 +15,15 @@ from state import app_state
 
 logger = logging.getLogger("news_filter")
 
-try:
-    import google.generativeai as genai
-    from google.generativeai.types import (
-        GenerationConfig,
-        HarmBlockThreshold,
-        HarmCategory,
-    )
-    _GENAI_IMPORT_ERROR = None
-except Exception as e:
-    genai = None
-    GenerationConfig = None
-    HarmBlockThreshold = None
-    HarmCategory = None
-    _GENAI_IMPORT_ERROR = e
-
 _GEMINI_MODEL = "gemini-flash-latest"
+_GEMINI_API_VERSION = "v1beta"
+_GEMINI_ENDPOINT = (
+    f"https://generativelanguage.googleapis.com/{_GEMINI_API_VERSION}/"
+    f"models/{_GEMINI_MODEL}:generateContent"
+)
 
 _cache: Dict[str, dict] = {}
 _cache_lock = threading.RLock()
-_model_local = threading.local()
 
 _CACHE_TTL = 600
 _ERROR_CACHE_TTL = 30
@@ -48,6 +39,8 @@ GO
 or
 BLOCK
 """
+
+_REQUEST_TIMEOUT = 20
 
 
 def _blocking_pool():
@@ -89,81 +82,61 @@ def _store_cache(pair: str, result: dict, ttl: int) -> dict:
     return dict(payload)
 
 
-def _build_model():
-    if _GENAI_IMPORT_ERROR is not None:
-        raise RuntimeError(f"google.generativeai import failed: {_GENAI_IMPORT_ERROR}")
-
-    if not GEMINI_API_KEY:
-        raise RuntimeError("GEMINI_API_KEY is not configured")
-
-    genai.configure(api_key=GEMINI_API_KEY)
-
-    safety_settings = {
-        HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
-        HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
-        HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
-        HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+def _build_payload(pair: str) -> dict:
+    return {
+        "contents": [
+            {
+                "parts": [
+                    {
+                        "text": _PROMPT.format(pair=pair)
+                    }
+                ]
+            }
+        ],
+        "generationConfig": {
+            "temperature": 0,
+            "maxOutputTokens": 4,
+            "candidateCount": 1,
+            "responseMimeType": "text/plain",
+        },
+        "safetySettings": [
+            {
+                "category": "HARM_CATEGORY_HARASSMENT",
+                "threshold": "BLOCK_NONE",
+            },
+            {
+                "category": "HARM_CATEGORY_HATE_SPEECH",
+                "threshold": "BLOCK_NONE",
+            },
+            {
+                "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                "threshold": "BLOCK_NONE",
+            },
+            {
+                "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                "threshold": "BLOCK_NONE",
+            },
+        ],
     }
 
-    model = genai.GenerativeModel(
-        model_name=_GEMINI_MODEL,
-        safety_settings=safety_settings,
-        generation_config=GenerationConfig(
-            max_output_tokens=4,
-            temperature=0,
-            candidate_count=1,
-        ),
-    )
-    return model
 
-
-def _get_thread_local_model():
-    model = getattr(_model_local, "model", None)
-    if model is not None:
-        return model
-
-    model = _build_model()
-    _model_local.model = model
-    return model
-
-
-def _extract_text(response) -> str:
-    # 1. Найпростіший шлях
-    text = getattr(response, "text", None)
-    if isinstance(text, str):
-        return text.strip()
-
-    # 2. Через candidates/content/parts
+def _extract_text_from_response_json(data: dict) -> str:
     try:
-        candidates = getattr(response, "candidates", None) or []
+        candidates = data.get("candidates") or []
         chunks = []
 
         for candidate in candidates:
-            content = getattr(candidate, "content", None)
-            parts = getattr(content, "parts", None) or []
+            content = candidate.get("content") or {}
+            parts = content.get("parts") or []
             for part in parts:
-                part_text = getattr(part, "text", None)
-                if part_text:
-                    chunks.append(part_text)
+                text = part.get("text")
+                if text:
+                    chunks.append(text)
 
         return "\n".join(chunks).strip()
     except Exception:
-        logger.exception("Не вдалося витягнути текст із legacy Gemini response")
+        logger.exception("Не вдалося витягнути текст із Gemini REST response")
         return ""
-
-
-def _log_response_meta(response, pair: str) -> None:
-    try:
-        prompt_feedback = getattr(response, "prompt_feedback", None)
-        candidates = getattr(response, "candidates", None)
-        logger.info(
-            "Gemini meta for %s: prompt_feedback=%r candidates_count=%s",
-            pair,
-            prompt_feedback,
-            len(candidates or []),
-        )
-    except Exception:
-        logger.exception("Не вдалося залогувати Gemini meta")
 
 
 def _parse_gemini_payload(raw: str) -> dict:
@@ -176,6 +149,7 @@ def _parse_gemini_payload(raw: str) -> dict:
             "reason": "",
             "source": "gemini_keyword",
             "model": _GEMINI_MODEL,
+            "api_version": _GEMINI_API_VERSION,
             "raw": cleaned[:120],
         }
 
@@ -185,45 +159,105 @@ def _parse_gemini_payload(raw: str) -> dict:
             "reason": "",
             "source": "gemini_keyword",
             "model": _GEMINI_MODEL,
+            "api_version": _GEMINI_API_VERSION,
             "raw": cleaned[:120],
         }
 
     logger.warning("Gemini malformed/empty response, fallback to GO. Raw=%r", cleaned[:120])
-
     return {
         "verdict": "GO",
         "reason": "Malformed or empty model output",
         "source": "fallback_malformed",
         "model": _GEMINI_MODEL,
+        "api_version": _GEMINI_API_VERSION,
         "raw": cleaned[:120],
     }
 
 
-def _call_gemini_sync(pair: str) -> dict:
-    model = _get_thread_local_model()
+def _do_rest_call(pair: str) -> dict:
+    if not GEMINI_API_KEY:
+        raise RuntimeError("GEMINI_API_KEY is not configured")
 
-    logger.info("Gemini request for %s using legacy SDK model=%s", pair, _GEMINI_MODEL)
+    payload = _build_payload(pair)
 
-    response = model.generate_content(
-        _PROMPT.format(pair=pair),
-        request_options={"timeout": 20},
+    logger.info(
+        "Gemini REST request for %s using model=%s api_version=%s",
+        pair,
+        _GEMINI_MODEL,
+        _GEMINI_API_VERSION,
     )
 
-    _log_response_meta(response, pair)
-    raw = _extract_text(response)
+    response = requests.post(
+        _GEMINI_ENDPOINT,
+        params={"key": GEMINI_API_KEY},
+        json=payload,
+        timeout=_REQUEST_TIMEOUT,
+    )
 
-    logger.info("Gemini raw response for %s [%s]: %s", pair, _GEMINI_MODEL, raw)
-
-    # Один повторний шанс, якщо модель повернула порожнечу
-    if not raw:
-        logger.warning("Gemini empty response for %s. Retry once...", pair)
-        response_retry = model.generate_content(
-            f"Asset: {pair}\nReply one word only: GO or BLOCK",
-            request_options={"timeout": 20},
+    if not response.ok:
+        logger.error(
+            "Gemini REST HTTP error for %s: %s %s",
+            pair,
+            response.status_code,
+            response.text[:500],
         )
-        _log_response_meta(response_retry, pair)
-        raw = _extract_text(response_retry)
-        logger.info("Gemini retry raw response for %s [%s]: %s", pair, _GEMINI_MODEL, raw)
+        response.raise_for_status()
+
+    data = response.json()
+    raw = _extract_text_from_response_json(data)
+
+    logger.info(
+        "Gemini raw response for %s [%s]: %s",
+        pair,
+        _GEMINI_MODEL,
+        raw,
+    )
+
+    if not raw:
+        logger.warning("Gemini returned empty text for %s. Retrying with shorter prompt...", pair)
+
+        retry_payload = {
+            "contents": [
+                {
+                    "parts": [
+                        {
+                            "text": f"Asset: {pair}\nReply exactly one word: GO or BLOCK"
+                        }
+                    ]
+                }
+            ],
+            "generationConfig": {
+                "temperature": 0,
+                "maxOutputTokens": 4,
+                "candidateCount": 1,
+                "responseMimeType": "text/plain",
+            },
+            "safetySettings": payload["safetySettings"],
+        }
+
+        retry_response = requests.post(
+            _GEMINI_ENDPOINT,
+            params={"key": GEMINI_API_KEY},
+            json=retry_payload,
+            timeout=_REQUEST_TIMEOUT,
+        )
+
+        if retry_response.ok:
+            retry_data = retry_response.json()
+            raw = _extract_text_from_response_json(retry_data)
+            logger.info(
+                "Gemini retry raw response for %s [%s]: %s",
+                pair,
+                _GEMINI_MODEL,
+                raw,
+            )
+        else:
+            logger.error(
+                "Gemini retry HTTP error for %s: %s %s",
+                pair,
+                retry_response.status_code,
+                retry_response.text[:500],
+            )
 
     return _parse_gemini_payload(raw)
 
@@ -254,6 +288,7 @@ def get_latest_news_sentiment_async(pair: str) -> Deferred:
                 "reason": "GEMINI_API_KEY не налаштований",
                 "source": "fallback_no_key",
                 "model": _GEMINI_MODEL,
+                "api_version": _GEMINI_API_VERSION,
             },
             _ERROR_CACHE_TTL,
         )
@@ -262,7 +297,7 @@ def get_latest_news_sentiment_async(pair: str) -> Deferred:
     d = deferToThreadPool(
         reactor,
         _blocking_pool(),
-        _call_gemini_sync,
+        _do_rest_call,
         pair,
     )
 
@@ -287,6 +322,7 @@ def get_latest_news_sentiment_async(pair: str) -> Deferred:
                 "reason": "API error — temporary fail-open",
                 "source": "fallback_error",
                 "model": _GEMINI_MODEL,
+                "api_version": _GEMINI_API_VERSION,
             },
             _ERROR_CACHE_TTL,
         )
@@ -310,12 +346,13 @@ def _get_cached_or_fresh_sync(pair: str) -> dict:
                 "reason": "GEMINI_API_KEY не налаштований",
                 "source": "fallback_no_key",
                 "model": _GEMINI_MODEL,
+                "api_version": _GEMINI_API_VERSION,
             },
             _ERROR_CACHE_TTL,
         )
 
     try:
-        result = _call_gemini_sync(pair)
+        result = _do_rest_call(pair)
         ttl = _CACHE_TTL if str(result.get("source", "")).startswith("gemini") else _ERROR_CACHE_TTL
         return _store_cache(pair, result, ttl)
     except Exception as e:
@@ -327,6 +364,7 @@ def _get_cached_or_fresh_sync(pair: str) -> dict:
                 "reason": "API error — temporary fail-open",
                 "source": "fallback_error",
                 "model": _GEMINI_MODEL,
+                "api_version": _GEMINI_API_VERSION,
             },
             _ERROR_CACHE_TTL,
         )
@@ -351,5 +389,5 @@ def get_cache_stats() -> dict:
         "stale": len(stale),
         "total": len(items),
         "model": _GEMINI_MODEL,
-        "sdk_ok": _GENAI_IMPORT_ERROR is None,
+        "api_version": _GEMINI_API_VERSION,
     }

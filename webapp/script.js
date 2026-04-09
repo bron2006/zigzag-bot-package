@@ -269,7 +269,7 @@ function displayLiveSignal(signalData) {
                 : "neutral";
 
     const html = `
-        <div class="live-signal-content" style="text-align:center;">
+        <div class="live-signal-content" style="text-align:center; font-size:12px;">
             <strong>${escapeHtml(signalData.pair)}</strong>: ${escapeHtml(signalData.verdict_text)} (${Number(signalData.score) || 0}%)
         </div>
         <div class="live-signal-timer"></div>
@@ -456,7 +456,7 @@ async function toggleFavorite(event, button, pair) {
 async function fetchSignal(pair) {
     lastSelectedPair = pair;
     showLoader(true);
-    signalOutput.innerHTML = `<div style="text-align:center; padding:12px;">⏳ Аналіз ${escapeHtml(pair)}...</div>`;
+    signalOutput.innerHTML = `<div style="text-align:center; padding:8px;">⏳ Аналіз ${escapeHtml(pair)}...</div>`;
 
     try {
         const url = `${API_BASE_URL}/api/signal${buildQuery({
@@ -472,12 +472,12 @@ async function fetchSignal(pair) {
 
         setTimeout(() => {
             signalContainer.scrollIntoView({ behavior: "smooth" });
-        }, 80);
+        }, 60);
     } catch (err) {
         console.error("Fetch signal error:", err);
         currentSignalData = null;
         signalOutput.innerHTML = `
-            <div style="text-align:center; color:#ef5350; padding:12px;">
+            <div style="text-align:center; color:#ef5350; padding:8px;">
                 ❌ Помилка запиту до сервера
             </div>
         `;
@@ -500,16 +500,16 @@ function renderTimeframeDetails(signalData) {
         else if (verdict === "SELL") color = "#ef5350";
 
         return `
-            <div style="flex:1; min-width:96px; padding:6px 8px; border:1px solid rgba(255,255,255,0.08); border-radius:8px; background:rgba(255,255,255,0.02);">
-                <div style="font-size:11px; color:#94a3b8; margin-bottom:2px;">${escapeHtml(tf.toUpperCase())}</div>
-                <div style="font-size:16px; font-weight:800; color:${color}; line-height:1.1;">${verdict}</div>
-                <div style="font-size:14px; color:#fff; line-height:1.1;">${score}%</div>
+            <div style="flex:1; min-width:84px; padding:4px 6px; border:1px solid rgba(255,255,255,0.08); border-radius:7px; background:rgba(255,255,255,0.02);">
+                <div style="font-size:10px; color:#94a3b8; margin-bottom:1px;">${escapeHtml(tf.toUpperCase())}</div>
+                <div style="font-size:14px; font-weight:800; color:${color}; line-height:1;">${verdict}</div>
+                <div style="font-size:12px; color:#fff; line-height:1;">${score}%</div>
             </div>
         `;
     }).join("");
 
     return `
-        <div style="display:flex; gap:8px; flex-wrap:wrap; margin:10px 0 6px;">
+        <div style="display:flex; gap:6px; flex-wrap:wrap; margin:6px 0 4px;">
             ${rows}
         </div>
     `;
@@ -518,7 +518,7 @@ function renderTimeframeDetails(signalData) {
 function formatSignalAsHtml(signalData, exp) {
     if (!signalData || signalData.error) {
         return `
-            <div style="text-align:center; color:#ef5350; padding:12px;">
+            <div style="text-align:center; color:#ef5350; padding:8px;">
                 ❌ Помилка: ${escapeHtml(signalData?.error || "Немає даних")}
             </div>
         `;
@@ -552,33 +552,33 @@ function formatSignalAsHtml(signalData, exp) {
             : "N/A";
 
     return `
-        <div class="signal-header" style="text-align:center; font-size:1.02em; margin-bottom:6px;">
-            <strong>${pair}</strong> <span style="color:#64748b; font-size:0.75em;">(Exp: ${escapeHtml(exp)})</span>
+        <div class="signal-header" style="text-align:center; font-size:0.95em; margin-bottom:4px;">
+            <strong>${pair}</strong> <span style="color:#64748b; font-size:0.72em;">(Exp: ${escapeHtml(exp)})</span>
         </div>
-        <div class="verdict-container" style="text-align:center; margin:6px 0 10px;">
-            <div class="arrow" style="font-size:54px; line-height:0.95; display:block; margin-bottom:2px;">${arrow}</div>
-            <div class="v-text ${cClass}" style="font-size:26px; font-weight:900; display:block; line-height:1;">${verdictText}</div>
-            <div style="font-size:18px; color:#3390ec; font-family:monospace; margin-top:4px; display:block; line-height:1;">${safePrice}</div>
+        <div class="verdict-container" style="text-align:center; margin:2px 0 6px;">
+            <div class="arrow" style="font-size:40px; line-height:0.9; display:block; margin-bottom:0;">${arrow}</div>
+            <div class="v-text ${cClass}" style="font-size:20px; font-weight:900; display:block; line-height:1; margin-top:0;">${verdictText}</div>
+            <div style="font-size:15px; color:#3390ec; font-family:monospace; margin-top:2px; display:block; line-height:1;">${safePrice}</div>
         </div>
         ${
             sentiment
-                ? `<div class="ai-verdict" style="padding:6px 10px; border-radius:8px; text-align:center; font-weight:bold; margin:6px auto; border:1px solid; background:rgba(0,0,0,0.1); color:${sentiment === "GO" ? "#26a69a" : "#ef5350"}; width:fit-content; font-size:13px;">
-                    ${sentiment === "GO" ? "✅" : "🚨"} ШІ Новини: ${sentiment}
+                ? `<div class="ai-verdict" style="padding:4px 8px; border-radius:7px; text-align:center; font-weight:bold; margin:4px auto; border:1px solid; background:rgba(0,0,0,0.1); color:${sentiment === "GO" ? "#26a69a" : "#ef5350"}; width:fit-content; font-size:12px;">
+                    ${sentiment === "GO" ? "✅" : "🚨"} ШІ: ${sentiment}
                    </div>`
                 : ""
         }
-        <div class="power-balance" style="display:flex; justify-content:space-around; margin:8px 0; font-weight:bold; text-align:center; font-size:14px;">
+        <div class="power-balance" style="display:flex; justify-content:space-around; margin:5px 0; font-weight:bold; text-align:center; font-size:12px;">
             <span style="color:#26a69a;">🐂 ${score}%</span>
             <span style="color:#ef5350;">🐃 ${100 - score}%</span>
         </div>
         ${renderTimeframeDetails(signalData)}
-        <div style="text-align:center; margin-top:6px; font-weight:bold; color:${tradeAllowed ? "#26a69a" : "#ef5350"}; font-size:14px;">
+        <div style="text-align:center; margin-top:4px; font-weight:bold; color:${tradeAllowed ? "#26a69a" : "#ef5350"}; font-size:12px;">
             ${tradeAllowed ? "✅ Вхід дозволено" : "⛔ Вхід не рекомендований"}
         </div>
         ${
             reasons.length
-                ? `<div class="reasons" style="text-align:left; margin-top:10px; border-top:1px solid rgba(255,255,255,0.1); padding-top:8px; font-size:13px; line-height:1.25;">
-                    ${reasons.map((r) => `<div style="margin-bottom:4px;">• ${escapeHtml(r)}</div>`).join("")}
+                ? `<div class="reasons" style="text-align:left; margin-top:8px; border-top:1px solid rgba(255,255,255,0.1); padding-top:6px; font-size:12px; line-height:1.15;">
+                    ${reasons.map((r) => `<div style="margin-bottom:3px;">• ${escapeHtml(r)}</div>`).join("")}
                    </div>`
                 : ""
         }
