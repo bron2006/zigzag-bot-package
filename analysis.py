@@ -90,6 +90,7 @@ def _prepare_features(df: pd.DataFrame) -> Optional[pd.DataFrame]:
 
         for target_name, source_candidates in FEATURE_SOURCE_MAP.items():
             found_value = None
+
             for source_name in source_candidates:
                 if source_name in latest.columns:
                     value = latest[source_name].iloc[0]
@@ -151,10 +152,12 @@ def _run_technical_analysis(df: pd.DataFrame) -> Tuple[int, str]:
 
 def _select_timeframes(requested_timeframe: str) -> tuple[str, str]:
     requested = (requested_timeframe or "5m").strip()
+
     if requested == "15m":
         return "5m", "15m"
     if requested == "1m":
         return "1m", "5m"
+
     return "1m", "5m"
 
 
@@ -283,11 +286,12 @@ def _analysis_flow(client, symbol_cache, symbol, user_id, timeframe="5m"):
             logger.error(f"CPU analysis timeout/error for {symbol}: {e}")
             return _fallback_result(symbol, timeframe, "Технічний аналіз перевищив час очікування", "WAIT")
 
+        # КРИТИЧНИЙ ФІКС:
+        # ТІЛЬКИ async-версія, без sync get_latest_news_sentiment(...)
         try:
-            # КРИТИЧНО: без addTimeout зверху, бо news_filter сам контролює timeouts через requests
             news_result = yield news_filter.get_latest_news_sentiment_async(pair_norm)
         except Exception as e:
-            logger.warning(f"News filter timeout/error for {pair_norm}: {e}")
+            logger.warning(f"News filter error for {pair_norm}: {e}")
             news_result = {
                 "verdict": "GO",
                 "reason": "Помилка запиту до Gemini",
@@ -298,6 +302,7 @@ def _analysis_flow(client, symbol_cache, symbol, user_id, timeframe="5m"):
             }
 
         result = dict(base_result)
+
         news_verdict = news_result.get("verdict", "GO")
         news_reason = news_result.get("reason", "")
         news_source = news_result.get("source")
