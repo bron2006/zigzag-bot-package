@@ -29,12 +29,11 @@ _STALE_CHECK_INTERVAL = 60
 
 _PRICE_SSE_THROTTLE_SECONDS = 0.5
 
-# НОВЕ:
-# Після старту/реконекту не панікуємо одразу по stale.
 _BOOTSTRAP_GRACE_SECONDS = 180
-_NO_PRICE_RESUBSCRIBE_AFTER = 45
-_RESUBSCRIBE_COOLDOWN = 60
-_STALE_RECONNECT_CONFIRMATIONS = 3
+_NO_PRICE_RESUBSCRIBE_AFTER = 60
+_RESUBSCRIBE_COOLDOWN = 90
+_STALE_RECONNECT_CONFIRMATIONS = 4
+_EMPTY_PRICE_RECONNECT_CONFIRMATIONS = 4
 
 _SYMBOL_ALIASES = {
     "US100": ["USTEC", "NAS100", "US100", "US100USD", "USTECH"],
@@ -60,6 +59,7 @@ _subscriptions_started_ts: float = 0.0
 _last_any_spot_ts: float = 0.0
 _last_resubscribe_ts: float = 0.0
 _stale_all_confirmations: int = 0
+_empty_price_confirmations: int = 0
 
 
 def _normalize_pair(pair: str) -> str:
@@ -91,6 +91,7 @@ def _reset_runtime_stream_state() -> None:
     global _last_any_spot_ts
     global _last_resubscribe_ts
     global _stale_all_confirmations
+    global _empty_price_confirmations
 
     _last_price_sse_ts = {}
     _connection_ready_ts = 0.0
@@ -98,9 +99,8 @@ def _reset_runtime_stream_state() -> None:
     _last_any_spot_ts = 0.0
     _last_resubscribe_ts = 0.0
     _stale_all_confirmations = 0
+    _empty_price_confirmations = 0
 
-    # КРИТИЧНИЙ ФІКС:
-    # очищаємо старі ціни, щоб stale-check не бачив "привидів" після reconnect
     app_state.live_prices.clear()
 
 
@@ -111,7 +111,7 @@ def _reset_runtime_stream_state() -> None:
     on_threshold=lambda: _schedule_reconnect(),
 )
 def _on_spot_event(event: ProtoOASpotEvent) -> None:
-    global _last_any_spot_ts, _stale_all_confirmations
+    global _last_any_spot_ts, _stale_all_confirmations, _empty_price_confirmations
 
     if not (event.HasField("bid") or event.HasField("ask")):
         return
@@ -137,6 +137,7 @@ def _on_spot_event(event: ProtoOASpotEvent) -> None:
 
     _last_any_spot_ts = now
     _stale_all_confirmations = 0
+    _empty_price_confirmations = 0
 
     payload = {
         "bid": bid,
@@ -198,17 +199,17 @@ def _find_in_cache(pair: str):
     return None
 
 
-def start_price_subscriptions() -> None:
+def start_price_subscriptions(force_resubscribe: bool = False) -> None:
     global _subscribed_symbols, _subscriptions_started_ts
 
     if not app_state.SYMBOLS_LOADED:
         logger.warning("start_price_subscriptions: символи ще не завантажені, відкладаємо на 5s")
-        reactor.callLater(5, start_price_subscriptions)
+        reactor.callLater(5, start_price_subscriptions, force_resubscribe)
         return
 
     if not app_state.client or not getattr(app_state.client._client, "account_id", None):
         logger.warning("start_price_subscriptions: client не готовий, відкладаємо на 5s")
-        reactor.callLater(5, start_price_subscriptions)
+        reactor.callLater(5, start_price_subscriptions, force_resubscribe)
         return
 
     try:
@@ -218,20 +219,25 @@ def start_price_subscriptions() -> None:
         scanner_assets = []
 
     all_assets = sorted({_normalize_pair(p) for p in (scanner_assets + STOCK_TICKERS)})
-    new_assets = [p for p in all_assets if p not in _subscribed_symbols]
+
+    if force_resubscribe:
+        target_assets = all_assets
+        logger.info("start_price_subscriptions(force_resubscribe=True): перепідписуємо всі активи")
+    else:
+        target_assets = [p for p in all_assets if p not in _subscribed_symbols]
 
     _subscriptions_started_ts = time.time()
 
-    if not new_assets:
+    if not target_assets:
         logger.info("start_price_subscriptions: всі активи вже підписані.")
         return
 
     logger.info(
-        f"start_price_subscriptions: підписуємо {len(new_assets)} нових активів "
+        f"start_price_subscriptions: підписуємо {len(target_assets)} активів "
         f"(вже підписано: {len(_subscribed_symbols)})"
     )
 
-    for i, pair in enumerate(new_assets):
+    for i, pair in enumerate(target_assets):
         reactor.callLater(i * 0.1, _subscribe_one_asset, pair)
 
 
@@ -324,6 +330,8 @@ def _do_reconnect(scheduled_attempt: Optional[int] = None) -> None:
         except Exception:
             logger.exception("Не вдалося зупинити старий cTrader client")
 
+    app_state.client = None
+
     try:
         start_ctrader_client()
     except Exception:
@@ -360,12 +368,12 @@ def _try_resubscribe_if_needed(now: float) -> None:
         return
 
     _last_resubscribe_ts = now
-    logger.warning("Після підписки все ще немає/мало свіжих цін — пробую повторну підписку без reconnect")
-    reactor.callLater(0, start_price_subscriptions)
+    logger.warning("Ціни не оновлюються — роблю force resubscribe без reconnect")
+    reactor.callLater(0, start_price_subscriptions, True)
 
 
 def _check_stale_prices() -> None:
-    global _stale_all_confirmations
+    global _stale_all_confirmations, _empty_price_confirmations
 
     _schedule_stale_check()
 
@@ -375,43 +383,56 @@ def _check_stale_prices() -> None:
     now = time.time()
     prices = app_state.get_live_prices_snapshot()
 
-    # GRACE PERIOD після підключення
     if _connection_ready_ts and (now - _connection_ready_ts) < _BOOTSTRAP_GRACE_SECONDS:
+        logger.info(
+            "Stale check: bootstrap grace active (%ss/%ss)",
+            int(now - _connection_ready_ts),
+            _BOOTSTRAP_GRACE_SECONDS,
+        )
         if not prices:
-            logger.info(
-                "Stale check: bootstrap grace active (%ss/%ss), ще чекаємо перші ціни",
-                int(now - _connection_ready_ts),
-                _BOOTSTRAP_GRACE_SECONDS,
-            )
             _try_resubscribe_if_needed(now)
         return
 
     if not prices:
         if _subscribed_symbols:
+            _empty_price_confirmations += 1
             logger.warning(
-                f"Є {len(_subscribed_symbols)} підписок але live_prices порожній — "
-                "спробую renew subscriptions без reconnect"
+                "live_prices порожній при %s підписках. Confirmation %s/%s",
+                len(_subscribed_symbols),
+                _empty_price_confirmations,
+                _EMPTY_PRICE_RECONNECT_CONFIRMATIONS,
             )
+
             _try_resubscribe_if_needed(now)
+
+            if _empty_price_confirmations >= _EMPTY_PRICE_RECONNECT_CONFIRMATIONS:
+                if _last_any_spot_ts and (now - _last_any_spot_ts) < _STALE_THRESHOLD:
+                    logger.info("Spot events були нещодавно — empty reconnect скасовую")
+                    _empty_price_confirmations = 0
+                    return
+
+                msg = "⏰ cTrader: після кількох перевірок live_prices все ще порожній. Запускаю reconnect."
+                logger.error(msg)
+                notify_admin(msg, alert_key="ctrader_empty_prices")
+                _empty_price_confirmations = 0
+                _schedule_reconnect()
         return
+
+    _empty_price_confirmations = 0
 
     stale = [n for n, d in prices.items() if (now - d.get("ts", 0)) > _STALE_THRESHOLD]
     fresh_count = len(prices) - len(stale)
 
     logger.debug(f"Stale check: {fresh_count} свіжих, {len(stale)} застарілих")
 
-    # Якщо є хоча б одна свіжа ціна — усе ок, лічильник скидаємо
     if fresh_count > 0:
         _stale_all_confirmations = 0
         if stale:
             logger.warning(f"Застарілі: {', '.join(stale[:10])}")
         return
 
-    # Якщо всі stale, але останній spot event був не так давно — не панікуємо
     if _last_any_spot_ts and (now - _last_any_spot_ts) < _STALE_THRESHOLD:
-        logger.info(
-            "Усі збережені ціни застарілі, але spot events ще недавно приходили — reconnect поки не роблю"
-        )
+        logger.info("Spot events були нещодавно — reconnect по stale поки не роблю")
         return
 
     _stale_all_confirmations += 1
@@ -422,9 +443,9 @@ def _check_stale_prices() -> None:
         _STALE_RECONNECT_CONFIRMATIONS,
     )
 
-    # Спершу пробуємо перепідписку, а не reconnect
+    _try_resubscribe_if_needed(now)
+
     if _stale_all_confirmations < _STALE_RECONNECT_CONFIRMATIONS:
-        _try_resubscribe_if_needed(now)
         return
 
     msg = (
@@ -496,11 +517,11 @@ def _on_symbols_loaded(raw) -> None:
     sample = list(app_state.symbol_cache.keys())[:20]
     logger.info(f"Приклади назв символів у кеші: {sample}")
 
-    start_price_subscriptions()
+    start_price_subscriptions(False)
 
 
 def on_ctrader_ready() -> None:
-    global _connection_ready_ts, _stale_all_confirmations
+    global _connection_ready_ts, _stale_all_confirmations, _empty_price_confirmations
 
     logger.info("cTrader авторизований і готовий.")
     _cancel_reconnect()
@@ -509,6 +530,7 @@ def on_ctrader_ready() -> None:
     _cancel_stale_check()
     _connection_ready_ts = time.time()
     _stale_all_confirmations = 0
+    _empty_price_confirmations = 0
 
     d = app_state.client.get_all_symbols()
     d.addCallback(_on_symbols_loaded)
