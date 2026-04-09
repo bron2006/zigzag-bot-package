@@ -32,8 +32,10 @@ PERIOD_MAP = {
 MARKET_DATA_TIMEOUT = 18
 CPU_ANALYSIS_TIMEOUT = 12
 
+# Модель навчена на цих назвах
 MODEL_FEATURE_NAMES = ["ATR", "ADX", "RSI", "EMA50", "EMA200"]
 
+# А pandas_ta повертає такі назви
 FEATURE_SOURCE_MAP = {
     "ATR": ["ATRr_14", "ATR_14"],
     "ADX": ["ADX_14"],
@@ -48,21 +50,23 @@ def _blocking_pool():
 
 
 def _normalize_pair(pair: str) -> str:
-    return pair.replace("/", "").upper()
+    return (pair or "").replace("/", "").upper().strip()
 
 
 def _resolve_symbol_details(symbol_cache, pair: str):
     norm = _normalize_pair(pair)
     with_slash = f"{norm[:3]}/{norm[3:]}" if len(norm) >= 6 else None
 
-    for candidate in [
+    candidates = [
         pair,
-        pair.upper(),
+        pair.upper() if isinstance(pair, str) else pair,
         norm,
         with_slash,
-        pair.replace("/", ""),
-        pair.replace("/", "").upper(),
-    ]:
+        pair.replace("/", "") if isinstance(pair, str) else pair,
+        pair.replace("/", "").upper() if isinstance(pair, str) else pair,
+    ]
+
+    for candidate in candidates:
         if candidate and candidate in symbol_cache:
             return symbol_cache[candidate]
 
@@ -265,7 +269,12 @@ def _analysis_flow(client, symbol_cache, symbol, user_id, timeframe="5m"):
                 reasons.append(f"Не вдалося завантажити {tf_a.upper()}")
             if not ok_b:
                 reasons.append(f"Не вдалося завантажити {tf_b.upper()}")
-            return _fallback_result(symbol, timeframe, "; ".join(reasons) or "Не вдалося завантажити дані", "WAIT")
+            return _fallback_result(
+                symbol,
+                timeframe,
+                "; ".join(reasons) or "Не вдалося завантажити дані",
+                "WAIT",
+            )
 
         d_cpu = deferToThreadPool(
             reactor,
@@ -286,8 +295,8 @@ def _analysis_flow(client, symbol_cache, symbol, user_id, timeframe="5m"):
             logger.error(f"CPU analysis timeout/error for {symbol}: {e}")
             return _fallback_result(symbol, timeframe, "Технічний аналіз перевищив час очікування", "WAIT")
 
-        # КРИТИЧНИЙ ФІКС:
-        # ТІЛЬКИ async-версія, без sync get_latest_news_sentiment(...)
+        # ГОЛОВНИЙ ФІКС:
+        # тільки async-версія, без sync news_filter.get_latest_news_sentiment(...)
         try:
             news_result = yield news_filter.get_latest_news_sentiment_async(pair_norm)
         except Exception as e:
@@ -321,7 +330,9 @@ def _analysis_flow(client, symbol_cache, symbol, user_id, timeframe="5m"):
                     result["verdict_text"] = "NEWS_WAIT"
 
                 result["reasons"].append(
-                    f"ШІ: BLOCK — {news_reason}" if news_reason else "ШІ: Ризиковані новини. Вхід заблоковано."
+                    f"ШІ: BLOCK — {news_reason}"
+                    if news_reason
+                    else "ШІ: Ризиковані новини. Вхід заблоковано."
                 )
             else:
                 reason_text = news_reason or "Новини ок"
