@@ -56,8 +56,8 @@ class SpotwareConnect(EventEmitter):
         self._client.setConnectedCallback(self._on_connected)
         self._client.setMessageReceivedCallback(self._on_message_received)
         self._client.setDisconnectedCallback(self._on_disconnected)
-
         self._client.account_id = None
+
         self.symbol_map = {}
 
     def start(self):
@@ -74,34 +74,35 @@ class SpotwareConnect(EventEmitter):
 
     def send(self, message, client_msg_id=None, timeout=30):
         deferred = self._client.send(message, clientMsgId=client_msg_id)
-        result_deferred = Deferred()
+        timeout_deferred = Deferred()
 
         timeout_call = reactor.callLater(
             timeout,
-            lambda: deferred.cancel() if not deferred.called else None,
+            lambda: deferred.cancel() if not deferred.called else None
         )
 
         def on_success(result):
             if timeout_call.active():
                 timeout_call.cancel()
-            if not result_deferred.called:
-                result_deferred.callback(result)
+            if not timeout_deferred.called:
+                timeout_deferred.callback(result)
             return None
 
         def on_error(failure):
             if timeout_call.active():
                 timeout_call.cancel()
-            if not result_deferred.called:
+            if not timeout_deferred.called:
                 if failure.check(TimeoutError):
                     err_msg = f"Таймаут ({timeout}s) для {type(message).__name__}"
                     logger.error(err_msg)
-                    result_deferred.errback(Exception(err_msg))
+                    timeout_deferred.errback(Exception(err_msg))
                 else:
-                    result_deferred.errback(failure)
+                    timeout_deferred.errback(failure)
+            # КРИТИЧНО: не повертаємо failure далі, щоб не було Unhandled error in Deferred
             return None
 
         deferred.addCallbacks(on_success, on_error)
-        return result_deferred
+        return timeout_deferred
 
     def _refresh_access_token(self):
         if self.is_refreshing_token:
@@ -125,7 +126,6 @@ class SpotwareConnect(EventEmitter):
         }
 
         try:
-            # ВАЖЛИВО: саме data=..., не params=...
             response = requests.post(TOKEN_REFRESH_URL, data=params, timeout=20)
             response.raise_for_status()
             data = response.json()
@@ -151,8 +151,6 @@ class SpotwareConnect(EventEmitter):
 
     def _on_connected(self, client):
         logger.info("Connection successful. Authorizing application...")
-        # Тут НЕ треба складної retry-state-machine.
-        # Резервна версія працювала саме так.
         self.send(
             ProtoOAApplicationAuthReq(
                 clientId=self._client_id,
@@ -167,6 +165,7 @@ class SpotwareConnect(EventEmitter):
             msg = reason.getErrorMessage()
         except Exception:
             msg = str(reason)
+
         logger.warning(f"Disconnected. Reason: {msg}")
         self.emit("error", f"Disconnected: {msg}")
 
@@ -197,10 +196,10 @@ class SpotwareConnect(EventEmitter):
 
             logger.error(f"API Error: {res.errorCode} - {res.description}")
 
-            # КЛЮЧОВИЙ ФІКС:
-            # Це не фатальна помилка. Це означає, що app auth уже є.
+            # ГОЛОВНИЙ ФІКС:
+            # Якщо Open API app already authorized — просто йдемо далі до account auth
             if res.errorCode == "ALREADY_LOGGED_IN":
-                logger.warning("Open API application already authorized. Proceeding to account auth.")
+                logger.warning("Open API application is already authorized. Proceeding to account auth.")
                 if not self.is_authorized:
                     self._authorize_account()
                 return
@@ -219,9 +218,7 @@ class SpotwareConnect(EventEmitter):
             spot_event = ProtoOASpotEvent()
             spot_event.ParseFromString(message.payload)
 
-            # Загальний івент
             self.emit("spot_event", spot_event)
-            # Точковий івент на symbolId
             self.emit(f"spot_event_{spot_event.symbolId}", spot_event)
             return
 
@@ -237,7 +234,7 @@ class SpotwareConnect(EventEmitter):
         self.send(
             ProtoOAAccountAuthReq(
                 ctidTraderAccountId=acc_id,
-                accessToken=token,
+                accessToken=token
             ),
             timeout=20,
         )
