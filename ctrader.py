@@ -6,6 +6,7 @@ from twisted.internet import reactor
 import config
 import scanner
 from config import STOCK_TICKERS, get_ct_client_id, get_ct_client_secret
+from notifier import notify_admin
 from spotware_connect import SpotwareConnect
 from state import app_state
 from ctrader_open_api.messages.OpenApiMessages_pb2 import (
@@ -73,7 +74,7 @@ def _resolve_price_divisor(symbol_name: str) -> float:
     if upper.startswith("XAU") or upper.startswith("XAG"):
         return 100.0
 
-    if upper.startswith("BTC") or upper.startswith("ETH") or upper.startswith("LTC") or upper.startswith("XRP") or upper.startswith("ADA") or upper.startswith("BCH"):
+    if upper.startswith(("BTC", "ETH", "LTC", "XRP", "ADA", "BCH")):
         return 100.0
 
     return 100000.0
@@ -132,12 +133,10 @@ def _reconnect_attempt_reset():
 def _find_in_cache(pair: str):
     norm = _normalize_pair(pair)
 
-    # 1. Прямий збіг
     direct = app_state.symbol_cache.get(norm)
     if direct:
         return direct
 
-    # 2. Alias map
     for alias in _SYMBOL_ALIASES.get(norm, []):
         alias_norm = _normalize_pair(alias)
         alias_direct = app_state.symbol_cache.get(alias_norm)
@@ -145,7 +144,6 @@ def _find_in_cache(pair: str):
             logger.info(f"Alias-матч символу '{norm}' -> '{alias_norm}'")
             return alias_direct
 
-    # 3. Canonical fallback
     canon = _canonical_symbol_key(norm)
     for key, value in app_state.symbol_cache.items():
         if _canonical_symbol_key(key) == canon:
@@ -180,7 +178,6 @@ def _on_spot_event(event: ProtoOASpotEvent):
             "ts": _last_any_spot_ts,
         }
 
-        # Якщо у state є новий метод для price SSE — використовуємо
         publish_price = getattr(app_state, "publish_price_sse", None)
         if callable(publish_price):
             publish_price({

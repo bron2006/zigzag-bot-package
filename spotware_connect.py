@@ -1,7 +1,9 @@
 import logging
 import requests
+
 from twisted.internet import reactor
 from twisted.internet.defer import Deferred, TimeoutError
+
 from ctrader_open_api.client import Client as SpotwareClientBase
 from ctrader_open_api.tcpProtocol import TcpProtocol
 from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import ProtoMessage
@@ -15,6 +17,7 @@ from ctrader_open_api.messages.OpenApiMessages_pb2 import (
     ProtoOASpotEvent,
 )
 from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOAPayloadType
+
 from config import get_demo_account_id, get_ctrader_refresh_token
 from state import app_state
 
@@ -78,7 +81,7 @@ class SpotwareConnect(EventEmitter):
 
         timeout_call = reactor.callLater(
             timeout,
-            lambda: deferred.cancel() if not deferred.called else None
+            lambda: deferred.cancel() if not deferred.called else None,
         )
 
         def on_success(result):
@@ -91,6 +94,7 @@ class SpotwareConnect(EventEmitter):
         def on_error(failure):
             if timeout_call.active():
                 timeout_call.cancel()
+
             if not timeout_deferred.called:
                 if failure.check(TimeoutError):
                     err_msg = f"Таймаут ({timeout}s) для {type(message).__name__}"
@@ -98,7 +102,6 @@ class SpotwareConnect(EventEmitter):
                     timeout_deferred.errback(Exception(err_msg))
                 else:
                     timeout_deferred.errback(failure)
-            # КРИТИЧНО: не повертаємо failure далі, щоб не було Unhandled error in Deferred
             return None
 
         deferred.addCallbacks(on_success, on_error)
@@ -151,13 +154,20 @@ class SpotwareConnect(EventEmitter):
 
     def _on_connected(self, client):
         logger.info("Connection successful. Authorizing application...")
-        self.send(
+        d = self.send(
             ProtoOAApplicationAuthReq(
                 clientId=self._client_id,
                 clientSecret=self._client_secret,
             ),
             timeout=20,
         )
+
+        def swallow_app_auth_error(failure):
+            msg = failure.getErrorMessage() if hasattr(failure, "getErrorMessage") else str(failure)
+            logger.warning(f"Application auth deferred ended with error: {msg}")
+            return None
+
+        d.addErrback(swallow_app_auth_error)
 
     def _on_disconnected(self, client, reason):
         self.is_authorized = False
@@ -183,10 +193,8 @@ class SpotwareConnect(EventEmitter):
 
             self._client.account_id = res.ctidTraderAccountId
             self.is_authorized = True
-
             logger.info(f"✅ Account {res.ctidTraderAccountId} authorized.")
 
-            self.get_all_symbols().addCallback(self._on_symbols_list)
             self.emit("ready")
             return
 
@@ -197,20 +205,23 @@ class SpotwareConnect(EventEmitter):
             logger.error(f"API Error: {res.errorCode} - {res.description}")
 
             # ГОЛОВНИЙ ФІКС:
-            # Якщо Open API app already authorized — просто йдемо далі до account auth
+            # cTrader може казати, що app already authorized.
+            # Це не фатальна помилка, а сигнал переходити до auth акаунта.
             if res.errorCode == "ALREADY_LOGGED_IN":
                 logger.warning("Open API application is already authorized. Proceeding to account auth.")
                 if not self.is_authorized:
                     self._authorize_account()
                 return
 
-            if res.errorCode == "CH_ACCESS_TOKEN_INVALID" or (
-                res.errorCode == "INVALID_REQUEST"
-                and "Trading account is not authorized" in res.description
-            ):
+            if res.errorCode == "INVALID_REQUEST" and "Trading account is not authorized" in res.description:
                 self._refresh_access_token()
                 return
 
+            if res.errorCode == "CH_ACCESS_TOKEN_INVALID":
+                self._refresh_access_token()
+                return
+
+            # НЕ емітимо все підряд як fatal error, щоб не валити робочий цикл
             self.emit("error", f"API Error: {res.errorCode} - {res.description}")
             return
 
@@ -231,13 +242,20 @@ class SpotwareConnect(EventEmitter):
             logger.error("CRITICAL: Account ID or Access Token is missing.")
             return
 
-        self.send(
+        d = self.send(
             ProtoOAAccountAuthReq(
                 ctidTraderAccountId=acc_id,
-                accessToken=token
+                accessToken=token,
             ),
             timeout=20,
         )
+
+        def swallow_account_auth_error(failure):
+            msg = failure.getErrorMessage() if hasattr(failure, "getErrorMessage") else str(failure)
+            logger.warning(f"Account auth deferred ended with error: {msg}")
+            return None
+
+        d.addErrback(swallow_account_auth_error)
 
     def get_all_symbols(self):
         logger.info("Requesting light symbol list...")

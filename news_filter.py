@@ -39,8 +39,7 @@ or
 BLOCK
 """
 
-# Робимо адекватний timeout на рівні requests, а не Deferred timeout зверху
-_REQUEST_TIMEOUT = (5, 8)  # connect, read
+_REQUEST_TIMEOUT = (5, 8)
 _RETRY_REQUEST_TIMEOUT = (5, 5)
 
 
