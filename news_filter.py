@@ -55,6 +55,14 @@ def _normalize_pair(pair: str) -> str:
     return (pair or "").replace("/", "").upper().strip()
 
 
+def _mask_key(value: Optional[str]) -> str:
+    if not value:
+        return "<empty>"
+    if len(value) < 10:
+        return "*" * len(value)
+    return f"{value[:4]}...{value[-4:]}"
+
+
 def _get_cached(pair: str) -> Optional[dict]:
     key = _normalize_pair(pair)
     with _cache_lock:
@@ -97,25 +105,12 @@ def _build_payload(pair: str) -> dict:
             "temperature": 0,
             "maxOutputTokens": 4,
             "candidateCount": 1,
-            "responseMimeType": "text/plain",
         },
         "safetySettings": [
-            {
-                "category": "HARM_CATEGORY_HARASSMENT",
-                "threshold": "BLOCK_NONE",
-            },
-            {
-                "category": "HARM_CATEGORY_HATE_SPEECH",
-                "threshold": "BLOCK_NONE",
-            },
-            {
-                "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
-                "threshold": "BLOCK_NONE",
-            },
-            {
-                "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
-                "threshold": "BLOCK_NONE",
-            },
+            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
         ],
     }
 
@@ -174,18 +169,11 @@ def _parse_gemini_payload(raw: str) -> dict:
     }
 
 
-def _do_rest_call(pair: str) -> dict:
-    if not GEMINI_API_KEY:
-        raise RuntimeError("GEMINI_API_KEY is not configured")
-
-    payload = _build_payload(pair)
-
-    logger.info(
-        "Gemini REST request for %s using model=%s api_version=%s",
-        pair,
-        _GEMINI_MODEL,
-        _GEMINI_API_VERSION,
-    )
+def _rest_call(pair: str, prompt_text: str) -> tuple[int, str, dict]:
+    payload = {
+        **_build_payload(pair),
+        "contents": [{"parts": [{"text": prompt_text}]}],
+    }
 
     response = requests.post(
         _GEMINI_ENDPOINT,
@@ -194,17 +182,47 @@ def _do_rest_call(pair: str) -> dict:
         timeout=_REQUEST_TIMEOUT,
     )
 
-    if not response.ok:
+    body_text = response.text[:500]
+    try:
+        body_json = response.json()
+    except Exception:
+        body_json = {}
+
+    logger.info(
+        "Gemini HTTP for %s: status=%s key=%s",
+        pair,
+        response.status_code,
+        _mask_key(GEMINI_API_KEY),
+    )
+
+    return response.status_code, body_text, body_json
+
+
+def _do_rest_call(pair: str) -> dict:
+    if not GEMINI_API_KEY:
+        raise RuntimeError("GEMINI_API_KEY is not configured")
+
+    logger.info(
+        "Gemini REST request for %s using model=%s api_version=%s",
+        pair,
+        _GEMINI_MODEL,
+        _GEMINI_API_VERSION,
+    )
+
+    status_code, body_text, body_json = _rest_call(pair, _PROMPT.format(pair=pair))
+
+    if status_code != 200:
         logger.error(
             "Gemini REST HTTP error for %s: %s %s",
             pair,
-            response.status_code,
-            response.text[:500],
+            status_code,
+            body_text,
         )
-        response.raise_for_status()
+        if status_code in (401, 403, 429, 500, 502, 503, 504):
+            raise RuntimeError(f"Gemini HTTP {status_code}: {body_text}")
+        raise RuntimeError(f"Gemini unexpected HTTP {status_code}: {body_text}")
 
-    data = response.json()
-    raw = _extract_text_from_response_json(data)
+    raw = _extract_text_from_response_json(body_json)
 
     logger.info(
         "Gemini raw response for %s [%s]: %s",
@@ -216,48 +234,25 @@ def _do_rest_call(pair: str) -> dict:
     if not raw:
         logger.warning("Gemini returned empty text for %s. Retrying with shorter prompt...", pair)
 
-        retry_payload = {
-            "contents": [
-                {
-                    "parts": [
-                        {
-                            "text": f"Asset: {pair}\nReply exactly one word: GO or BLOCK"
-                        }
-                    ]
-                }
-            ],
-            "generationConfig": {
-                "temperature": 0,
-                "maxOutputTokens": 4,
-                "candidateCount": 1,
-                "responseMimeType": "text/plain",
-            },
-            "safetySettings": payload["safetySettings"],
-        }
+        retry_prompt = f"Asset: {pair}\nReply exactly one word: GO or BLOCK"
+        retry_status, retry_body_text, retry_body_json = _rest_call(pair, retry_prompt)
 
-        retry_response = requests.post(
-            _GEMINI_ENDPOINT,
-            params={"key": GEMINI_API_KEY},
-            json=retry_payload,
-            timeout=_REQUEST_TIMEOUT,
-        )
-
-        if retry_response.ok:
-            retry_data = retry_response.json()
-            raw = _extract_text_from_response_json(retry_data)
-            logger.info(
-                "Gemini retry raw response for %s [%s]: %s",
-                pair,
-                _GEMINI_MODEL,
-                raw,
-            )
-        else:
+        if retry_status != 200:
             logger.error(
                 "Gemini retry HTTP error for %s: %s %s",
                 pair,
-                retry_response.status_code,
-                retry_response.text[:500],
+                retry_status,
+                retry_body_text,
             )
+            raise RuntimeError(f"Gemini retry HTTP {retry_status}: {retry_body_text}")
+
+        raw = _extract_text_from_response_json(retry_body_json)
+        logger.info(
+            "Gemini retry raw response for %s [%s]: %s",
+            pair,
+            _GEMINI_MODEL,
+            raw,
+        )
 
     return _parse_gemini_payload(raw)
 
@@ -390,4 +385,6 @@ def get_cache_stats() -> dict:
         "total": len(items),
         "model": _GEMINI_MODEL,
         "api_version": _GEMINI_API_VERSION,
+        "has_api_key": bool(GEMINI_API_KEY),
+        "masked_key": _mask_key(GEMINI_API_KEY),
     }

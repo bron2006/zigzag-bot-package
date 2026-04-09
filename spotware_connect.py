@@ -31,6 +31,11 @@ logger = logging.getLogger(__name__)
 
 TOKEN_REFRESH_URL = "https://connect.spotware.com/apps/token"
 
+_APP_AUTH_SEND_TIMEOUT = 20
+_ACCOUNT_AUTH_SEND_TIMEOUT = 20
+_APP_AUTH_RETRY_DELAY = 2
+_APP_AUTH_MAX_RETRIES = 3
+
 _ACCOUNT_AUTH_TIMEOUT = 12
 _MAX_ACCOUNT_AUTH_ATTEMPTS = 3
 
@@ -90,6 +95,9 @@ class SpotwareConnect(EventEmitter):
         self._account_auth_watchdog = None
         self._account_auth_attempts = 0
 
+        self._application_auth_retry_call = None
+        self._application_auth_attempts = 0
+
         self._client = SpotwareClientBase(self.host, self.port, TcpProtocol)
         self._client.setConnectedCallback(self._on_connected)
         self._client.setMessageReceivedCallback(self._on_message_received)
@@ -122,6 +130,7 @@ class SpotwareConnect(EventEmitter):
     def stop(self) -> None:
         logger.info("Зупинка Spotware client service...")
         self._cancel_account_auth_watchdog()
+        self._cancel_application_auth_retry()
         try:
             self.is_authorized = False
             self._application_authed = False
@@ -187,20 +196,18 @@ class SpotwareConnect(EventEmitter):
         self.is_authorized = False
         self._application_authed = False
         self._account_auth_attempts = 0
-        self._cancel_account_auth_watchdog()
+        self._application_auth_attempts = 0
 
-        self.send(
-            ProtoOAApplicationAuthReq(
-                clientId=self._client_id,
-                clientSecret=self._client_secret,
-            ),
-            timeout=15,
-        ).addErrback(self._on_application_auth_send_error)
+        self._cancel_account_auth_watchdog()
+        self._cancel_application_auth_retry()
+
+        self._send_application_auth("on_connected")
 
     def _on_disconnected(self, client, reason) -> None:
         self.is_authorized = False
         self._application_authed = False
         self._cancel_account_auth_watchdog()
+        self._cancel_application_auth_retry()
 
         msg = self._reason_to_text(reason)
         logger.warning("Disconnected. Reason: %s", msg)
@@ -212,6 +219,9 @@ class SpotwareConnect(EventEmitter):
 
         if pt == ProtoOAPayloadType.PROTO_OA_APPLICATION_AUTH_RES:
             self._application_authed = True
+            self._application_auth_attempts = 0
+            self._cancel_application_auth_retry()
+
             logger.info("✅ Application authorized successfully.")
             self._send_account_auth("after_application_auth_res")
             return
@@ -262,7 +272,81 @@ class SpotwareConnect(EventEmitter):
             return
 
     # ------------------------------------------------------------------
-    # Application / account auth
+    # Application auth
+    # ------------------------------------------------------------------
+
+    def _send_application_auth(self, source: str) -> None:
+        self._application_auth_attempts += 1
+
+        logger.info(
+            "Починаю application auth. source=%s attempt=%s/%s client_id=%s",
+            source,
+            self._application_auth_attempts,
+            _APP_AUTH_MAX_RETRIES,
+            _mask_secret(self._client_id),
+        )
+
+        self.send(
+            ProtoOAApplicationAuthReq(
+                clientId=self._client_id,
+                clientSecret=self._client_secret,
+            ),
+            timeout=_APP_AUTH_SEND_TIMEOUT,
+        ).addCallbacks(
+            self._on_application_auth_send_ok,
+            self._on_application_auth_send_error,
+        )
+
+    def _schedule_application_auth_retry(self) -> None:
+        if self._application_authed:
+            return
+
+        if self._application_auth_attempts >= _APP_AUTH_MAX_RETRIES:
+            msg = (
+                f"Application auth не вдався після {_APP_AUTH_MAX_RETRIES} спроб. "
+                "Емічу помилку для reconnect."
+            )
+            logger.error(msg)
+            self.emit("error", msg)
+            return
+
+        self._cancel_application_auth_retry()
+        logger.warning(
+            "Повторюю application auth через %ss (спроба %s/%s)",
+            _APP_AUTH_RETRY_DELAY,
+            self._application_auth_attempts + 1,
+            _APP_AUTH_MAX_RETRIES,
+        )
+        self._application_auth_retry_call = reactor.callLater(
+            _APP_AUTH_RETRY_DELAY,
+            self._send_application_auth,
+            "retry_after_timeout",
+        )
+
+    def _cancel_application_auth_retry(self) -> None:
+        if self._application_auth_retry_call and self._application_auth_retry_call.active():
+            try:
+                self._application_auth_retry_call.cancel()
+            except Exception:
+                logger.exception("Не вдалося скасувати application auth retry")
+        self._application_auth_retry_call = None
+
+    def _on_application_auth_send_ok(self, result):
+        logger.info("ProtoOAApplicationAuthReq відправлено. Очікую ProtoOAApplicationAuthRes...")
+        return result
+
+    def _on_application_auth_send_error(self, failure):
+        msg = failure.getErrorMessage()
+        logger.error("Application auth send failed: %s", msg)
+
+        # НЕ емітимо помилку одразу — спершу retry
+        self._schedule_application_auth_retry()
+
+        # ВАЖЛИВО: поглинаємо failure, щоб не було Unhandled error in Deferred
+        return None
+
+    # ------------------------------------------------------------------
+    # Account auth
     # ------------------------------------------------------------------
 
     def _send_account_auth(self, source: str) -> None:
@@ -303,7 +387,7 @@ class SpotwareConnect(EventEmitter):
                     ctidTraderAccountId=acc_id,
                     accessToken=token,
                 ),
-                timeout=20,
+                timeout=_ACCOUNT_AUTH_SEND_TIMEOUT,
             ).addCallbacks(
                 self._on_account_auth_send_ok,
                 self._on_account_auth_send_error,
@@ -350,11 +434,6 @@ class SpotwareConnect(EventEmitter):
             )
             self._refresh_access_token(reason="account_auth_watchdog_timeout")
 
-    def _on_application_auth_send_error(self, failure):
-        logger.error("Application auth send failed: %s", failure.getErrorMessage())
-        self.emit("error", f"Application auth send failed: {failure.getErrorMessage()}")
-        return failure
-
     def _on_account_auth_send_ok(self, result):
         logger.info("ProtoOAAccountAuthReq відправлено. Очікую ProtoOAAccountAuthRes...")
         return result
@@ -369,7 +448,7 @@ class SpotwareConnect(EventEmitter):
         else:
             self.emit("error", f"Account auth send failed: {msg}")
 
-        return failure
+        return None
 
     # ------------------------------------------------------------------
     # Token refresh
