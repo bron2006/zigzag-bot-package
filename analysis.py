@@ -205,9 +205,10 @@ def _combine_verdicts_sync(
         "reasons": reasons,
         "ts": time.time(),
         "timeframe": requested_timeframe,
-        "sentiment": "GO",
+        "sentiment": "N/A",
         "is_trade_allowed": final_verdict in ("BUY", "SELL"),
         "timeframe_details": timeframe_details,
+        "news_source": None,
     }
 
 
@@ -220,10 +221,11 @@ def _fallback_result(symbol: str, timeframe: str, reason: str, verdict_text: str
         "reasons": [reason],
         "ts": time.time(),
         "timeframe": timeframe,
-        "sentiment": "GO",
+        "sentiment": "N/A",
         "is_trade_allowed": False,
         "error": reason if verdict_text == "ERROR" else None,
         "timeframe_details": {},
+        "news_source": None,
     }
 
 
@@ -286,33 +288,53 @@ def _analysis_flow(client, symbol_cache, symbol, user_id, timeframe="5m"):
             logger.warning(f"News filter timeout/error for {pair_norm}: {e}")
             news_result = {
                 "verdict": "GO",
-                "reason": "ШІ недоступний, аналіз без новин",
+                "reason": "ШІ недоступний",
                 "source": "fallback_timeout",
-                "model": None,
+                "model": "gemini-flash-latest",
+                "available": False,
+                "http_status": None,
             }
 
         result = dict(base_result)
         news_verdict = news_result.get("verdict", "GO")
         news_reason = news_result.get("reason", "")
+        news_source = news_result.get("source")
         news_model = news_result.get("model")
-        result["sentiment"] = news_verdict
+        news_available = bool(news_result.get("available", False))
+        news_http_status = news_result.get("http_status")
 
-        if news_verdict == "BLOCK":
-            result["is_trade_allowed"] = False
-            if result.get("verdict_text") in ("BUY", "SELL"):
-                result["verdict_text"] = "NEWS_WAIT"
+        result["news_source"] = news_source
 
-            result["reasons"].append(
-                f"ШІ: BLOCK — {news_reason}"
-                if news_reason
-                else "ШІ: Ризиковані новини. Вхід заблоковано."
-            )
+        # Якщо Gemini реально відповів нормально
+        if news_available:
+            result["sentiment"] = news_verdict
+
+            if news_verdict == "BLOCK":
+                result["is_trade_allowed"] = False
+                if result.get("verdict_text") in ("BUY", "SELL"):
+                    result["verdict_text"] = "NEWS_WAIT"
+
+                result["reasons"].append(
+                    f"ШІ: BLOCK — {news_reason}" if news_reason else "ШІ: Ризиковані новини. Вхід заблоковано."
+                )
+            else:
+                reason_text = news_reason or "Новини ок"
+                if news_model:
+                    reason_text = f"{reason_text} [{news_model}]"
+                result["reasons"].append(f"ШІ: GO — {reason_text}")
+                result["is_trade_allowed"] = result.get("verdict_text") in ("BUY", "SELL")
+
+        # Якщо Gemini недоступний/порожній/перевантажений
         else:
-            go_reason = news_reason or "Новини ок"
-            if news_model:
-                go_reason = f"{go_reason} [{news_model}]"
-            result["reasons"].append(f"ШІ: GO — {go_reason}")
+            result["sentiment"] = "UNAVAILABLE"
             result["is_trade_allowed"] = result.get("verdict_text") in ("BUY", "SELL")
+
+            if news_http_status:
+                result["reasons"].append(f"ШІ: недоступний — HTTP {news_http_status}")
+            elif news_reason:
+                result["reasons"].append(f"ШІ: недоступний — {news_reason}")
+            else:
+                result["reasons"].append("ШІ: недоступний")
 
         result["ts"] = time.time()
         return result

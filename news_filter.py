@@ -1,4 +1,3 @@
-import json
 import logging
 import re
 import threading
@@ -26,7 +25,7 @@ _cache: Dict[str, dict] = {}
 _cache_lock = threading.RLock()
 
 _CACHE_TTL = 600
-_ERROR_CACHE_TTL = 30
+_ERROR_CACHE_TTL = 60
 
 _PROMPT = """You are a short-term trading news gate.
 
@@ -90,13 +89,13 @@ def _store_cache(pair: str, result: dict, ttl: int) -> dict:
     return dict(payload)
 
 
-def _build_payload(pair: str) -> dict:
+def _build_payload(pair: str, prompt_text: str) -> dict:
     return {
         "contents": [
             {
                 "parts": [
                     {
-                        "text": _PROMPT.format(pair=pair)
+                        "text": prompt_text
                     }
                 ]
             }
@@ -134,46 +133,62 @@ def _extract_text_from_response_json(data: dict) -> str:
         return ""
 
 
+def _success_result(verdict: str, raw: str, source: str) -> dict:
+    return {
+        "verdict": verdict,
+        "reason": "",
+        "source": source,
+        "model": _GEMINI_MODEL,
+        "api_version": _GEMINI_API_VERSION,
+        "raw": (raw or "")[:120],
+        "available": True,
+        "http_status": 200,
+    }
+
+
+def _fallback_result(reason: str, source: str, http_status: Optional[int] = None, raw: str = "") -> dict:
+    return {
+        "verdict": "GO",
+        "reason": reason,
+        "source": source,
+        "model": _GEMINI_MODEL,
+        "api_version": _GEMINI_API_VERSION,
+        "raw": (raw or "")[:120],
+        "available": False,
+        "http_status": http_status,
+    }
+
+
 def _parse_gemini_payload(raw: str) -> dict:
     cleaned = (raw or "").strip()
     upper = cleaned.upper()
 
     if re.search(r"\bBLOCK\b", upper):
-        return {
-            "verdict": "BLOCK",
-            "reason": "",
-            "source": "gemini_keyword",
-            "model": _GEMINI_MODEL,
-            "api_version": _GEMINI_API_VERSION,
-            "raw": cleaned[:120],
-        }
+        return _success_result("BLOCK", cleaned, "gemini_keyword")
 
     if re.search(r"\bGO\b", upper):
-        return {
-            "verdict": "GO",
-            "reason": "",
-            "source": "gemini_keyword",
-            "model": _GEMINI_MODEL,
-            "api_version": _GEMINI_API_VERSION,
-            "raw": cleaned[:120],
-        }
+        return _success_result("GO", cleaned, "gemini_keyword")
 
-    logger.warning("Gemini malformed/empty response, fallback to GO. Raw=%r", cleaned[:120])
-    return {
-        "verdict": "GO",
-        "reason": "Malformed or empty model output",
-        "source": "fallback_malformed",
-        "model": _GEMINI_MODEL,
-        "api_version": _GEMINI_API_VERSION,
-        "raw": cleaned[:120],
-    }
+    logger.warning("Gemini malformed/empty response. Raw=%r", cleaned[:120])
+
+    if not cleaned:
+        return _fallback_result(
+            reason="Порожня відповідь від моделі",
+            source="fallback_empty",
+            http_status=200,
+            raw=cleaned,
+        )
+
+    return _fallback_result(
+        reason="Некоректний формат відповіді моделі",
+        source="fallback_malformed",
+        http_status=200,
+        raw=cleaned,
+    )
 
 
 def _rest_call(pair: str, prompt_text: str) -> tuple[int, str, dict]:
-    payload = {
-        **_build_payload(pair),
-        "contents": [{"parts": [{"text": prompt_text}]}],
-    }
+    payload = _build_payload(pair, prompt_text)
 
     response = requests.post(
         _GEMINI_ENDPOINT,
@@ -218,9 +233,12 @@ def _do_rest_call(pair: str) -> dict:
             status_code,
             body_text,
         )
-        if status_code in (401, 403, 429, 500, 502, 503, 504):
-            raise RuntimeError(f"Gemini HTTP {status_code}: {body_text}")
-        raise RuntimeError(f"Gemini unexpected HTTP {status_code}: {body_text}")
+        return _fallback_result(
+            reason=f"HTTP {status_code} від Gemini",
+            source="fallback_http_error",
+            http_status=status_code,
+            raw=body_text,
+        )
 
     raw = _extract_text_from_response_json(body_json)
 
@@ -244,7 +262,12 @@ def _do_rest_call(pair: str) -> dict:
                 retry_status,
                 retry_body_text,
             )
-            raise RuntimeError(f"Gemini retry HTTP {retry_status}: {retry_body_text}")
+            return _fallback_result(
+                reason=f"HTTP {retry_status} від Gemini при повторі",
+                source="fallback_retry_http_error",
+                http_status=retry_status,
+                raw=retry_body_text,
+            )
 
         raw = _extract_text_from_response_json(retry_body_json)
         logger.info(
@@ -278,13 +301,11 @@ def get_latest_news_sentiment_async(pair: str) -> Deferred:
     if not GEMINI_API_KEY:
         result = _store_cache(
             pair,
-            {
-                "verdict": "GO",
-                "reason": "GEMINI_API_KEY не налаштований",
-                "source": "fallback_no_key",
-                "model": _GEMINI_MODEL,
-                "api_version": _GEMINI_API_VERSION,
-            },
+            _fallback_result(
+                reason="GEMINI_API_KEY не налаштований",
+                source="fallback_no_key",
+                http_status=None,
+            ),
             _ERROR_CACHE_TTL,
         )
         return succeed(result)
@@ -297,14 +318,15 @@ def get_latest_news_sentiment_async(pair: str) -> Deferred:
     )
 
     def _cache_success(result: dict):
-        ttl = _CACHE_TTL if str(result.get("source", "")).startswith("gemini") else _ERROR_CACHE_TTL
+        ttl = _CACHE_TTL if result.get("available") else _ERROR_CACHE_TTL
         cached_result = _store_cache(pair, result, ttl)
         logger.info(
-            "Gemini [%s]: %s (source=%s, model=%s)",
+            "Gemini [%s]: verdict=%s available=%s source=%s status=%s",
             pair,
             cached_result["verdict"],
+            cached_result.get("available"),
             cached_result.get("source"),
-            cached_result.get("model"),
+            cached_result.get("http_status"),
         )
         return cached_result
 
@@ -312,13 +334,11 @@ def get_latest_news_sentiment_async(pair: str) -> Deferred:
         logger.error("Gemini error for %s: %s", pair, failure.getErrorMessage())
         return _store_cache(
             pair,
-            {
-                "verdict": "GO",
-                "reason": "API error — temporary fail-open",
-                "source": "fallback_error",
-                "model": _GEMINI_MODEL,
-                "api_version": _GEMINI_API_VERSION,
-            },
+            _fallback_result(
+                reason="Помилка запиту до Gemini",
+                source="fallback_error",
+                http_status=None,
+            ),
             _ERROR_CACHE_TTL,
         )
 
@@ -336,31 +356,27 @@ def _get_cached_or_fresh_sync(pair: str) -> dict:
     if not GEMINI_API_KEY:
         return _store_cache(
             pair,
-            {
-                "verdict": "GO",
-                "reason": "GEMINI_API_KEY не налаштований",
-                "source": "fallback_no_key",
-                "model": _GEMINI_MODEL,
-                "api_version": _GEMINI_API_VERSION,
-            },
+            _fallback_result(
+                reason="GEMINI_API_KEY не налаштований",
+                source="fallback_no_key",
+                http_status=None,
+            ),
             _ERROR_CACHE_TTL,
         )
 
     try:
         result = _do_rest_call(pair)
-        ttl = _CACHE_TTL if str(result.get("source", "")).startswith("gemini") else _ERROR_CACHE_TTL
+        ttl = _CACHE_TTL if result.get("available") else _ERROR_CACHE_TTL
         return _store_cache(pair, result, ttl)
     except Exception as e:
         logger.error("Gemini sync error for %s: %s", pair, e)
         return _store_cache(
             pair,
-            {
-                "verdict": "GO",
-                "reason": "API error — temporary fail-open",
-                "source": "fallback_error",
-                "model": _GEMINI_MODEL,
-                "api_version": _GEMINI_API_VERSION,
-            },
+            _fallback_result(
+                reason="Помилка запиту до Gemini",
+                source="fallback_error",
+                http_status=None,
+            ),
             _ERROR_CACHE_TTL,
         )
 
