@@ -1,26 +1,26 @@
 import logging
+import os
+import re
 import threading
 import time
 from typing import Dict, Optional
 
-import requests as _requests
+import requests
 from twisted.internet import reactor
 from twisted.internet.defer import Deferred, succeed
 from twisted.internet.threads import deferToThreadPool
 
-from config import GEMINI_API_KEY
 from state import app_state
 
 logger = logging.getLogger("news_filter")
 
-# Стабільні моделі в порядку пріоритету
-_MODELS = [
-    "gemini-1.5-flash-8b",
-    "gemini-1.5-flash",
-    "gemini-2.0-flash-lite",
-]
+_OPENROUTER_API_KEY = (os.environ.get("OPENROUTER_API_KEY") or "").strip()
+_OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
-_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+_MODELS = [
+    (os.environ.get("OPENROUTER_MODEL_PRIMARY") or "google/gemini-2.0-flash-001").strip(),
+    (os.environ.get("OPENROUTER_MODEL_FALLBACK") or "google/gemini-flash-1.5").strip(),
+]
 
 _cache: Dict[str, dict] = {}
 _cache_lock = threading.RLock()
@@ -28,9 +28,19 @@ _cache_lock = threading.RLock()
 _CACHE_TTL = 600
 _ERROR_CACHE_TTL = 60
 
-_PROMPT = (
-    "Is there a major economic news event or release in the NEXT 30 MINUTES for {pair}? "
-    "Reply with exactly one word: GO or BLOCK"
+_REQUEST_TIMEOUT = (5, 15)   # connect, read
+_RETRY_TIMEOUT = (5, 10)
+
+_SYSTEM_PROMPT = (
+    "You are a short-term trading news gate. "
+    "Reply with EXACTLY ONE WORD only: GO or BLOCK."
+)
+
+_USER_PROMPT = (
+    "Asset: {pair}\n"
+    "Check if there are dangerous high-impact news or market-moving events "
+    "in the next 30 minutes.\n"
+    "Reply exactly one word: GO or BLOCK."
 )
 
 
@@ -54,10 +64,6 @@ def _mask_key(value: Optional[str]) -> str:
     return f"{value[:4]}...{value[-4:]}"
 
 
-def _get_api_key() -> str:
-    return (GEMINI_API_KEY or "").strip()
-
-
 def _get_cached(pair: str) -> Optional[dict]:
     key = _normalize_pair(pair)
     with _cache_lock:
@@ -75,7 +81,6 @@ def _get_cached(pair: str) -> Optional[dict]:
 
 def _store_cache(pair: str, result: dict, ttl: int) -> dict:
     key = _normalize_pair(pair)
-
     payload = dict(result)
     payload["ts"] = _now()
     payload["_ttl"] = ttl
@@ -86,15 +91,15 @@ def _store_cache(pair: str, result: dict, ttl: int) -> dict:
     return dict(payload)
 
 
-def _success(verdict: str, *, model: str, raw: str = "") -> dict:
+def _success(verdict: str, *, model: str, raw: str = "", http_status: int = 200) -> dict:
     return {
         "verdict": verdict,
         "reason": "",
         "available": True,
-        "source": "gemini",
+        "source": "openrouter",
         "model": model,
-        "http_status": 200,
-        "raw": (raw or "")[:120],
+        "http_status": http_status,
+        "raw": (raw or "")[:200],
     }
 
 
@@ -106,124 +111,158 @@ def _fallback(reason: str, *, source: str, model: Optional[str] = None, http_sta
         "source": source,
         "model": model,
         "http_status": http_status,
-        "raw": (raw or "")[:120],
+        "raw": (raw or "")[:200],
     }
 
 
-def _extract_text_from_json(data: dict) -> str:
+def _extract_text_from_openrouter(data: dict) -> str:
     try:
-        candidates = data.get("candidates") or []
-        chunks = []
+        choices = data.get("choices") or []
+        if not choices:
+            return ""
 
-        for candidate in candidates:
-            content = candidate.get("content") or {}
-            parts = content.get("parts") or []
-            for part in parts:
-                text = part.get("text")
-                if text:
-                    chunks.append(text)
+        message = choices[0].get("message") or {}
+        content = message.get("content", "")
 
-        return "\n".join(chunks).strip()
+        if isinstance(content, str):
+            return content.strip()
+
+        # якщо раптом provider віддасть content як масив шматків
+        if isinstance(content, list):
+            chunks = []
+            for item in content:
+                if isinstance(item, dict):
+                    text = item.get("text")
+                    if text:
+                        chunks.append(text)
+            return "\n".join(chunks).strip()
+
+        return ""
     except Exception:
-        logger.exception("Не вдалося витягнути текст із Gemini response JSON")
+        logger.exception("Не вдалося витягнути текст із OpenRouter response")
         return ""
 
 
-def _parse_text_to_verdict(text: str, model: str) -> dict:
-    upper = (text or "").strip().upper()
+def _parse_verdict(text: str, model: str) -> dict:
+    cleaned = (text or "").strip()
+    upper = cleaned.upper()
 
-    if "BLOCK" in upper:
-        return _success("BLOCK", model=model, raw=text)
+    if re.search(r"\bBLOCK\b", upper):
+        return _success("BLOCK", model=model, raw=cleaned)
 
-    if "GO" in upper:
-        return _success("GO", model=model, raw=text)
+    if re.search(r"\bGO\b", upper):
+        return _success("GO", model=model, raw=cleaned)
 
+    if not cleaned:
+        logger.warning("OpenRouter returned empty response")
+        return _fallback(
+            "Порожня відповідь від моделі",
+            source="fallback_empty",
+            model=model,
+            http_status=200,
+        )
+
+    logger.warning("OpenRouter malformed response: %r", cleaned[:200])
     return _fallback(
-        "empty_or_unrecognized_response",
+        "Некоректний формат відповіді моделі",
         source="fallback_malformed",
         model=model,
         http_status=200,
-        raw=text,
+        raw=cleaned,
     )
 
 
-def _call_model_once(model: str, pair: str, prompt: str, timeout: int = 15) -> dict:
-    api_key = _get_api_key()
-    if not api_key:
-        return _fallback("no_api_key", source="fallback_no_key", model=model)
+def _call_model_once(model: str, pair: str, prompt: str, timeout_value) -> dict:
+    if not _OPENROUTER_API_KEY:
+        return _fallback(
+            "OPENROUTER_API_KEY не налаштований",
+            source="fallback_no_key",
+            model=model,
+        )
 
-    url = _BASE_URL.format(model=model)
-    params = {"key": api_key}
-    body = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "maxOutputTokens": 10,
-            "temperature": 0,
-            "candidateCount": 1,
-        },
-        "safetySettings": [
-            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-        ],
+    headers = {
+        "Authorization": f"Bearer {_OPENROUTER_API_KEY}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://zigzag-bot-package.fly.dev",
+        "X-Title": "zigzag-bot",
     }
 
-    resp = _requests.post(url, params=params, json=body, timeout=timeout)
-    logger.info(
-        "Gemini [%s] model=%s status=%s key=%s",
-        pair,
-        model,
-        resp.status_code,
-        _mask_key(api_key),
+    body = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0,
+        "max_tokens": 4,
+    }
+
+    response = requests.post(
+        _OPENROUTER_URL,
+        headers=headers,
+        json=body,
+        timeout=timeout_value,
     )
 
-    if resp.status_code != 200:
+    logger.info(
+        "OpenRouter [%s] model=%s status=%s key=%s",
+        pair,
+        model,
+        response.status_code,
+        _mask_key(_OPENROUTER_API_KEY),
+    )
+
+    body_text = response.text[:500]
+
+    if response.status_code != 200:
         return _fallback(
-            f"http_{resp.status_code}",
+            f"http_{response.status_code}",
             source="fallback_http_error",
             model=model,
-            http_status=resp.status_code,
-            raw=resp.text[:200],
+            http_status=response.status_code,
+            raw=body_text,
         )
 
     try:
-        data = resp.json()
+        data = response.json()
     except Exception:
         return _fallback(
             "invalid_json_response",
             source="fallback_invalid_json",
             model=model,
             http_status=200,
-            raw=resp.text[:200],
+            raw=body_text,
         )
 
-    text = _extract_text_from_json(data)
-    logger.info("Gemini raw response for %s [%s]: %s", pair, model, text)
+    text = _extract_text_from_openrouter(data)
+    logger.info("OpenRouter raw response for %s [%s]: %s", pair, model, text)
 
-    return _parse_text_to_verdict(text, model)
+    return _parse_verdict(text, model)
 
 
-def _call_gemini_sync(pair: str) -> dict:
-    api_key = _get_api_key()
-    if not api_key:
-        logger.warning("GEMINI_API_KEY не встановлений — повертаємо GO")
-        return _fallback("no_api_key", source="fallback_no_key", model=None)
-
+def _call_openrouter_sync(pair: str) -> dict:
     pair = _normalize_pair(pair)
-    prompt = _PROMPT.format(pair=pair)
 
-    last_nonfatal_result = None
+    if not _OPENROUTER_API_KEY:
+        logger.warning("OPENROUTER_API_KEY не встановлений — fallback GO")
+        return _fallback(
+            "OPENROUTER_API_KEY не налаштований",
+            source="fallback_no_key",
+            model=None,
+        )
 
-    for model in _MODELS:
+    prompt = _USER_PROMPT.format(pair=pair)
+    last_result = None
+
+    for model in [m for m in _MODELS if m]:
         for attempt in range(3):
             try:
-                result = _call_model_once(model, pair, prompt, timeout=15)
+                timeout_value = _REQUEST_TIMEOUT if attempt == 0 else _RETRY_TIMEOUT
+                result = _call_model_once(model, pair, prompt, timeout_value)
 
-                # Успішна відповідь із verdict
                 if result.get("available"):
                     logger.info(
-                        "Gemini [%s]: %s (model=%s)",
+                        "OpenRouter [%s]: %s (model=%s)",
                         pair,
                         result["verdict"],
                         model,
@@ -232,12 +271,12 @@ def _call_gemini_sync(pair: str) -> dict:
 
                 status = result.get("http_status")
                 reason = result.get("reason", "")
+                last_result = result
 
-                # Якщо 429/503 — retry/backoff
-                if status in (429, 503):
+                if status in (429, 500, 502, 503, 504):
                     wait = 2 ** attempt
                     logger.warning(
-                        "Gemini [%s] model=%s status=%s reason=%s wait=%ss attempt=%s/3",
+                        "OpenRouter [%s] model=%s status=%s reason=%s wait=%ss attempt=%s/3",
                         pair,
                         model,
                         status,
@@ -245,42 +284,37 @@ def _call_gemini_sync(pair: str) -> dict:
                         wait,
                         attempt + 1,
                     )
-                    last_nonfatal_result = result
                     time.sleep(wait)
                     continue
 
-                # Якщо 200, але порожньо/криво — пробуємо іншу модель
-                if status == 200 and reason in ("empty_or_unrecognized_response", "invalid_json_response"):
+                if status == 200 and reason in ("Порожня відповідь від моделі", "Некоректний формат відповіді моделі", "invalid_json_response"):
                     logger.warning(
-                        "Gemini [%s] model=%s returned unusable 200 response: %s",
+                        "OpenRouter [%s] model=%s returned unusable 200 response: %s",
                         pair,
                         model,
                         reason,
                     )
-                    last_nonfatal_result = result
                     break
 
-                # Інші HTTP-помилки — наступна модель
                 logger.warning(
-                    "Gemini [%s] model=%s fallback result: status=%s reason=%s",
+                    "OpenRouter [%s] model=%s fallback result: status=%s reason=%s",
                     pair,
                     model,
                     status,
                     reason,
                 )
-                last_nonfatal_result = result
                 break
 
-            except _requests.exceptions.Timeout:
+            except requests.exceptions.Timeout:
                 wait = 2 ** attempt
                 logger.warning(
-                    "Gemini [%s] model=%s timeout wait=%ss attempt=%s/3",
+                    "OpenRouter [%s] model=%s timeout wait=%ss attempt=%s/3",
                     pair,
                     model,
                     wait,
                     attempt + 1,
                 )
-                last_nonfatal_result = _fallback(
+                last_result = _fallback(
                     "timeout",
                     source="fallback_timeout",
                     model=model,
@@ -290,8 +324,8 @@ def _call_gemini_sync(pair: str) -> dict:
                 continue
 
             except Exception as e:
-                logger.error("Gemini [%s] model=%s exception: %s", pair, model, e)
-                last_nonfatal_result = _fallback(
+                logger.error("OpenRouter [%s] model=%s exception: %s", pair, model, e)
+                last_result = _fallback(
                     str(e),
                     source="fallback_exception",
                     model=model,
@@ -299,8 +333,8 @@ def _call_gemini_sync(pair: str) -> dict:
                 )
                 break
 
-    logger.warning("Gemini [%s]: всі моделі недоступні — fallback GO", pair)
-    return last_nonfatal_result or _fallback(
+    logger.warning("OpenRouter [%s]: всі моделі недоступні — fallback GO", pair)
+    return last_result or _fallback(
         "all_models_unavailable",
         source="fallback_all_models_unavailable",
         model=None,
@@ -313,7 +347,12 @@ def get_latest_news_sentiment_async(pair: str):
 
     cached = _get_cached(pair)
     if cached:
-        logger.debug("news_filter cache hit for %s", pair)
+        logger.debug(
+            "news_filter cache hit for %s (age=%ss, source=%s)",
+            pair,
+            int(_now() - cached.get("ts", 0)),
+            cached.get("source"),
+        )
         return succeed(cached)
 
     def _store(result: dict):
@@ -322,7 +361,7 @@ def get_latest_news_sentiment_async(pair: str):
 
     def _on_error(failure):
         logger.error(
-            "deferToThreadPool Gemini error for %s: %s",
+            "deferToThreadPool OpenRouter error for %s: %s",
             pair,
             failure.getErrorMessage(),
         )
@@ -337,7 +376,7 @@ def get_latest_news_sentiment_async(pair: str):
     d = deferToThreadPool(
         reactor,
         _blocking_pool(),
-        _call_gemini_sync,
+        _call_openrouter_sync,
         pair,
     )
     d.addCallback(_store)
@@ -352,7 +391,7 @@ def get_latest_news_sentiment(pair: str) -> str:
     if cached:
         return cached["verdict"]
 
-    result = _call_gemini_sync(pair)
+    result = _call_openrouter_sync(pair)
     ttl = _CACHE_TTL if result.get("available") else _ERROR_CACHE_TTL
     _store_cache(pair, result, ttl)
     return result["verdict"]
@@ -377,6 +416,6 @@ def get_cache_stats() -> dict:
         "stale": len(stale),
         "total": len(items),
         "models": list(_MODELS),
-        "has_api_key": bool(_get_api_key()),
-        "masked_key": _mask_key(_get_api_key()),
+        "has_api_key": bool(_OPENROUTER_API_KEY),
+        "masked_key": _mask_key(_OPENROUTER_API_KEY),
     }
