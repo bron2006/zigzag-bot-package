@@ -32,22 +32,17 @@ _client_local = threading.local()
 _CACHE_TTL = 600
 _ERROR_CACHE_TTL = 30
 
-# НАВМИСНО МАКСИМАЛЬНО ПРОСТИЙ ПРОМПТ
-_PROMPT = """You are a news risk filter for short-term trading.
+# МАКСИМАЛЬНО ПРОСТИЙ ПРОМПТ
+_PROMPT = """You are a short-term trading news gate.
 
 Asset: {pair}
 
-Check whether there are high-impact news/events in the next 30 minutes that make trading risky.
+Check if there are dangerous high-impact news/events in the next 30 minutes.
 
-Reply with EXACTLY ONE WORD ONLY:
+Reply with EXACTLY ONE WORD:
 GO
 or
 BLOCK
-
-Do not output JSON.
-Do not explain.
-Do not add punctuation.
-Do not add markdown.
 """
 
 
@@ -134,19 +129,49 @@ def _extract_text(response) -> str:
         return ""
 
 
+def _build_generate_config():
+    """
+    Пробуємо максимально пом'якшити safety settings.
+    Якщо конкретний формат SDK не приймає ці поля — тихо fallback.
+    """
+    base_kwargs = {
+        "max_output_tokens": 4,
+        "temperature": 0,
+        "response_mime_type": "text/plain",
+    }
+
+    try:
+        safety_settings = [
+            types.SafetySetting(category="HARM_CATEGORY_HARASSMENT", threshold="BLOCK_NONE"),
+            types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH", threshold="BLOCK_NONE"),
+            types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold="BLOCK_NONE"),
+            types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="BLOCK_NONE"),
+        ]
+        return types.GenerateContentConfig(
+            **base_kwargs,
+            safety_settings=safety_settings,
+        )
+    except Exception as e:
+        logger.warning("Не вдалося застосувати safety_settings=BLOCK_NONE: %s", e)
+
+    try:
+        return types.GenerateContentConfig(**base_kwargs)
+    except Exception:
+        logger.exception("Не вдалося створити GenerateContentConfig")
+        raise
+
+
 def _parse_gemini_payload(raw: str) -> dict:
     """
-    Максимально толерантний парсер.
-    Шукає BLOCK/GO у будь-якому тексті.
-    Навіть якщо модель повернула обірваний JSON типу:
-    {"verdict": "
-    — ми не падаємо.
+    МАКСИМАЛЬНО ГНУЧКИЙ ПАРСЕР:
+    - якщо бачить BLOCK → BLOCK
+    - якщо бачить GO → GO
+    - якщо пусто/сміття → GO fallback
     """
     cleaned = (raw or "").strip()
     upper = cleaned.upper()
 
-    # 1. Найсуворіше правило: якщо є BLOCK — це BLOCK
-    if "BLOCK" in upper:
+    if re.search(r"\bBLOCK\b", upper):
         return {
             "verdict": "BLOCK",
             "reason": "",
@@ -156,7 +181,6 @@ def _parse_gemini_payload(raw: str) -> dict:
             "raw": cleaned[:120],
         }
 
-    # 2. Якщо є окреме слово GO — це GO
     if re.search(r"\bGO\b", upper):
         return {
             "verdict": "GO",
@@ -167,12 +191,11 @@ def _parse_gemini_payload(raw: str) -> dict:
             "raw": cleaned[:120],
         }
 
-    # 3. Якщо модель повернула щось дивне/обірване — fail-open, але без сміття в reason
-    logger.warning("Gemini malformed response, fallback to GO. Raw=%r", cleaned[:120])
+    logger.warning("Gemini malformed/empty response, fallback to GO. Raw=%r", cleaned[:120])
 
     return {
         "verdict": "GO",
-        "reason": "Malformed model output",
+        "reason": "Malformed or empty model output",
         "source": "fallback_malformed",
         "model": _GEMINI_MODEL,
         "api_version": _GEMINI_API_VERSION,
@@ -182,6 +205,7 @@ def _parse_gemini_payload(raw: str) -> dict:
 
 def _call_gemini_sync(pair: str) -> dict:
     client = _get_thread_local_client()
+    config = _build_generate_config()
 
     logger.info(
         "Gemini request for %s using model=%s api_version=%s",
@@ -193,10 +217,7 @@ def _call_gemini_sync(pair: str) -> dict:
     response = client.models.generate_content(
         model=_GEMINI_MODEL,
         contents=_PROMPT.format(pair=pair),
-        config=types.GenerateContentConfig(
-            max_output_tokens=8,
-            temperature=0,
-        ),
+        config=config,
     )
 
     raw = _extract_text(response)
@@ -245,7 +266,7 @@ def get_latest_news_sentiment_async(pair: str) -> Deferred:
     )
 
     def _cache_success(result: dict):
-        ttl = _CACHE_TTL if result.get("source", "").startswith("gemini") else _ERROR_CACHE_TTL
+        ttl = _CACHE_TTL if str(result.get("source", "")).startswith("gemini") else _ERROR_CACHE_TTL
         cached_result = _store_cache(pair, result, ttl)
         logger.info(
             "Gemini [%s]: %s (source=%s, model=%s, api_version=%s)",
@@ -297,7 +318,7 @@ def _get_cached_or_fresh_sync(pair: str) -> dict:
 
     try:
         result = _call_gemini_sync(pair)
-        ttl = _CACHE_TTL if result.get("source", "").startswith("gemini") else _ERROR_CACHE_TTL
+        ttl = _CACHE_TTL if str(result.get("source", "")).startswith("gemini") else _ERROR_CACHE_TTL
         return _store_cache(pair, result, ttl)
     except Exception as e:
         logger.error("Gemini sync error for %s: %s", pair, e)
