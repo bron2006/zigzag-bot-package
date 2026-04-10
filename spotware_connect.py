@@ -77,12 +77,12 @@ class SpotwareConnect(EventEmitter):
             logger.exception("Failed to stop Spotware client")
 
     def send(self, message, client_msg_id=None, timeout=30):
-        # ФІКС: Передаємо timeout безпосередньо в бібліотеку
-        deferred = self._client.send(message, clientMsgId=client_msg_id, timeout=timeout)
+        # ФІКС: Більше не передаємо timeout у саму бібліотеку (вона його не знає)
+        deferred = self._client.send(message, clientMsgId=client_msg_id)
         timeout_deferred = Deferred()
 
         timeout_call = reactor.callLater(
-            timeout + 2,
+            timeout,
             lambda: deferred.cancel() if not deferred.called else None,
         )
 
@@ -108,61 +108,50 @@ class SpotwareConnect(EventEmitter):
             return
 
         self.is_refreshing_token = True
-        logger.info("Attempting to refresh access token...")
-
+        logger.info("Refreshing access token...")
         refresh_token = get_ctrader_refresh_token()
         if not refresh_token:
-            logger.error("CRITICAL: CTRADER_REFRESH_TOKEN is not set.")
+            logger.error("CTRADER_REFRESH_TOKEN is missing")
             self.is_refreshing_token = False
             return
 
-        params = {
-            "grant_type": "refresh_token",
-            "refresh_token": refresh_token,
-            "client_id": self._client_id,
-            "client_secret": self._client_secret,
-        }
-
         try:
+            params = {
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token,
+                "client_id": self._client_id,
+                "client_secret": self._client_secret,
+            }
             response = requests.post(TOKEN_REFRESH_URL, data=params, timeout=20)
             response.raise_for_status()
-            data = response.json()
-            new_access_token = data.get("accessToken")
-            if not new_access_token:
-                raise Exception("Response is missing 'accessToken'")
-
-            app_state.access_token = new_access_token
-            logger.info("✅ Access token has been successfully refreshed.")
+            app_state.access_token = response.json().get("accessToken")
+            logger.info("✅ Token refreshed.")
             self._authorize_account()
-
         except Exception as e:
-            logger.error(f"Failed to refresh token: {e}")
+            logger.error(f"Refresh failed: {e}")
         finally:
             self.is_refreshing_token = False
 
     def _on_connected(self, client):
         logger.info("Connection successful. Authorizing application...")
-        try:
-            self._client.send(
-                ProtoOAApplicationAuthReq(
-                    clientId=self._client_id,
-                    clientSecret=self._client_secret,
-                )
+        self._client.send(
+            ProtoOAApplicationAuthReq(
+                clientId=self._client_id,
+                clientSecret=self._client_secret,
             )
-        except Exception:
-            logger.exception("Failed to send ProtoOAApplicationAuthReq")
+        )
 
     def _on_disconnected(self, client, reason):
         self.is_authorized = False
         msg = reason.getErrorMessage() if hasattr(reason, "getErrorMessage") else str(reason)
-        logger.warning(f"Disconnected. Reason: {msg}")
-        self.emit("error", f"Disconnected: {msg}")
+        logger.warning(f"Disconnected: {msg}")
+        self.emit("error", msg)
 
     def _on_message_received(self, client, message: ProtoMessage):
         pt = message.payloadType
 
         if pt == ProtoOAPayloadType.PROTO_OA_APPLICATION_AUTH_RES:
-            logger.info("Application authorized. Authorizing account...")
+            logger.info("App authorized. Authorizing account...")
             self._authorize_account()
             return
 
@@ -179,23 +168,20 @@ class SpotwareConnect(EventEmitter):
             res = ProtoOAErrorRes()
             res.ParseFromString(message.payload)
             
-            # ФІКС ПЕТЛІ: Якщо вже в мережі, просто переходимо до ready
+            # ФІКС: Обробка блокування та повторної авторизації
             if res.errorCode == "ALREADY_LOGGED_IN":
-                if "Trading account" in res.description:
-                    logger.info("✅ Акаунт вже авторизований. Продовжуємо.")
-                    self.is_authorized = True
-                    self.emit("ready")
-                else:
-                    logger.warning("Додаток вже авторизований, йдемо до акаунта.")
-                    self._authorize_account()
+                logger.info("Already authorized. Proceeding...")
+                self.is_authorized = True
+                self.emit("ready")
                 return
 
-            if res.errorCode in ("INVALID_REQUEST", "CH_ACCESS_TOKEN_INVALID"):
-                self._refresh_access_token()
+            if res.errorCode == "BLOCKED_PAYLOAD_TYPE":
+                logger.critical("🚨 cTrader RATE LIMIT! Нам треба відпочити.")
+                self.emit("error", "RATE_LIMIT_BLOCKED")
                 return
 
             logger.error(f"API Error: {res.errorCode} - {res.description}")
-            self.emit("error", f"API Error: {res.errorCode} - {res.description}")
+            self.emit("error", res.errorCode)
             return
 
         elif pt == ProtoOAPayloadType.PROTO_OA_SPOT_EVENT:
@@ -203,44 +189,22 @@ class SpotwareConnect(EventEmitter):
             spot_event.ParseFromString(message.payload)
             self.emit("spot_event", spot_event)
             self.emit(f"spot_event_{spot_event.symbolId}", spot_event)
-            return
 
     def _authorize_account(self):
         acc_id = get_demo_account_id()
         token = app_state.access_token
-        logger.info(f"Authorizing account ID: {acc_id}...")
-        if not acc_id or not token:
-            logger.error("CRITICAL: Account ID or Access Token is missing.")
-            return
-
-        try:
-            self._client.send(
-                ProtoOAAccountAuthReq(
-                    ctidTraderAccountId=acc_id,
-                    accessToken=token,
-                )
+        if not acc_id or not token: return
+        logger.info(f"Authorizing account {acc_id}...")
+        self._client.send(
+            ProtoOAAccountAuthReq(
+                ctidTraderAccountId=acc_id,
+                accessToken=token,
             )
-        except Exception:
-            logger.exception("Failed to send ProtoOAAccountAuthReq")
-
-    def get_all_symbols(self):
-        logger.info("Requesting light symbol list...")
-        if not self._client.account_id:
-            d = Deferred()
-            reactor.callLater(0, d.errback, Exception("ctidTraderAccountId is missing"))
-            return d
-
-        return self.send(
-            ProtoOASymbolsListReq(
-                ctidTraderAccountId=self._client.account_id
-            ),
-            timeout=30,
         )
 
-    def subscribe_ticks(self, symbol_name, callback):
-        if symbol_name not in self.symbol_map:
-            return
-        symbol_id = self.symbol_map[symbol_name]
-        def handler(event: ProtoOASpotEvent):
-            callback(symbol_name, event)
-        self.on(f"spot_event_{symbol_id}", handler)
+    def get_all_symbols(self):
+        if not self._client.account_id:
+            d = Deferred()
+            reactor.callLater(0, d.errback, Exception("No account ID"))
+            return d
+        return self.send(ProtoOASymbolsListReq(ctidTraderAccountId=self._client.account_id))

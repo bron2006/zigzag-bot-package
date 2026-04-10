@@ -29,9 +29,9 @@ PERIOD_MAP = {
     "15m": TrendbarPeriod.M15,
 }
 
-# ФІКС: Збільшені таймаути для Fly.io
-MARKET_DATA_TIMEOUT = 35
-CPU_ANALYSIS_TIMEOUT = 25
+# ФІКС: Величезні таймаути для Fly.io
+MARKET_DATA_TIMEOUT = 45
+CPU_ANALYSIS_TIMEOUT = 30
 
 MODEL_FEATURE_NAMES = ["ATR", "ADX", "RSI", "EMA50", "EMA200"]
 
@@ -54,10 +54,7 @@ def _normalize_pair(pair: str) -> str:
 
 def _resolve_symbol_details(symbol_cache, pair: str):
     norm = _normalize_pair(pair)
-    candidates = [pair, pair.upper(), norm]
-    for candidate in candidates:
-        if candidate and candidate in symbol_cache:
-            return symbol_cache[candidate]
+    if norm in symbol_cache: return symbol_cache[norm]
     return None
 
 
@@ -72,42 +69,29 @@ def _prepare_features(df: pd.DataFrame) -> Optional[pd.DataFrame]:
 
         latest = df.tail(1)
         prepared = {}
-        for target_name, source_candidates in FEATURE_SOURCE_MAP.items():
-            for source_name in source_candidates:
-                if source_name in latest.columns:
-                    val = latest[source_name].iloc[0]
+        for target, sources in FEATURE_SOURCE_MAP.items():
+            for src in sources:
+                if src in latest.columns:
+                    val = latest[src].iloc[0]
                     if pd.notna(val):
-                        prepared[target_name] = val
+                        prepared[target] = val
                         break
-        
-        if len(prepared) < len(MODEL_FEATURE_NAMES):
-            return None
-
+        if len(prepared) < 5: return None
         return pd.DataFrame([prepared], columns=MODEL_FEATURE_NAMES)
-    except Exception as e:
-        logger.error(f"Помилка розрахунку індикаторів: {e}")
-        return None
+    except Exception: return None
 
 
 def _run_technical_analysis(df: pd.DataFrame) -> Tuple[int, str]:
-    if df is None or df.empty or len(df) < 250:
-        return 50, "NEUTRAL"
-
-    if not (ml_models.LGBM_MODEL and ml_models.SCALER):
-        return 50, "NEUTRAL"
-
-    features_df = _prepare_features(df)
-    if features_df is None:
-        return 50, "NEUTRAL"
-
+    if df is None or len(df) < 250: return 50, "NEUTRAL"
+    features = _prepare_features(df)
+    if features is None: return 50, "NEUTRAL"
     try:
-        features_scaled = ml_models.SCALER.transform(features_df)
-        probs = ml_models.LGBM_MODEL.predict_proba(features_scaled)
-        score = int(probs[0][1] * 100)
+        scaled = ml_models.SCALER.transform(features)
+        prob = ml_models.LGBM_MODEL.predict_proba(scaled)[0][1]
+        score = int(prob * 100)
         verdict = "BUY" if score > 75 else "SELL" if score < 25 else "NEUTRAL"
         return score, verdict
-    except Exception:
-        return 50, "NEUTRAL"
+    except Exception: return 50, "NEUTRAL"
 
 
 @defer.inlineCallbacks
@@ -118,37 +102,29 @@ def _analysis_flow(client, symbol_cache, symbol, user_id, timeframe="5m"):
             return {"verdict_text": "WAIT", "reasons": ["Акаунт не готовий"], "is_trade_allowed": False}
 
         tf_a, tf_b = ("1m", "5m") if timeframe == "1m" else ("5m", "15m")
-
         d_a = get_market_data(client, symbol_cache, pair_norm, tf_a, 300)
         d_b = get_market_data(client, symbol_cache, pair_norm, tf_b, 300)
 
-        d_a.addTimeout(MARKET_DATA_TIMEOUT, reactor)
-        d_b.addTimeout(MARKET_DATA_TIMEOUT, reactor)
-
         results = yield DeferredList([d_a, d_b], consumeErrors=True)
-        ok_a, df_a = results[0]
-        ok_b, df_b = results[1]
+        df_a = results[0][1] if results[0][0] else None
+        df_b = results[1][1] if results[1][0] else None
 
-        if not ok_a or not ok_b:
-            return {"verdict_text": "WAIT", "reasons": ["Не вдалося завантажити бари"], "is_trade_allowed": False}
+        if df_a is None or df_b is None:
+            return {"verdict_text": "WAIT", "reasons": ["Помилка даних"], "is_trade_allowed": False}
 
         score_a, verdict_a = _run_technical_analysis(df_a)
         score_b, verdict_b = _run_technical_analysis(df_b)
-        avg_score = int((score_a + score_b) / 2)
-
-        # Новини через OpenRouter
-        news_result = yield news_filter.get_latest_news_sentiment_async(pair_norm)
-        news_verdict = news_result.get("verdict", "GO")
-
-        is_allowed = (verdict_a in ("BUY", "SELL")) and (news_verdict == "GO")
         
+        news_res = yield news_filter.get_latest_news_sentiment_async(pair_norm)
+        news_v = news_res.get("verdict", "GO")
+
         return {
             "pair": symbol,
-            "verdict_text": "NEWS_WAIT" if news_verdict == "BLOCK" else verdict_a,
-            "score": avg_score,
-            "sentiment": news_verdict,
-            "is_trade_allowed": is_allowed,
-            "reasons": [f"TF1: {verdict_a}, TF2: {verdict_b}", f"ШІ: {news_verdict}"]
+            "verdict_text": "NEWS_WAIT" if news_v == "BLOCK" else verdict_a,
+            "score": int((score_a + score_b)/2),
+            "sentiment": news_v,
+            "is_trade_allowed": (verdict_a in ("BUY", "SELL")) and (news_v == "GO"),
+            "reasons": [f"TF: {verdict_a}/{verdict_b}", f"ШІ: {news_v}"]
         }
     except Exception as e:
         return {"verdict_text": "ERROR", "reasons": [str(e)], "is_trade_allowed": False}
@@ -159,8 +135,8 @@ def get_api_detailed_signal_data(client, symbol_cache, symbol, user_id, timefram
 def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: int):
     d = Deferred()
     symbol_details = _resolve_symbol_details(symbol_cache, norm_pair)
-    if not symbol_details or not getattr(client._client, "account_id", None):
-        reactor.callLater(0, d.errback, Exception("Missing details/auth"))
+    if not symbol_details:
+        reactor.callLater(0, d.errback, Exception("Symbol not found"))
         return d
 
     now = int(time.time() * 1000)
@@ -175,7 +151,7 @@ def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: in
         toTimestamp=now,
     )
 
-    api_deferred = client.send(req, timeout=20)
+    api_d = client.send(req, timeout=25)
 
     def on_res(msg):
         try:
@@ -186,5 +162,5 @@ def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: in
             d.callback(pd.DataFrame(bars))
         except Exception as e: d.errback(e)
 
-    api_deferred.addCallbacks(on_res, d.errback)
+    api_d.addCallbacks(on_res, d.errback)
     return d
