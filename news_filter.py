@@ -1,3 +1,4 @@
+# news_filter.py
 import logging
 import os
 import re
@@ -19,7 +20,7 @@ _OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 _MODELS = [
     (os.environ.get("OPENROUTER_MODEL_PRIMARY") or "google/gemini-2.0-flash-001").strip(),
-    (os.environ.get("OPENROUTER_MODEL_FALLBACK") or "google/gemini-flash-1.5").strip(),
+    (os.environ.get("OPENROUTER_MODEL_FALLBACK") or "openai/gpt-4o-mini").strip(),
 ]
 
 _cache: Dict[str, dict] = {}
@@ -28,7 +29,7 @@ _cache_lock = threading.RLock()
 _CACHE_TTL = 600
 _ERROR_CACHE_TTL = 60
 
-_REQUEST_TIMEOUT = (5, 15)   # connect, read
+_REQUEST_TIMEOUT = (5, 15)
 _RETRY_TIMEOUT = (5, 10)
 
 _SYSTEM_PROMPT = (
@@ -127,7 +128,6 @@ def _extract_text_from_openrouter(data: dict) -> str:
         if isinstance(content, str):
             return content.strip()
 
-        # якщо раптом provider віддасть content як масив шматків
         if isinstance(content, list):
             chunks = []
             for item in content:
@@ -287,7 +287,11 @@ def _call_openrouter_sync(pair: str) -> dict:
                     time.sleep(wait)
                     continue
 
-                if status == 200 and reason in ("Порожня відповідь від моделі", "Некоректний формат відповіді моделі", "invalid_json_response"):
+                if status == 200 and reason in (
+                    "Порожня відповідь від моделі",
+                    "Некоректний формат відповіді моделі",
+                    "invalid_json_response",
+                ):
                     logger.warning(
                         "OpenRouter [%s] model=%s returned unusable 200 response: %s",
                         pair,

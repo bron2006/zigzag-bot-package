@@ -1,3 +1,4 @@
+# spotware_connect.py
 import logging
 import requests
 
@@ -154,20 +155,21 @@ class SpotwareConnect(EventEmitter):
 
     def _on_connected(self, client):
         logger.info("Connection successful. Authorizing application...")
-        d = self.send(
-            ProtoOAApplicationAuthReq(
-                clientId=self._client_id,
-                clientSecret=self._client_secret,
-            ),
-            timeout=20,
-        )
 
-        def swallow_app_auth_error(failure):
-            msg = failure.getErrorMessage() if hasattr(failure, "getErrorMessage") else str(failure)
-            logger.warning(f"Application auth deferred ended with error: {msg}")
-            return None
-
-        d.addErrback(swallow_app_auth_error)
+        # ВАЖЛИВО:
+        # Для app/account auth не чекаємо через timeout_deferred.
+        # cTrader часто відповідає асинхронним ERROR_RES / AUTH_RES,
+        # і send(...timeout=...) тут дає хибні таймаути.
+        try:
+            self._client.send(
+                ProtoOAApplicationAuthReq(
+                    clientId=self._client_id,
+                    clientSecret=self._client_secret,
+                )
+            )
+        except Exception:
+            logger.exception("Failed to send ProtoOAApplicationAuthReq")
+            self.emit("error", "Failed to send ProtoOAApplicationAuthReq")
 
     def _on_disconnected(self, client, reason):
         self.is_authorized = False
@@ -194,7 +196,6 @@ class SpotwareConnect(EventEmitter):
             self._client.account_id = res.ctidTraderAccountId
             self.is_authorized = True
             logger.info(f"✅ Account {res.ctidTraderAccountId} authorized.")
-
             self.emit("ready")
             return
 
@@ -204,9 +205,8 @@ class SpotwareConnect(EventEmitter):
 
             logger.error(f"API Error: {res.errorCode} - {res.description}")
 
-            # ГОЛОВНИЙ ФІКС:
-            # cTrader може казати, що app already authorized.
-            # Це не фатальна помилка, а сигнал переходити до auth акаунта.
+            # КЛЮЧОВИЙ ФІКС:
+            # Уже авторизований додаток — це не аварія.
             if res.errorCode == "ALREADY_LOGGED_IN":
                 logger.warning("Open API application is already authorized. Proceeding to account auth.")
                 if not self.is_authorized:
@@ -221,7 +221,11 @@ class SpotwareConnect(EventEmitter):
                 self._refresh_access_token()
                 return
 
-            # НЕ емітимо все підряд як fatal error, щоб не валити робочий цикл
+            if res.errorCode == "CANT_ROUTE_REQUEST":
+                # Це transient серверна/маршрутна помилка — віддаємо наверх як disconnect/error
+                self.emit("error", f"API Error: {res.errorCode} - {res.description}")
+                return
+
             self.emit("error", f"API Error: {res.errorCode} - {res.description}")
             return
 
@@ -242,23 +246,25 @@ class SpotwareConnect(EventEmitter):
             logger.error("CRITICAL: Account ID or Access Token is missing.")
             return
 
-        d = self.send(
-            ProtoOAAccountAuthReq(
-                ctidTraderAccountId=acc_id,
-                accessToken=token,
-            ),
-            timeout=20,
-        )
-
-        def swallow_account_auth_error(failure):
-            msg = failure.getErrorMessage() if hasattr(failure, "getErrorMessage") else str(failure)
-            logger.warning(f"Account auth deferred ended with error: {msg}")
-            return None
-
-        d.addErrback(swallow_account_auth_error)
+        try:
+            self._client.send(
+                ProtoOAAccountAuthReq(
+                    ctidTraderAccountId=acc_id,
+                    accessToken=token,
+                )
+            )
+        except Exception:
+            logger.exception("Failed to send ProtoOAAccountAuthReq")
+            self.emit("error", "Failed to send ProtoOAAccountAuthReq")
 
     def get_all_symbols(self):
         logger.info("Requesting light symbol list...")
+
+        if not self._client.account_id:
+            d = Deferred()
+            reactor.callLater(0, d.errback, Exception("ctidTraderAccountId is missing"))
+            return d
+
         return self.send(
             ProtoOASymbolsListReq(
                 ctidTraderAccountId=self._client.account_id
