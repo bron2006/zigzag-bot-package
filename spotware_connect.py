@@ -77,11 +77,12 @@ class SpotwareConnect(EventEmitter):
             logger.exception("Failed to stop Spotware client")
 
     def send(self, message, client_msg_id=None, timeout=30):
-        deferred = self._client.send(message, clientMsgId=client_msg_id)
+        # ФІКС: Передаємо timeout безпосередньо в бібліотеку
+        deferred = self._client.send(message, clientMsgId=client_msg_id, timeout=timeout)
         timeout_deferred = Deferred()
 
         timeout_call = reactor.callLater(
-            timeout,
+            timeout + 2,
             lambda: deferred.cancel() if not deferred.called else None,
         )
 
@@ -95,14 +96,8 @@ class SpotwareConnect(EventEmitter):
         def on_error(failure):
             if timeout_call.active():
                 timeout_call.cancel()
-
             if not timeout_deferred.called:
-                if failure.check(TimeoutError):
-                    err_msg = f"Таймаут ({timeout}s) для {type(message).__name__}"
-                    logger.error(err_msg)
-                    timeout_deferred.errback(Exception(err_msg))
-                else:
-                    timeout_deferred.errback(failure)
+                timeout_deferred.errback(failure)
             return None
 
         deferred.addCallbacks(on_success, on_error)
@@ -110,7 +105,6 @@ class SpotwareConnect(EventEmitter):
 
     def _refresh_access_token(self):
         if self.is_refreshing_token:
-            logger.info("Token refresh already in progress.")
             return
 
         self.is_refreshing_token = True
@@ -118,7 +112,7 @@ class SpotwareConnect(EventEmitter):
 
         refresh_token = get_ctrader_refresh_token()
         if not refresh_token:
-            logger.error("CRITICAL: CTRADER_REFRESH_TOKEN is not set. Cannot refresh.")
+            logger.error("CRITICAL: CTRADER_REFRESH_TOKEN is not set.")
             self.is_refreshing_token = False
             return
 
@@ -133,33 +127,21 @@ class SpotwareConnect(EventEmitter):
             response = requests.post(TOKEN_REFRESH_URL, data=params, timeout=20)
             response.raise_for_status()
             data = response.json()
-
             new_access_token = data.get("accessToken")
             if not new_access_token:
-                logger.error(f"Failed to refresh: 'accessToken' missing. Response: {data}")
                 raise Exception("Response is missing 'accessToken'")
 
             app_state.access_token = new_access_token
             logger.info("✅ Access token has been successfully refreshed.")
-
             self._authorize_account()
 
-        except requests.exceptions.RequestException as e:
-            logger.error(f"HTTP error during token refresh: {e}")
-            if getattr(e, "response", None) is not None:
-                logger.error(f"cTrader response content: {e.response.text}")
         except Exception as e:
-            logger.error(f"Failed to parse refresh token response: {e}")
+            logger.error(f"Failed to refresh token: {e}")
         finally:
             self.is_refreshing_token = False
 
     def _on_connected(self, client):
         logger.info("Connection successful. Authorizing application...")
-
-        # ВАЖЛИВО:
-        # Для app/account auth не чекаємо через timeout_deferred.
-        # cTrader часто відповідає асинхронним ERROR_RES / AUTH_RES,
-        # і send(...timeout=...) тут дає хибні таймаути.
         try:
             self._client.send(
                 ProtoOAApplicationAuthReq(
@@ -169,15 +151,10 @@ class SpotwareConnect(EventEmitter):
             )
         except Exception:
             logger.exception("Failed to send ProtoOAApplicationAuthReq")
-            self.emit("error", "Failed to send ProtoOAApplicationAuthReq")
 
     def _on_disconnected(self, client, reason):
         self.is_authorized = False
-        try:
-            msg = reason.getErrorMessage()
-        except Exception:
-            msg = str(reason)
-
+        msg = reason.getErrorMessage() if hasattr(reason, "getErrorMessage") else str(reason)
         logger.warning(f"Disconnected. Reason: {msg}")
         self.emit("error", f"Disconnected: {msg}")
 
@@ -192,7 +169,6 @@ class SpotwareConnect(EventEmitter):
         elif pt == ProtoOAPayloadType.PROTO_OA_ACCOUNT_AUTH_RES:
             res = ProtoOAAccountAuthRes()
             res.ParseFromString(message.payload)
-
             self._client.account_id = res.ctidTraderAccountId
             self.is_authorized = True
             logger.info(f"✅ Account {res.ctidTraderAccountId} authorized.")
@@ -202,37 +178,29 @@ class SpotwareConnect(EventEmitter):
         elif pt == ProtoOAPayloadType.PROTO_OA_ERROR_RES:
             res = ProtoOAErrorRes()
             res.ParseFromString(message.payload)
-
-            logger.error(f"API Error: {res.errorCode} - {res.description}")
-
-            # КЛЮЧОВИЙ ФІКС:
-            # Уже авторизований додаток — це не аварія.
+            
+            # ФІКС ПЕТЛІ: Якщо вже в мережі, просто переходимо до ready
             if res.errorCode == "ALREADY_LOGGED_IN":
-                logger.warning("Open API application is already authorized. Proceeding to account auth.")
-                if not self.is_authorized:
+                if "Trading account" in res.description:
+                    logger.info("✅ Акаунт вже авторизований. Продовжуємо.")
+                    self.is_authorized = True
+                    self.emit("ready")
+                else:
+                    logger.warning("Додаток вже авторизований, йдемо до акаунта.")
                     self._authorize_account()
                 return
 
-            if res.errorCode == "INVALID_REQUEST" and "Trading account is not authorized" in res.description:
+            if res.errorCode in ("INVALID_REQUEST", "CH_ACCESS_TOKEN_INVALID"):
                 self._refresh_access_token()
                 return
 
-            if res.errorCode == "CH_ACCESS_TOKEN_INVALID":
-                self._refresh_access_token()
-                return
-
-            if res.errorCode == "CANT_ROUTE_REQUEST":
-                # Це transient серверна/маршрутна помилка — віддаємо наверх як disconnect/error
-                self.emit("error", f"API Error: {res.errorCode} - {res.description}")
-                return
-
+            logger.error(f"API Error: {res.errorCode} - {res.description}")
             self.emit("error", f"API Error: {res.errorCode} - {res.description}")
             return
 
         elif pt == ProtoOAPayloadType.PROTO_OA_SPOT_EVENT:
             spot_event = ProtoOASpotEvent()
             spot_event.ParseFromString(message.payload)
-
             self.emit("spot_event", spot_event)
             self.emit(f"spot_event_{spot_event.symbolId}", spot_event)
             return
@@ -240,7 +208,6 @@ class SpotwareConnect(EventEmitter):
     def _authorize_account(self):
         acc_id = get_demo_account_id()
         token = app_state.access_token
-
         logger.info(f"Authorizing account ID: {acc_id}...")
         if not acc_id or not token:
             logger.error("CRITICAL: Account ID or Access Token is missing.")
@@ -255,11 +222,9 @@ class SpotwareConnect(EventEmitter):
             )
         except Exception:
             logger.exception("Failed to send ProtoOAAccountAuthReq")
-            self.emit("error", "Failed to send ProtoOAAccountAuthReq")
 
     def get_all_symbols(self):
         logger.info("Requesting light symbol list...")
-
         if not self._client.account_id:
             d = Deferred()
             reactor.callLater(0, d.errback, Exception("ctidTraderAccountId is missing"))
@@ -272,24 +237,10 @@ class SpotwareConnect(EventEmitter):
             timeout=30,
         )
 
-    def _on_symbols_list(self, message: ProtoMessage):
-        res = ProtoOASymbolsListRes()
-        res.ParseFromString(message.payload)
-
-        for symbol in res.symbol:
-            self.symbol_map[symbol.symbolName] = symbol.symbolId
-
-        logger.info(f"Loaded {len(self.symbol_map)} symbols from cTrader.")
-
     def subscribe_ticks(self, symbol_name, callback):
         if symbol_name not in self.symbol_map:
-            logger.error(f"Symbol {symbol_name} not found in cTrader symbol list.")
             return
-
         symbol_id = self.symbol_map[symbol_name]
-
         def handler(event: ProtoOASpotEvent):
             callback(symbol_name, event)
-
         self.on(f"spot_event_{symbol_id}", handler)
-        logger.info(f"Subscribed to ticks for {symbol_name} (ID {symbol_id})")
