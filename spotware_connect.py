@@ -29,12 +29,9 @@ TOKEN_REFRESH_URL = "https://connect.spotware.com/apps/token"
 class EventEmitter:
     def __init__(self):
         self._events = {}
-
     def on(self, event, func):
-        if event not in self._events:
-            self._events[event] = []
+        if event not in self._events: self._events[event] = []
         self._events[event].append(func)
-
     def emit(self, event, *args, **kwargs):
         if event in self._events:
             for func in self._events[event]:
@@ -48,11 +45,12 @@ class SpotwareConnect(EventEmitter):
         self._client_id = client_id
         self._client_secret = client_secret
         self.is_authorized = False
+        
         self._client = SpotwareClientBase(self.host, self.port, TcpProtocol)
         self._client.setConnectedCallback(self._on_connected)
         self._client.setMessageReceivedCallback(self._on_message_received)
         self._client.setDisconnectedCallback(self._on_disconnected)
-        self.symbol_map = {}
+        self._client.account_id = None
 
     def start(self):
         self._client.startService()
@@ -68,12 +66,12 @@ class SpotwareConnect(EventEmitter):
         return self._client.send(message)
 
     def _on_connected(self, client):
-        logger.info("Connection successful. Waiting 1.5s before auth...")
-        # Збільшили паузу перед авторизацією для стабільності
-        reactor.callLater(1.5, self._send_app_auth)
+        logger.info("Connected to cTrader. Waiting 2s before App Auth...")
+        # ПАУЗА 1: Щоб сервер нас не забанив на старті
+        reactor.callLater(2.0, self._send_app_auth)
 
     def _send_app_auth(self):
-        logger.info("Sending Application Auth...")
+        logger.info("Step 1: Sending Application Auth...")
         req = ProtoOAApplicationAuthReq(clientId=self._client_id, clientSecret=self._client_secret)
         self._client.send(req)
 
@@ -81,15 +79,16 @@ class SpotwareConnect(EventEmitter):
         pt = message.payloadType
 
         if pt == ProtoOAPayloadType.PROTO_OA_APPLICATION_AUTH_RES:
-            logger.info("App authorized. Sending Account Auth...")
-            self._authorize_account()
+            logger.info("Step 1 OK. Waiting 2s before Account Auth...")
+            # ПАУЗА 2: Між авторизацією додатка та акаунта
+            reactor.callLater(2.0, self._authorize_account)
 
         elif pt == ProtoOAPayloadType.PROTO_OA_ACCOUNT_AUTH_RES:
             res = ProtoOAAccountAuthRes()
             res.ParseFromString(message.payload)
             self._client.account_id = res.ctidTraderAccountId
             self.is_authorized = True
-            logger.info(f"✅ Account {res.ctidTraderAccountId} authorized.")
+            logger.info(f"✅ Step 2 OK. Account {res.ctidTraderAccountId} authorized.")
             self.emit("ready")
 
         elif pt == ProtoOAPayloadType.PROTO_OA_ERROR_RES:
@@ -97,18 +96,18 @@ class SpotwareConnect(EventEmitter):
             res.ParseFromString(message.payload)
             
             if res.errorCode == "ALREADY_LOGGED_IN":
-                logger.info("Already logged in. Checking authorization status...")
+                logger.info("Account already authorized. Marking as ready.")
                 self.is_authorized = True
                 self.emit("ready")
                 return
 
             if res.errorCode == "BLOCKED_PAYLOAD_TYPE":
-                logger.critical("🚨 cTrader RATE LIMIT! Потрібна пауза.")
+                logger.critical("🚨 cTrader RATE LIMIT! Зупиняємося на 5 хвилин.")
                 self.emit("error", "RATE_LIMIT_BLOCKED")
                 return
 
             logger.error(f"API Error: {res.errorCode} - {res.description}")
-            self.emit("error", str(res.errorCode))
+            self.emit("error", res.errorCode)
 
         elif pt == ProtoOAPayloadType.PROTO_OA_SPOT_EVENT:
             spot_event = ProtoOASpotEvent()
@@ -118,7 +117,9 @@ class SpotwareConnect(EventEmitter):
     def _authorize_account(self):
         acc_id = get_demo_account_id()
         token = app_state.access_token
-        if not acc_id or not token: return
+        if not acc_id or not token:
+            logger.error("Missing Account ID or Token")
+            return
         req = ProtoOAAccountAuthReq(ctidTraderAccountId=acc_id, accessToken=token)
         self._client.send(req)
 
