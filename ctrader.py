@@ -1,10 +1,19 @@
 # ctrader.py
 import logging
+import re
 import time
 
 from twisted.internet import reactor
 
-from config import STOCK_TICKERS, get_ct_client_id, get_ct_client_secret
+from config import (
+    COMMODITIES,
+    CRYPTO_PAIRS,
+    FOREX_SESSIONS,
+    STOCK_TICKERS,
+    get_chat_id,
+    get_ct_client_id,
+    get_ct_client_secret,
+)
 from ctrader_open_api.messages.OpenApiMessages_pb2 import (
     ProtoOASpotEvent,
     ProtoOASubscribeSpotsReq,
@@ -19,6 +28,100 @@ logger = logging.getLogger("ctrader")
 
 _reconnect_attempt = 0
 _reconnect_scheduled = False
+_SUBSCRIBE_BATCH_SIZE = 50
+_SUBSCRIBE_BATCH_DELAY = 1.0
+
+
+def _compact_symbol(value: str) -> str:
+    return re.sub(r"[^A-Z0-9]", "", (value or "").upper())
+
+
+def _display_symbol_name(symbol) -> str:
+    return getattr(symbol, "symbolName", "") or str(getattr(symbol, "symbolId", "unknown"))
+
+
+def _requested_pair_key(pair: str) -> str:
+    return _compact_symbol(pair)
+
+
+def _symbol_cache_keys(symbol) -> set[str]:
+    raw_name = _display_symbol_name(symbol)
+    no_slash = raw_name.replace("/", "").upper().strip()
+    compact = _compact_symbol(raw_name)
+    return {key for key in (no_slash, compact) if key}
+
+
+def _unique_symbols_from_cache() -> list:
+    seen = set()
+    symbols = []
+
+    for symbol in app_state.symbol_cache.values():
+        symbol_id = getattr(symbol, "symbolId", None)
+        if symbol_id in seen:
+            continue
+        seen.add(symbol_id)
+        symbols.append(symbol)
+
+    return symbols
+
+
+def _collect_configured_assets() -> list[str]:
+    assets = []
+
+    for pairs in FOREX_SESSIONS.values():
+        assets.extend(pairs)
+
+    assets.extend(CRYPTO_PAIRS)
+    assets.extend(COMMODITIES)
+    assets.extend(STOCK_TICKERS)
+
+    try:
+        import db
+
+        chat_id = get_chat_id()
+        if chat_id:
+            assets.extend(db.get_watchlist(chat_id))
+    except Exception:
+        logger.exception("Не вдалося додати обраний список до підписок цін")
+
+    seen = set()
+    normalized = []
+
+    for asset in assets:
+        key = _requested_pair_key(asset)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        normalized.append(key)
+
+    return normalized
+
+
+def _resolve_broker_symbol(pair: str):
+    requested = _requested_pair_key(pair)
+    if not requested:
+        return None
+
+    exact = app_state.symbol_cache.get(requested)
+    if exact is not None:
+        return exact
+
+    candidates = []
+    for symbol in _unique_symbols_from_cache():
+        keys = _symbol_cache_keys(symbol)
+        if requested in keys:
+            return symbol
+
+        for key in keys:
+            if key.startswith(requested):
+                candidates.append((len(key), _display_symbol_name(symbol), symbol))
+                break
+
+    if candidates:
+        candidates.sort(key=lambda item: (item[0], item[1]))
+        return candidates[0][2]
+
+    return None
 
 
 def start_ctrader_client():
@@ -108,10 +211,16 @@ def _on_symbols_loaded(msg):
         all_names = []
 
         for symbol in res.symbol:
-            name = symbol.symbolName.replace("/", "").upper()
-            symbol_cache[name] = symbol
-            symbol_id_map[symbol.symbolId] = name
-            all_names.append(name)
+            display_name = _display_symbol_name(symbol)
+            keys = _symbol_cache_keys(symbol)
+
+            for key in keys:
+                symbol_cache[key] = symbol
+
+            canonical = _compact_symbol(display_name)
+            if canonical:
+                symbol_id_map[symbol.symbolId] = canonical
+                all_names.append(canonical)
 
         with app_state._state_lock:
             app_state.symbol_cache = symbol_cache
@@ -119,7 +228,11 @@ def _on_symbols_loaded(msg):
             app_state.all_symbol_names = sorted(all_names)
             app_state.SYMBOLS_LOADED = True
 
-        logger.info("Loaded %s cTrader symbols. Pairs are ready.", len(symbol_cache))
+        logger.info(
+            "Завантажено %s символів cTrader (%s ключів пошуку). Пари готові.",
+            len(res.symbol),
+            len(symbol_cache),
+        )
         start_price_subscriptions()
 
     except Exception:
@@ -129,52 +242,93 @@ def _on_symbols_loaded(msg):
 
 def start_price_subscriptions():
     if not app_state.SYMBOLS_LOADED:
-        logger.info("Symbols are not loaded yet. Price subscriptions skipped.")
+        logger.info("Символи ще не завантажені. Підписку на ціни пропущено.")
         return
 
-    try:
-        import scanner
-
-        assets = sorted(set(scanner._collect_assets_to_scan() + STOCK_TICKERS))
-    except Exception:
-        logger.exception("Failed to collect assets for subscriptions")
-        assets = sorted(set(STOCK_TICKERS))
+    assets = _collect_configured_assets()
 
     if not assets:
-        logger.info("No assets selected for price subscriptions")
+        logger.info("Немає активів для підписки на ціни.")
         return
 
-    logger.info("Subscribing to %s assets...", len(assets))
+    resolved = []
+    missing = []
 
-    for i, pair in enumerate(assets):
-        norm = pair.replace("/", "").upper()
-        reactor.callLater(i * 0.5, _subscribe_pair, norm)
+    for pair in assets:
+        symbol = _resolve_broker_symbol(pair)
+        if symbol is None:
+            logger.warning("Не зміг підписатися на пару %s, бо її немає в списку брокера", pair)
+            missing.append(pair)
+            continue
+
+        resolved.append((pair, symbol))
+
+    if not resolved:
+        logger.warning(
+            "Не знайдено жодного символу брокера для %s налаштованих активів.",
+            len(assets),
+        )
+        return
+
+    with app_state._state_lock:
+        for pair, symbol in resolved:
+            app_state.symbol_cache[pair] = symbol
+            app_state.symbol_id_map[symbol.symbolId] = pair
+
+    logger.info(
+        "Підписуюся на ціни: знайдено %s з %s активів, не знайдено %s.",
+        len(resolved),
+        len(assets),
+        len(missing),
+    )
+
+    for i in range(0, len(resolved), _SUBSCRIBE_BATCH_SIZE):
+        batch = resolved[i : i + _SUBSCRIBE_BATCH_SIZE]
+        reactor.callLater(
+            (i // _SUBSCRIBE_BATCH_SIZE) * _SUBSCRIBE_BATCH_DELAY,
+            _subscribe_symbol_batch,
+            batch,
+        )
 
 
-def _subscribe_pair(pair):
+def _subscribe_symbol_batch(batch):
     if not app_state.client:
+        logger.warning("cTrader client не готовий. Батч підписки пропущено.")
         return
 
-    symbol = app_state.symbol_cache.get(pair)
-    if symbol is None:
-        logger.debug("Symbol %s not found in cTrader cache. Subscription skipped.", pair)
+    if not batch:
         return
 
     account_id = getattr(app_state.client._client, "account_id", None)
     if not account_id:
-        logger.warning("No Account ID. Cannot subscribe to %s", pair)
+        logger.warning("Акаунт cTrader не готовий. Не можу підписатися на ціни.")
+        return
+
+    symbol_ids = []
+    pairs = []
+
+    for pair, symbol in batch:
+        symbol_id = getattr(symbol, "symbolId", None)
+        if symbol_id is None:
+            logger.warning("Не зміг підписатися на пару %s, бо її немає в списку брокера", pair)
+            continue
+
+        symbol_ids.append(symbol_id)
+        pairs.append(f"{pair}->{_display_symbol_name(symbol)}")
+
+    if not symbol_ids:
         return
 
     try:
         req = ProtoOASubscribeSpotsReq(
             ctidTraderAccountId=account_id,
-            symbolId=[symbol.symbolId],
+            symbolId=symbol_ids,
         )
         app_state.client.send(req, responseTimeoutInSeconds=10)
-        logger.debug("Subscribed to %s", pair)
+        logger.info("Підписка на ціни надіслана для %s символів: %s", len(symbol_ids), ", ".join(pairs))
 
     except Exception:
-        logger.exception("Failed to subscribe to %s", pair)
+        logger.exception("Не вдалося надіслати батч підписки на ціни: %s", ", ".join(pairs))
 
 
 def _value_from_event(event: ProtoOASpotEvent, field: str, divisor: float):
