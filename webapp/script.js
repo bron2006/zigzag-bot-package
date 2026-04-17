@@ -25,6 +25,7 @@ let signalEventSource = null;
 let priceEventSource = null;
 
 const debouncedFetchSignal = debounce(fetchSignal, 300);
+const WATCHLIST_STORAGE_KEY = "zigzag_watchlist";
 
 document.addEventListener("DOMContentLoaded", function () {
     showLoader(true);
@@ -70,11 +71,60 @@ function applyPairMetadata(staticData) {
     unavailablePairs = new Set(((staticData && staticData.unavailable_pairs) || []).map(normalizePair));
 }
 
+function loadLocalWatchlist() {
+    try {
+        const raw = localStorage.getItem(WATCHLIST_STORAGE_KEY);
+        const parsed = JSON.parse(raw || "[]");
+        return Array.isArray(parsed) ? parsed.map(normalizePair).filter(Boolean) : [];
+    } catch (err) {
+        console.warn("Local watchlist load failed:", err);
+        return [];
+    }
+}
+
+function saveLocalWatchlist(items) {
+    try {
+        const unique = Array.from(new Set((items || []).map(normalizePair).filter(Boolean)));
+        localStorage.setItem(WATCHLIST_STORAGE_KEY, JSON.stringify(unique));
+    } catch (err) {
+        console.warn("Local watchlist save failed:", err);
+    }
+}
+
+function mergeWatchlists(remoteItems) {
+    return Array.from(
+        new Set([
+            ...((remoteItems || []).map(normalizePair)),
+            ...loadLocalWatchlist(),
+        ].filter(Boolean))
+    );
+}
+
+function configuredPairSet(data = allData) {
+    const pairs = [
+        ...(data && data.forex ? data.forex.map((s) => s.pairs).flat() : []),
+        ...((data && data.crypto) || []),
+        ...((data && data.stocks) || []),
+        ...((data && data.commodities) || []),
+    ];
+    return new Set(pairs.map(normalizePair).filter(Boolean));
+}
+
+function setCurrentWatchlist(items) {
+    const configured = configuredPairSet();
+    currentWatchlist = Array.from(new Set((items || []).map(normalizePair).filter(Boolean)))
+        .filter((pair) => configured.size === 0 || configured.has(pair));
+    saveLocalWatchlist(currentWatchlist);
+    if (allData) {
+        allData.watchlist = currentWatchlist;
+    }
+}
+
 async function loadInitialData() {
     try {
         const staticData = await apiGet("/api/get_pairs");
         allData = staticData || {};
-        currentWatchlist = ((staticData && staticData.watchlist) || []).map(normalizePair);
+        setCurrentWatchlist(mergeWatchlists((staticData && staticData.watchlist) || []));
         applyPairMetadata(staticData);
 
         populateLists(allData);
@@ -527,11 +577,12 @@ async function toggleFavorite(event, button, pair) {
             } else {
                 currentWatchlist.push(pairNorm);
             }
+            setCurrentWatchlist(currentWatchlist);
 
             try {
                 const refreshed = await apiGet("/api/get_pairs");
                 allData = refreshed || allData;
-                currentWatchlist = ((refreshed && refreshed.watchlist) || []).map(normalizePair);
+                setCurrentWatchlist(mergeWatchlists((refreshed && refreshed.watchlist) || []));
                 applyPairMetadata(refreshed);
             } catch (refreshErr) {
                 console.warn("Watchlist refresh failed, using local state:", refreshErr);
@@ -544,12 +595,17 @@ async function toggleFavorite(event, button, pair) {
         }
     } catch (err) {
         console.error("Toggle favorite error:", err);
-        if (button) {
-            button.disabled = false;
-            button.textContent = previousText || "⭐";
-        }
+        const locallyEnabled = !currentWatchlist.includes(pairNorm);
+        const nextWatchlist = locallyEnabled
+            ? [...currentWatchlist, pairNorm]
+            : currentWatchlist.filter((p) => p !== pairNorm);
+        setCurrentWatchlist(nextWatchlist);
+
+        const searchInput = document.getElementById("searchInput");
+        populateLists(allData, searchInput ? searchInput.value : "");
+
         if (window.Telegram && tg && typeof tg.showAlert === "function") {
-            tg.showAlert(`Не вдалося оновити обране: ${err.message}`);
+            tg.showAlert("Обране збережено на цьому пристрої. Сервер тимчасово не відповів.");
         }
     } finally {
         if (button && button.textContent === "…") {
