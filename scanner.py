@@ -67,7 +67,8 @@ def _collect_assets_to_scan() -> list:
 
     if app_state.get_scanner_state("forex"):
         active_sessions = _get_active_forex_sessions()
-        logger.info(f"Активні Forex сесії: {active_sessions}")
+        logger.info("Активні Forex сесії: %s", active_sessions)
+
         for session_name in active_sessions:
             assets.extend(FOREX_SESSIONS.get(session_name, []))
 
@@ -84,6 +85,7 @@ def _collect_assets_to_scan() -> list:
 
     seen = set()
     normalized = []
+
     for asset in assets:
         pair = asset.replace("/", "").upper()
         if pair not in seen:
@@ -100,17 +102,30 @@ def _send_signal_async(chat_id: int, message: str, reply_markup=None):
         send_signal,
         chat_id,
         message,
-        "Markdown",
+        "HTML",
         reply_markup,
     )
+
+
+def _attach_live_price(pair_norm: str, result: dict) -> dict:
+    if result.get("price") is not None:
+        return result
+
+    price_data = app_state.get_live_price(pair_norm)
+    if price_data and isinstance(price_data.get("mid"), (int, float)):
+        result["price"] = price_data["mid"]
+
+    return result
 
 
 def _handle_analysis_result(pair_norm: str, result: dict):
     if not result:
         return succeed(None)
 
+    result = _attach_live_price(pair_norm, dict(result))
+
     if result.get("error"):
-        logger.warning(f"Аналіз не вдався для {pair_norm}: {result.get('error')}")
+        logger.warning("Аналіз не вдався для %s: %s", pair_norm, result.get("error"))
         return succeed(None)
 
     score = int(result.get("score", 50))
@@ -129,8 +144,13 @@ def _handle_analysis_result(pair_norm: str, result: dict):
             is_signal = True
 
     logger.info(
-        f"[SCANNER] {pair_norm}: verdict={verdict}, score={score}, "
-        f"sentiment={sentiment}, trade_allowed={trade_allowed}, signal={is_signal}"
+        "[SCANNER] %s: verdict=%s, score=%s, sentiment=%s, trade_allowed=%s, signal=%s",
+        pair_norm,
+        verdict,
+        score,
+        sentiment,
+        trade_allowed,
+        is_signal,
     )
 
     app_state.latest_analysis_cache[pair_norm] = result
@@ -140,35 +160,41 @@ def _handle_analysis_result(pair_norm: str, result: dict):
 
     now = time.time()
     last_ts = app_state.scanner_cooldown_cache.get(pair_norm, 0)
+
     if (now - last_ts) < SCANNER_COOLDOWN_SECONDS:
-        logger.debug(f"{pair_norm} на cooldown, пропускаємо")
+        logger.debug("%s на cooldown, пропускаємо", pair_norm)
         return succeed(None)
 
     result.setdefault("type", "signal")
     result["pair"] = pair_norm
+    result["timeframe"] = result.get("timeframe", SCANNER_TIMEFRAME)
     result["ts"] = now
 
-    app_state.publish_sse(result)
+    app_state.publish_signal_sse(result)
     app_state.scanner_cooldown_cache[pair_norm] = now
 
     chat_id = get_chat_id()
     if not chat_id:
-        logger.info(f"[SCANNER] Сигнал для {pair_norm} готовий, але CHAT_ID не задано")
+        logger.info("[SCANNER] Сигнал для %s готовий, але CHAT_ID не задано", pair_norm)
         return succeed(result)
 
     expiration = result.get("timeframe", SCANNER_TIMEFRAME)
     message = telegram_ui._format_signal_message(result, expiration)
     kb = telegram_ui.get_main_menu_kb()
 
-    logger.info(f"[SCANNER] Надсилаємо сигнал для {pair_norm}")
+    logger.info("[SCANNER] Надсилаємо сигнал для %s", pair_norm)
     d = _send_signal_async(chat_id, message, reply_markup=kb)
 
     def _done(_):
-        logger.info(f"SCANNER: Сигнал надіслано для {pair_norm} (score={score})")
+        logger.info("SCANNER: сигнал надіслано для %s (score=%s)", pair_norm, score)
         return result
 
     def _failed(failure):
-        logger.error(f"SCANNER: Не вдалося надіслати сигнал для {pair_norm}: {failure.getErrorMessage()}")
+        logger.error(
+            "SCANNER: не вдалося надіслати сигнал для %s: %s",
+            pair_norm,
+            failure.getErrorMessage(),
+        )
         return None
 
     d.addCallbacks(_done, _failed)
@@ -182,13 +208,16 @@ def _process_one_asset(pair_norm: str):
 
     price_data = app_state.get_live_price(pair_norm)
     if price_data is None:
-        logger.debug(f"Немає живої ціни для {pair_norm} — ще не прийшла, пропускаємо.")
+        logger.debug("Немає живої ціни для %s, пропускаємо.", pair_norm)
         return succeed(None)
 
     age = time.time() - price_data.get("ts", 0)
     if age > STALE_PRICE_THRESHOLD:
         logger.warning(
-            f"{pair_norm}: ціна застаріла ({age:.0f}s > {STALE_PRICE_THRESHOLD}s), пропускаємо."
+            "%s: ціна застаріла (%.0fs > %ss), пропускаємо.",
+            pair_norm,
+            age,
+            STALE_PRICE_THRESHOLD,
         )
         return succeed(None)
 
@@ -200,15 +229,22 @@ def _process_one_asset(pair_norm: str):
             0,
             SCANNER_TIMEFRAME,
         )
+
         d.addCallback(lambda result, p=pair_norm: _handle_analysis_result(p, result))
-        d.addErrback(
-            lambda failure, p=pair_norm: logger.error(
-                f"Критична помилка в ланцюгу аналізу для {p}: {failure.getErrorMessage()}"
+
+        def _analysis_failed(failure, p=pair_norm):
+            logger.error(
+                "Критична помилка в ланцюгу аналізу для %s: %s",
+                p,
+                failure.getErrorMessage(),
             )
-        )
+            return None
+
+        d.addErrback(_analysis_failed)
         return d
+
     except Exception:
-        logger.exception(f"Виняток при підготовці аналізу для {pair_norm}")
+        logger.exception("Виняток при підготовці аналізу для %s", pair_norm)
         return succeed(None)
 
 
@@ -217,12 +253,12 @@ def scan_markets_once() -> None:
     global _scan_active
 
     if _scan_active:
-        logger.warning("SCANNER: попередній цикл ще триває — пропускаємо новий запуск")
+        logger.warning("SCANNER: попередній цикл ще триває, пропускаємо новий запуск")
         return
 
     state_snapshot = app_state.get_scanner_state_snapshot()
     if not any(state_snapshot.values()):
-        logger.debug("Всі сканери вимкнені; пропускаємо.")
+        logger.debug("Всі сканери вимкнені, пропускаємо.")
         return
 
     assets = _collect_assets_to_scan()
@@ -231,22 +267,18 @@ def scan_markets_once() -> None:
         return
 
     if not app_state.get_live_prices_snapshot() and app_state.SYMBOLS_LOADED:
-        logger.warning("live_prices порожній але символи завантажені — перезапускаємо підписку")
+        logger.warning("live_prices порожній, але символи завантажені. Перезапускаємо підписку.")
         try:
             from ctrader import start_price_subscriptions
+
             reactor.callLater(0, start_price_subscriptions)
         except Exception:
             logger.exception("Не вдалося перезапустити підписку")
 
-    logger.info(f"SCANNER: Запускаю скан для {len(assets)} активів...")
+    logger.info("SCANNER: запускаю скан для %s активів...", len(assets))
     _scan_active = True
 
-    deferreds = []
-
-    for asset in assets:
-        d = _scan_semaphore.run(_process_one_asset, asset)
-        deferreds.append(d)
-
+    deferreds = [_scan_semaphore.run(_process_one_asset, asset) for asset in assets]
     dl = DeferredList(deferreds, consumeErrors=True)
 
     def _finish(_):
@@ -258,7 +290,7 @@ def scan_markets_once() -> None:
     def _finish_err(failure):
         global _scan_active
         _scan_active = False
-        logger.error(f"SCANNER: цикл завершився з помилкою: {failure.getErrorMessage()}")
+        logger.error("SCANNER: цикл завершився з помилкою: %s", failure.getErrorMessage())
         return None
 
     dl.addCallbacks(_finish, _finish_err)

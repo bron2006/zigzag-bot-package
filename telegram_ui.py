@@ -111,8 +111,10 @@ def get_assets_kb(asset_list: list, category: str, expiration: str) -> InlineKey
 
     for asset in asset_list:
         clean = asset.replace("/", "").upper()
-        cd = f"analyze_{expiration}_{clean}"
-        row.append(InlineKeyboardButton(asset, callback_data=cd))
+        callback_data = f"analyze_{expiration}_{clean}"
+
+        row.append(InlineKeyboardButton(asset, callback_data=callback_data))
+
         if len(row) == 2:
             kb.append(row)
             row = []
@@ -121,8 +123,8 @@ def get_assets_kb(asset_list: list, category: str, expiration: str) -> InlineKey
         kb.append(row)
 
     back = "⬅️ Назад до сесій" if category == "forex" else "⬅️ Назад до експірацій"
-    cd_back = f"exp_forex_{expiration}" if category == "forex" else f"category_{category}"
-    kb.append([InlineKeyboardButton(back, callback_data=cd_back)])
+    callback_back = f"exp_forex_{expiration}" if category == "forex" else f"category_{category}"
+    kb.append([InlineKeyboardButton(back, callback_data=callback_back)])
 
     return InlineKeyboardMarkup(kb)
 
@@ -137,10 +139,12 @@ def _format_timeframe_details(result: dict) -> str:
         return ""
 
     lines = ["", "🧠 <b>Таймфрейми:</b>"]
+
     for tf, item in details.items():
         verdict = _safe_html(item.get("verdict", "N/A"))
-        score = item.get("score", "N/A")
-        lines.append(f"• <b>{_safe_html(tf.upper())}</b>: {verdict} ({_safe_html(score)}%)")
+        score = _safe_html(item.get("score", "N/A"))
+        lines.append(f"• <b>{_safe_html(tf.upper())}</b>: {verdict} ({score}%)")
+
     return "\n".join(lines)
 
 
@@ -175,6 +179,7 @@ def _format_signal_message(result: dict, expiration: str) -> str:
     if reasons:
         lines.append("")
         lines.append("📑 <b>Фактори аналізу:</b>")
+
         for reason in reasons:
             lines.append(f"• <i>{_safe_html(reason)}</i>")
 
@@ -190,6 +195,7 @@ def start(update: Update, context: CallbackContext):
 
 def menu(update: Update, context: CallbackContext):
     chat_id = _get_chat_id(update)
+
     try:
         bot_clear_messages(context.bot, context.bot_data, chat_id, limit=100)
     except Exception:
@@ -204,6 +210,7 @@ def stats_command(update, context):
     cache = app_state.latest_analysis_cache
 
     lines = ["📊 <b>Статистика за 1 год:</b>"]
+
     for pair, result in cache.items():
         if now - result.get("ts", 0) < 3600:
             verdict = _safe_html(result.get("verdict_text", "N/A"))
@@ -224,6 +231,7 @@ def live_command(update, context):
         age = time.time() - data.get("ts", 0)
         mid = data.get("mid")
         mid_str = f"{mid:.5f}" if isinstance(mid, (float, int)) else "N/A"
+
         lines.append(
             f"{'🟢' if age < 30 else '🔴'} <code>{_safe_html(pair)}</code>: "
             f"{mid_str} ({age:.0f}s)"
@@ -258,6 +266,7 @@ def button_handler(update: Update, context: CallbackContext):
 
     if action == "category":
         cat = parts[1]
+
         if cat == "watchlist":
             assets = db.get_watchlist(chat_id)
             if not assets:
@@ -282,6 +291,7 @@ def button_handler(update: Update, context: CallbackContext):
 
     if action == "exp":
         _, cat, exp = parts
+
         if cat == "watchlist":
             context.bot.send_message(
                 chat_id,
@@ -289,18 +299,28 @@ def button_handler(update: Update, context: CallbackContext):
                 reply_markup=get_assets_kb(db.get_watchlist(chat_id), "watchlist", exp),
             )
         elif cat == "forex":
-            context.bot.send_message(chat_id, "Сесії Forex:", reply_markup=get_forex_sessions_kb(exp))
+            context.bot.send_message(
+                chat_id,
+                "Сесії Forex:",
+                reply_markup=get_forex_sessions_kb(exp),
+            )
         else:
             assets = {
                 "crypto": CRYPTO_PAIRS,
                 "stocks": STOCK_TICKERS,
                 "commodities": COMMODITIES,
             }.get(cat, [])
-            context.bot.send_message(chat_id, "Оберіть актив:", reply_markup=get_assets_kb(assets, cat, exp))
+
+            context.bot.send_message(
+                chat_id,
+                "Оберіть актив:",
+                reply_markup=get_assets_kb(assets, cat, exp),
+            )
         return
 
     if action == "session":
         _, _, exp, sess = parts
+
         context.bot.send_message(
             chat_id,
             f"Пари {sess}:",
@@ -355,8 +375,9 @@ def button_handler(update: Update, context: CallbackContext):
 
             def _final_error(failure):
                 logger.error(
-                    f"Помилка надсилання результату analyze для {symbol}: "
-                    f"{failure.getErrorMessage()}"
+                    "Помилка надсилання результату analyze для %s: %s",
+                    symbol,
+                    failure.getErrorMessage(),
                 )
                 return None
 
@@ -364,7 +385,7 @@ def button_handler(update: Update, context: CallbackContext):
             return res
 
         def on_err(failure):
-            logger.error(f"Помилка аналізу {symbol}: {failure.getErrorMessage()}")
+            logger.error("Помилка аналізу %s: %s", symbol, failure.getErrorMessage())
 
             chain = _bot_call_async(
                 context.bot.delete_message,
