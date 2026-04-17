@@ -183,6 +183,22 @@ h1 { text-align: center; color: var(--text-color); font-size: 24px; margin-top: 
     background-color: var(--button-color);
     color: var(--button-text-color);
 }
+.pair-item.unavailable {
+    opacity: 0.62;
+}
+.pair-button.unavailable,
+.pair-button:disabled {
+    cursor: not-allowed;
+}
+.pair-button.unavailable:hover,
+.pair-button:disabled:hover {
+    background: var(--secondary-bg-color);
+    color: var(--text-color);
+}
+.pair-item.unavailable .pair-price {
+    color: var(--warning-color);
+    font-size: 12px;
+}
 
 #signalContainer { text-align: left; }
 #signalOutput { padding: 15px; background: var(--secondary-bg-color); border-radius: 8px; line-height: 1.6; min-height: 50px; }

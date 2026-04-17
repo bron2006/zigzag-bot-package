@@ -50,6 +50,64 @@ def _safe_json_dumps(data: dict) -> str:
     return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
 
 
+def _pair_key(pair: str) -> str:
+    return "".join(ch for ch in (pair or "").upper() if ch.isalnum())
+
+
+def _collect_ui_pairs(watchlist: list[str]) -> list[str]:
+    pairs = []
+
+    for session_pairs in FOREX_SESSIONS.values():
+        pairs.extend(session_pairs)
+
+    pairs.extend(CRYPTO_PAIRS)
+    pairs.extend(STOCK_TICKERS)
+    pairs.extend(COMMODITIES)
+    pairs.extend(watchlist or [])
+
+    seen = set()
+    result = []
+    for pair in pairs:
+        key = _pair_key(pair)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        result.append(key)
+
+    return result
+
+
+def _broker_pair_availability(watchlist: list[str]) -> tuple[list[str], list[str]]:
+    if not app_state.SYMBOLS_LOADED:
+        return [], []
+
+    available = []
+    unavailable = []
+
+    for pair in _collect_ui_pairs(watchlist):
+        if ctrader._resolve_broker_symbol(pair) is None:
+            unavailable.append(pair)
+        else:
+            available.append(pair)
+
+    return available, unavailable
+
+
+def _unavailable_symbol_payload(pair: str, tf: str) -> dict:
+    return {
+        "success": False,
+        "pair": _pair_key(pair) or pair,
+        "timeframe": tf,
+        "verdict_text": "ERROR",
+        "score": 50,
+        "price": None,
+        "sentiment": "BLOCK",
+        "reasons": ["Цього символу немає в списку брокера"],
+        "is_trade_allowed": False,
+        "unavailable_symbol": True,
+    }
+
+
 def _drain_channel(channel: str) -> None:
     events = app_state.pop_pending_sse_events(channel, limit=500)
     if not events:
@@ -216,6 +274,7 @@ def register_routes(app):
     def get_pairs():
         uid = get_user_id_from_init_data(_request_init_data())
         watchlist = db.get_watchlist(uid) if uid else []
+        available_pairs, unavailable_pairs = _broker_pair_availability(watchlist)
         forex_data = [
             {
                 "title": f"{k} {TRADING_HOURS.get(k, '')}".strip(),
@@ -230,6 +289,9 @@ def register_routes(app):
                 "stocks": STOCK_TICKERS,
                 "commodities": COMMODITIES,
                 "watchlist": watchlist,
+                "symbols_loaded": app_state.SYMBOLS_LOADED,
+                "available_pairs": available_pairs,
+                "unavailable_pairs": unavailable_pairs,
             }
         )
 
@@ -279,6 +341,9 @@ def register_routes(app):
 
         if not pair:
             return jsonify({"success": False, "error": "pair is required"}), 400
+
+        if app_state.SYMBOLS_LOADED and ctrader._resolve_broker_symbol(pair) is None:
+            return jsonify(_unavailable_symbol_payload(pair, tf))
 
         try:
             result = blockingCallFromThread(

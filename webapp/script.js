@@ -18,6 +18,8 @@ let allData = {};
 let lastSelectedPair = null;
 let currentSignalData = null;
 let latestPrices = {};
+let brokerSymbolsLoaded = false;
+let unavailablePairs = new Set();
 
 let signalEventSource = null;
 let priceEventSource = null;
@@ -63,11 +65,17 @@ async function apiGet(path, params = {}) {
     return response.json();
 }
 
+function applyPairMetadata(staticData) {
+    brokerSymbolsLoaded = Boolean(staticData && staticData.symbols_loaded);
+    unavailablePairs = new Set(((staticData && staticData.unavailable_pairs) || []).map(normalizePair));
+}
+
 async function loadInitialData() {
     try {
         const staticData = await apiGet("/api/get_pairs");
         allData = staticData || {};
         currentWatchlist = ((staticData && staticData.watchlist) || []).map(normalizePair);
+        applyPairMetadata(staticData);
 
         populateLists(allData);
         showLoader(false);
@@ -305,8 +313,8 @@ function updateScannerButtons(stateDict) {
     if (!stateDict || !scannerControls) return;
 
     const textMap = {
-        forex: "Forex",
-        crypto: "Crypto",
+        forex: "Валюти",
+        crypto: "Криптовалюти",
         commodities: "Сировина",
         watchlist: "Обране",
     };
@@ -386,14 +394,20 @@ function populateLists(data, query = "") {
             const pairNorm = normalizePair(pair);
             const isFav = currentWatchlist.includes(pairNorm);
             const price = latestPrices[pairNorm];
+            const brokerUnavailable = brokerSymbolsLoaded && unavailablePairs.has(pairNorm);
             const priceText =
-                price && typeof price.mid === "number"
-                    ? price.mid.toFixed(5)
-                    : "—";
+                brokerUnavailable
+                    ? "немає у брокера"
+                    : (price && typeof price.mid === "number" ? price.mid.toFixed(5) : "—");
+            const unavailableClass = brokerUnavailable ? " unavailable" : "";
+            const disabledAttr = brokerUnavailable ? " disabled" : "";
+            const titleAttr = brokerUnavailable
+                ? ' title="Цього символу немає в списку брокера"'
+                : "";
 
             sectionHtml += `
-                <div class="pair-item">
-                    <button class="pair-button" data-pair="${escapeHtml(pair)}">
+                <div class="pair-item${unavailableClass}">
+                    <button class="pair-button${unavailableClass}" data-pair="${escapeHtml(pair)}"${disabledAttr}${titleAttr}>
                         <span>${escapeHtml(pair)}</span>
                         <span class="pair-price" id="price-${pairNorm}" data-pair="${pairNorm}">${priceText}</span>
                     </button>
@@ -434,7 +448,10 @@ function populateLists(data, query = "") {
     listsContainer.innerHTML = html;
 
     listsContainer.querySelectorAll(".pair-button").forEach((btn) => {
-        btn.addEventListener("click", (e) => debouncedFetchSignal(e.currentTarget.dataset.pair));
+        btn.addEventListener("click", (e) => {
+            if (e.currentTarget.disabled) return;
+            debouncedFetchSignal(e.currentTarget.dataset.pair);
+        });
     });
 }
 
@@ -507,6 +524,7 @@ async function toggleFavorite(event, button, pair) {
                 const refreshed = await apiGet("/api/get_pairs");
                 allData = refreshed || allData;
                 currentWatchlist = ((refreshed && refreshed.watchlist) || []).map(normalizePair);
+                applyPairMetadata(refreshed);
             } catch (refreshErr) {
                 console.warn("Watchlist refresh failed, using local state:", refreshErr);
             }
@@ -520,6 +538,23 @@ async function toggleFavorite(event, button, pair) {
 }
 
 async function fetchSignal(pair) {
+    const pairNorm = normalizePair(pair);
+
+    if (brokerSymbolsLoaded && unavailablePairs.has(pairNorm)) {
+        lastSelectedPair = pair;
+        currentSignalData = null;
+        showLoader(false);
+        signalOutput.innerHTML = `
+            <div style="text-align:center; color:#ff9800; padding:10px;">
+                ⚠️ Цього символу немає в списку брокера: ${escapeHtml(pair)}
+            </div>
+        `;
+        setTimeout(() => {
+            signalContainer.scrollIntoView({ behavior: "smooth" });
+        }, 80);
+        return;
+    }
+
     lastSelectedPair = pair;
     showLoader(true);
     signalOutput.innerHTML = `<div style="text-align:center; padding:10px;">⏳ Аналіз ${escapeHtml(pair)}...</div>`;
@@ -583,6 +618,14 @@ function renderTimeframeDetails(signalData) {
 }
 
 function formatSignalAsHtml(signalData, exp) {
+    if (signalData && signalData.unavailable_symbol) {
+        return `
+            <div style="text-align:center; color:#ff9800; padding:10px;">
+                ⚠️ Цього символу немає в списку брокера: ${escapeHtml(signalData.pair || "")}
+            </div>
+        `;
+    }
+
     if (!signalData || signalData.error) {
         return `
             <div style="text-align:center; color:#ef5350; padding:10px;">
