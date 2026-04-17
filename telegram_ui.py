@@ -145,6 +145,18 @@ def _label_verdict(value) -> str:
     return labels.get(str(value or "").upper(), "невідомо")
 
 
+def _label_verdict_strong(value) -> str:
+    labels = {
+        "BUY": "КУПІВЛЯ",
+        "SELL": "ПРОДАЖ",
+        "NEUTRAL": "НЕЙТРАЛЬНО",
+        "WAIT": "ОЧІКУВАННЯ",
+        "NEWS_WAIT": "ПАУЗА ЧЕРЕЗ НОВИНИ",
+        "ERROR": "ПОМИЛКА",
+    }
+    return labels.get(str(value or "").upper(), "НЕВІДОМО")
+
+
 def _label_sentiment(value) -> str:
     labels = {
         "GO": "дозволено",
@@ -197,19 +209,19 @@ def _format_reason_uk(reason) -> str:
     return text
 
 
-def _format_timeframe_details(result: dict) -> str:
+def _format_timeframe_details(result: dict) -> list[str]:
     details = result.get("timeframe_details") or {}
     if not details:
-        return ""
+        return []
 
-    lines = ["", "🧠 <b>Таймфрейми:</b>"]
+    lines = ["🧠 <b>Таймфрейми:</b>"]
 
     for tf, item in details.items():
-        verdict = _safe_html(_label_verdict(item.get("verdict", "немає даних")))
+        verdict = _safe_html(_label_verdict_strong(item.get("verdict", "немає даних")))
         score = _safe_html(item.get("score", "немає даних"))
         lines.append(f"• <b>{_safe_html(_label_timeframe(tf))}</b>: {verdict} ({score}%)")
 
-    return "\n".join(lines)
+    return lines
 
 
 def _format_signal_message(result: dict, expiration: str) -> str:
@@ -218,26 +230,38 @@ def _format_signal_message(result: dict, expiration: str) -> str:
 
     pair = _safe_html(result.get("pair", "немає даних"))
     price = result.get("price")
-    verdict = _safe_html(_label_verdict(result.get("verdict_text", "WAIT")))
+    raw_verdict = str(result.get("verdict_text", "WAIT") or "WAIT").upper()
+    verdict = _safe_html(_label_verdict_strong(raw_verdict))
     sentiment = _safe_html(_label_sentiment(result.get("sentiment", "GO")))
-    trade_allowed = "✅ Так" if result.get("is_trade_allowed") else "⛔ Ні"
+    trade_allowed = "✅ ВХІД ДОЗВОЛЕНО" if result.get("is_trade_allowed") else "⛔ ВХІД НЕ РЕКОМЕНДОВАНИЙ"
+    score = int(float(result.get("score", 50) or 50))
+    bear_score = max(0, min(100, 100 - score))
+
+    arrow = "↔️"
+    if raw_verdict == "BUY":
+        arrow = "⬆️"
+    elif raw_verdict == "SELL":
+        arrow = "⬇️"
+    elif raw_verdict == "NEWS_WAIT":
+        arrow = "⏸️"
 
     price_str = "немає даних"
     if isinstance(price, (int, float)):
         price_str = f"{price:.5f}"
 
     lines = [
-        f"📈 <b>Сигнал для {pair}</b> ({_safe_html(_label_timeframe(expiration))})",
-        f"<b>Прогноз:</b> {verdict}",
-        f"<b>Ціна:</b> <code>{price_str}</code>",
-        f"<b>Новини:</b> {sentiment}",
-        f"<b>Вхід дозволено:</b> {trade_allowed}",
-        f"<b>Підсумкова оцінка:</b> {_safe_html(result.get('score', 'немає даних'))}%",
+        f"📈 <b>{pair}</b>  <i>Експірація: {_safe_html(_label_timeframe(expiration))}</i>",
+        "",
+        f"{arrow} <b>{verdict}</b>",
+        f"💵 <code>{price_str}</code>",
+        f"✅ <b>Новини:</b> {sentiment}",
+        "",
+        f"🐂 <b>Бики:</b> {score}%    🐃 <b>Ведмеді:</b> {bear_score}%",
+        "",
     ]
 
-    tf_block = _format_timeframe_details(result)
-    if tf_block:
-        lines.append(tf_block)
+    lines.extend(_format_timeframe_details(result))
+    lines.extend(["", f"<b>{trade_allowed}</b>"])
 
     reasons = result.get("reasons", [])
     if reasons:

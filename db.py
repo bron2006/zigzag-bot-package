@@ -1,5 +1,6 @@
 ﻿# db.py
 import logging
+import threading
 from contextlib import contextmanager
 
 from sqlalchemy import Column, DateTime, Float, Integer, String, create_engine, event, func
@@ -16,6 +17,8 @@ Base = declarative_base()
 
 engine = None
 SessionLocal = None
+_fallback_watchlists: dict[int, set[str]] = {}
+_fallback_lock = threading.RLock()
 
 
 class SignalHistory(Base):
@@ -164,6 +167,46 @@ def add_signal_to_history(data: dict) -> bool:
         return False
 
 
+def _fallback_get_watchlist(user_id: int) -> list[str]:
+    with _fallback_lock:
+        return sorted(_fallback_watchlists.get(int(user_id), set()))
+
+
+def _fallback_set_watchlist(user_id: int, pairs: list[str]) -> list[str]:
+    normalized = {pair.strip().upper() for pair in pairs if pair}
+    with _fallback_lock:
+        _fallback_watchlists[int(user_id)] = normalized
+        return sorted(normalized)
+
+
+def _fallback_toggle_watchlist(user_id: int, pair: str) -> bool:
+    pair = pair.strip().upper()
+    with _fallback_lock:
+        items = _fallback_watchlists.setdefault(int(user_id), set())
+        if pair in items:
+            items.remove(pair)
+        else:
+            items.add(pair)
+    logger.warning("Використано резервне обране для user_id=%s pair=%s", user_id, pair)
+    return True
+
+
+def _fallback_add_watchlist(user_id: int, pair: str) -> bool:
+    pair = pair.strip().upper()
+    with _fallback_lock:
+        _fallback_watchlists.setdefault(int(user_id), set()).add(pair)
+    logger.warning("Використано резервне додавання в обране для user_id=%s pair=%s", user_id, pair)
+    return True
+
+
+def _fallback_remove_watchlist(user_id: int, pair: str) -> bool:
+    pair = pair.strip().upper()
+    with _fallback_lock:
+        _fallback_watchlists.setdefault(int(user_id), set()).discard(pair)
+    logger.warning("Використано резервне видалення з обраного для user_id=%s pair=%s", user_id, pair)
+    return True
+
+
 def get_watchlist(user_id: int) -> list[str]:
     if not user_id:
         return []
@@ -179,10 +222,14 @@ def get_watchlist(user_id: int) -> list[str]:
                 .order_by(UserWatchlist.pair.asc())
                 .all()
             )
-            return [row.pair for row in rows]
+            pairs = [row.pair for row in rows]
+            fallback_pairs = _fallback_get_watchlist(user_id)
+            if fallback_pairs:
+                pairs = sorted(set(pairs) | set(fallback_pairs))
+            return pairs
     except SQLAlchemyError:
         logger.exception("Error loading watchlist")
-        return []
+        return _fallback_get_watchlist(user_id)
 
 
 def is_in_watchlist(user_id: int, pair: str) -> bool:
@@ -233,10 +280,11 @@ def add_to_watchlist(user_id: int, pair: str) -> bool:
             if existing is None:
                 db.add(UserWatchlist(user_id=int(user_id), pair=pair))
 
+            _fallback_add_watchlist(user_id, pair)
             return True
     except OperationalError:
         logger.exception("OperationalError while adding to watchlist")
-        return False
+        return _fallback_add_watchlist(user_id, pair)
     except SQLAlchemyError:
         logger.exception("Error adding to watchlist")
         return False
@@ -265,10 +313,11 @@ def remove_from_watchlist(user_id: int, pair: str) -> bool:
             if existing is not None:
                 db.delete(existing)
 
+            _fallback_remove_watchlist(user_id, pair)
             return True
     except OperationalError:
         logger.exception("OperationalError while removing from watchlist")
-        return False
+        return _fallback_remove_watchlist(user_id, pair)
     except SQLAlchemyError:
         logger.exception("Error removing from watchlist")
         return False
@@ -294,15 +343,20 @@ def toggle_watchlist(user_id: int, pair: str) -> bool:
                 .first()
             )
 
-            if existing:
-                db.delete(existing)
+            fallback_has_pair = pair in _fallback_get_watchlist(user_id)
+
+            if existing or fallback_has_pair:
+                if existing:
+                    db.delete(existing)
+                _fallback_remove_watchlist(user_id, pair)
             else:
                 db.add(UserWatchlist(user_id=int(user_id), pair=pair))
+                _fallback_add_watchlist(user_id, pair)
 
             return True
     except OperationalError:
         logger.exception("OperationalError while toggling watchlist")
-        return False
+        return _fallback_toggle_watchlist(user_id, pair)
     except SQLAlchemyError:
         logger.exception("Error toggling watchlist")
         return False

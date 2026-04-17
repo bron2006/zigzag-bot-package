@@ -410,7 +410,7 @@ function populateLists(data, query = "") {
                 <div class="pair-item${unavailableClass}">
                     <button class="pair-button${unavailableClass}" data-pair="${escapeHtml(pair)}"${disabledAttr}${titleAttr}>
                         <span>${escapeHtml(pair)}</span>
-                        <span class="pair-price" id="price-${pairNorm}" data-pair="${pairNorm}">${priceText}</span>
+                        <span class="pair-price" data-pair="${pairNorm}">${priceText}</span>
                     </button>
                     <button class="fav-btn" onclick="toggleFavorite(event, this, '${escapeJsString(pair)}')">
                         ${isFav ? "✅" : "⭐"}
@@ -457,8 +457,8 @@ function populateLists(data, query = "") {
 }
 
 function updatePairPriceInList(pairNorm, priceData) {
-    const priceNode = document.getElementById(`price-${pairNorm}`);
-    if (!priceNode) return;
+    const priceNodes = document.querySelectorAll(`.pair-price[data-pair="${pairNorm}"]`);
+    if (!priceNodes.length) return;
 
     let priceText = "—";
     if (typeof priceData.mid === "number") {
@@ -469,9 +469,11 @@ function updatePairPriceInList(pairNorm, priceData) {
         priceText = priceData.ask.toFixed(5);
     }
 
-    if (priceNode.textContent !== priceText) {
-        priceNode.textContent = priceText;
-    }
+    priceNodes.forEach((priceNode) => {
+        if (priceNode.textContent !== priceText) {
+            priceNode.textContent = priceText;
+        }
+    });
 }
 
 function updateOpenSignalPrice(pairNorm, priceData) {
@@ -503,16 +505,21 @@ async function toggleFavorite(event, button, pair) {
     event.stopPropagation();
 
     const pairNorm = normalizePair(pair);
+    const previousText = button ? button.textContent : "";
+
+    if (button) {
+        button.disabled = true;
+        button.textContent = "…";
+    }
 
     try {
         const url = `${API_BASE_URL}/api/toggle_watchlist${buildQuery({ pair })}`;
         const response = await fetch(url, { method: "GET" });
+        const res = await response.json().catch(() => ({}));
 
         if (!response.ok) {
-            throw new Error(`HTTP ${response.status}`);
+            throw new Error(res.error || `HTTP ${response.status}`);
         }
-
-        const res = await response.json();
 
         if (res.success) {
             if (currentWatchlist.includes(pairNorm)) {
@@ -532,9 +539,23 @@ async function toggleFavorite(event, button, pair) {
 
             const searchInput = document.getElementById("searchInput");
             populateLists(allData, searchInput ? searchInput.value : "");
+        } else {
+            throw new Error(res.error || "Обране не оновлено");
         }
     } catch (err) {
         console.error("Toggle favorite error:", err);
+        if (button) {
+            button.disabled = false;
+            button.textContent = previousText || "⭐";
+        }
+        if (window.Telegram && tg && typeof tg.showAlert === "function") {
+            tg.showAlert(`Не вдалося оновити обране: ${err.message}`);
+        }
+    } finally {
+        if (button && button.textContent === "…") {
+            button.disabled = false;
+            button.textContent = previousText || "⭐";
+        }
     }
 }
 
