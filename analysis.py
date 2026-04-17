@@ -30,6 +30,7 @@ PERIOD_MAP = {
 
 MARKET_DATA_TIMEOUT = 45
 CPU_ANALYSIS_TIMEOUT = 30
+PRICE_FRESH_SECONDS = 60
 
 MODEL_FEATURE_NAMES = ["ATR", "ADX", "RSI", "EMA50", "EMA200"]
 
@@ -185,9 +186,99 @@ def _latest_price_from_df(df: pd.DataFrame):
     return None
 
 
+def _price_status(pair_norm: str) -> dict:
+    price_data = app_state.get_live_price(pair_norm)
+    if not price_data:
+        return {
+            "ok": False,
+            "label": "поточна ціна ще не отримана",
+            "age_seconds": None,
+            "mid": None,
+        }
+
+    age = max(0, int(time.time() - price_data.get("ts", 0)))
+    mid = price_data.get("mid")
+    ok = isinstance(mid, (int, float)) and age <= PRICE_FRESH_SECONDS
+
+    return {
+        "ok": ok,
+        "label": f"свіжа, {age} сек тому" if ok else f"застаріла, {age} сек тому",
+        "age_seconds": age,
+        "mid": mid if isinstance(mid, (int, float)) else None,
+        "bid": price_data.get("bid"),
+        "ask": price_data.get("ask"),
+    }
+
+
+def _base_status(pair_norm: str) -> dict:
+    account_ready = bool(getattr(getattr(app_state.client, "_client", None), "account_id", None))
+    models_ready = _models_ready()
+    return {
+        "ctrader": {
+            "ok": bool(app_state.SYMBOLS_LOADED and account_ready),
+            "label": "готовий" if app_state.SYMBOLS_LOADED and account_ready else "не готовий",
+        },
+        "price": _price_status(pair_norm),
+        "ml": {
+            "ok": models_ready,
+            "label": "готова" if models_ready else "модель не завантажена",
+        },
+        "calendar": {
+            "ok": None,
+            "label": "ще не перевірено",
+        },
+        "market_data": {
+            "ok": None,
+            "label": "ще не перевірено",
+        },
+        "generated_at": int(time.time()),
+    }
+
+
+def _calendar_status(news_res: dict) -> dict:
+    if not news_res:
+        return {"ok": False, "label": "календар не відповів", "source": None}
+
+    verdict = news_res.get("verdict")
+    available = bool(news_res.get("available", False))
+    source = news_res.get("source")
+    reason = news_res.get("reason") or ""
+
+    if verdict == "BLOCK":
+        label = f"заблоковано: {reason}" if reason else "заблоковано"
+        ok = False
+    elif available:
+        label = reason or "календар працює"
+        ok = True
+    else:
+        label = f"недоступний: {reason}" if reason else "недоступний"
+        ok = None
+
+    return {
+        "ok": ok,
+        "label": label,
+        "source": source,
+        "verdict": verdict,
+        "available": available,
+    }
+
+
+def _signal_quality(score: int, trade_allowed: bool) -> str:
+    if not trade_allowed:
+        return "чекати"
+
+    distance = abs(score - 50)
+    if distance >= 35:
+        return "сильний"
+    if distance >= 25:
+        return "середній"
+    return "слабкий"
+
+
 @defer.inlineCallbacks
 def _analysis_flow(client, symbol_cache, symbol, user_id, timeframe="5m"):
     pair_norm = _normalize_pair(symbol)
+    data_status = _base_status(pair_norm)
 
     try:
         if client is None or not getattr(client, "_client", None):
@@ -198,6 +289,7 @@ def _analysis_flow(client, symbol_cache, symbol, user_id, timeframe="5m"):
                 "score": 50,
                 "sentiment": "GO",
                 "reasons": ["cTrader клієнт не готовий"],
+                "data_status": data_status,
                 "is_trade_allowed": False,
             }
 
@@ -209,6 +301,7 @@ def _analysis_flow(client, symbol_cache, symbol, user_id, timeframe="5m"):
                 "score": 50,
                 "sentiment": "GO",
                 "reasons": ["Акаунт не готовий"],
+                "data_status": data_status,
                 "is_trade_allowed": False,
             }
 
@@ -223,6 +316,10 @@ def _analysis_flow(client, symbol_cache, symbol, user_id, timeframe="5m"):
         df_b = results[1][1] if results[1][0] else None
 
         if df_a is None or df_b is None:
+            data_status["market_data"] = {
+                "ok": False,
+                "label": "історичні дані не отримано",
+            }
             reasons = ["Помилка даних"]
             if not results[0][0]:
                 reasons.append(f"{tf_a}: {results[0][1].getErrorMessage()}")
@@ -236,14 +333,22 @@ def _analysis_flow(client, symbol_cache, symbol, user_id, timeframe="5m"):
                 "score": 50,
                 "sentiment": "GO",
                 "reasons": reasons,
+                "data_status": data_status,
                 "is_trade_allowed": False,
             }
+
+        data_status["market_data"] = {
+            "ok": True,
+            "label": f"отримано ({tf_a} і {tf_b})",
+        }
 
         score_a, verdict_a, reason_a = _run_technical_analysis(df_a)
         score_b, verdict_b, reason_b = _run_technical_analysis(df_b)
 
         news_res = yield news_filter.get_latest_news_sentiment_async(pair_norm)
         news_v = news_res.get("verdict", "GO")
+        data_status["calendar"] = _calendar_status(news_res)
+        data_status["price"] = _price_status(pair_norm)
 
         reasons = [
             (
@@ -264,7 +369,12 @@ def _analysis_flow(client, symbol_cache, symbol, user_id, timeframe="5m"):
 
         score = int((score_a + score_b) / 2)
         verdict = "NEWS_WAIT" if news_v == "BLOCK" else verdict_a
-        trade_allowed = verdict_a in ("BUY", "SELL") and news_v == "GO"
+        price_ok = bool(data_status["price"].get("ok"))
+        if not price_ok:
+            reasons.append(f"Ціна: {data_status['price'].get('label', 'не готова')}")
+
+        trade_allowed = verdict_a in ("BUY", "SELL") and news_v == "GO" and price_ok
+        quality = _signal_quality(score, trade_allowed)
 
         return {
             "pair": pair_norm,
@@ -274,6 +384,8 @@ def _analysis_flow(client, symbol_cache, symbol, user_id, timeframe="5m"):
             "score": score,
             "sentiment": news_v,
             "news_filter": news_res,
+            "data_status": data_status,
+            "signal_quality": quality,
             "is_trade_allowed": trade_allowed,
             "reasons": reasons,
             "timeframe_details": {
@@ -292,6 +404,7 @@ def _analysis_flow(client, symbol_cache, symbol, user_id, timeframe="5m"):
             "sentiment": "GO",
             "reasons": [str(e)],
             "error": str(e),
+            "data_status": data_status,
             "is_trade_allowed": False,
         }
 

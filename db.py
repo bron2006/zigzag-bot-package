@@ -3,7 +3,7 @@ import logging
 import threading
 from contextlib import contextmanager
 
-from sqlalchemy import Column, DateTime, Float, Integer, String, create_engine, event, func
+from sqlalchemy import Column, DateTime, Float, Integer, String, create_engine, event, func, text
 from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from sqlalchemy.orm import declarative_base, scoped_session, sessionmaker
 
@@ -255,6 +255,35 @@ def is_in_watchlist(user_id: int, pair: str) -> bool:
     except SQLAlchemyError:
         logger.exception("Error checking watchlist membership")
         return False
+
+
+def check_database_status() -> dict:
+    fallback_count = 0
+    with _fallback_lock:
+        fallback_count = sum(len(items) for items in _fallback_watchlists.values())
+
+    if engine is None:
+        return {
+            "ok": False,
+            "label": "двигун бази не ініціалізований",
+            "fallback_items": fallback_count,
+        }
+
+    try:
+        with engine.connect() as conn:
+            value = conn.execute(text("select 1")).scalar()
+        return {
+            "ok": value == 1,
+            "label": "працює" if value == 1 else "неочікувана відповідь",
+            "fallback_items": fallback_count,
+        }
+    except Exception as exc:
+        logger.exception("Database status check failed")
+        return {
+            "ok": False,
+            "label": f"помилка підключення: {type(exc).__name__}",
+            "fallback_items": fallback_count,
+        }
 
 
 def add_to_watchlist(user_id: int, pair: str) -> bool:

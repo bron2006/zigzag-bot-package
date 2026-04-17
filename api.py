@@ -17,6 +17,8 @@ from twisted.web.wsgi import WSGIResource
 import analysis as analysis_module
 import ctrader
 import db
+import ml_models
+import news_filter
 from auth import get_user_id_from_init_data, is_valid_init_data
 from config import (
     COMMODITIES,
@@ -41,7 +43,7 @@ def _protected_route(f):
     def decorated_function(*args, **kwargs):
         init_data = _request_init_data()
         if not is_valid_init_data(init_data):
-            return jsonify({"success": False, "error": "Unauthorized"}), 401
+            return jsonify({"success": False, "error": "Немає доступу"}), 401
         return f(*args, **kwargs)
     return decorated_function
 
@@ -108,6 +110,50 @@ def _unavailable_symbol_payload(pair: str, tf: str) -> dict:
     }
 
 
+def _diagnostics_payload() -> dict:
+    now = time.time()
+    prices = app_state.get_live_prices_snapshot()
+    configured_pairs = _collect_ui_pairs([])
+    stale_prices = {
+        pair: int(now - data.get("ts", 0))
+        for pair, data in prices.items()
+        if now - data.get("ts", 0) > 60
+    }
+    missing_prices = sorted(set(configured_pairs) - set(prices.keys()))
+
+    return {
+        "ok": True,
+        "updated_at": int(now),
+        "ctrader": {
+            "ok": bool(app_state.SYMBOLS_LOADED),
+            "label": "символи завантажені" if app_state.SYMBOLS_LOADED else "символи не завантажені",
+            "configured_pairs": len(configured_pairs),
+            "prices_live": len(prices),
+            "missing_prices": missing_prices,
+            "stale_prices": stale_prices,
+        },
+        "telegram": {
+            "ok": bool(app_state.updater),
+            "label": "працює" if app_state.updater else "вимкнено",
+        },
+        "ml": {
+            "ok": bool(
+                ml_models.SCALER is not None
+                and ml_models.LGBM_MODEL is not None
+                and hasattr(ml_models.SCALER, "transform")
+                and hasattr(ml_models.LGBM_MODEL, "predict_proba")
+            ),
+            "label": "модель завантажена" if ml_models.SCALER is not None and ml_models.LGBM_MODEL is not None else "модель не завантажена",
+        },
+        "calendar": news_filter.get_cache_stats(),
+        "database": db.check_database_status(),
+        "sse": {
+            "signal_clients": app_state.sse_listener_count("signal"),
+            "price_clients": app_state.sse_listener_count("price"),
+        },
+    }
+
+
 def _drain_channel(channel: str) -> None:
     events = app_state.pop_pending_sse_events(channel, limit=500)
     if not events:
@@ -138,7 +184,7 @@ class SSEStreamResource(Resource):
         if not is_valid_init_data(init_data):
             request.setResponseCode(401)
             request.setHeader(b"Content-Type", b"application/json; charset=utf-8")
-            return b'{"success":false,"error":"Unauthorized"}'
+            return '{"success":false,"error":"Немає доступу"}'.encode("utf-8")
 
         request.setHeader(b"Content-Type", b"text/event-stream; charset=utf-8")
         request.setHeader(b"Cache-Control", b"no-cache")
@@ -255,10 +301,10 @@ def register_routes(app):
             </style></head>
             <body><div class="card">
                 <h1>📊 Стан ZigZag</h1>
-                <div class="stat"><span>cTrader:</span><span class="val {'ok' if app_state.SYMBOLS_LOADED else 'err'}">{'✅ OK' if app_state.SYMBOLS_LOADED else '❌ ERROR'}</span></div>
+                <div class="stat"><span>cTrader:</span><span class="val {'ok' if app_state.SYMBOLS_LOADED else 'err'}">{'✅ ГОТОВО' if app_state.SYMBOLS_LOADED else '❌ ПОМИЛКА'}</span></div>
                 <div class="stat"><span>Telegram Бот:</span><span class="val {'ok' if app_state.updater else 'err'}">{tg_status}</span></div>
-                <div class="stat"><span>SSE signal-клієнтів:</span><span class="val info">{app_state.sse_listener_count('signal')}</span></div>
-                <div class="stat"><span>SSE price-клієнтів:</span><span class="val info">{app_state.sse_listener_count('price')}</span></div>
+                <div class="stat"><span>SSE клієнтів сигналів:</span><span class="val info">{app_state.sse_listener_count('signal')}</span></div>
+                <div class="stat"><span>SSE клієнтів цін:</span><span class="val info">{app_state.sse_listener_count('price')}</span></div>
                 <div class="stat"><span>Цін в ефірі:</span><span class="val">{len(prices)}</span></div>
                 <div class="stat"><span>Застарілих:</span><span class="val">{stale_count}</span></div>
                 <p style='text-align:center;color:#555;font-size:11px;margin-top:20px;'>Оновлено: {time.strftime('%H:%M:%S')}</p>
@@ -267,7 +313,12 @@ def register_routes(app):
             return Response(html, mimetype="text/html")
         except Exception as e:
             logger.exception("Health endpoint failed")
-            return f"Error: {str(e)}", 500
+            return f"Помилка: {str(e)}", 500
+
+    @app.route("/api/diagnostics")
+    @_protected_route
+    def diagnostics():
+        return jsonify(_diagnostics_payload())
 
     @app.route("/api/get_pairs")
     @_protected_route
@@ -318,10 +369,10 @@ def register_routes(app):
         pair = (request.values.get("pair") or "").strip()
 
         if not uid:
-            return jsonify({"success": False, "error": "User not resolved"}), 400
+            return jsonify({"success": False, "error": "Користувача не визначено"}), 400
 
         if not pair:
-            return jsonify({"success": False, "error": "pair is required"}), 400
+            return jsonify({"success": False, "error": "Пару не вказано"}), 400
 
         if _pair_key(pair) not in set(_collect_ui_pairs([])):
             return jsonify({"success": False, "error": "Цієї пари немає в актуальному списку"}), 400
@@ -345,7 +396,7 @@ def register_routes(app):
         uid = get_user_id_from_init_data(_request_init_data())
 
         if not pair:
-            return jsonify({"success": False, "error": "pair is required"}), 400
+            return jsonify({"success": False, "error": "Пару не вказано"}), 400
 
         if app_state.SYMBOLS_LOADED and ctrader._resolve_broker_symbol(pair) is None:
             return jsonify(_unavailable_symbol_payload(pair, tf))

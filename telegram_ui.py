@@ -24,6 +24,13 @@ from utils_message_cleanup import bot_clear_messages, bot_track_message
 logger = logging.getLogger(__name__)
 
 EXPIRATIONS = ["1m", "5m", "15m"]
+CATEGORY_LABELS = {
+    "forex": "Валютні пари",
+    "crypto": "Криптовалюти",
+    "stocks": "Акції/Індекси",
+    "commodities": "Сировина",
+    "watchlist": "Обране",
+}
 
 
 def _blocking_pool():
@@ -224,6 +231,46 @@ def _format_timeframe_details(result: dict) -> list[str]:
     return lines
 
 
+def _label_signal_quality(value) -> str:
+    labels = {
+        "strong": "сильний",
+        "medium": "середній",
+        "weak": "слабкий",
+        "wait": "чекати",
+        "сильний": "сильний",
+        "середній": "середній",
+        "слабкий": "слабкий",
+        "чекати": "чекати",
+    }
+    return labels.get(str(value or "").lower(), "чекати")
+
+
+def _format_data_status(result: dict) -> list[str]:
+    status = result.get("data_status") or {}
+    items = [
+        ("cTrader", status.get("ctrader")),
+        ("Ціна", status.get("price")),
+        ("Календар", status.get("calendar")),
+        ("Модель", status.get("ml")),
+        ("Історичні дані", status.get("market_data")),
+    ]
+
+    lines = []
+    for title, item in items:
+        if not isinstance(item, dict):
+            continue
+
+        ok = item.get("ok")
+        icon = "✅" if ok is True else "⚠️" if ok is False else "⏳"
+        label = _format_reason_uk(item.get("label") or "немає даних")
+        lines.append(f"• {icon} <b>{_safe_html(title)}:</b> {_safe_html(label)}")
+
+    if not lines:
+        return []
+
+    return ["🔎 <b>Перевірка джерел:</b>", *lines]
+
+
 def _format_signal_message(result: dict, expiration: str) -> str:
     if result.get("error"):
         return "❌ Помилка: <code>технічна помилка аналізу</code>"
@@ -261,7 +308,12 @@ def _format_signal_message(result: dict, expiration: str) -> str:
     ]
 
     lines.extend(_format_timeframe_details(result))
-    lines.extend(["", f"<b>{trade_allowed}</b>"])
+    status_lines = _format_data_status(result)
+    if status_lines:
+        lines.extend(["", *status_lines])
+
+    quality = _safe_html(_label_signal_quality(result.get("signal_quality")))
+    lines.extend(["", f"🔎 <b>Якість сигналу:</b> {quality}", f"<b>{trade_allowed}</b>"])
 
     reasons = result.get("reasons", [])
     if reasons:
@@ -322,7 +374,7 @@ def live_command(update, context):
 
         lines.append(
             f"{'🟢' if age < 30 else '🔴'} <code>{_safe_html(pair)}</code>: "
-            f"{mid_str} ({age:.0f}s)"
+            f"{mid_str} ({age:.0f} сек)"
         )
 
     update.message.reply_text(
@@ -372,7 +424,7 @@ def button_handler(update: Update, context: CallbackContext):
         else:
             context.bot.send_message(
                 chat_id,
-                f"Експірація для {cat}:",
+                f"Експірація для {CATEGORY_LABELS.get(cat, 'категорії')}:",
                 reply_markup=get_expiration_kb(cat),
             )
         return

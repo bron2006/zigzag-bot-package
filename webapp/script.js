@@ -695,6 +695,55 @@ function renderTimeframeDetails(signalData) {
     `;
 }
 
+function labelSignalQuality(value) {
+    const labels = {
+        strong: "сильний",
+        medium: "середній",
+        weak: "слабкий",
+        wait: "чекати",
+        "сильний": "сильний",
+        "середній": "середній",
+        "слабкий": "слабкий",
+        "чекати": "чекати",
+    };
+
+    return labels[String(value || "").toLowerCase()] || "чекати";
+}
+
+function renderDataStatus(signalData) {
+    const status = signalData?.data_status || {};
+    const items = [
+        ["cTrader", status.ctrader],
+        ["Ціна", status.price],
+        ["Календар", status.calendar],
+        ["Модель", status.ml],
+        ["Історичні дані", status.market_data],
+    ].filter(([, item]) => item && typeof item === "object");
+
+    if (!items.length) return "";
+
+    const rows = items.map(([name, item]) => {
+        const ok = item.ok;
+        const icon = ok === true ? "✅" : ok === false ? "⚠️" : "⏳";
+        const color = ok === true ? "#26a69a" : ok === false ? "#ef5350" : "#94a3b8";
+        const label = escapeHtml(localizeReason(item.label || "немає даних"));
+
+        return `
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; padding:4px 0; border-bottom:1px solid rgba(255,255,255,0.06);">
+                <span style="color:#e5e7eb;">${escapeHtml(name)}</span>
+                <span style="color:${color}; text-align:right;">${icon} ${label}</span>
+            </div>
+        `;
+    }).join("");
+
+    return `
+        <div style="margin:8px 0 6px; padding:8px 10px; border:1px solid rgba(255,255,255,0.08); border-radius:8px; background:rgba(255,255,255,0.02); font-size:12px; line-height:1.25;">
+            <div style="font-weight:800; margin-bottom:4px; color:#ffffff;">Перевірка джерел</div>
+            ${rows}
+        </div>
+    `;
+}
+
 function formatSignalAsHtml(signalData, exp) {
     if (signalData && signalData.unavailable_symbol) {
         return `
@@ -720,6 +769,7 @@ function formatSignalAsHtml(signalData, exp) {
     const sentiment = rawSentiment ? escapeHtml(labelSentiment(rawSentiment)) : "";
     const reasons = Array.isArray(signalData.reasons) ? signalData.reasons : [];
     const tradeAllowed = Boolean(signalData.is_trade_allowed);
+    const quality = escapeHtml(labelSignalQuality(signalData.signal_quality));
 
     let arrow = "↔️";
     let cClass = "neutral";
@@ -761,6 +811,10 @@ function formatSignalAsHtml(signalData, exp) {
             <span style="color:#ef5350;">🐃 ${100 - score}%</span>
         </div>
         ${renderTimeframeDetails(signalData)}
+        ${renderDataStatus(signalData)}
+        <div style="text-align:center; margin-top:5px; font-weight:bold; color:#f8fafc; font-size:13px;">
+            🔎 Якість сигналу: ${quality}
+        </div>
         <div style="text-align:center; margin-top:5px; font-weight:bold; color:${tradeAllowed ? "#26a69a" : "#ef5350"}; font-size:13px;">
             ${tradeAllowed ? "✅ Вхід дозволено" : "⛔ Вхід не рекомендований"}
         </div>
