@@ -250,14 +250,17 @@ def _analysis_flow(client, symbol_cache, symbol, user_id, timeframe="5m"):
                 f"Таймфрейми: {_label_timeframe(tf_a)} = {_label_verdict(verdict_a)}, "
                 f"{_label_timeframe(tf_b)} = {_label_verdict(verdict_b)}"
             ),
-            f"ШІ: {_label_sentiment(news_v)}",
+            f"Новини: {_label_sentiment(news_v)}",
         ]
         if reason_a:
             reasons.append(f"{_label_timeframe(tf_a)}: {reason_a}")
         if reason_b:
             reasons.append(f"{_label_timeframe(tf_b)}: {reason_b}")
-        if news_res.get("reason") and not news_res.get("available", True):
-            reasons.append("Фільтр новин: резервний режим")
+        if news_res.get("reason"):
+            if news_v == "BLOCK":
+                reasons.append(f"Фільтр новин: {news_res['reason']}")
+            elif not news_res.get("available", True):
+                reasons.append(f"Фільтр новин: {news_res['reason']} (вхід не блокується)")
 
         score = int((score_a + score_b) / 2)
         verdict = "NEWS_WAIT" if news_v == "BLOCK" else verdict_a
@@ -270,6 +273,7 @@ def _analysis_flow(client, symbol_cache, symbol, user_id, timeframe="5m"):
             "verdict_text": verdict,
             "score": score,
             "sentiment": news_v,
+            "news_filter": news_res,
             "is_trade_allowed": trade_allowed,
             "reasons": reasons,
             "timeframe_details": {

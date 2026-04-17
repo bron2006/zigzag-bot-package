@@ -675,7 +675,7 @@ function formatSignalAsHtml(signalData, exp) {
         ${
             sentiment
                 ? `<div class="ai-verdict" style="padding:5px 9px; border-radius:8px; text-align:center; font-weight:bold; margin:5px auto; border:1px solid; background:rgba(0,0,0,0.1); color:${rawSentiment === "GO" ? "#26a69a" : "#ef5350"}; width:fit-content; font-size:12px;">
-                    ${rawSentiment === "GO" ? "✅" : "🚨"} ШІ: ${sentiment}
+                    ${rawSentiment === "GO" ? "✅" : "🚨"} Новини: ${sentiment}
                    </div>`
                 : ""
         }
