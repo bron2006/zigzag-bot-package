@@ -42,6 +42,35 @@ FEATURE_SOURCE_MAP = {
 }
 
 
+def _label_verdict(value: str) -> str:
+    labels = {
+        "BUY": "купівля",
+        "SELL": "продаж",
+        "NEUTRAL": "нейтрально",
+        "WAIT": "очікування",
+        "NEWS_WAIT": "пауза через новини",
+        "ERROR": "помилка",
+    }
+    return labels.get((value or "").upper(), "невідомо")
+
+
+def _label_sentiment(value: str) -> str:
+    labels = {
+        "GO": "дозволено",
+        "BLOCK": "заблоковано",
+    }
+    return labels.get((value or "").upper(), "невідомо")
+
+
+def _label_timeframe(value: str) -> str:
+    labels = {
+        "1m": "1 хв",
+        "5m": "5 хв",
+        "15m": "15 хв",
+    }
+    return labels.get(value or "", value or "")
+
+
 def _blocking_pool():
     return app_state.blocking_pool or reactor.getThreadPool()
 
@@ -128,7 +157,7 @@ def _run_technical_analysis(df: pd.DataFrame) -> Tuple[int, str, str]:
         return 50, "WAIT", "Недостатньо історії"
 
     if not _models_ready():
-        return 50, "WAIT", "ML модель не завантажена"
+        return 50, "WAIT", "Модель ШІ не завантажена"
 
     features = _prepare_features(df)
     if features is None:
@@ -142,7 +171,7 @@ def _run_technical_analysis(df: pd.DataFrame) -> Tuple[int, str, str]:
         return score, verdict, ""
     except Exception:
         logger.exception("ML prediction failed")
-        return 50, "WAIT", "Помилка ML прогнозу"
+        return 50, "WAIT", "Помилка прогнозу ШІ"
 
 
 def _latest_price_from_df(df: pd.DataFrame):
@@ -216,13 +245,19 @@ def _analysis_flow(client, symbol_cache, symbol, user_id, timeframe="5m"):
         news_res = yield news_filter.get_latest_news_sentiment_async(pair_norm)
         news_v = news_res.get("verdict", "GO")
 
-        reasons = [f"TF: {tf_a}={verdict_a}, {tf_b}={verdict_b}", f"ШІ: {news_v}"]
+        reasons = [
+            (
+                f"Таймфрейми: {_label_timeframe(tf_a)} = {_label_verdict(verdict_a)}, "
+                f"{_label_timeframe(tf_b)} = {_label_verdict(verdict_b)}"
+            ),
+            f"ШІ: {_label_sentiment(news_v)}",
+        ]
         if reason_a:
-            reasons.append(f"{tf_a}: {reason_a}")
+            reasons.append(f"{_label_timeframe(tf_a)}: {reason_a}")
         if reason_b:
-            reasons.append(f"{tf_b}: {reason_b}")
-        if news_res.get("reason"):
-            reasons.append(f"News filter: {news_res.get('reason')}")
+            reasons.append(f"{_label_timeframe(tf_b)}: {reason_b}")
+        if news_res.get("reason") and not news_res.get("available", True):
+            reasons.append("Фільтр новин: резервний режим")
 
         score = int((score_a + score_b) / 2)
         verdict = "NEWS_WAIT" if news_v == "BLOCK" else verdict_a

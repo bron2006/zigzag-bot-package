@@ -212,6 +212,72 @@ function escapeHtml(value) {
         .replace(/'/g, "&#039;");
 }
 
+function labelVerdict(value) {
+    const labels = {
+        BUY: "купівля",
+        SELL: "продаж",
+        NEUTRAL: "нейтрально",
+        WAIT: "очікування",
+        NEWS_WAIT: "пауза через новини",
+        ERROR: "помилка",
+    };
+
+    return labels[String(value || "").toUpperCase()] || "невідомо";
+}
+
+function labelSentiment(value) {
+    const labels = {
+        GO: "дозволено",
+        BLOCK: "заблоковано",
+    };
+
+    return labels[String(value || "").toUpperCase()] || "невідомо";
+}
+
+function labelTimeframe(value) {
+    const labels = {
+        "1m": "1 хв",
+        "5m": "5 хв",
+        "15m": "15 хв",
+    };
+
+    return labels[String(value || "")] || String(value || "");
+}
+
+function localizeReason(reason) {
+    let text = String(reason || "");
+    const replacements = [
+        ["NEWS_WAIT", "пауза через новини"],
+        ["NEUTRAL", "нейтрально"],
+        ["BLOCK", "заблоковано"],
+        ["BUY", "купівля"],
+        ["SELL", "продаж"],
+        ["WAIT", "очікування"],
+        ["ERROR", "помилка"],
+        ["GO", "дозволено"],
+        ["TF:", "Таймфрейми:"],
+        ["News filter:", "Фільтр новин:"],
+        ["ML", "ШІ"],
+        ["fallback", "резервний режим"],
+        ["timeout", "час очікування вичерпано"],
+        ["invalid_json_response", "некоректна відповідь"],
+        ["all_models_unavailable", "моделі недоступні"],
+        ["Symbol not found", "символ не знайдено"],
+        ["No Account ID", "акаунт не готовий"],
+        ["Unsupported timeframe", "непідтримуваний таймфрейм"],
+        ["No trendbars returned", "історичні дані не отримано"],
+        ["1m", "1 хв"],
+        ["5m", "5 хв"],
+        ["15m", "15 хв"],
+    ];
+
+    replacements.forEach(([source, target]) => {
+        text = text.split(source).join(target);
+    });
+
+    return text;
+}
+
 function isSignalPayload(data) {
     return (
         data &&
@@ -270,7 +336,7 @@ function displayLiveSignal(signalData) {
 
     const html = `
         <div class="live-signal-content" style="text-align:center; font-size:13px;">
-            <strong>${escapeHtml(signalData.pair)}</strong>: ${escapeHtml(signalData.verdict_text)} (${Number(signalData.score) || 0}%)
+            <strong>${escapeHtml(signalData.pair)}</strong>: ${escapeHtml(labelVerdict(signalData.verdict_text))} (${Number(signalData.score) || 0}%)
         </div>
         <div class="live-signal-timer"></div>
     `;
@@ -492,16 +558,17 @@ function renderTimeframeDetails(signalData) {
     if (!entries.length) return "";
 
     const rows = entries.map(([tf, item]) => {
-        const verdict = escapeHtml(item?.verdict || "N/A");
+        const rawVerdict = item?.verdict || "немає даних";
+        const verdict = escapeHtml(labelVerdict(rawVerdict));
         const score = Number.isFinite(Number(item?.score)) ? Number(item.score) : 50;
 
         let color = "#94a3b8";
-        if (verdict === "BUY") color = "#26a69a";
-        else if (verdict === "SELL") color = "#ef5350";
+        if (rawVerdict === "BUY") color = "#26a69a";
+        else if (rawVerdict === "SELL") color = "#ef5350";
 
         return `
             <div style="flex:1; min-width:92px; padding:6px 8px; border:1px solid rgba(255,255,255,0.08); border-radius:8px; background:rgba(255,255,255,0.02);">
-                <div style="font-size:10px; color:#94a3b8; margin-bottom:2px;">${escapeHtml(tf.toUpperCase())}</div>
+                <div style="font-size:10px; color:#94a3b8; margin-bottom:2px;">${escapeHtml(labelTimeframe(tf))}</div>
                 <div style="font-size:15px; font-weight:800; color:${color}; line-height:1.05;">${verdict}</div>
                 <div style="font-size:13px; color:#fff; line-height:1.05;">${score}%</div>
             </div>
@@ -519,16 +586,17 @@ function formatSignalAsHtml(signalData, exp) {
     if (!signalData || signalData.error) {
         return `
             <div style="text-align:center; color:#ef5350; padding:10px;">
-                ❌ Помилка: ${escapeHtml(signalData?.error || "Немає даних")}
+                ❌ Помилка: технічна помилка аналізу
             </div>
         `;
     }
 
-    const pair = escapeHtml(signalData.pair || "N/A");
+    const pair = escapeHtml(signalData.pair || "немає даних");
     const price = signalData.price;
-    const verdictText = escapeHtml(signalData.verdict_text || "WAIT");
+    const verdictText = escapeHtml(labelVerdict(signalData.verdict_text || "WAIT"));
     const score = Number.isFinite(Number(signalData.score)) ? Number(signalData.score) : 50;
-    const sentiment = signalData.sentiment ? escapeHtml(signalData.sentiment) : "";
+    const rawSentiment = signalData.sentiment || "";
+    const sentiment = rawSentiment ? escapeHtml(labelSentiment(rawSentiment)) : "";
     const reasons = Array.isArray(signalData.reasons) ? signalData.reasons : [];
     const tradeAllowed = Boolean(signalData.is_trade_allowed);
 
@@ -549,11 +617,11 @@ function formatSignalAsHtml(signalData, exp) {
     const safePrice =
         typeof price === "number"
             ? price.toFixed(5)
-            : "N/A";
+            : "немає даних";
 
     return `
         <div class="signal-header" style="text-align:center; font-size:1em; margin-bottom:6px;">
-            <strong>${pair}</strong> <span style="color:#64748b; font-size:0.74em;">(Exp: ${escapeHtml(exp)})</span>
+            <strong>${pair}</strong> <span style="color:#64748b; font-size:0.74em;">(Експірація: ${escapeHtml(labelTimeframe(exp))})</span>
         </div>
         <div class="verdict-container" style="text-align:center; margin:6px 0 10px;">
             <div class="arrow" style="font-size:48px; line-height:0.95; display:block; margin-bottom:2px;">${arrow}</div>
@@ -562,8 +630,8 @@ function formatSignalAsHtml(signalData, exp) {
         </div>
         ${
             sentiment
-                ? `<div class="ai-verdict" style="padding:5px 9px; border-radius:8px; text-align:center; font-weight:bold; margin:5px auto; border:1px solid; background:rgba(0,0,0,0.1); color:${sentiment === "GO" ? "#26a69a" : "#ef5350"}; width:fit-content; font-size:12px;">
-                    ${sentiment === "GO" ? "✅" : "🚨"} ШІ: ${sentiment}
+                ? `<div class="ai-verdict" style="padding:5px 9px; border-radius:8px; text-align:center; font-weight:bold; margin:5px auto; border:1px solid; background:rgba(0,0,0,0.1); color:${rawSentiment === "GO" ? "#26a69a" : "#ef5350"}; width:fit-content; font-size:12px;">
+                    ${rawSentiment === "GO" ? "✅" : "🚨"} ШІ: ${sentiment}
                    </div>`
                 : ""
         }
@@ -578,7 +646,7 @@ function formatSignalAsHtml(signalData, exp) {
         ${
             reasons.length
                 ? `<div class="reasons" style="text-align:left; margin-top:9px; border-top:1px solid rgba(255,255,255,0.1); padding-top:7px; font-size:12px; line-height:1.2;">
-                    ${reasons.map((r) => `<div style="margin-bottom:4px;">• ${escapeHtml(r)}</div>`).join("")}
+                    ${reasons.map((r) => `<div style="margin-bottom:4px;">• ${escapeHtml(localizeReason(r))}</div>`).join("")}
                    </div>`
                 : ""
         }

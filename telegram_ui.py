@@ -133,6 +133,69 @@ def _safe_html(value) -> str:
     return html.escape("" if value is None else str(value))
 
 
+def _label_verdict(value) -> str:
+    labels = {
+        "BUY": "купівля",
+        "SELL": "продаж",
+        "NEUTRAL": "нейтрально",
+        "WAIT": "очікування",
+        "NEWS_WAIT": "пауза через новини",
+        "ERROR": "помилка",
+    }
+    return labels.get(str(value or "").upper(), "невідомо")
+
+
+def _label_sentiment(value) -> str:
+    labels = {
+        "GO": "дозволено",
+        "BLOCK": "заблоковано",
+    }
+    return labels.get(str(value or "").upper(), "невідомо")
+
+
+def _label_timeframe(value) -> str:
+    labels = {
+        "1m": "1 хв",
+        "5m": "5 хв",
+        "15m": "15 хв",
+    }
+    return labels.get(str(value or ""), "" if value is None else str(value))
+
+
+def _format_reason_uk(reason) -> str:
+    text = "" if reason is None else str(reason)
+
+    replacements = {
+        "NEWS_WAIT": "пауза через новини",
+        "NEUTRAL": "нейтрально",
+        "BLOCK": "заблоковано",
+        "BUY": "купівля",
+        "SELL": "продаж",
+        "WAIT": "очікування",
+        "ERROR": "помилка",
+        "GO": "дозволено",
+        "TF:": "Таймфрейми:",
+        "News filter:": "Фільтр новин:",
+        "ML": "ШІ",
+        "fallback": "резервний режим",
+        "timeout": "час очікування вичерпано",
+        "invalid_json_response": "некоректна відповідь",
+        "all_models_unavailable": "моделі недоступні",
+        "Symbol not found": "символ не знайдено",
+        "No Account ID": "акаунт не готовий",
+        "Unsupported timeframe": "непідтримуваний таймфрейм",
+        "No trendbars returned": "історичні дані не отримано",
+    }
+
+    for source, target in replacements.items():
+        text = text.replace(source, target)
+
+    text = text.replace("1m", "1 хв")
+    text = text.replace("5m", "5 хв")
+    text = text.replace("15m", "15 хв")
+    return text
+
+
 def _format_timeframe_details(result: dict) -> str:
     details = result.get("timeframe_details") or {}
     if not details:
@@ -141,34 +204,34 @@ def _format_timeframe_details(result: dict) -> str:
     lines = ["", "🧠 <b>Таймфрейми:</b>"]
 
     for tf, item in details.items():
-        verdict = _safe_html(item.get("verdict", "N/A"))
-        score = _safe_html(item.get("score", "N/A"))
-        lines.append(f"• <b>{_safe_html(tf.upper())}</b>: {verdict} ({score}%)")
+        verdict = _safe_html(_label_verdict(item.get("verdict", "немає даних")))
+        score = _safe_html(item.get("score", "немає даних"))
+        lines.append(f"• <b>{_safe_html(_label_timeframe(tf))}</b>: {verdict} ({score}%)")
 
     return "\n".join(lines)
 
 
 def _format_signal_message(result: dict, expiration: str) -> str:
     if result.get("error"):
-        return f"❌ Помилка: <code>{_safe_html(result['error'])}</code>"
+        return "❌ Помилка: <code>технічна помилка аналізу</code>"
 
-    pair = _safe_html(result.get("pair", "N/A"))
+    pair = _safe_html(result.get("pair", "немає даних"))
     price = result.get("price")
-    verdict = _safe_html(result.get("verdict_text", "WAIT"))
-    sentiment = _safe_html(result.get("sentiment", "GO"))
+    verdict = _safe_html(_label_verdict(result.get("verdict_text", "WAIT")))
+    sentiment = _safe_html(_label_sentiment(result.get("sentiment", "GO")))
     trade_allowed = "✅ Так" if result.get("is_trade_allowed") else "⛔ Ні"
 
-    price_str = "N/A"
+    price_str = "немає даних"
     if isinstance(price, (int, float)):
         price_str = f"{price:.5f}"
 
     lines = [
-        f"📈 <b>Сигнал для {pair}</b> ({_safe_html(expiration)})",
+        f"📈 <b>Сигнал для {pair}</b> ({_safe_html(_label_timeframe(expiration))})",
         f"<b>Прогноз:</b> {verdict}",
         f"<b>Ціна:</b> <code>{price_str}</code>",
         f"<b>Новини:</b> {sentiment}",
         f"<b>Вхід дозволено:</b> {trade_allowed}",
-        f"<b>Підсумковий score:</b> {_safe_html(result.get('score', 'N/A'))}%",
+        f"<b>Підсумкова оцінка:</b> {_safe_html(result.get('score', 'немає даних'))}%",
     ]
 
     tf_block = _format_timeframe_details(result)
@@ -181,7 +244,7 @@ def _format_signal_message(result: dict, expiration: str) -> str:
         lines.append("📑 <b>Фактори аналізу:</b>")
 
         for reason in reasons:
-            lines.append(f"• <i>{_safe_html(reason)}</i>")
+            lines.append(f"• <i>{_safe_html(_format_reason_uk(reason))}</i>")
 
     return "\n".join(lines)
 
@@ -213,8 +276,8 @@ def stats_command(update, context):
 
     for pair, result in cache.items():
         if now - result.get("ts", 0) < 3600:
-            verdict = _safe_html(result.get("verdict_text", "N/A"))
-            score = _safe_html(result.get("score", "N/A"))
+            verdict = _safe_html(_label_verdict(result.get("verdict_text", "немає даних")))
+            score = _safe_html(result.get("score", "немає даних"))
             lines.append(f"• <b>{_safe_html(pair)}</b>: {verdict} ({score}%)")
 
     update.message.reply_text(
@@ -230,7 +293,7 @@ def live_command(update, context):
     for pair, data in app_state.get_live_prices_snapshot().items():
         age = time.time() - data.get("ts", 0)
         mid = data.get("mid")
-        mid_str = f"{mid:.5f}" if isinstance(mid, (float, int)) else "N/A"
+        mid_str = f"{mid:.5f}" if isinstance(mid, (float, int)) else "немає даних"
 
         lines.append(
             f"{'🟢' if age < 30 else '🔴'} <code>{_safe_html(pair)}</code>: "
