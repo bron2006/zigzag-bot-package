@@ -191,7 +191,14 @@ def _request_symbols():
         logger.warning("Cannot request symbols: app_state.client is empty")
         return
 
+    logger.info("Запитую список символів cTrader...")
     d = app_state.client.get_all_symbols()
+    if d is None:
+        logger.error("Запит списку символів cTrader не повернув Deferred.")
+        _schedule_reconnect(30)
+        return
+
+    d.addTimeout(30, reactor)
     d.addCallbacks(_on_symbols_loaded, _on_symbols_error)
 
 
