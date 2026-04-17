@@ -274,6 +274,7 @@ function localizeReason(reason) {
         ["No Account ID", "акаунт не готовий"],
         ["Unsupported timeframe", "непідтримуваний таймфрейм"],
         ["No trendbars returned", "історичні дані не отримано"],
+        [" for ", " для "],
         ["1m", "1 хв"],
         ["5m", "5 хв"],
         ["15m", "15 хв"],

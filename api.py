@@ -273,7 +273,9 @@ def register_routes(app):
     @_protected_route
     def get_pairs():
         uid = get_user_id_from_init_data(_request_init_data())
-        watchlist = db.get_watchlist(uid) if uid else []
+        raw_watchlist = db.get_watchlist(uid) if uid else []
+        configured_pairs = set(_collect_ui_pairs([]))
+        watchlist = [pair for pair in raw_watchlist if _pair_key(pair) in configured_pairs]
         available_pairs, unavailable_pairs = _broker_pair_availability(watchlist)
         forex_data = [
             {
@@ -320,6 +322,9 @@ def register_routes(app):
 
         if not pair:
             return jsonify({"success": False, "error": "pair is required"}), 400
+
+        if _pair_key(pair) not in set(_collect_ui_pairs([])):
+            return jsonify({"success": False, "error": "Цієї пари немає в актуальному списку"}), 400
 
         ok = db.toggle_watchlist(uid, pair.replace("/", "").upper())
         watchlist = db.get_watchlist(uid) if ok else []

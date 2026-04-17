@@ -7,10 +7,6 @@
       "NZD/JPY",
       "NZD/USD",
       "NZD/CAD",
-      "AUD/DKK",
-      "AUD/HUF",
-      "AUD/NOK",
-      "AUD/SEK",
       "AUD/CHF",
       "NZD/CHF"
     ],
@@ -51,8 +47,7 @@
       "USD/CAD",
       "USD/CHF",
       "USD/JPY",
-      "USD/MXN",
-      "EUR/MXN"
+      "USD/MXN"
     ]
   },
   "crypto_pairs": [
@@ -63,19 +58,15 @@
     "BCH/USD",
     "ADA/USD",
     "SOL/USD",
-    "DOGE/USD",
     "BNB/USD"
   ],
   "stock_tickers": [
     "US30",
-    "US100",
     "US500",
-    "DE30",
     "UK100"
   ],
   "commodities": [
     "XAU/USD",
-    "XAG/USD",
-    "USO/USD"
+    "XAG/USD"
   ]
 }

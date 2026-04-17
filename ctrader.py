@@ -10,7 +10,6 @@ from config import (
     CRYPTO_PAIRS,
     FOREX_SESSIONS,
     STOCK_TICKERS,
-    get_chat_id,
     get_ct_client_id,
     get_ct_client_secret,
 )
@@ -75,14 +74,6 @@ def _collect_configured_assets() -> list[str]:
     assets.extend(COMMODITIES)
     assets.extend(STOCK_TICKERS)
 
-    try:
-        import db
-
-        chat_id = get_chat_id()
-        if chat_id:
-            assets.extend(db.get_watchlist(chat_id))
-    except Exception:
-        logger.exception("Не вдалося додати обраний список до підписок цін")
 
     seen = set()
     normalized = []

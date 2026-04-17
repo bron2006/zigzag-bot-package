@@ -17,6 +17,7 @@ from config import (
     FOREX_SESSIONS,
     SCANNER_COOLDOWN_SECONDS,
     SCANNER_TIMEFRAME,
+    STOCK_TICKERS,
     get_chat_id,
 )
 from errors import safe_call
@@ -32,6 +33,22 @@ get_api_detailed_signal_data = analysis_module.get_api_detailed_signal_data
 
 _scan_semaphore = DeferredSemaphore(tokens=_MAX_CONCURRENT_ANALYSIS)
 _scan_active = False
+
+
+def _pair_key(pair: str) -> str:
+    return "".join(ch for ch in (pair or "").upper() if ch.isalnum())
+
+
+def _configured_pair_keys() -> set[str]:
+    pairs = []
+
+    for session_pairs in FOREX_SESSIONS.values():
+        pairs.extend(session_pairs)
+
+    pairs.extend(CRYPTO_PAIRS)
+    pairs.extend(COMMODITIES)
+    pairs.extend(STOCK_TICKERS)
+    return {_pair_key(pair) for pair in pairs if _pair_key(pair)}
 
 
 def _blocking_pool():
@@ -81,7 +98,11 @@ def _collect_assets_to_scan() -> list:
     if app_state.get_scanner_state("watchlist"):
         user_id = get_chat_id()
         if user_id:
-            assets.extend(db.get_watchlist(user_id))
+            configured = _configured_pair_keys()
+            assets.extend(
+                pair for pair in db.get_watchlist(user_id)
+                if _pair_key(pair) in configured
+            )
 
     seen = set()
     normalized = []

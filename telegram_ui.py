@@ -64,15 +64,15 @@ def get_reply_keyboard() -> ReplyKeyboardMarkup:
 def get_main_menu_kb() -> InlineKeyboardMarkup:
     keyboard = [
         [InlineKeyboardButton("⭐ Мій список (Обране)", callback_data="category_watchlist")],
-        [InlineKeyboardButton("💹 Валютні пари (Forex)", callback_data="category_forex")],
+        [InlineKeyboardButton("💹 Валютні пари", callback_data="category_forex")],
         [InlineKeyboardButton("💎 Криптовалюти", callback_data="category_crypto")],
         [InlineKeyboardButton("📈 Акції/Індекси", callback_data="category_stocks")],
         [InlineKeyboardButton("🥇 Сировина", callback_data="category_commodities")],
     ]
 
     scanner_map = {
-        "forex": "💹 Forex",
-        "crypto": "💎 Crypto",
+        "forex": "💹 Валюти",
+        "crypto": "💎 Криптовалюти",
         "commodities": "🥇 Сировина",
         "watchlist": "⭐ Обране",
     }
@@ -193,6 +193,7 @@ def _format_reason_uk(reason) -> str:
     text = text.replace("1m", "1 хв")
     text = text.replace("5m", "5 хв")
     text = text.replace("15m", "15 хв")
+    text = text.replace(" for ", " для ")
     return text
 
 
@@ -364,7 +365,7 @@ def button_handler(update: Update, context: CallbackContext):
         elif cat == "forex":
             context.bot.send_message(
                 chat_id,
-                "Сесії Forex:",
+                "Валютні сесії:",
                 reply_markup=get_forex_sessions_kb(exp),
             )
         else:
