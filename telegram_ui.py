@@ -499,7 +499,7 @@ def button_handler(update: Update, context: CallbackContext):
                     text=result_message,
                     parse_mode="HTML",
                     disable_web_page_preview=True,
-                    reply_markup=get_main_menu_kb(),
+                    reply_markup=get_reply_keyboard(),
                 )
 
             chain.addBoth(_send_result)
@@ -530,7 +530,7 @@ def button_handler(update: Update, context: CallbackContext):
                     chat_id=chat_id,
                     text=f"❌ Помилка аналізу для <b>{_safe_html(symbol)}</b>",
                     parse_mode="HTML",
-                    reply_markup=get_main_menu_kb(),
+                    reply_markup=get_reply_keyboard(),
                 )
 
             chain.addBoth(_send_error)
