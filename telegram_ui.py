@@ -54,6 +54,12 @@ def _safe_delete(bot, chat_id: int, message_id: int):
         pass
 
 
+def _send_tracked(context: CallbackContext, chat_id: int, text: str, **kwargs):
+    sent = context.bot.send_message(chat_id=chat_id, text=text, **kwargs)
+    bot_track_message(context.bot_data, chat_id, sent.message_id)
+    return sent
+
+
 def _bot_call_async(func: Callable, *args, **kwargs):
     return deferToThreadPool(
         reactor,
@@ -384,8 +390,7 @@ def menu(update: Update, context: CallbackContext):
     except Exception:
         pass
 
-    sent = context.bot.send_message(chat_id, "🏠 Головне меню:", reply_markup=get_main_menu_kb())
-    bot_track_message(context.bot_data, chat_id, sent.message_id)
+    _send_tracked(context, chat_id, "🏠 Головне меню:", reply_markup=get_main_menu_kb())
 
 
 def stats_command(update, context):
@@ -453,19 +458,22 @@ def button_handler(update: Update, context: CallbackContext):
         if cat == "watchlist":
             assets = db.get_watchlist(chat_id)
             if not assets:
-                context.bot.send_message(
+                _send_tracked(
+                    context,
                     chat_id,
                     "📭 Список порожній.",
                     reply_markup=get_main_menu_kb(),
                 )
             else:
-                context.bot.send_message(
+                _send_tracked(
+                    context,
                     chat_id,
                     "⭐ Обране. Оберіть ТФ:",
                     reply_markup=get_expiration_kb("watchlist"),
                 )
         else:
-            context.bot.send_message(
+            _send_tracked(
+                context,
                 chat_id,
                 f"Експірація для {CATEGORY_LABELS.get(cat, 'категорії')}:",
                 reply_markup=get_expiration_kb(cat),
@@ -476,13 +484,15 @@ def button_handler(update: Update, context: CallbackContext):
         _, cat, exp = parts
 
         if cat == "watchlist":
-            context.bot.send_message(
+            _send_tracked(
+                context,
                 chat_id,
                 f"⭐ Обране ({exp}):",
                 reply_markup=get_assets_kb(db.get_watchlist(chat_id), "watchlist", exp),
             )
         elif cat == "forex":
-            context.bot.send_message(
+            _send_tracked(
+                context,
                 chat_id,
                 "Валютні сесії:",
                 reply_markup=get_forex_sessions_kb(exp),
@@ -494,7 +504,8 @@ def button_handler(update: Update, context: CallbackContext):
                 "commodities": COMMODITIES,
             }.get(cat, [])
 
-            context.bot.send_message(
+            _send_tracked(
+                context,
                 chat_id,
                 "Оберіть актив:",
                 reply_markup=get_assets_kb(assets, cat, exp),
@@ -504,7 +515,8 @@ def button_handler(update: Update, context: CallbackContext):
     if action == "session":
         _, _, exp, sess = parts
 
-        context.bot.send_message(
+        _send_tracked(
+            context,
             chat_id,
             f"Пари {sess}:",
             reply_markup=get_assets_kb(FOREX_SESSIONS.get(sess, []), "forex", exp),
@@ -515,7 +527,7 @@ def button_handler(update: Update, context: CallbackContext):
         exp = parts[1]
         symbol = "_".join(parts[2:]).replace("/", "").upper()
 
-        loading = context.bot.send_message(chat_id, f"⏳ Аналіз {symbol}...")
+        loading = _send_tracked(context, chat_id, f"⏳ Аналіз {symbol}...")
 
         d = get_api_detailed_signal_data(
             app_state.client,
@@ -536,7 +548,7 @@ def button_handler(update: Update, context: CallbackContext):
             )
 
             def _send_result(_):
-                return _bot_call_async(
+                d_send = _bot_call_async(
                     context.bot.send_message,
                     chat_id=chat_id,
                     text=result_message,
@@ -544,6 +556,11 @@ def button_handler(update: Update, context: CallbackContext):
                     disable_web_page_preview=True,
                     reply_markup=get_reply_keyboard(),
                 )
+                d_send.addCallback(
+                    lambda sent: bot_track_message(context.bot_data, chat_id, sent.message_id)
+                    or sent
+                )
+                return d_send
 
             chain.addBoth(_send_result)
 
@@ -568,13 +585,18 @@ def button_handler(update: Update, context: CallbackContext):
             )
 
             def _send_error(_):
-                return _bot_call_async(
+                d_send = _bot_call_async(
                     context.bot.send_message,
                     chat_id=chat_id,
                     text=f"❌ Помилка аналізу для <b>{_safe_html(symbol)}</b>",
                     parse_mode="HTML",
                     reply_markup=get_reply_keyboard(),
                 )
+                d_send.addCallback(
+                    lambda sent: bot_track_message(context.bot_data, chat_id, sent.message_id)
+                    or sent
+                )
+                return d_send
 
             chain.addBoth(_send_error)
             return None
