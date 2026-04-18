@@ -120,6 +120,10 @@ class AppState:
             self.all_symbol_names = []
             self.SYMBOLS_LOADED = False
 
+    def clear_live_prices(self) -> None:
+        with self._state_lock:
+            self.live_prices.clear()
+
     def update_live_price(self, symbol: str, payload: Dict[str, Any]) -> None:
         with self._state_lock:
             self.live_prices[symbol] = payload

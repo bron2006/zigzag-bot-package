@@ -29,6 +29,16 @@ _reconnect_attempt = 0
 _reconnect_scheduled = False
 _SUBSCRIBE_BATCH_SIZE = 50
 _SUBSCRIBE_BATCH_DELAY = 1.0
+_PRICE_FRESH_SECONDS = 120
+_PRICE_START_GRACE_SECONDS = 60
+_PRICE_RECOVERY_COOLDOWN_SECONDS = 120
+_PRICE_RESUBSCRIBE_ATTEMPTS_BEFORE_RECONNECT = 1
+
+_symbols_loaded_at = 0.0
+_last_subscription_request_ts = 0.0
+_last_price_recovery_ts = 0.0
+_price_recovery_attempts = 0
+_last_spot_event_ts = 0.0
 
 
 def _compact_symbol(value: str) -> str:
@@ -159,6 +169,8 @@ def _schedule_reconnect(delay):
 
 
 def _do_reconnect():
+    global _last_spot_event_ts
+
     if app_state.client:
         try:
             app_state.client.stop()
@@ -166,6 +178,8 @@ def _do_reconnect():
             logger.exception("Failed to stop cTrader client before reconnect")
 
     app_state.clear_symbol_state()
+    app_state.clear_live_prices()
+    _last_spot_event_ts = 0.0
     start_ctrader_client()
 
 
@@ -200,6 +214,8 @@ def _on_symbols_error(failure):
 
 
 def _on_symbols_loaded(msg):
+    global _symbols_loaded_at
+
     try:
         res = ProtoOASymbolsListRes()
         res.ParseFromString(msg.payload)
@@ -226,6 +242,8 @@ def _on_symbols_loaded(msg):
             app_state.all_symbol_names = sorted(all_names)
             app_state.SYMBOLS_LOADED = True
 
+        _symbols_loaded_at = time.time()
+
         logger.info(
             "Завантажено %s символів cTrader (%s ключів пошуку). Пари готові.",
             len(res.symbol),
@@ -239,6 +257,8 @@ def _on_symbols_loaded(msg):
 
 
 def start_price_subscriptions():
+    global _last_subscription_request_ts
+
     if not app_state.SYMBOLS_LOADED:
         logger.info("Символи ще не завантажені. Підписку на ціни пропущено.")
         return
@@ -279,6 +299,8 @@ def start_price_subscriptions():
         len(assets),
         len(missing),
     )
+
+    _last_subscription_request_ts = time.time()
 
     for i in range(0, len(resolved), _SUBSCRIBE_BATCH_SIZE):
         batch = resolved[i : i + _SUBSCRIBE_BATCH_SIZE]
@@ -329,6 +351,119 @@ def _subscribe_symbol_batch(batch):
         logger.exception("Не вдалося надіслати батч підписки на ціни: %s", ", ".join(pairs))
 
 
+def _price_stream_snapshot() -> dict:
+    now = time.time()
+    assets = _collect_configured_assets()
+    prices = app_state.get_live_prices_snapshot()
+
+    fresh = []
+    stale = {}
+    missing = []
+
+    for pair in assets:
+        price = prices.get(pair)
+        if not price:
+            missing.append(pair)
+            continue
+
+        age = max(0, int(now - price.get("ts", 0)))
+        if age <= _PRICE_FRESH_SECONDS:
+            fresh.append(pair)
+        else:
+            stale[pair] = age
+
+    return {
+        "configured": len(assets),
+        "live": len(prices),
+        "fresh": len(fresh),
+        "missing": missing,
+        "stale": stale,
+        "last_spot_age": int(now - _last_spot_event_ts) if _last_spot_event_ts else None,
+        "last_subscription_age": (
+            int(now - _last_subscription_request_ts)
+            if _last_subscription_request_ts
+            else None
+        ),
+        "recovery_attempts": _price_recovery_attempts,
+    }
+
+
+def get_price_stream_status() -> dict:
+    snapshot = _price_stream_snapshot()
+    ok = bool(app_state.SYMBOLS_LOADED and snapshot["fresh"] > 0)
+
+    if not app_state.SYMBOLS_LOADED:
+        label = "символи ще не завантажені"
+    elif snapshot["fresh"] > 0:
+        label = f"є свіжі ціни: {snapshot['fresh']} з {snapshot['configured']}"
+    elif snapshot["live"] > 0:
+        label = "потік цін давно не оновлювався"
+    else:
+        label = "ціни ще не отримані"
+
+    return {
+        "ok": ok,
+        "label": label,
+        **snapshot,
+    }
+
+
+def monitor_price_stream_health():
+    global _last_price_recovery_ts, _price_recovery_attempts
+
+    if _reconnect_scheduled:
+        return
+
+    if not app_state.SYMBOLS_LOADED:
+        return
+
+    client = app_state.client
+    account_id = getattr(getattr(client, "_client", None), "account_id", None)
+    if not client or not account_id:
+        return
+
+    assets = _collect_configured_assets()
+    if not assets:
+        return
+
+    now = time.time()
+    snapshot = _price_stream_snapshot()
+    last_start = max(_symbols_loaded_at, _last_subscription_request_ts)
+
+    if snapshot["fresh"] > 0:
+        if _price_recovery_attempts:
+            logger.info("Потік цін відновився. Свіжих цін: %s.", snapshot["fresh"])
+        _price_recovery_attempts = 0
+        return
+
+    if last_start and now - last_start < _PRICE_START_GRACE_SECONDS:
+        return
+
+    if now - _last_price_recovery_ts < _PRICE_RECOVERY_COOLDOWN_SECONDS:
+        return
+
+    _last_price_recovery_ts = now
+    _price_recovery_attempts += 1
+
+    logger.warning(
+        "Контроль цін: немає свіжих цін. Активів=%s, live=%s, застарілих=%s, пропущених=%s, спроба=%s.",
+        snapshot["configured"],
+        snapshot["live"],
+        len(snapshot["stale"]),
+        len(snapshot["missing"]),
+        _price_recovery_attempts,
+    )
+
+    if _price_recovery_attempts <= _PRICE_RESUBSCRIBE_ATTEMPTS_BEFORE_RECONNECT:
+        logger.warning("Контроль цін: повторно надсилаю підписку на ціни.")
+        start_price_subscriptions()
+        return
+
+    logger.warning("Контроль цін: повторна підписка не допомогла, перезапускаю cTrader.")
+    _price_recovery_attempts = 0
+    _schedule_reconnect(5)
+
+
 def _value_from_event(event: ProtoOASpotEvent, field: str, divisor: float):
     if event.HasField(field):
         return getattr(event, field) / divisor
@@ -336,6 +471,8 @@ def _value_from_event(event: ProtoOASpotEvent, field: str, divisor: float):
 
 
 def _on_spot_event(event: ProtoOASpotEvent):
+    global _last_spot_event_ts
+
     if not (event.HasField("bid") or event.HasField("ask")):
         return
 
@@ -358,6 +495,7 @@ def _on_spot_event(event: ProtoOASpotEvent):
             mid = bid if bid is not None else ask
 
         ts = time.time()
+        _last_spot_event_ts = ts
         payload = {
             "type": "price",
             "pair": name,

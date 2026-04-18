@@ -131,6 +131,7 @@ def _diagnostics_payload() -> dict:
             "prices_live": len(prices),
             "missing_prices": missing_prices,
             "stale_prices": stale_prices,
+            "price_stream": ctrader.get_price_stream_status(),
         },
         "telegram": {
             "ok": bool(app_state.updater),

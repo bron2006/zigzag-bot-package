@@ -88,6 +88,7 @@ def _start_background_services() -> None:
         logger.exception("Не вдалося запустити cTrader client")
 
     _start_loop(60.0, scanner.scan_markets_once, now=False, name="scanner")
+    _start_loop(30.0, ctrader.monitor_price_stream_health, now=False, name="price_watchdog")
     _start_loop(0.2, api.drain_sse_events, now=False, name="sse_drain")
     _start_loop(20.0, _publish_sse_ping, now=False, name="sse_ping")
 

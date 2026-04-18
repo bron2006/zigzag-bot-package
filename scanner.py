@@ -288,13 +288,13 @@ def scan_markets_once() -> None:
         return
 
     if not app_state.get_live_prices_snapshot() and app_state.SYMBOLS_LOADED:
-        logger.warning("live_prices порожній, але символи завантажені. Перезапускаємо підписку.")
+        logger.warning("live_prices порожній, але символи завантажені. Передаємо перевірку контролю цін.")
         try:
-            from ctrader import start_price_subscriptions
+            from ctrader import monitor_price_stream_health
 
-            reactor.callLater(0, start_price_subscriptions)
+            reactor.callLater(0, monitor_price_stream_health)
         except Exception:
-            logger.exception("Не вдалося перезапустити підписку")
+            logger.exception("Не вдалося запустити перевірку потоку цін")
 
     logger.info("SCANNER: запускаю скан для %s активів...", len(assets))
     _scan_active = True
