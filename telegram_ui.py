@@ -271,6 +271,41 @@ def _format_data_status(result: dict) -> list[str]:
     return ["🔎 <b>Перевірка джерел:</b>", *lines]
 
 
+def _format_action_panel(pair: str, expiration: str, raw_verdict: str, verdict: str, trade_allowed: str) -> list[str]:
+    tf = _safe_html(_label_timeframe(expiration))
+
+    if raw_verdict == "BUY":
+        return [
+            "🟩🟩🟩 <b>КУПІВЛЯ</b> 🟩🟩🟩",
+            f"⬆️⬆️⬆️ <b>{verdict}</b> ⬆️⬆️⬆️",
+            f"<b>{pair}</b> · {tf}",
+            f"<b>{trade_allowed}</b>",
+        ]
+
+    if raw_verdict == "SELL":
+        return [
+            "🟥🟥🟥 <b>ПРОДАЖ</b> 🟥🟥🟥",
+            f"⬇️⬇️⬇️ <b>{verdict}</b> ⬇️⬇️⬇️",
+            f"<b>{pair}</b> · {tf}",
+            f"<b>{trade_allowed}</b>",
+        ]
+
+    if raw_verdict == "NEWS_WAIT":
+        return [
+            "🟨🟨🟨 <b>ПАУЗА</b> 🟨🟨🟨",
+            f"⏸️⏸️⏸️ <b>{verdict}</b> ⏸️⏸️⏸️",
+            f"<b>{pair}</b> · {tf}",
+            f"<b>{trade_allowed}</b>",
+        ]
+
+    return [
+        "⬜⬜⬜ <b>НЕ СТАВИТИ</b> ⬜⬜⬜",
+        f"↔️↔️↔️ <b>{verdict}</b> ↔️↔️↔️",
+        f"<b>{pair}</b> · {tf}",
+        f"<b>{trade_allowed}</b>",
+    ]
+
+
 def _format_signal_message(result: dict, expiration: str) -> str:
     if result.get("error"):
         return "❌ Помилка: <code>технічна помилка аналізу</code>"
@@ -327,9 +362,7 @@ def _format_signal_message(result: dict, expiration: str) -> str:
         [
             "",
             "⚡ <b>КОРОТКО:</b>",
-            f"<b>{pair}</b> · {_safe_html(_label_timeframe(expiration))}",
-            f"{arrow} <b>НАПРЯМОК: {verdict}</b>",
-            f"<b>{trade_allowed}</b>",
+            *_format_action_panel(pair, expiration, raw_verdict, verdict, trade_allowed),
         ]
     )
 
