@@ -313,7 +313,7 @@ def _format_signal_message(result: dict, expiration: str) -> str:
         lines.extend(["", *status_lines])
 
     quality = _safe_html(_label_signal_quality(result.get("signal_quality")))
-    lines.extend(["", f"🔎 <b>Якість сигналу:</b> {quality}", f"<b>{trade_allowed}</b>"])
+    lines.extend(["", f"🔎 <b>Якість сигналу:</b> {quality}"])
 
     reasons = result.get("reasons", [])
     if reasons:
@@ -322,6 +322,16 @@ def _format_signal_message(result: dict, expiration: str) -> str:
 
         for reason in reasons:
             lines.append(f"• <i>{_safe_html(_format_reason_uk(reason))}</i>")
+
+    lines.extend(
+        [
+            "",
+            "⚡ <b>КОРОТКО:</b>",
+            f"<b>{pair}</b> · {_safe_html(_label_timeframe(expiration))}",
+            f"{arrow} <b>НАПРЯМОК: {verdict}</b>",
+            f"<b>{trade_allowed}</b>",
+        ]
+    )
 
     return "\n".join(lines)
 
