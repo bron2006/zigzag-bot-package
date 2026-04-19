@@ -15,6 +15,7 @@ import api
 import bot
 import config
 import ctrader
+import db
 import ml_models
 import scanner
 from errors import ConfigError
@@ -89,6 +90,7 @@ def _start_background_services() -> None:
 
     _start_loop(60.0, scanner.scan_markets_once, now=False, name="scanner")
     _start_loop(30.0, ctrader.monitor_price_stream_health, now=False, name="price_watchdog")
+    _start_loop(120.0, db.refresh_cached_user_statuses, now=False, name="user_status_cache")
     _start_loop(0.2, api.drain_sse_events, now=False, name="sse_drain")
     _start_loop(20.0, _publish_sse_ping, now=False, name="sse_ping")
 

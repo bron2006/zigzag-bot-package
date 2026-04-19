@@ -355,6 +355,7 @@ def register_routes(app):
     def get_pairs():
         lang = _request_lang()
         uid = get_user_id_from_init_data(_request_init_data())
+        user_status = db.get_cached_user_status(uid, language_hint=lang) if uid else None
         raw_watchlist = db.get_watchlist(uid) if uid else []
         configured_pairs = set(_collect_ui_pairs([]))
         watchlist = [pair for pair in raw_watchlist if _pair_key(pair) in configured_pairs]
@@ -377,6 +378,37 @@ def register_routes(app):
                 "available_pairs": available_pairs,
                 "unavailable_pairs": unavailable_pairs,
                 "language": lang,
+                "user": user_status,
+            }
+        )
+
+    @app.route("/api/user/status", methods=["GET"])
+    @_protected_route
+    def user_status():
+        lang = _request_lang()
+        uid = get_user_id_from_init_data(_request_init_data())
+        if not uid:
+            return jsonify({"success": False, "error": t("user_not_resolved", lang)}), 400
+
+        status = db.get_cached_user_status(uid, language_hint=lang)
+        return jsonify({"success": True, "user": status})
+
+    @app.route("/api/subscription/status", methods=["GET"])
+    @_protected_route
+    def subscription_status():
+        lang = _request_lang()
+        uid = get_user_id_from_init_data(_request_init_data())
+        if not uid:
+            return jsonify({"success": False, "error": t("user_not_resolved", lang)}), 400
+
+        status = db.get_cached_user_status(uid, language_hint=lang) or {}
+        return jsonify(
+            {
+                "success": True,
+                "plan_type": status.get("plan_type", "free"),
+                "subscription_ends_at": status.get("subscription_ends_at"),
+                "is_pro": bool(status.get("is_pro")),
+                "has_active_subscription": bool(status.get("has_active_subscription")),
             }
         )
 

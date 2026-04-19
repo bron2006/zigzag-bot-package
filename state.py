@@ -2,6 +2,7 @@
 import logging
 import queue
 import threading
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from telegram.error import BadRequest
@@ -34,6 +35,7 @@ class AppState:
         self.scanner_cooldown_cache: Dict[str, float] = {}
         self.latest_analysis_cache: Dict[str, Dict[str, Any]] = {}
         self.SIGNAL_CACHE: Dict[str, Dict[str, Any]] = {}
+        self.user_status_cache: Dict[int, Dict[str, Any]] = {}
 
         self.SCANNER_STATE: Dict[str, bool] = {
             "forex": False,
@@ -174,6 +176,52 @@ class AppState:
         key = f"{pair}_{timeframe}"
         with self._state_lock:
             return self.SIGNAL_CACHE.get(key)
+
+    # ------------------------------------------------------------------
+    # User / subscription cache
+    # ------------------------------------------------------------------
+
+    def get_cached_user_status(self, user_id: int, max_age_seconds: int = 60) -> Optional[Dict[str, Any]]:
+        if not user_id:
+            return None
+
+        with self._state_lock:
+            cached = self.user_status_cache.get(int(user_id))
+            if not cached:
+                return None
+
+            refreshed_at = float(cached.get("refreshed_at") or 0)
+            if time.time() - refreshed_at > max_age_seconds:
+                return None
+
+            return dict(cached)
+
+    def set_cached_user_status(self, user_id: int, status: Dict[str, Any]) -> Dict[str, Any]:
+        if not user_id:
+            return dict(status or {})
+
+        payload = dict(status or {})
+        payload["refreshed_at"] = time.time()
+
+        with self._state_lock:
+            self.user_status_cache[int(user_id)] = payload
+
+        return dict(payload)
+
+    def invalidate_user_status(self, user_id: int) -> None:
+        if not user_id:
+            return
+
+        with self._state_lock:
+            self.user_status_cache.pop(int(user_id), None)
+
+    def clear_user_status_cache(self) -> None:
+        with self._state_lock:
+            self.user_status_cache.clear()
+
+    def get_cached_user_status_ids(self) -> List[int]:
+        with self._state_lock:
+            return list(self.user_status_cache.keys())
 
     # ------------------------------------------------------------------
     # SSE

@@ -2,6 +2,7 @@
 import logging
 import threading
 from contextlib import contextmanager
+from datetime import datetime, timezone
 
 from sqlalchemy import Column, DateTime, Float, Integer, String, create_engine, event, func, text
 from sqlalchemy.exc import OperationalError, SQLAlchemyError
@@ -19,6 +20,7 @@ engine = None
 SessionLocal = None
 _fallback_watchlists: dict[int, set[str]] = {}
 _fallback_user_languages: dict[int, str] = {}
+_fallback_user_profiles: dict[int, dict] = {}
 _fallback_lock = threading.RLock()
 
 
@@ -40,6 +42,15 @@ class UserWatchlist(Base):
     pair = Column(String, primary_key=True)
 
 
+class User(Base):
+    __tablename__ = "users"
+
+    user_id = Column(Integer, primary_key=True)
+    language = Column(String(8), nullable=False, default="en")
+    subscription_ends_at = Column(DateTime, nullable=True)
+    plan_type = Column(String(16), nullable=False, default="free")
+
+
 class UserSettings(Base):
     __tablename__ = "user_settings"
 
@@ -50,6 +61,66 @@ class UserSettings(Base):
 def _normalize_language(lang: str | None) -> str:
     value = (lang or "").split(",", 1)[0].split("-")[0].split("_")[0].lower()
     return value if value in {"en", "uk", "es", "de", "ru"} else "en"
+
+
+def _normalize_plan(plan_type: str | None) -> str:
+    value = (plan_type or "free").strip().lower()
+    return value if value in {"free", "pro"} else "free"
+
+
+def _normalize_datetime(value) -> datetime | None:
+    if value is None or value == "":
+        return None
+
+    if isinstance(value, datetime):
+        dt = value
+    elif isinstance(value, str):
+        try:
+            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            logger.warning("Invalid subscription datetime: %r", value)
+            return None
+    else:
+        logger.warning("Unsupported subscription datetime type: %r", type(value))
+        return None
+
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+
+    return dt
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _dt_to_iso(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    return value.replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _subscription_active(plan_type: str, subscription_ends_at: datetime | None) -> bool:
+    plan_type = _normalize_plan(plan_type)
+    if plan_type != "pro":
+        return False
+    return subscription_ends_at is None or subscription_ends_at > _utcnow()
+
+
+def _user_to_status(user: User | None, fallback_language: str | None = None) -> dict:
+    lang = _normalize_language(getattr(user, "language", None) or fallback_language)
+    plan = _normalize_plan(getattr(user, "plan_type", None))
+    ends_at = getattr(user, "subscription_ends_at", None)
+    active = _subscription_active(plan, ends_at)
+
+    return {
+        "user_id": int(getattr(user, "user_id", 0) or 0),
+        "language": lang,
+        "plan_type": plan,
+        "subscription_ends_at": _dt_to_iso(ends_at),
+        "is_pro": active,
+        "has_active_subscription": active,
+    }
 
 
 def _is_sqlite_url(url: str) -> bool:
@@ -194,9 +265,69 @@ def _fallback_set_user_language(user_id: int, lang: str, *, log_warning: bool = 
     lang = _normalize_language(lang)
     with _fallback_lock:
         _fallback_user_languages[int(user_id)] = lang
+        profile = _fallback_user_profiles.setdefault(
+            int(user_id),
+            {
+                "user_id": int(user_id),
+                "language": lang,
+                "plan_type": "free",
+                "subscription_ends_at": None,
+                "is_pro": False,
+                "has_active_subscription": False,
+            },
+        )
+        profile["language"] = lang
     if log_warning:
         logger.warning("Використано резервне збереження мови для user_id=%s lang=%s", user_id, lang)
     return lang
+
+
+def _fallback_get_user_status(user_id: int) -> dict | None:
+    with _fallback_lock:
+        profile = _fallback_user_profiles.get(int(user_id))
+        if profile:
+            return dict(profile)
+
+        lang = _fallback_user_languages.get(int(user_id))
+        if not lang:
+            return None
+
+        return {
+            "user_id": int(user_id),
+            "language": lang,
+            "plan_type": "free",
+            "subscription_ends_at": None,
+            "is_pro": False,
+            "has_active_subscription": False,
+        }
+
+
+def _fallback_set_user_subscription(
+    user_id: int,
+    plan_type: str,
+    subscription_ends_at=None,
+    language: str | None = None,
+    *,
+    log_warning: bool = True,
+) -> dict:
+    plan = _normalize_plan(plan_type)
+    ends_at = _normalize_datetime(subscription_ends_at)
+    lang = _normalize_language(language or _fallback_get_user_language(user_id))
+    active = _subscription_active(plan, ends_at)
+    profile = {
+        "user_id": int(user_id),
+        "language": lang,
+        "plan_type": plan,
+        "subscription_ends_at": _dt_to_iso(ends_at),
+        "is_pro": active,
+        "has_active_subscription": active,
+    }
+    with _fallback_lock:
+        _fallback_user_profiles[int(user_id)] = profile
+        _fallback_user_languages[int(user_id)] = lang
+    if log_warning:
+        logger.warning("Використано резервне збереження підписки для user_id=%s plan=%s", user_id, plan)
+    return dict(profile)
 
 
 def _fallback_set_watchlist(user_id: int, pairs: list[str]) -> list[str]:
@@ -314,25 +445,8 @@ def check_database_status() -> dict:
 
 
 def get_user_language(user_id: int) -> str | None:
-    if not user_id:
-        return None
-
-    fallback_lang = _fallback_get_user_language(user_id)
-
-    try:
-        with get_db() as db:
-            if db is None:
-                return fallback_lang
-
-            row = (
-                db.query(UserSettings)
-                .filter(UserSettings.user_id == int(user_id))
-                .first()
-            )
-            return _normalize_language(row.language) if row else fallback_lang
-    except SQLAlchemyError:
-        logger.exception("Error loading user language")
-        return fallback_lang
+    status = get_cached_user_status(user_id)
+    return status.get("language") if status else None
 
 
 def set_user_language(user_id: int, lang: str) -> str:
@@ -340,29 +454,203 @@ def set_user_language(user_id: int, lang: str) -> str:
     if not user_id:
         return lang
 
+    status = None
     try:
         with session_scope() as db:
             if db is None:
-                return _fallback_set_user_language(user_id, lang)
+                status = _fallback_set_user_subscription(user_id, "free", None, lang)
+                _cache_user_status(user_id, status)
+                return lang
 
-            row = (
+            user = _get_or_create_user_row(db, user_id, language=lang)
+            user.language = lang
+
+            legacy = (
                 db.query(UserSettings)
                 .filter(UserSettings.user_id == int(user_id))
                 .first()
             )
-            if row is None:
+            if legacy is None:
                 db.add(UserSettings(user_id=int(user_id), language=lang))
             else:
-                row.language = lang
+                legacy.language = lang
 
-            _fallback_set_user_language(user_id, lang, log_warning=False)
-            return lang
+            status = _user_to_status(user)
     except OperationalError:
         logger.exception("OperationalError while saving user language")
-        return _fallback_set_user_language(user_id, lang)
+        status = _fallback_set_user_subscription(user_id, "free", None, lang)
     except SQLAlchemyError:
         logger.exception("Error saving user language")
-        return _fallback_set_user_language(user_id, lang)
+        status = _fallback_set_user_subscription(user_id, "free", None, lang)
+
+    _fallback_set_user_language(user_id, lang, log_warning=False)
+    _cache_user_status(user_id, status)
+    return lang
+
+
+def _get_legacy_language(db, user_id: int) -> str | None:
+    try:
+        row = (
+            db.query(UserSettings)
+            .filter(UserSettings.user_id == int(user_id))
+            .first()
+        )
+        return _normalize_language(row.language) if row else None
+    except SQLAlchemyError:
+        logger.exception("Error loading legacy user language")
+        return None
+
+
+def _get_or_create_user_row(db, user_id: int, language: str | None = None) -> User:
+    user_id = int(user_id)
+    user = db.query(User).filter(User.user_id == user_id).first()
+    if user is not None:
+        if language and not user.language:
+            user.language = _normalize_language(language)
+        return user
+
+    lang = _normalize_language(language or _get_legacy_language(db, user_id) or _fallback_get_user_language(user_id))
+    user = User(
+        user_id=user_id,
+        language=lang,
+        plan_type="free",
+        subscription_ends_at=None,
+    )
+    db.add(user)
+    return user
+
+
+def _cache_user_status(user_id: int, status: dict | None) -> dict | None:
+    if not user_id or not status:
+        return status
+    try:
+        from state import app_state
+        return app_state.set_cached_user_status(user_id, status)
+    except Exception:
+        logger.debug("Could not update user status cache", exc_info=True)
+        return status
+
+
+def invalidate_user_status_cache(user_id: int) -> None:
+    try:
+        from state import app_state
+        app_state.invalidate_user_status(user_id)
+    except Exception:
+        logger.debug("Could not invalidate user status cache", exc_info=True)
+
+
+def get_cached_user_status(user_id: int, *, language_hint: str | None = None, max_age_seconds: int = 60) -> dict | None:
+    if not user_id:
+        return None
+
+    try:
+        from state import app_state
+        cached = app_state.get_cached_user_status(user_id, max_age_seconds=max_age_seconds)
+        if cached:
+            return cached
+    except Exception:
+        logger.debug("Could not read user status cache", exc_info=True)
+
+    status = get_user_status(user_id, language_hint=language_hint)
+    return _cache_user_status(user_id, status)
+
+
+def get_user_status(user_id: int, *, language_hint: str | None = None) -> dict | None:
+    if not user_id:
+        return None
+
+    fallback_status = _fallback_get_user_status(user_id)
+
+    try:
+        with session_scope() as db:
+            if db is None:
+                return fallback_status or _fallback_set_user_subscription(user_id, "free", None, language_hint)
+
+            user = _get_or_create_user_row(db, user_id, language=language_hint)
+            status = _user_to_status(user)
+            _fallback_set_user_subscription(
+                user_id,
+                status["plan_type"],
+                status["subscription_ends_at"],
+                status["language"],
+                log_warning=False,
+            )
+            return status
+    except SQLAlchemyError:
+        logger.exception("Error loading user status")
+        return fallback_status or _fallback_set_user_subscription(user_id, "free", None, language_hint)
+
+
+def set_user_subscription(user_id: int, plan_type: str = "free", subscription_ends_at=None, *, language: str | None = None) -> dict | None:
+    if not user_id:
+        return None
+
+    plan = _normalize_plan(plan_type)
+    ends_at = _normalize_datetime(subscription_ends_at)
+    status = None
+
+    try:
+        with session_scope() as db:
+            if db is None:
+                status = _fallback_set_user_subscription(user_id, plan, ends_at, language)
+                _cache_user_status(user_id, status)
+                return status
+
+            user = _get_or_create_user_row(db, user_id, language=language)
+            if language:
+                user.language = _normalize_language(language)
+            user.plan_type = plan
+            user.subscription_ends_at = ends_at if plan == "pro" else None
+            status = _user_to_status(user)
+    except OperationalError:
+        logger.exception("OperationalError while saving user subscription")
+        status = _fallback_set_user_subscription(user_id, plan, ends_at, language)
+    except SQLAlchemyError:
+        logger.exception("Error saving user subscription")
+        status = _fallback_set_user_subscription(user_id, plan, ends_at, language)
+
+    _cache_user_status(user_id, status)
+    return status
+
+
+def refresh_cached_user_statuses() -> None:
+    try:
+        from state import app_state
+        user_ids = app_state.get_cached_user_status_ids()
+    except Exception:
+        logger.debug("Could not list cached user statuses", exc_info=True)
+        return
+
+    for user_id in user_ids:
+        try:
+            status = get_user_status(user_id)
+            _cache_user_status(user_id, status)
+        except Exception:
+            logger.exception("Could not refresh cached user status for user_id=%s", user_id)
+
+
+def list_users(limit: int = 100, plan_type: str | None = None) -> list[dict]:
+    limit = max(1, min(int(limit or 100), 500))
+    plan = _normalize_plan(plan_type) if plan_type else None
+
+    try:
+        with get_db() as db:
+            if db is None:
+                with _fallback_lock:
+                    return list(_fallback_user_profiles.values())[:limit]
+
+            query = db.query(User).order_by(User.user_id.asc())
+            if plan:
+                query = query.filter(User.plan_type == plan)
+
+            return [_user_to_status(row) for row in query.limit(limit).all()]
+    except SQLAlchemyError:
+        logger.exception("Error listing users")
+        with _fallback_lock:
+            users = list(_fallback_user_profiles.values())
+            if plan:
+                users = [item for item in users if item.get("plan_type") == plan]
+            return users[:limit]
 
 
 def add_to_watchlist(user_id: int, pair: str) -> bool:
