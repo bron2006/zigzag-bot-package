@@ -10,6 +10,7 @@ from config import (
     CRYPTO_PAIRS,
     FOREX_SESSIONS,
     STOCK_TICKERS,
+    broker_symbol_key,
     get_ct_client_id,
     get_ct_client_secret,
 )
@@ -51,6 +52,18 @@ def _display_symbol_name(symbol) -> str:
 
 def _requested_pair_key(pair: str) -> str:
     return _compact_symbol(pair)
+
+
+def _broker_pair_keys(pair: str) -> list[str]:
+    requested = _requested_pair_key(pair)
+    broker_key = broker_symbol_key(pair)
+    keys = []
+
+    for key in (requested, broker_key):
+        if key and key not in keys:
+            keys.append(key)
+
+    return keys
 
 
 def _symbol_cache_keys(symbol) -> set[str]:
@@ -99,24 +112,26 @@ def _collect_configured_assets() -> list[str]:
 
 
 def _resolve_broker_symbol(pair: str):
-    requested = _requested_pair_key(pair)
-    if not requested:
+    requested_keys = _broker_pair_keys(pair)
+    if not requested_keys:
         return None
 
-    exact = app_state.symbol_cache.get(requested)
-    if exact is not None:
-        return exact
+    for key in requested_keys:
+        exact = app_state.symbol_cache.get(key)
+        if exact is not None:
+            return exact
 
     candidates = []
     for symbol in _unique_symbols_from_cache():
         keys = _symbol_cache_keys(symbol)
-        if requested in keys:
+        if any(requested in keys for requested in requested_keys):
             return symbol
 
         for key in keys:
-            if key.startswith(requested):
-                candidates.append((len(key), _display_symbol_name(symbol), symbol))
-                break
+            for requested in requested_keys:
+                if key.startswith(requested):
+                    candidates.append((len(key), _display_symbol_name(symbol), symbol))
+                    break
 
     if candidates:
         candidates.sort(key=lambda item: (item[0], item[1]))

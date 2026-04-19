@@ -10,6 +10,7 @@ from twisted.internet.threads import deferToThreadPool
 
 import ml_models
 import news_filter
+from config import broker_symbol_key
 from ctrader_open_api.messages.OpenApiMessages_pb2 import (
     ProtoOAGetTrendbarsReq,
     ProtoOAGetTrendbarsRes,
@@ -82,15 +83,19 @@ def _normalize_pair(pair: str) -> str:
 
 def _resolve_symbol_details(symbol_cache, pair: str):
     norm = _normalize_pair(pair)
+    broker_norm = broker_symbol_key(pair)
 
     candidates = [
         norm,
+        broker_norm,
         pair,
         pair.upper() if pair else "",
     ]
 
     if len(norm) >= 6:
         candidates.append(f"{norm[:3]}/{norm[3:]}")
+    if len(broker_norm) >= 6:
+        candidates.append(f"{broker_norm[:3]}/{broker_norm[3:]}")
 
     for candidate in candidates:
         if candidate and candidate in symbol_cache:

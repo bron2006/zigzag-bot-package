@@ -107,10 +107,17 @@ def load_assets_from_json() -> dict:
             "crypto": assets.get("crypto_pairs", []),
             "stocks": assets.get("stock_tickers", []),
             "commodities": assets.get("commodities", []),
+            "symbol_aliases": assets.get("symbol_aliases", {}),
         }
     except Exception:
         logger.exception("Could not load assets.json")
-        return {"forex": {}, "crypto": [], "stocks": [], "commodities": []}
+        return {
+            "forex": {},
+            "crypto": [],
+            "stocks": [],
+            "commodities": [],
+            "symbol_aliases": {},
+        }
 
 
 _assets = load_assets_from_json()
@@ -118,6 +125,22 @@ FOREX_SESSIONS = _assets["forex"]
 CRYPTO_PAIRS = _assets["crypto"]
 STOCK_TICKERS = _assets["stocks"]
 COMMODITIES = _assets["commodities"]
+
+
+def normalize_symbol_key(value: str) -> str:
+    return "".join(ch for ch in (value or "").upper() if ch.isalnum())
+
+
+SYMBOL_ALIASES = {
+    normalize_symbol_key(source): normalize_symbol_key(target)
+    for source, target in _assets["symbol_aliases"].items()
+    if normalize_symbol_key(source) and normalize_symbol_key(target)
+}
+
+
+def broker_symbol_key(value: str) -> str:
+    requested = normalize_symbol_key(value)
+    return SYMBOL_ALIASES.get(requested, requested)
 
 TRADING_HOURS = {
     "Європейська": "🇪🇺 (10:00 - 19:00)",

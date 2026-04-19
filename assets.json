@@ -4,18 +4,22 @@
       "AUD/CAD",
       "AUD/JPY",
       "AUD/NZD",
+      "AUD/SGD",
       "NZD/JPY",
       "NZD/USD",
       "NZD/CAD",
       "AUD/CHF",
+      "NZD/SGD",
       "NZD/CHF"
     ],
     "Азіатська": [
       "AUD/JPY",
+      "CAD/JPY",
       "EUR/JPY",
       "GBP/JPY",
       "CHF/JPY",
       "NZD/JPY",
+      "SGD/JPY",
       "USD/JPY",
       "AUD/USD",
       "EUR/AUD",
@@ -28,13 +32,16 @@
       "EUR/GBP",
       "EUR/JPY",
       "EUR/NZD",
+      "EUR/SGD",
       "EUR/USD",
       "GBP/AUD",
       "GBP/CAD",
       "GBP/CHF",
       "GBP/JPY",
       "GBP/NZD",
+      "GBP/SGD",
       "GBP/USD",
+      "CAD/CHF",
       "USD/CAD",
       "USD/CHF",
       "USD/JPY"
@@ -47,7 +54,8 @@
       "USD/CAD",
       "USD/CHF",
       "USD/JPY",
-      "USD/MXN"
+      "USD/MXN",
+      "USD/SGD"
     ]
   },
   "crypto_pairs": [
@@ -58,15 +66,56 @@
     "BCH/USD",
     "ADA/USD",
     "SOL/USD",
-    "BNB/USD"
+    "BNB/USD",
+    "TRX/USD",
+    "XLM/USD",
+    "DOT/USD",
+    "ETC/USD",
+    "ATOM/USD",
+    "FIL/USD",
+    "AAVE/USD",
+    "UNI/USD",
+    "ALGO/USD",
+    "APT/USD",
+    "ARB/USD",
+    "OP/USD",
+    "POL/USD",
+    "NEAR/USD",
+    "TON/USD",
+    "SUI/USD",
+    "PEPE/USD",
+    "SHIB/USD",
+    "ZEC/USD",
+    "XMR/USD",
+    "ONDO/USD",
+    "HBAR/USD",
+    "INJ/USD",
+    "JUP/USD",
+    "RENDER/USD",
+    "SEI/USD",
+    "TAO/USD",
+    "WIF/USD",
+    "AVAX/USD",
+    "LINK/USD"
   ],
   "stock_tickers": [
     "US30",
+    "US100",
     "US500",
-    "UK100"
+    "UK100",
+    "DE40",
+    "JP225",
+    "HK50",
+    "AUS200",
+    "US2000"
   ],
   "commodities": [
     "XAU/USD",
     "XAG/USD"
-  ]
+  ],
+  "symbol_aliases": {
+    "AVAX/USD": "AVXUSD",
+    "LINK/USD": "LNKUSD",
+    "US100": "USTEC"
+  }
 }
