@@ -27,6 +27,11 @@ let priceEventSource = null;
 const debouncedFetchSignal = debounce(fetchSignal, 300);
 const WATCHLIST_STORAGE_KEY = "zigzag_watchlist";
 const LANG_STORAGE_KEY = "zigzag_language";
+const TIMEZONE_STORAGE_KEY = "zigzag_timezone";
+let userTimezone = normalizeTimezone(
+    localStorage.getItem(TIMEZONE_STORAGE_KEY)
+    || Intl.DateTimeFormat().resolvedOptions().timeZone
+);
 let userLang = normalizeAppLanguage(
     localStorage.getItem(LANG_STORAGE_KEY) || tg.initDataUnsafe?.user?.language_code
 );
@@ -217,6 +222,7 @@ function buildQuery(params = {}) {
     const search = new URLSearchParams();
 
     search.set("lang", userLang);
+    search.set("timezone", userTimezone);
 
     if (initData) {
         search.set("initData", initData);
@@ -235,6 +241,24 @@ function buildQuery(params = {}) {
 function normalizeAppLanguage(lang) {
     const base = String(lang || "").split(/[-_]/)[0].toLowerCase();
     return ["uk", "en", "es", "de", "ru"].includes(base) ? base : "en";
+}
+
+function normalizeTimezone(value) {
+    const timezone = String(value || "").trim();
+    if (!timezone) return "Europe/Kyiv";
+
+    try {
+        Intl.DateTimeFormat("en-US", { timeZone: timezone }).format(new Date());
+        return timezone;
+    } catch (err) {
+        return "Europe/Kyiv";
+    }
+}
+
+function setUserTimezone(timezone) {
+    userTimezone = normalizeTimezone(timezone);
+    localStorage.setItem(TIMEZONE_STORAGE_KEY, userTimezone);
+    return userTimezone;
 }
 
 function tr(key, params = {}) {
@@ -338,6 +362,9 @@ async function loadInitialData() {
         if (staticData && staticData.language) {
             setUserLanguage(staticData.language, { persist: false, redraw: false });
         }
+        if (staticData && staticData.timezone) {
+            setUserTimezone(staticData.timezone);
+        }
         allData = staticData || {};
         setCurrentWatchlist(mergeWatchlists((staticData && staticData.watchlist) || []));
         applyPairMetadata(staticData);
@@ -438,6 +465,9 @@ function bindLanguageSelector() {
             const res = await apiGet("/api/language", { language: nextLang });
             if (res && res.language) {
                 setUserLanguage(res.language);
+            }
+            if (res && res.timezone) {
+                setUserTimezone(res.timezone);
             }
         } catch (err) {
             console.warn("Language save failed, using local preference:", err);

@@ -25,10 +25,10 @@ from config import (
     CRYPTO_PAIRS,
     FOREX_SESSIONS,
     STOCK_TICKERS,
-    TRADING_HOURS,
     get_fly_app_name,
 )
 from locales import localize_reason, localize_signal_payload, normalize_lang, session_label, t
+from session_times import DEFAULT_TIMEZONE, normalize_timezone, session_time_label
 from state import app_state
 
 logger = logging.getLogger("api")
@@ -55,6 +55,30 @@ def _request_lang() -> str:
         or request.headers.get("X-User-Language")
         or request.headers.get("Accept-Language")
     )
+
+
+def _request_timezone() -> str:
+    return normalize_timezone(
+        request.values.get("timezone")
+        or request.values.get("tz")
+        or request.headers.get("X-User-Timezone")
+    )
+
+
+def _sync_user_timezone(uid: int | None) -> str:
+    requested_tz = _request_timezone()
+    if not uid:
+        return requested_tz
+
+    try:
+        status = db.get_cached_user_status(uid, max_age_seconds=3600)
+        current_tz = normalize_timezone((status or {}).get("timezone"))
+        if requested_tz != current_tz:
+            return db.set_user_timezone(uid, requested_tz)
+        return current_tz
+    except Exception:
+        logger.debug("Could not sync user timezone", exc_info=True)
+        return requested_tz or DEFAULT_TIMEZONE
 
 
 def _protected_route(f):
@@ -355,6 +379,7 @@ def register_routes(app):
     def get_pairs():
         lang = _request_lang()
         uid = get_user_id_from_init_data(_request_init_data())
+        user_timezone = _sync_user_timezone(uid)
         user_status = db.get_cached_user_status(uid, language_hint=lang) if uid else None
         raw_watchlist = db.get_watchlist(uid) if uid else []
         configured_pairs = set(_collect_ui_pairs([]))
@@ -362,7 +387,8 @@ def register_routes(app):
         available_pairs, unavailable_pairs = _broker_pair_availability(watchlist)
         forex_data = [
             {
-                "title": f"{session_label(k, lang)} {TRADING_HOURS.get(k, '')}".strip(),
+                "title": f"{session_label(k, lang)} {session_time_label(k, user_timezone)}".strip(),
+                "timezone": user_timezone,
                 "pairs": v,
             }
             for k, v in FOREX_SESSIONS.items()
@@ -378,6 +404,7 @@ def register_routes(app):
                 "available_pairs": available_pairs,
                 "unavailable_pairs": unavailable_pairs,
                 "language": lang,
+                "timezone": user_timezone,
                 "user": user_status,
             }
         )
@@ -390,6 +417,7 @@ def register_routes(app):
         if not uid:
             return jsonify({"success": False, "error": t("user_not_resolved", lang)}), 400
 
+        _sync_user_timezone(uid)
         status = db.get_cached_user_status(uid, language_hint=lang)
         return jsonify({"success": True, "user": status})
 
@@ -401,12 +429,14 @@ def register_routes(app):
         if not uid:
             return jsonify({"success": False, "error": t("user_not_resolved", lang)}), 400
 
+        _sync_user_timezone(uid)
         status = db.get_cached_user_status(uid, language_hint=lang) or {}
         return jsonify(
             {
                 "success": True,
                 "plan_type": status.get("plan_type", "free"),
                 "subscription_ends_at": status.get("subscription_ends_at"),
+                "timezone": status.get("timezone", DEFAULT_TIMEZONE),
                 "is_pro": bool(status.get("is_pro")),
                 "has_active_subscription": bool(status.get("has_active_subscription")),
             }
@@ -425,7 +455,9 @@ def register_routes(app):
         else:
             lang = _request_lang()
 
-        return jsonify({"success": True, "language": lang})
+        timezone_name = _sync_user_timezone(uid)
+
+        return jsonify({"success": True, "language": lang, "timezone": timezone_name})
 
     @app.route("/api/scanner/status", methods=["GET"])
     @_protected_route

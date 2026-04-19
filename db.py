@@ -4,11 +4,12 @@ import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, DateTime, Float, Integer, String, create_engine, event, func, text
+from sqlalchemy import Column, DateTime, Float, Integer, String, create_engine, event, func, inspect, text
 from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from sqlalchemy.orm import declarative_base, scoped_session, sessionmaker
 
 from config import get_database_url
+from session_times import DEFAULT_TIMEZONE, normalize_timezone
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +21,7 @@ engine = None
 SessionLocal = None
 _fallback_watchlists: dict[int, set[str]] = {}
 _fallback_user_languages: dict[int, str] = {}
+_fallback_user_timezones: dict[int, str] = {}
 _fallback_user_profiles: dict[int, dict] = {}
 _fallback_lock = threading.RLock()
 
@@ -47,6 +49,7 @@ class User(Base):
 
     user_id = Column(Integer, primary_key=True)
     language = Column(String(8), nullable=False, default="en")
+    timezone = Column(String(64), nullable=False, default=DEFAULT_TIMEZONE)
     subscription_ends_at = Column(DateTime, nullable=True)
     plan_type = Column(String(16), nullable=False, default="free")
 
@@ -61,6 +64,10 @@ class UserSettings(Base):
 def _normalize_language(lang: str | None) -> str:
     value = (lang or "").split(",", 1)[0].split("-")[0].split("_")[0].lower()
     return value if value in {"en", "uk", "es", "de", "ru"} else "en"
+
+
+def _normalize_timezone(value: str | None) -> str:
+    return normalize_timezone(value)
 
 
 def _normalize_plan(plan_type: str | None) -> str:
@@ -109,6 +116,7 @@ def _subscription_active(plan_type: str, subscription_ends_at: datetime | None) 
 
 def _user_to_status(user: User | None, fallback_language: str | None = None) -> dict:
     lang = _normalize_language(getattr(user, "language", None) or fallback_language)
+    tz = _normalize_timezone(getattr(user, "timezone", None))
     plan = _normalize_plan(getattr(user, "plan_type", None))
     ends_at = getattr(user, "subscription_ends_at", None)
     active = _subscription_active(plan, ends_at)
@@ -116,6 +124,7 @@ def _user_to_status(user: User | None, fallback_language: str | None = None) -> 
     return {
         "user_id": int(getattr(user, "user_id", 0) or 0),
         "language": lang,
+        "timezone": tz,
         "plan_type": plan,
         "subscription_ends_at": _dt_to_iso(ends_at),
         "is_pro": active,
@@ -224,9 +233,31 @@ def initialize_database():
 
     try:
         Base.metadata.create_all(bind=engine)
+        _ensure_user_columns()
         logger.info("Database initialization complete.")
     except Exception as e:
         logger.error(f"Error initializing database: {e}", exc_info=True)
+
+
+def _ensure_user_columns() -> None:
+    try:
+        inspector = inspect(engine)
+        existing = {column["name"] for column in inspector.get_columns("users")}
+        statements = []
+
+        if "timezone" not in existing:
+            statements.append(f"ALTER TABLE users ADD COLUMN timezone VARCHAR(64) DEFAULT '{DEFAULT_TIMEZONE}' NOT NULL")
+
+        if not statements:
+            return
+
+        with engine.begin() as conn:
+            for statement in statements:
+                conn.execute(text(statement))
+
+        logger.info("Database users table migrated: %s", ", ".join(statements))
+    except Exception:
+        logger.exception("Could not ensure users table columns")
 
 
 def add_signal_to_history(data: dict) -> bool:
@@ -261,6 +292,11 @@ def _fallback_get_user_language(user_id: int) -> str | None:
         return _fallback_user_languages.get(int(user_id))
 
 
+def _fallback_get_user_timezone(user_id: int) -> str | None:
+    with _fallback_lock:
+        return _fallback_user_timezones.get(int(user_id))
+
+
 def _fallback_set_user_language(user_id: int, lang: str, *, log_warning: bool = True) -> str:
     lang = _normalize_language(lang)
     with _fallback_lock:
@@ -270,6 +306,7 @@ def _fallback_set_user_language(user_id: int, lang: str, *, log_warning: bool = 
             {
                 "user_id": int(user_id),
                 "language": lang,
+                "timezone": _fallback_user_timezones.get(int(user_id), DEFAULT_TIMEZONE),
                 "plan_type": "free",
                 "subscription_ends_at": None,
                 "is_pro": False,
@@ -282,6 +319,28 @@ def _fallback_set_user_language(user_id: int, lang: str, *, log_warning: bool = 
     return lang
 
 
+def _fallback_set_user_timezone(user_id: int, timezone_name: str, *, log_warning: bool = True) -> str:
+    tz = _normalize_timezone(timezone_name)
+    with _fallback_lock:
+        _fallback_user_timezones[int(user_id)] = tz
+        profile = _fallback_user_profiles.setdefault(
+            int(user_id),
+            {
+                "user_id": int(user_id),
+                "language": _fallback_user_languages.get(int(user_id), "en"),
+                "timezone": tz,
+                "plan_type": "free",
+                "subscription_ends_at": None,
+                "is_pro": False,
+                "has_active_subscription": False,
+            },
+        )
+        profile["timezone"] = tz
+    if log_warning:
+        logger.warning("Використано резервне збереження timezone для user_id=%s timezone=%s", user_id, tz)
+    return tz
+
+
 def _fallback_get_user_status(user_id: int) -> dict | None:
     with _fallback_lock:
         profile = _fallback_user_profiles.get(int(user_id))
@@ -289,12 +348,14 @@ def _fallback_get_user_status(user_id: int) -> dict | None:
             return dict(profile)
 
         lang = _fallback_user_languages.get(int(user_id))
-        if not lang:
+        tz = _fallback_user_timezones.get(int(user_id), DEFAULT_TIMEZONE)
+        if not lang and not tz:
             return None
 
         return {
             "user_id": int(user_id),
-            "language": lang,
+            "language": lang or "en",
+            "timezone": tz,
             "plan_type": "free",
             "subscription_ends_at": None,
             "is_pro": False,
@@ -313,10 +374,12 @@ def _fallback_set_user_subscription(
     plan = _normalize_plan(plan_type)
     ends_at = _normalize_datetime(subscription_ends_at)
     lang = _normalize_language(language or _fallback_get_user_language(user_id))
+    tz = _normalize_timezone(_fallback_get_user_timezone(user_id))
     active = _subscription_active(plan, ends_at)
     profile = {
         "user_id": int(user_id),
         "language": lang,
+        "timezone": tz,
         "plan_type": plan,
         "subscription_ends_at": _dt_to_iso(ends_at),
         "is_pro": active,
@@ -325,6 +388,7 @@ def _fallback_set_user_subscription(
     with _fallback_lock:
         _fallback_user_profiles[int(user_id)] = profile
         _fallback_user_languages[int(user_id)] = lang
+        _fallback_user_timezones[int(user_id)] = tz
     if log_warning:
         logger.warning("Використано резервне збереження підписки для user_id=%s plan=%s", user_id, plan)
     return dict(profile)
@@ -449,6 +513,13 @@ def get_user_language(user_id: int) -> str | None:
     return status.get("language") if status else None
 
 
+def get_user_timezone(user_id: int) -> str:
+    status = get_cached_user_status(user_id)
+    if status and status.get("timezone"):
+        return _normalize_timezone(status.get("timezone"))
+    return DEFAULT_TIMEZONE
+
+
 def set_user_language(user_id: int, lang: str) -> str:
     lang = _normalize_language(lang)
     if not user_id:
@@ -478,6 +549,37 @@ def set_user_language(user_id: int, lang: str) -> str:
     return lang
 
 
+def set_user_timezone(user_id: int, timezone_name: str | None) -> str:
+    tz = _normalize_timezone(timezone_name)
+    if not user_id:
+        return tz
+
+    status = None
+    try:
+        with session_scope() as db:
+            if db is None:
+                _fallback_set_user_timezone(user_id, tz)
+                status = _fallback_get_user_status(user_id)
+                _cache_user_status(user_id, status)
+                return tz
+
+            user = _get_or_create_user_row(db, user_id)
+            user.timezone = tz
+            status = _user_to_status(user)
+    except OperationalError:
+        logger.exception("OperationalError while saving user timezone")
+        _fallback_set_user_timezone(user_id, tz)
+        status = _fallback_get_user_status(user_id)
+    except SQLAlchemyError:
+        logger.exception("Error saving user timezone")
+        _fallback_set_user_timezone(user_id, tz)
+        status = _fallback_get_user_status(user_id)
+
+    _fallback_set_user_timezone(user_id, tz, log_warning=False)
+    _cache_user_status(user_id, status)
+    return tz
+
+
 def _get_legacy_language(db, user_id: int) -> str | None:
     return None
 
@@ -488,12 +590,15 @@ def _get_or_create_user_row(db, user_id: int, language: str | None = None) -> Us
     if user is not None:
         if language and not user.language:
             user.language = _normalize_language(language)
+        if not getattr(user, "timezone", None):
+            user.timezone = _fallback_get_user_timezone(user_id) or DEFAULT_TIMEZONE
         return user
 
     lang = _normalize_language(language or _get_legacy_language(db, user_id) or _fallback_get_user_language(user_id))
     user = User(
         user_id=user_id,
         language=lang,
+        timezone=_fallback_get_user_timezone(user_id) or DEFAULT_TIMEZONE,
         plan_type="free",
         subscription_ends_at=None,
     )

@@ -15,6 +15,7 @@ from config import (
     COMMODITIES,
     CRYPTO_PAIRS,
     FOREX_SESSIONS,
+    SESSION_WINDOWS_UTC,
     SCANNER_COOLDOWN_SECONDS,
     SCANNER_TIMEFRAME,
     STOCK_TICKERS,
@@ -56,18 +57,11 @@ def _blocking_pool():
 
 
 def _get_active_forex_sessions() -> list:
-    session_times_utc = {
-        "Тихоокеанська": (21, 6),
-        "Азіатська": (0, 9),
-        "Європейська": (7, 16),
-        "Американська": (13, 22),
-    }
-
     utc_now = datetime.now(pytz.utc)
     current_hour = utc_now.hour
     active = []
 
-    for session, (start, end) in session_times_utc.items():
+    for session, (start, end) in SESSION_WINDOWS_UTC.items():
         if start > end:
             if current_hour >= start or current_hour < end:
                 active.append(session)

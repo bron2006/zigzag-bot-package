@@ -17,7 +17,7 @@ from twisted.internet.threads import deferToThreadPool
 
 import db
 from analysis import get_api_detailed_signal_data
-from config import COMMODITIES, CRYPTO_PAIRS, FOREX_SESSIONS, STOCK_TICKERS, TRADING_HOURS
+from config import COMMODITIES, CRYPTO_PAIRS, FOREX_SESSIONS, STOCK_TICKERS
 from locales import (
     LANGUAGE_NAMES,
     SUPPORTED_LANGS,
@@ -32,6 +32,7 @@ from locales import (
     timeframe_label,
     verdict_label,
 )
+from session_times import session_time_label
 from state import app_state
 from utils_message_cleanup import bot_clear_messages, bot_track_message
 
@@ -60,6 +61,11 @@ def _lang(update: Update | None = None) -> str:
 
     user = getattr(update, "effective_user", None)
     return normalize_lang(getattr(user, "language_code", None))
+
+
+def _timezone(update: Update | None = None) -> str:
+    user_id = _get_user_id(update)
+    return db.get_user_timezone(user_id) if user_id else "Europe/Kyiv"
 
 
 def _category_label(category: str, lang: str) -> str:
@@ -154,11 +160,11 @@ def get_expiration_kb(category: str, lang: str = "en") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(kb)
 
 
-def get_forex_sessions_kb(expiration: str, lang: str = "en") -> InlineKeyboardMarkup:
+def get_forex_sessions_kb(expiration: str, lang: str = "en", user_timezone: str | None = None) -> InlineKeyboardMarkup:
     kb = [
         [
             InlineKeyboardButton(
-                f"{TRADING_HOURS.get(s, '')} {session_label(s, lang)}".strip(),
+                f"{session_time_label(s, user_timezone)} {session_label(s, lang)}".strip(),
                 callback_data=f"session_forex_{expiration}_{s}",
             )
         ]
@@ -538,7 +544,7 @@ def button_handler(update: Update, context: CallbackContext):
                 context,
                 chat_id,
                 t("forex_sessions", lang),
-                reply_markup=get_forex_sessions_kb(exp, lang),
+                reply_markup=get_forex_sessions_kb(exp, lang, _timezone(update)),
             )
         else:
             assets = {
