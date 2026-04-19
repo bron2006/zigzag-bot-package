@@ -1,7 +1,14 @@
 from copy import deepcopy
 
 DEFAULT_LANG = "en"
-SUPPORTED_LANGS = {"en", "uk"}
+SUPPORTED_LANGS = {"en", "uk", "es", "de", "ru"}
+LANGUAGE_NAMES = {
+    "uk": "Українська",
+    "en": "English",
+    "es": "Español",
+    "de": "Deutsch",
+    "ru": "Русский",
+}
 
 
 TRANSLATIONS = {
@@ -87,6 +94,9 @@ TRANSLATIONS = {
         "favorite_not_updated": "Favorites were not updated",
         "favorite_saved_local": "Favorites were saved on this device. The server did not respond.",
         "source_check_title": "Source check",
+        "language_settings": "🌐 Language / Мова",
+        "language_choose": "🌐 Choose language:",
+        "language_saved": "✅ Language saved: {language}",
         "ops_notifier_unavailable": "[alert] notifier is unavailable. Message: {text}",
         "ops_alert_send_failed": "[alert] failed to send admin alert",
         "ops_recovered_after_errors": "[{context}] recovered after {count} consecutive errors",
@@ -180,6 +190,9 @@ TRANSLATIONS = {
         "favorite_not_updated": "Обране не оновлено",
         "favorite_saved_local": "Обране збережено на цьому пристрої. Сервер тимчасово не відповів.",
         "source_check_title": "Перевірка джерел",
+        "language_settings": "🌐 Мова / Language",
+        "language_choose": "🌐 Оберіть мову:",
+        "language_saved": "✅ Мову збережено: {language}",
         "ops_notifier_unavailable": "[alert] notifier недоступний. Повідомлення: {text}",
         "ops_alert_send_failed": "[alert] не вдалося надіслати алерт адміну",
         "ops_recovered_after_errors": "[{context}] відновлено після {count} помилок підряд",
@@ -384,10 +397,200 @@ REASON_REPLACEMENTS = {
     ],
 }
 
+TRANSLATIONS["es"] = {
+    **TRANSLATIONS["en"],
+    "reply_menu": "MENÚ",
+    "main_menu": "🏠 Menú principal:",
+    "start": "👋 ¡Bienvenido! Pulsa «MENÚ».",
+    "watchlist": "Favoritos",
+    "my_watchlist": "⭐ Mi lista (Favoritos)",
+    "forex_pairs": "💹 Pares de divisas",
+    "crypto": "💎 Cripto",
+    "stocks": "📈 Acciones/Índices",
+    "commodities": "🥇 Materias primas",
+    "scanner": "Escáner",
+    "scanner_forex": "💹 Divisas",
+    "scanner_crypto": "💎 Cripto",
+    "scanner_commodities": "🥇 Materias primas",
+    "scanner_watchlist": "⭐ Favoritos",
+    "back_categories": "⬅️ Volver a categorías",
+    "back_expirations": "⬅️ Volver a expiraciones",
+    "back_sessions": "⬅️ Volver a sesiones",
+    "choose_timeframe": "Expiración para {category}:",
+    "watchlist_empty": "📭 La lista está vacía.",
+    "watchlist_choose_tf": "⭐ Favoritos. Elige TF:",
+    "watchlist_exp": "⭐ Favoritos ({exp}):",
+    "forex_sessions": "Sesiones de divisas:",
+    "choose_asset": "Elige un activo:",
+    "session_pairs": "Pares {session}:",
+    "analyzing": "⏳ Analizando {symbol}...",
+    "analysis_error": "❌ Error de análisis para <b>{symbol}</b>",
+    "technical_error": "error técnico de análisis",
+    "press_menu": "Pulsa MENÚ.",
+    "stats_title": "📊 <b>Estadísticas de 1 hora:</b>",
+    "no_data": "Sin datos",
+    "prices": "💹 <b>Precios:</b>",
+    "empty_feed": "El feed de precios está vacío",
+    "symbols": "Símbolos: {count}",
+    "expiration": "Expiración",
+    "news": "Noticias",
+    "bulls": "Toros",
+    "bears": "Osos",
+    "timeframes": "🧠 <b>Marcos temporales:</b>",
+    "source_check": "🔎 <b>Verificación de fuentes:</b>",
+    "price": "Precio",
+    "calendar": "Calendario",
+    "model": "Modelo",
+    "market_data": "Datos históricos",
+    "signal_quality": "🔎 <b>Calidad de señal:</b> {quality}",
+    "analysis_factors": "📑 <b>Factores de análisis:</b>",
+    "short": "⚡ <b>RESUMEN:</b>",
+    "buy_panel": "🟩🟩🟩 <b>COMPRA</b> 🟩🟩🟩",
+    "sell_panel": "🟥🟥🟥 <b>VENTA</b> 🟥🟥🟥",
+    "pause_panel": "🟨🟨🟨 <b>PAUSA</b> 🟨🟨🟨",
+    "no_trade_panel": "⬜⬜⬜ <b>NO OPERAR</b> ⬜⬜⬜",
+    "trade_allowed": "✅ ENTRADA PERMITIDA",
+    "trade_not_recommended": "⛔ ENTRADA NO RECOMENDADA",
+    "unauthorized": "Sin acceso",
+    "language_settings": "🌐 Idioma / Language",
+    "language_choose": "🌐 Elige idioma:",
+    "language_saved": "✅ Idioma guardado: {language}",
+}
+
+TRANSLATIONS["de"] = {
+    **TRANSLATIONS["en"],
+    "reply_menu": "MENÜ",
+    "main_menu": "🏠 Hauptmenü:",
+    "start": "👋 Willkommen! Drücke «MENÜ».",
+    "watchlist": "Favoriten",
+    "my_watchlist": "⭐ Meine Liste (Favoriten)",
+    "forex_pairs": "💹 Währungspaare",
+    "crypto": "💎 Krypto",
+    "stocks": "📈 Aktien/Indizes",
+    "commodities": "🥇 Rohstoffe",
+    "scanner": "Scanner",
+    "back_categories": "⬅️ Zurück zu Kategorien",
+    "back_expirations": "⬅️ Zurück zu Expirationen",
+    "back_sessions": "⬅️ Zurück zu Sessions",
+    "choose_timeframe": "Expiration für {category}:",
+    "watchlist_empty": "📭 Die Liste ist leer.",
+    "watchlist_choose_tf": "⭐ Favoriten. TF wählen:",
+    "forex_sessions": "Währungssessions:",
+    "choose_asset": "Asset wählen:",
+    "analyzing": "⏳ Analysiere {symbol}...",
+    "technical_error": "technischer Analysefehler",
+    "press_menu": "Drücke MENÜ.",
+    "no_data": "Keine Daten",
+    "prices": "💹 <b>Preise:</b>",
+    "expiration": "Expiration",
+    "news": "Nachrichten",
+    "bulls": "Bullen",
+    "bears": "Bären",
+    "timeframes": "🧠 <b>Zeitrahmen:</b>",
+    "source_check": "🔎 <b>Quellenprüfung:</b>",
+    "price": "Preis",
+    "calendar": "Kalender",
+    "model": "Modell",
+    "market_data": "Historische Daten",
+    "signal_quality": "🔎 <b>Signalqualität:</b> {quality}",
+    "analysis_factors": "📑 <b>Analysefaktoren:</b>",
+    "short": "⚡ <b>KURZ:</b>",
+    "buy_panel": "🟩🟩🟩 <b>KAUF</b> 🟩🟩🟩",
+    "sell_panel": "🟥🟥🟥 <b>VERKAUF</b> 🟥🟥🟥",
+    "pause_panel": "🟨🟨🟨 <b>PAUSE</b> 🟨🟨🟨",
+    "no_trade_panel": "⬜⬜⬜ <b>NICHT HANDELN</b> ⬜⬜⬜",
+    "trade_allowed": "✅ EINSTIEG ERLAUBT",
+    "trade_not_recommended": "⛔ EINSTIEG NICHT EMPFOHLEN",
+    "unauthorized": "Kein Zugriff",
+    "language_settings": "🌐 Sprache / Language",
+    "language_choose": "🌐 Sprache wählen:",
+    "language_saved": "✅ Sprache gespeichert: {language}",
+}
+
+TRANSLATIONS["ru"] = {
+    **TRANSLATIONS["en"],
+    "reply_menu": "МЕНЮ",
+    "main_menu": "🏠 Главное меню:",
+    "start": "👋 Добро пожаловать! Нажмите «МЕНЮ».",
+    "watchlist": "Избранное",
+    "my_watchlist": "⭐ Мой список (Избранное)",
+    "forex_pairs": "💹 Валютные пары",
+    "crypto": "💎 Криптовалюты",
+    "stocks": "📈 Акции/Индексы",
+    "commodities": "🥇 Сырье",
+    "scanner": "Сканер",
+    "scanner_forex": "💹 Валюты",
+    "scanner_crypto": "💎 Криптовалюты",
+    "scanner_commodities": "🥇 Сырье",
+    "scanner_watchlist": "⭐ Избранное",
+    "back_categories": "⬅️ Назад к категориям",
+    "back_expirations": "⬅️ Назад к экспирациям",
+    "back_sessions": "⬅️ Назад к сессиям",
+    "choose_timeframe": "Экспирация для {category}:",
+    "watchlist_empty": "📭 Список пуст.",
+    "watchlist_choose_tf": "⭐ Избранное. Выберите ТФ:",
+    "watchlist_exp": "⭐ Избранное ({exp}):",
+    "forex_sessions": "Валютные сессии:",
+    "choose_asset": "Выберите актив:",
+    "session_pairs": "Пары {session}:",
+    "analyzing": "⏳ Анализ {symbol}...",
+    "analysis_error": "❌ Ошибка анализа для <b>{symbol}</b>",
+    "technical_error": "техническая ошибка анализа",
+    "press_menu": "Нажмите МЕНЮ.",
+    "stats_title": "📊 <b>Статистика за 1 час:</b>",
+    "no_data": "Нет данных",
+    "prices": "💹 <b>Цены:</b>",
+    "empty_feed": "Лента цен пустая",
+    "symbols": "Символов: {count}",
+    "expiration": "Экспирация",
+    "news": "Новости",
+    "bulls": "Быки",
+    "bears": "Медведи",
+    "timeframes": "🧠 <b>Таймфреймы:</b>",
+    "source_check": "🔎 <b>Проверка источников:</b>",
+    "price": "Цена",
+    "calendar": "Календарь",
+    "model": "Модель",
+    "market_data": "Исторические данные",
+    "signal_quality": "🔎 <b>Качество сигнала:</b> {quality}",
+    "analysis_factors": "📑 <b>Факторы анализа:</b>",
+    "short": "⚡ <b>КОРОТКО:</b>",
+    "buy_panel": "🟩🟩🟩 <b>ПОКУПКА</b> 🟩🟩🟩",
+    "sell_panel": "🟥🟥🟥 <b>ПРОДАЖА</b> 🟥🟥🟥",
+    "pause_panel": "🟨🟨🟨 <b>ПАУЗА</b> 🟨🟨🟨",
+    "no_trade_panel": "⬜⬜⬜ <b>НЕ СТАВИТЬ</b> ⬜⬜⬜",
+    "trade_allowed": "✅ ВХОД РАЗРЕШЕН",
+    "trade_not_recommended": "⛔ ВХОД НЕ РЕКОМЕНДОВАН",
+    "unauthorized": "Нет доступа",
+    "language_settings": "🌐 Язык / Language",
+    "language_choose": "🌐 Выберите язык:",
+    "language_saved": "✅ Язык сохранен: {language}",
+}
+
+VERDICTS["es"] = {"BUY": "compra", "SELL": "venta", "NEUTRAL": "neutral", "WAIT": "esperar", "NEWS_WAIT": "pausa por noticias", "ERROR": "error", "UNKNOWN": "desconocido"}
+VERDICTS["de"] = {"BUY": "kauf", "SELL": "verkauf", "NEUTRAL": "neutral", "WAIT": "warten", "NEWS_WAIT": "nachrichtenpause", "ERROR": "fehler", "UNKNOWN": "unbekannt"}
+VERDICTS["ru"] = {"BUY": "покупка", "SELL": "продажа", "NEUTRAL": "нейтрально", "WAIT": "ожидание", "NEWS_WAIT": "пауза из-за новостей", "ERROR": "ошибка", "UNKNOWN": "неизвестно"}
+SENTIMENTS["es"] = {"GO": "permitido", "BLOCK": "bloqueado", "UNKNOWN": "desconocido"}
+SENTIMENTS["de"] = {"GO": "erlaubt", "BLOCK": "blockiert", "UNKNOWN": "unbekannt"}
+SENTIMENTS["ru"] = {"GO": "разрешено", "BLOCK": "заблокировано", "UNKNOWN": "неизвестно"}
+TIMEFRAMES["es"] = {"1m": "1 min", "5m": "5 min", "15m": "15 min"}
+TIMEFRAMES["de"] = {"1m": "1 min", "5m": "5 min", "15m": "15 min"}
+TIMEFRAMES["ru"] = {"1m": "1 мин", "5m": "5 мин", "15m": "15 мин"}
+QUALITY["es"] = {"strong": "fuerte", "medium": "media", "weak": "débil", "wait": "esperar", "сильний": "fuerte", "середній": "media", "слабкий": "débil", "чекати": "esperar"}
+QUALITY["de"] = {"strong": "stark", "medium": "mittel", "weak": "schwach", "wait": "warten", "сильний": "stark", "середній": "mittel", "слабкий": "schwach", "чекати": "warten"}
+QUALITY["ru"] = {"strong": "сильный", "medium": "средний", "weak": "слабый", "wait": "ждать", "сильний": "сильный", "середній": "средний", "слабкий": "слабый", "чекати": "ждать"}
+SESSION_NAMES["es"] = {**SESSION_NAMES["en"], "Європейська": "Europea", "Американська": "Americana", "Азіатська": "Asiática", "Тихоокеанська": "Pacífico"}
+SESSION_NAMES["de"] = {**SESSION_NAMES["en"], "Європейська": "Europäisch", "Американська": "Amerikanisch", "Азіатська": "Asiatisch", "Тихоокеанська": "Pazifik"}
+SESSION_NAMES["ru"] = {"Європейська": "Европейская", "Американська": "Американская", "Азіатська": "Азиатская", "Тихоокеанська": "Тихоокеанская"}
+
+REASON_REPLACEMENTS["es"] = REASON_REPLACEMENTS["en"] + [("allowed", "permitido"), ("blocked", "bloqueado"), ("buy", "compra"), ("sell", "venta"), ("neutral", "neutral"), ("wait", "esperar"), ("Timeframes", "Marcos temporales"), ("News", "Noticias"), ("Price", "Precio"), ("no data", "sin datos"), ("fresh", "fresco"), ("stale", "antiguo"), ("sec ago", "seg atrás")]
+REASON_REPLACEMENTS["de"] = REASON_REPLACEMENTS["en"] + [("allowed", "erlaubt"), ("blocked", "blockiert"), ("buy", "kauf"), ("sell", "verkauf"), ("neutral", "neutral"), ("wait", "warten"), ("Timeframes", "Zeitrahmen"), ("News", "Nachrichten"), ("Price", "Preis"), ("no data", "keine daten"), ("fresh", "frisch"), ("stale", "veraltet"), ("sec ago", "sek her")]
+REASON_REPLACEMENTS["ru"] = REASON_REPLACEMENTS["en"] + [("allowed", "разрешено"), ("blocked", "заблокировано"), ("buy", "покупка"), ("sell", "продажа"), ("neutral", "нейтрально"), ("wait", "ожидание"), ("Timeframes", "Таймфреймы"), ("News", "Новости"), ("Price", "Цена"), ("no data", "нет данных"), ("fresh", "свежая"), ("stale", "устарела"), ("sec ago", "сек назад"), ("1 min", "1 мин"), ("5 min", "5 мин"), ("15 min", "15 мин")]
+
 
 def normalize_lang(lang: str | None) -> str:
     value = (lang or "").split(",", 1)[0].split("-")[0].split("_")[0].lower()
-    return "uk" if value == "uk" else DEFAULT_LANG
+    return value if value in SUPPORTED_LANGS else DEFAULT_LANG
 
 
 def t(key: str, lang: str | None = None, **kwargs) -> str:
@@ -420,6 +623,11 @@ def quality_label(value: str, lang: str | None = None) -> str:
 def session_label(value: str, lang: str | None = None) -> str:
     lang = normalize_lang(lang)
     return SESSION_NAMES[lang].get(str(value or ""), "" if value is None else str(value))
+
+
+def language_name(lang: str | None = None) -> str:
+    lang = normalize_lang(lang)
+    return LANGUAGE_NAMES.get(lang, LANGUAGE_NAMES[DEFAULT_LANG])
 
 
 def localize_reason(reason, lang: str | None = None) -> str:

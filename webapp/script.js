@@ -11,8 +11,6 @@ let tg = window.Telegram.WebApp;
 tg.ready();
 tg.expand();
 
-const userLang = normalizeAppLanguage(tg.initDataUnsafe?.user?.language_code);
-
 let currentWatchlist = [];
 let initData = tg.initData || "";
 let currentExpiration = "1m";
@@ -28,9 +26,15 @@ let priceEventSource = null;
 
 const debouncedFetchSignal = debounce(fetchSignal, 300);
 const WATCHLIST_STORAGE_KEY = "zigzag_watchlist";
+const LANG_STORAGE_KEY = "zigzag_language";
+let userLang = normalizeAppLanguage(
+    localStorage.getItem(LANG_STORAGE_KEY) || tg.initDataUnsafe?.user?.language_code
+);
+let scannerState = null;
 
 const APP_I18N = {
     en: {
+        languageLabel: "Language",
         appTitle: "Terminal | Binary Options",
         search: "🔍 Search...",
         expiration1m: "Expiration 1 min",
@@ -63,6 +67,7 @@ const APP_I18N = {
         favoriteSavedLocal: "Favorites were saved on this device. The server did not respond.",
     },
     uk: {
+        languageLabel: "Мова",
         appTitle: "Термінал | Бінарні Опціони",
         search: "🔍 Пошук...",
         expiration1m: "Експірація 1 хв",
@@ -94,6 +99,105 @@ const APP_I18N = {
         favoriteNotUpdated: "Обране не оновлено",
         favoriteSavedLocal: "Обране збережено на цьому пристрої. Сервер тимчасово не відповів.",
     },
+    es: {
+        languageLabel: "Idioma",
+        appTitle: "Terminal | Opciones Binarias",
+        search: "🔍 Buscar...",
+        expiration1m: "Expiración 1 min",
+        expiration5m: "Expiración 5 min",
+        chooseAsset: "Elige un activo para analizar...",
+        forex: "Divisas",
+        crypto: "Cripto",
+        commodities: "Materias primas",
+        watchlist: "Favoritos",
+        stocks: "Acciones/Índices",
+        noBroker: "no está en el broker",
+        noBrokerTitle: "Este símbolo no está en la lista del broker",
+        noData: "sin datos",
+        analyzing: "Analizando {pair}...",
+        requestFailed: "❌ Error de solicitud al servidor",
+        analysisError: "error técnico de análisis",
+        expiration: "Expiración",
+        news: "Noticias",
+        bulls: "Toros",
+        bears: "Osos",
+        sourceCheck: "Verificación de fuentes",
+        price: "Precio",
+        calendar: "Calendario",
+        model: "Modelo",
+        marketData: "Datos históricos",
+        signalQuality: "Calidad de señal",
+        entryAllowed: "✅ Entrada permitida",
+        entryNotRecommended: "⛔ Entrada no recomendada",
+        favoriteNotUpdated: "Favoritos no actualizados",
+        favoriteSavedLocal: "Favoritos guardados en este dispositivo. El servidor no respondió.",
+    },
+    de: {
+        languageLabel: "Sprache",
+        appTitle: "Terminal | Binäre Optionen",
+        search: "🔍 Suche...",
+        expiration1m: "Expiration 1 Min",
+        expiration5m: "Expiration 5 Min",
+        chooseAsset: "Asset für Analyse wählen...",
+        forex: "Währungen",
+        crypto: "Krypto",
+        commodities: "Rohstoffe",
+        watchlist: "Favoriten",
+        stocks: "Aktien/Indizes",
+        noBroker: "nicht beim Broker",
+        noBrokerTitle: "Dieses Symbol ist nicht in der Brokerliste",
+        noData: "keine Daten",
+        analyzing: "Analysiere {pair}...",
+        requestFailed: "❌ Serveranfrage fehlgeschlagen",
+        analysisError: "technischer Analysefehler",
+        expiration: "Expiration",
+        news: "Nachrichten",
+        bulls: "Bullen",
+        bears: "Bären",
+        sourceCheck: "Quellenprüfung",
+        price: "Preis",
+        calendar: "Kalender",
+        model: "Modell",
+        marketData: "Historische Daten",
+        signalQuality: "Signalqualität",
+        entryAllowed: "✅ Einstieg erlaubt",
+        entryNotRecommended: "⛔ Einstieg nicht empfohlen",
+        favoriteNotUpdated: "Favoriten wurden nicht aktualisiert",
+        favoriteSavedLocal: "Favoriten wurden auf diesem Gerät gespeichert. Der Server antwortete nicht.",
+    },
+    ru: {
+        languageLabel: "Язык",
+        appTitle: "Терминал | Бинарные Опционы",
+        search: "🔍 Поиск...",
+        expiration1m: "Экспирация 1 мин",
+        expiration5m: "Экспирация 5 мин",
+        chooseAsset: "Выберите актив для анализа...",
+        forex: "Валюты",
+        crypto: "Криптовалюты",
+        commodities: "Сырье",
+        watchlist: "Избранное",
+        stocks: "Акции/Индексы",
+        noBroker: "нет у брокера",
+        noBrokerTitle: "Этого символа нет в списке брокера",
+        noData: "нет данных",
+        analyzing: "Анализ {pair}...",
+        requestFailed: "❌ Ошибка запроса к серверу",
+        analysisError: "техническая ошибка анализа",
+        expiration: "Экспирация",
+        news: "Новости",
+        bulls: "Быки",
+        bears: "Медведи",
+        sourceCheck: "Проверка источников",
+        price: "Цена",
+        calendar: "Календарь",
+        model: "Модель",
+        marketData: "Исторические данные",
+        signalQuality: "Качество сигнала",
+        entryAllowed: "✅ Вход разрешен",
+        entryNotRecommended: "⛔ Вход не рекомендован",
+        favoriteNotUpdated: "Избранное не обновлено",
+        favoriteSavedLocal: "Избранное сохранено на этом устройстве. Сервер не ответил.",
+    },
 };
 
 document.addEventListener("DOMContentLoaded", function () {
@@ -102,6 +206,7 @@ document.addEventListener("DOMContentLoaded", function () {
 
     loadInitialData();
     bindScannerControls();
+    bindLanguageSelector();
     bindTimeframeButtons();
     bindSearch();
     connectSignalStream();
@@ -129,7 +234,7 @@ function buildQuery(params = {}) {
 
 function normalizeAppLanguage(lang) {
     const base = String(lang || "").split(/[-_]/)[0].toLowerCase();
-    return base === "uk" ? "uk" : "en";
+    return ["uk", "en", "es", "de", "ru"].includes(base) ? base : "en";
 }
 
 function tr(key, params = {}) {
@@ -156,6 +261,10 @@ function applyStaticTranslations() {
     if (tf5) tf5.textContent = tr("expiration5m");
 
     if (signalOutput) signalOutput.textContent = tr("chooseAsset");
+
+    document.querySelectorAll(".lang-button").forEach((button) => {
+        button.classList.toggle("active", button.dataset.lang === userLang);
+    });
 }
 
 async function apiGet(path, params = {}) {
@@ -226,6 +335,9 @@ function setCurrentWatchlist(items) {
 async function loadInitialData() {
     try {
         const staticData = await apiGet("/api/get_pairs");
+        if (staticData && staticData.language) {
+            setUserLanguage(staticData.language, { persist: false, redraw: false });
+        }
         allData = staticData || {};
         setCurrentWatchlist(mergeWatchlists((staticData && staticData.watchlist) || []));
         applyPairMetadata(staticData);
@@ -239,16 +351,49 @@ async function loadInitialData() {
 
     try {
         const state = await apiGet("/api/scanner/status");
+        scannerState = state;
         updateScannerButtons(state);
     } catch (err) {
         console.warn("Scanner status unavailable:", err);
-        updateScannerButtons({
+        scannerState = {
             forex: false,
             crypto: false,
             commodities: false,
             watchlist: false,
-        });
+        };
+        updateScannerButtons(scannerState);
     }
+}
+
+function setUserLanguage(lang, options = {}) {
+    const nextLang = normalizeAppLanguage(lang);
+    const changed = nextLang !== userLang;
+    userLang = nextLang;
+    localStorage.setItem(LANG_STORAGE_KEY, userLang);
+    applyStaticTranslations();
+
+    if (options.redraw !== false) {
+        updateScannerButtons(scannerState);
+        populateLists(allData, document.getElementById("searchInput")?.value || "");
+        if (currentSignalData) {
+            signalOutput.innerHTML = formatSignalAsHtml(currentSignalData, currentExpiration);
+        }
+    }
+
+    return changed;
+}
+
+function reconnectStreams() {
+    if (signalEventSource) {
+        signalEventSource.close();
+        signalEventSource = null;
+    }
+    if (priceEventSource) {
+        priceEventSource.close();
+        priceEventSource = null;
+    }
+    connectSignalStream();
+    connectPriceStream();
 }
 
 function bindScannerControls() {
@@ -270,10 +415,36 @@ function bindScannerControls() {
             }
 
             const newState = await response.json();
+            scannerState = newState;
             updateScannerButtons(newState);
         } catch (err) {
             console.error("Scanner toggle error:", err);
         }
+    });
+}
+
+function bindLanguageSelector() {
+    const selector = document.getElementById("languageSelector");
+    if (!selector) return;
+
+    selector.addEventListener("click", async (event) => {
+        const button = event.target.closest(".lang-button");
+        if (!button || !button.dataset.lang) return;
+
+        const nextLang = normalizeAppLanguage(button.dataset.lang);
+        setUserLanguage(nextLang);
+
+        try {
+            const res = await apiGet("/api/language", { language: nextLang });
+            if (res && res.language) {
+                setUserLanguage(res.language);
+            }
+        } catch (err) {
+            console.warn("Language save failed, using local preference:", err);
+        }
+
+        reconnectStreams();
+        loadInitialData();
     });
 }
 
@@ -393,27 +564,63 @@ function labelVerdict(value) {
             ERROR: "помилка",
             UNKNOWN: "невідомо",
         },
+        es: {
+            BUY: "compra",
+            SELL: "venta",
+            NEUTRAL: "neutral",
+            WAIT: "esperar",
+            NEWS_WAIT: "pausa por noticias",
+            ERROR: "error",
+            UNKNOWN: "desconocido",
+        },
+        de: {
+            BUY: "kauf",
+            SELL: "verkauf",
+            NEUTRAL: "neutral",
+            WAIT: "warten",
+            NEWS_WAIT: "nachrichtenpause",
+            ERROR: "fehler",
+            UNKNOWN: "unbekannt",
+        },
+        ru: {
+            BUY: "покупка",
+            SELL: "продажа",
+            NEUTRAL: "нейтрально",
+            WAIT: "ожидание",
+            NEWS_WAIT: "пауза из-за новостей",
+            ERROR: "ошибка",
+            UNKNOWN: "неизвестно",
+        },
     };
 
-    return labels[userLang][String(value || "").toUpperCase()] || labels[userLang].UNKNOWN;
+    const dict = labels[userLang] || labels.en;
+    return dict[String(value || "").toUpperCase()] || dict.UNKNOWN;
 }
 
 function labelSentiment(value) {
     const labels = {
         en: { GO: "allowed", BLOCK: "blocked", UNKNOWN: "unknown" },
         uk: { GO: "дозволено", BLOCK: "заблоковано", UNKNOWN: "невідомо" },
+        es: { GO: "permitido", BLOCK: "bloqueado", UNKNOWN: "desconocido" },
+        de: { GO: "erlaubt", BLOCK: "blockiert", UNKNOWN: "unbekannt" },
+        ru: { GO: "разрешено", BLOCK: "заблокировано", UNKNOWN: "неизвестно" },
     };
 
-    return labels[userLang][String(value || "").toUpperCase()] || labels[userLang].UNKNOWN;
+    const dict = labels[userLang] || labels.en;
+    return dict[String(value || "").toUpperCase()] || dict.UNKNOWN;
 }
 
 function labelTimeframe(value) {
     const labels = {
         en: { "1m": "1 min", "5m": "5 min", "15m": "15 min" },
         uk: { "1m": "1 хв", "5m": "5 хв", "15m": "15 хв" },
+        es: { "1m": "1 min", "5m": "5 min", "15m": "15 min" },
+        de: { "1m": "1 min", "5m": "5 min", "15m": "15 min" },
+        ru: { "1m": "1 мин", "5m": "5 мин", "15m": "15 мин" },
     };
 
-    return labels[userLang][String(value || "")] || String(value || "");
+    const dict = labels[userLang] || labels.en;
+    return dict[String(value || "")] || String(value || "");
 }
 
 function localizeReason(reason) {
@@ -477,7 +684,53 @@ function localizeReason(reason) {
         ],
     };
 
-    replacements[userLang].forEach(([source, target]) => {
+    replacements.es = replacements.en.concat([
+        ["allowed", "permitido"],
+        ["blocked", "bloqueado"],
+        ["buy", "compra"],
+        ["sell", "venta"],
+        ["wait", "esperar"],
+        ["Timeframes", "Marcos temporales"],
+        ["News", "Noticias"],
+        ["Price", "Precio"],
+        ["no data", "sin datos"],
+        ["fresh", "fresco"],
+        ["stale", "antiguo"],
+        ["sec ago", "seg atrás"],
+    ]);
+    replacements.de = replacements.en.concat([
+        ["allowed", "erlaubt"],
+        ["blocked", "blockiert"],
+        ["buy", "kauf"],
+        ["sell", "verkauf"],
+        ["wait", "warten"],
+        ["Timeframes", "Zeitrahmen"],
+        ["News", "Nachrichten"],
+        ["Price", "Preis"],
+        ["no data", "keine daten"],
+        ["fresh", "frisch"],
+        ["stale", "veraltet"],
+        ["sec ago", "sek her"],
+    ]);
+    replacements.ru = replacements.en.concat([
+        ["allowed", "разрешено"],
+        ["blocked", "заблокировано"],
+        ["buy", "покупка"],
+        ["sell", "продажа"],
+        ["wait", "ожидание"],
+        ["Timeframes", "Таймфреймы"],
+        ["News", "Новости"],
+        ["Price", "Цена"],
+        ["no data", "нет данных"],
+        ["fresh", "свежая"],
+        ["stale", "устарела"],
+        ["sec ago", "сек назад"],
+        ["1 min", "1 мин"],
+        ["5 min", "5 мин"],
+        ["15 min", "15 мин"],
+    ]);
+
+    (replacements[userLang] || replacements.en).forEach(([source, target]) => {
         text = text.split(source).join(target);
     });
 
@@ -864,9 +1117,40 @@ function labelSignalQuality(value) {
             "слабкий": "слабкий",
             "чекати": "чекати",
         },
+        es: {
+            strong: "fuerte",
+            medium: "media",
+            weak: "débil",
+            wait: "esperar",
+            "сильний": "fuerte",
+            "середній": "media",
+            "слабкий": "débil",
+            "чекати": "esperar",
+        },
+        de: {
+            strong: "stark",
+            medium: "mittel",
+            weak: "schwach",
+            wait: "warten",
+            "сильний": "stark",
+            "середній": "mittel",
+            "слабкий": "schwach",
+            "чекати": "warten",
+        },
+        ru: {
+            strong: "сильный",
+            medium: "средний",
+            weak: "слабый",
+            wait: "ждать",
+            "сильний": "сильный",
+            "середній": "средний",
+            "слабкий": "слабый",
+            "чекати": "ждать",
+        },
     };
 
-    return labels[userLang][String(value || "").toLowerCase()] || labels[userLang].wait;
+    const dict = labels[userLang] || labels.en;
+    return dict[String(value || "").toLowerCase()] || dict.wait;
 }
 
 function renderDataStatus(signalData) {

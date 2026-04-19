@@ -40,6 +40,16 @@ def _request_init_data() -> str | None:
 
 
 def _request_lang() -> str:
+    init_data = _request_init_data()
+    try:
+        if init_data and is_valid_init_data(init_data):
+            uid = get_user_id_from_init_data(init_data)
+            saved_lang = db.get_user_language(uid) if uid else None
+            if saved_lang:
+                return normalize_lang(saved_lang)
+    except Exception:
+        logger.debug("Could not resolve saved user language", exc_info=True)
+
     return normalize_lang(
         request.values.get("lang")
         or request.headers.get("X-User-Language")
@@ -366,8 +376,24 @@ def register_routes(app):
                 "symbols_loaded": app_state.SYMBOLS_LOADED,
                 "available_pairs": available_pairs,
                 "unavailable_pairs": unavailable_pairs,
+                "language": lang,
             }
         )
+
+    @app.route("/api/language", methods=["GET", "POST"])
+    @_protected_route
+    def language_settings():
+        uid = get_user_id_from_init_data(_request_init_data())
+        if not uid:
+            return jsonify({"success": False, "error": t("user_not_resolved", _request_lang())}), 400
+
+        requested_lang = request.values.get("language") or request.values.get("lang")
+        if requested_lang:
+            lang = db.set_user_language(uid, requested_lang)
+        else:
+            lang = _request_lang()
+
+        return jsonify({"success": True, "language": lang})
 
     @app.route("/api/scanner/status", methods=["GET"])
     @_protected_route

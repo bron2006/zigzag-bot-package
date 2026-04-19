@@ -19,6 +19,9 @@ import db
 from analysis import get_api_detailed_signal_data
 from config import COMMODITIES, CRYPTO_PAIRS, FOREX_SESSIONS, STOCK_TICKERS, TRADING_HOURS
 from locales import (
+    LANGUAGE_NAMES,
+    SUPPORTED_LANGS,
+    language_name,
     localize_reason,
     localize_signal_payload,
     normalize_lang,
@@ -44,7 +47,17 @@ CATEGORY_KEYS = {
 }
 
 
+def _get_user_id(update: Update | None = None) -> int:
+    user = getattr(update, "effective_user", None)
+    return int(getattr(user, "id", 0) or 0)
+
+
 def _lang(update: Update | None = None) -> str:
+    user_id = _get_user_id(update)
+    saved_lang = db.get_user_language(user_id) if user_id else None
+    if saved_lang:
+        return normalize_lang(saved_lang)
+
     user = getattr(update, "effective_user", None)
     return normalize_lang(getattr(user, "language_code", None))
 
@@ -96,6 +109,7 @@ def get_reply_keyboard(lang: str = "en") -> ReplyKeyboardMarkup:
 
 def get_main_menu_kb(lang: str = "en") -> InlineKeyboardMarkup:
     keyboard = [
+        [InlineKeyboardButton(t("language_settings", lang), callback_data="language_menu")],
         [InlineKeyboardButton(t("my_watchlist", lang), callback_data="category_watchlist")],
         [InlineKeyboardButton(t("forex_pairs", lang), callback_data="category_forex")],
         [InlineKeyboardButton(t("crypto", lang), callback_data="category_crypto")],
@@ -117,6 +131,21 @@ def get_main_menu_kb(lang: str = "en") -> InlineKeyboardMarkup:
         )
 
     return InlineKeyboardMarkup(keyboard)
+
+
+def get_language_kb(lang: str = "en") -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(
+                f"{'✅ ' if code == lang else ''}{name}",
+                callback_data=f"setlang_{code}",
+            )
+        ]
+        for code, name in LANGUAGE_NAMES.items()
+        if code in SUPPORTED_LANGS
+    ]
+    rows.append([InlineKeyboardButton(t("back_categories", lang), callback_data="main_menu")])
+    return InlineKeyboardMarkup(rows)
 
 
 def get_expiration_kb(category: str, lang: str = "en") -> InlineKeyboardMarkup:
@@ -392,6 +421,37 @@ def live_command(update, context):
     )
 
 
+def language_command(update, context):
+    lang = _lang(update)
+    chat_id = _get_chat_id(update)
+    _send_tracked(
+        context,
+        chat_id,
+        t("language_choose", lang),
+        reply_markup=get_language_kb(lang),
+    )
+
+
+def set_language_command(update, context):
+    command = ""
+    if update.message and update.message.text:
+        command = update.message.text.split()[0].lstrip("/").lower()
+
+    new_lang = normalize_lang(command)
+    if command not in SUPPORTED_LANGS:
+        return language_command(update, context)
+
+    chat_id = _get_chat_id(update)
+    user_id = _get_user_id(update) or chat_id
+    db.set_user_language(user_id, new_lang)
+    sent = update.message.reply_text(
+        t("language_saved", new_lang, language=language_name(new_lang)),
+        reply_markup=get_reply_keyboard(new_lang),
+    )
+    bot_track_message(context.bot_data, chat_id, sent.message_id)
+    _send_tracked(context, chat_id, t("main_menu", new_lang), reply_markup=get_main_menu_kb(new_lang))
+
+
 def button_handler(update: Update, context: CallbackContext):
     lang = _lang(update)
     query = update.callback_query
@@ -402,6 +462,28 @@ def button_handler(update: Update, context: CallbackContext):
 
     parts = query.data.split("_")
     action = parts[0]
+
+    if action == "language":
+        _send_tracked(
+            context,
+            chat_id,
+            t("language_choose", lang),
+            reply_markup=get_language_kb(lang),
+        )
+        return
+
+    if action == "setlang" and len(parts) > 1:
+        new_lang = normalize_lang(parts[1])
+        user_id = _get_user_id(update) or chat_id
+        db.set_user_language(user_id, new_lang)
+        _send_tracked(
+            context,
+            chat_id,
+            t("language_saved", new_lang, language=language_name(new_lang)),
+            reply_markup=get_reply_keyboard(new_lang),
+        )
+        _send_tracked(context, chat_id, t("main_menu", new_lang), reply_markup=get_main_menu_kb(new_lang))
+        return
 
     if action == "toggle" and len(parts) > 2:
         cat = parts[2]

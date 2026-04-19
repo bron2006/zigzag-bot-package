@@ -18,6 +18,7 @@ Base = declarative_base()
 engine = None
 SessionLocal = None
 _fallback_watchlists: dict[int, set[str]] = {}
+_fallback_user_languages: dict[int, str] = {}
 _fallback_lock = threading.RLock()
 
 
@@ -37,6 +38,18 @@ class UserWatchlist(Base):
 
     user_id = Column(Integer, primary_key=True)
     pair = Column(String, primary_key=True)
+
+
+class UserSettings(Base):
+    __tablename__ = "user_settings"
+
+    user_id = Column(Integer, primary_key=True)
+    language = Column(String(8), nullable=False, default="en")
+
+
+def _normalize_language(lang: str | None) -> str:
+    value = (lang or "").split(",", 1)[0].split("-")[0].split("_")[0].lower()
+    return value if value in {"en", "uk", "es", "de", "ru"} else "en"
 
 
 def _is_sqlite_url(url: str) -> bool:
@@ -172,6 +185,20 @@ def _fallback_get_watchlist(user_id: int) -> list[str]:
         return sorted(_fallback_watchlists.get(int(user_id), set()))
 
 
+def _fallback_get_user_language(user_id: int) -> str | None:
+    with _fallback_lock:
+        return _fallback_user_languages.get(int(user_id))
+
+
+def _fallback_set_user_language(user_id: int, lang: str, *, log_warning: bool = True) -> str:
+    lang = _normalize_language(lang)
+    with _fallback_lock:
+        _fallback_user_languages[int(user_id)] = lang
+    if log_warning:
+        logger.warning("Використано резервне збереження мови для user_id=%s lang=%s", user_id, lang)
+    return lang
+
+
 def _fallback_set_watchlist(user_id: int, pairs: list[str]) -> list[str]:
     normalized = {pair.strip().upper() for pair in pairs if pair}
     with _fallback_lock:
@@ -284,6 +311,58 @@ def check_database_status() -> dict:
             "label": f"помилка підключення: {type(exc).__name__}",
             "fallback_items": fallback_count,
         }
+
+
+def get_user_language(user_id: int) -> str | None:
+    if not user_id:
+        return None
+
+    fallback_lang = _fallback_get_user_language(user_id)
+
+    try:
+        with get_db() as db:
+            if db is None:
+                return fallback_lang
+
+            row = (
+                db.query(UserSettings)
+                .filter(UserSettings.user_id == int(user_id))
+                .first()
+            )
+            return _normalize_language(row.language) if row else fallback_lang
+    except SQLAlchemyError:
+        logger.exception("Error loading user language")
+        return fallback_lang
+
+
+def set_user_language(user_id: int, lang: str) -> str:
+    lang = _normalize_language(lang)
+    if not user_id:
+        return lang
+
+    try:
+        with session_scope() as db:
+            if db is None:
+                return _fallback_set_user_language(user_id, lang)
+
+            row = (
+                db.query(UserSettings)
+                .filter(UserSettings.user_id == int(user_id))
+                .first()
+            )
+            if row is None:
+                db.add(UserSettings(user_id=int(user_id), language=lang))
+            else:
+                row.language = lang
+
+            _fallback_set_user_language(user_id, lang, log_warning=False)
+            return lang
+    except OperationalError:
+        logger.exception("OperationalError while saving user language")
+        return _fallback_set_user_language(user_id, lang)
+    except SQLAlchemyError:
+        logger.exception("Error saving user language")
+        return _fallback_set_user_language(user_id, lang)
 
 
 def add_to_watchlist(user_id: int, pair: str) -> bool:

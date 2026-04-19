@@ -30,8 +30,11 @@ def _register_handlers(updater: Updater) -> None:
     dp.add_handler(CommandHandler("symbols", telegram_ui.symbols_command))
     dp.add_handler(CommandHandler("stats", telegram_ui.stats_command))
     dp.add_handler(CommandHandler("live", telegram_ui.live_command))
+    dp.add_handler(CommandHandler("language", telegram_ui.language_command))
+    dp.add_handler(CommandHandler("lang", telegram_ui.language_command))
+    dp.add_handler(CommandHandler(["uk", "en", "es", "de", "ru"], telegram_ui.set_language_command))
 
-    dp.add_handler(MessageHandler(Filters.regex(r"^(МЕНЮ|[Mm][Ee][Nn][Uu])$"), telegram_ui.menu))
+    dp.add_handler(MessageHandler(Filters.regex(r"^(МЕНЮ|МЕНЮ|MENÚ|MENÜ|MENU|[Mm][Ee][Nn][Uu])$"), telegram_ui.menu))
     dp.add_handler(MessageHandler(Filters.text & ~Filters.command, telegram_ui.reset_ui))
     dp.add_handler(CallbackQueryHandler(telegram_ui.button_handler))
 

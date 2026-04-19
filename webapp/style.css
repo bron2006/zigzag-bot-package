@@ -69,6 +69,29 @@ h1 { text-align: center; color: var(--text-color); font-size: 24px; margin-top: 
     border-color: var(--button-color);
 }
 
+.language-selector {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 8px;
+}
+
+.lang-button {
+    padding: 8px 6px;
+    font-size: 12px;
+    font-weight: 800;
+    background-color: var(--secondary-bg-color);
+    color: var(--hint-color);
+    border: 1px solid var(--secondary-bg-color);
+    border-radius: 8px;
+    cursor: pointer;
+}
+
+.lang-button.active {
+    background-color: var(--button-color);
+    color: var(--button-text-color);
+    border-color: var(--button-color);
+}
+
 .scanner-controls {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
