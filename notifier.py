@@ -139,7 +139,7 @@ def notify_admin(text: str, alert_key: str = None, parse_mode: str | None = None
 
 
 def notify_bot_started() -> None:
-    notify_admin("✅ ZigZag Bot запущено і готовий до роботи.", alert_key="bot_started")
+    logger.info("Bot startup notification is disabled.")
 
 
 def notify_bot_failed(reason: str) -> None:
@@ -183,7 +183,7 @@ def _restart_polling() -> None:
         from bot import start_telegram_bot
 
         start_telegram_bot()
-        _http_fallback(_get_admin_chat_id(), "✅ ZigZag Bot: Telegram polling перезапущено.")
+        logger.info("Telegram polling restarted.")
     except Exception:
         logger.exception("Failed to restart Telegram bot")
         _http_fallback(

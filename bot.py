@@ -7,7 +7,7 @@ from telegram.ext import CallbackQueryHandler, CommandHandler, Filters, MessageH
 import telegram_ui
 from config import TELEGRAM_BOT_TOKEN
 from errors import ConfigError, TelegramError
-from notifier import notify_bot_failed, notify_bot_started
+from notifier import notify_bot_failed
 from state import app_state
 
 logger = logging.getLogger("bot")
@@ -74,7 +74,6 @@ def start_telegram_bot():
             _start_polling_thread(updater)
 
             logger.info("Telegram bot запущено. Команди: /start /symbols /stats /live")
-            notify_bot_started()
             return updater
 
         except ConfigError:
