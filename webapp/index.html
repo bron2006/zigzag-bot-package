@@ -1,9 +1,9 @@
 ﻿<!DOCTYPE html>
-<html lang="uk">
+<html lang="en">
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no"/>
-    <title>ZigZag | Бінарні опціони</title>
+    <title>ZigZag | Binary Options</title>
     <link rel="stylesheet" href="style.css">
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <script>
@@ -12,18 +12,18 @@
 </head>
 <body>
     <div class="container">
-        <h1>Термінал | Бінарні Опціони</h1>
+        <h1 id="appTitle">Terminal | Binary Options</h1>
         <div class="controls-panel">
-            <input type="search" id="searchInput" class="search-input" placeholder="🔍 Пошук...">
+            <input type="search" id="searchInput" class="search-input" placeholder="🔍 Search...">
             <div id="expirationSelector" class="timeframe-selector">
-                <button class="tf-button active" data-exp="1m">Експірація 1 хв</button>
-                <button class="tf-button" data-exp="5m">Експірація 5 хв</button>
+                <button class="tf-button active" data-exp="1m">Expiration 1 min</button>
+                <button class="tf-button" data-exp="5m">Expiration 5 min</button>
             </div>
             <div id="scannerControls" class="scanner-controls">
-                <button class="scanner-button" data-cat="forex">💹 Валюти</button>
-                <button class="scanner-button" data-cat="crypto">💎 Криптовалюти</button>
-                <button class="scanner-button" data-cat="commodities">🥇 Сировина</button>
-                <button class="scanner-button" data-cat="watchlist">⭐ Обране</button>
+                <button class="scanner-button" data-cat="forex">💹 Currencies</button>
+                <button class="scanner-button" data-cat="crypto">💎 Crypto</button>
+                <button class="scanner-button" data-cat="commodities">🥇 Commodities</button>
+                <button class="scanner-button" data-cat="watchlist">⭐ Favorites</button>
             </div>
         </div>
 
@@ -32,7 +32,7 @@
         <div id="listsContainer"></div>
         <div class="separator"></div>
         <div id="signalContainer">
-            <div id="signalOutput">Оберіть актив для аналізу...</div>
+            <div id="signalOutput">Choose an asset for analysis...</div>
         </div>
         <div id="loader" class="hidden"></div>
     </div>

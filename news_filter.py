@@ -13,6 +13,7 @@ from twisted.internet import reactor
 from twisted.internet.defer import Deferred, succeed
 from twisted.internet.threads import deferToThreadPool
 
+from locales import localize_reason, normalize_lang
 from state import app_state
 
 logger = logging.getLogger("news_filter")
@@ -116,6 +117,15 @@ def _store_cache(pair: str, result: dict, ttl: int) -> dict:
         _cache[key] = payload
 
     return dict(payload)
+
+
+def _localized_result(result: dict, lang: str | None = None) -> dict:
+    if lang is None:
+        return dict(result or {})
+
+    payload = dict(result or {})
+    payload["reason"] = localize_reason(payload.get("reason", ""), normalize_lang(lang))
+    return payload
 
 
 def _safe_int(value: str, default: int) -> int:
@@ -570,7 +580,7 @@ def _call_openrouter_sync(pair: str) -> dict:
     )
 
 
-def get_latest_news_sentiment_async(pair: str):
+def get_latest_news_sentiment_async(pair: str, lang: str | None = None):
     pair = _normalize_pair(pair)
 
     cached = _get_cached(pair)
@@ -581,11 +591,11 @@ def get_latest_news_sentiment_async(pair: str):
             int(_now() - cached.get("ts", 0)),
             cached.get("source"),
         )
-        return succeed(cached)
+        return succeed(_localized_result(cached, lang))
 
     def _store(result: dict):
         ttl = _CACHE_TTL if result.get("available") else _ERROR_CACHE_TTL
-        return _store_cache(pair, result, ttl)
+        return _localized_result(_store_cache(pair, result, ttl), lang)
 
     def _on_error(failure):
         logger.error(
@@ -599,7 +609,7 @@ def get_latest_news_sentiment_async(pair: str):
             model=None,
             http_status=None,
         )
-        return _store_cache(pair, fallback, _ERROR_CACHE_TTL)
+        return _localized_result(_store_cache(pair, fallback, _ERROR_CACHE_TTL), lang)
 
     d = deferToThreadPool(
         reactor,
@@ -612,17 +622,16 @@ def get_latest_news_sentiment_async(pair: str):
     return d
 
 
-def get_latest_news_sentiment(pair: str) -> str:
+def get_latest_news_sentiment(pair: str, lang: str | None = None) -> str:
     pair = _normalize_pair(pair)
 
     cached = _get_cached(pair)
     if cached:
-        return cached["verdict"]
+        return _localized_result(cached, lang)["verdict"]
 
     result = _calendar_verdict(pair)
     ttl = _CACHE_TTL if result.get("available") else _ERROR_CACHE_TTL
-    _store_cache(pair, result, ttl)
-    return result["verdict"]
+    return _localized_result(_store_cache(pair, result, ttl), lang)["verdict"]
 
 
 def get_cache_stats() -> dict:

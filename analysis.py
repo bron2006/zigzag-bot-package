@@ -276,7 +276,7 @@ def _signal_quality(score: int, trade_allowed: bool) -> str:
 
 
 @defer.inlineCallbacks
-def _analysis_flow(client, symbol_cache, symbol, user_id, timeframe="5m"):
+def _analysis_flow(client, symbol_cache, symbol, user_id, timeframe="5m", lang: str | None = None):
     pair_norm = _normalize_pair(symbol)
     data_status = _base_status(pair_norm)
 
@@ -345,7 +345,7 @@ def _analysis_flow(client, symbol_cache, symbol, user_id, timeframe="5m"):
         score_a, verdict_a, reason_a = _run_technical_analysis(df_a)
         score_b, verdict_b, reason_b = _run_technical_analysis(df_b)
 
-        news_res = yield news_filter.get_latest_news_sentiment_async(pair_norm)
+        news_res = yield news_filter.get_latest_news_sentiment_async(pair_norm, lang)
         news_v = news_res.get("verdict", "GO")
         data_status["calendar"] = _calendar_status(news_res)
         data_status["price"] = _price_status(pair_norm)
@@ -409,8 +409,8 @@ def _analysis_flow(client, symbol_cache, symbol, user_id, timeframe="5m"):
         }
 
 
-def get_api_detailed_signal_data(client, symbol_cache, symbol, user_id, timeframe="5m"):
-    return defer.maybeDeferred(_analysis_flow, client, symbol_cache, symbol, user_id, timeframe)
+def get_api_detailed_signal_data(client, symbol_cache, symbol, user_id, timeframe="5m", lang: str | None = None):
+    return defer.maybeDeferred(_analysis_flow, client, symbol_cache, symbol, user_id, timeframe, lang)
 
 
 def _trendbar_to_row(bar, divisor: float) -> dict:

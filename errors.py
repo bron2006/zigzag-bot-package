@@ -5,6 +5,8 @@ import functools
 import threading
 import traceback
 
+from locales import t
+
 logger = logging.getLogger("errors")
 
 
@@ -69,7 +71,7 @@ class _ErrorRegistry:
         with self._lock:
             prev = self._counts.get(context, 0)
             if prev > 0:
-                logger.info(f"[{context}] відновлено після {prev} помилок підряд")
+                logger.info(t("ops_recovered_after_errors", "en", context=context, count=prev))
             self._counts[context] = 0
 
     def should_alert(self, context: str, cooldown: float = 300.0) -> bool:
@@ -94,17 +96,20 @@ def _alert(text: str, alert_key: str = None) -> None:
         from notifier import notify_admin
         notify_admin(text, alert_key=alert_key)
     except ImportError:
-        logger.warning(f"[alert] notifier недоступний. Повідомлення: {text}")
+        logger.warning(t("ops_notifier_unavailable", "en", text=text))
     except Exception:
-        logger.exception("[alert] Не вдалося надіслати алерт адміну")
+        logger.exception(t("ops_alert_send_failed", "en"))
 
 
 def _check_threshold(context, count, threshold, alert_cooldown, on_threshold):
     if count < threshold:
         return
-    msg = (
-        f"🚨 [{context}] Поріг досягнуто: {count} помилок підряд. "
-        + ("Запускаю відновлення..." if on_threshold else "Потрібна увага.")
+    msg = t(
+        "ops_threshold_reached",
+        "en",
+        context=context,
+        count=count,
+        action=t("ops_starting_recovery", "en") if on_threshold else t("ops_attention_required", "en"),
     )
     logger.error(msg)
     if _registry.should_alert(f"{context}_threshold", alert_cooldown):
@@ -113,7 +118,7 @@ def _check_threshold(context, count, threshold, alert_cooldown, on_threshold):
         try:
             on_threshold()
         except Exception:
-            logger.exception(f"[{context}] on_threshold callback впав")
+            logger.exception(t("ops_threshold_callback_failed", "en", context=context))
 
 
 def safe_twisted(
@@ -136,23 +141,22 @@ def safe_twisted(
                 count = _registry.record_error(context, threshold, window)
                 logger.error(
                     f"[{context}] {type(e).__name__}: {e} "
-                    f"(підряд: {count}, recoverable: {e.recoverable})\n"
+                    f"({t('ops_consecutive', 'en')}: {count}, recoverable: {e.recoverable})\n"
                     + traceback.format_exc()
                 )
                 if e.alert and _registry.should_alert(context, alert_cooldown):
                     _alert(f"⚠️ [{context}] {type(e).__name__}: {e}",
                            alert_key=f"{context}_{type(e).__name__}")
                 if not e.recoverable and _registry.should_alert(f"{context}_fatal", alert_cooldown):
-                    _alert(f"🛑 [{context}] НЕВІДНОВЛЮВАНА помилка: {e}\nПотрібне ручне втручання.",
-                           alert_key=f"{context}_fatal")
+                    _alert(t("ops_fatal_manual", "en", context=context, error=e), alert_key=f"{context}_fatal")
                 _check_threshold(context, count, threshold, alert_cooldown, on_threshold)
                 if reraise:
                     raise
             except Exception as e:
                 count = _registry.record_error(context, threshold, window)
                 logger.exception(
-                    f"[{context}] Несподіваний {type(e).__name__}: {e} "
-                    f"(підряд: {count}/{threshold})"
+                    f"[{context}] {t('ops_unexpected', 'en')} {type(e).__name__}: {e} "
+                    f"({t('ops_consecutive', 'en')}: {count}/{threshold})"
                 )
                 _check_threshold(context, count, threshold, alert_cooldown, on_threshold)
                 if reraise:
@@ -179,7 +183,7 @@ def safe_call(
                 return result
             except ZigZagError as e:
                 count = _registry.record_error(context, threshold, window)
-                logger.error(f"[{context}] {type(e).__name__}: {e} (підряд: {count})")
+                logger.error(f"[{context}] {type(e).__name__}: {e} ({t('ops_consecutive', 'en')}: {count})")
                 if e.alert and _registry.should_alert(context, alert_cooldown):
                     _alert(f"⚠️ [{context}] {e}", alert_key=context)
                 _check_threshold(context, count, threshold, alert_cooldown, on_threshold)
@@ -187,8 +191,8 @@ def safe_call(
             except Exception as e:
                 count = _registry.record_error(context, threshold, window)
                 logger.exception(
-                    f"[{context}] Несподіваний {type(e).__name__}: {e} "
-                    f"(підряд: {count}/{threshold})"
+                    f"[{context}] {t('ops_unexpected', 'en')} {type(e).__name__}: {e} "
+                    f"({t('ops_consecutive', 'en')}: {count}/{threshold})"
                 )
                 _check_threshold(context, count, threshold, alert_cooldown, on_threshold)
                 return default

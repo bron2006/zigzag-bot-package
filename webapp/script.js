@@ -11,6 +11,8 @@ let tg = window.Telegram.WebApp;
 tg.ready();
 tg.expand();
 
+const userLang = normalizeAppLanguage(tg.initDataUnsafe?.user?.language_code);
+
 let currentWatchlist = [];
 let initData = tg.initData || "";
 let currentExpiration = "1m";
@@ -27,7 +29,75 @@ let priceEventSource = null;
 const debouncedFetchSignal = debounce(fetchSignal, 300);
 const WATCHLIST_STORAGE_KEY = "zigzag_watchlist";
 
+const APP_I18N = {
+    en: {
+        appTitle: "Terminal | Binary Options",
+        search: "🔍 Search...",
+        expiration1m: "Expiration 1 min",
+        expiration5m: "Expiration 5 min",
+        chooseAsset: "Choose an asset for analysis...",
+        forex: "Currencies",
+        crypto: "Crypto",
+        commodities: "Commodities",
+        watchlist: "Favorites",
+        stocks: "Stocks/Indices",
+        noBroker: "not at broker",
+        noBrokerTitle: "This symbol is not in the broker list",
+        noData: "no data",
+        analyzing: "Analyzing {pair}...",
+        requestFailed: "❌ Server request failed",
+        analysisError: "technical analysis error",
+        expiration: "Expiration",
+        news: "News",
+        bulls: "Bulls",
+        bears: "Bears",
+        sourceCheck: "Source check",
+        price: "Price",
+        calendar: "Calendar",
+        model: "Model",
+        marketData: "Historical data",
+        signalQuality: "Signal quality",
+        entryAllowed: "✅ Entry allowed",
+        entryNotRecommended: "⛔ Entry not recommended",
+        favoriteNotUpdated: "Favorites were not updated",
+        favoriteSavedLocal: "Favorites were saved on this device. The server did not respond.",
+    },
+    uk: {
+        appTitle: "Термінал | Бінарні Опціони",
+        search: "🔍 Пошук...",
+        expiration1m: "Експірація 1 хв",
+        expiration5m: "Експірація 5 хв",
+        chooseAsset: "Оберіть актив для аналізу...",
+        forex: "Валюти",
+        crypto: "Криптовалюти",
+        commodities: "Сировина",
+        watchlist: "Обране",
+        stocks: "Акції/Індекси",
+        noBroker: "немає у брокера",
+        noBrokerTitle: "Цього символу немає в списку брокера",
+        noData: "немає даних",
+        analyzing: "Аналіз {pair}...",
+        requestFailed: "❌ Помилка запиту до сервера",
+        analysisError: "технічна помилка аналізу",
+        expiration: "Експірація",
+        news: "Новини",
+        bulls: "Бики",
+        bears: "Ведмеді",
+        sourceCheck: "Перевірка джерел",
+        price: "Ціна",
+        calendar: "Календар",
+        model: "Модель",
+        marketData: "Історичні дані",
+        signalQuality: "Якість сигналу",
+        entryAllowed: "✅ Вхід дозволено",
+        entryNotRecommended: "⛔ Вхід не рекомендований",
+        favoriteNotUpdated: "Обране не оновлено",
+        favoriteSavedLocal: "Обране збережено на цьому пристрої. Сервер тимчасово не відповів.",
+    },
+};
+
 document.addEventListener("DOMContentLoaded", function () {
+    applyStaticTranslations();
     showLoader(true);
 
     loadInitialData();
@@ -41,6 +111,8 @@ document.addEventListener("DOMContentLoaded", function () {
 function buildQuery(params = {}) {
     const search = new URLSearchParams();
 
+    search.set("lang", userLang);
+
     if (initData) {
         search.set("initData", initData);
     }
@@ -53,6 +125,37 @@ function buildQuery(params = {}) {
 
     const qs = search.toString();
     return qs ? `?${qs}` : "";
+}
+
+function normalizeAppLanguage(lang) {
+    const base = String(lang || "").split(/[-_]/)[0].toLowerCase();
+    return base === "uk" ? "uk" : "en";
+}
+
+function tr(key, params = {}) {
+    let text = (APP_I18N[userLang] && APP_I18N[userLang][key]) || APP_I18N.en[key] || key;
+    Object.entries(params).forEach(([name, value]) => {
+        text = text.split(`{${name}}`).join(String(value));
+    });
+    return text;
+}
+
+function applyStaticTranslations() {
+    document.documentElement.lang = userLang;
+    document.title = userLang === "uk" ? "ZigZag | Бінарні опціони" : "ZigZag | Binary Options";
+
+    const title = document.getElementById("appTitle");
+    if (title) title.textContent = tr("appTitle");
+
+    const searchInput = document.getElementById("searchInput");
+    if (searchInput) searchInput.placeholder = tr("search");
+
+    const tf1 = document.querySelector('.tf-button[data-exp="1m"]');
+    const tf5 = document.querySelector('.tf-button[data-exp="5m"]');
+    if (tf1) tf1.textContent = tr("expiration1m");
+    if (tf5) tf5.textContent = tr("expiration5m");
+
+    if (signalOutput) signalOutput.textContent = tr("chooseAsset");
 }
 
 async function apiGet(path, params = {}) {
@@ -272,65 +375,109 @@ function escapeHtml(value) {
 
 function labelVerdict(value) {
     const labels = {
-        BUY: "купівля",
-        SELL: "продаж",
-        NEUTRAL: "нейтрально",
-        WAIT: "очікування",
-        NEWS_WAIT: "пауза через новини",
-        ERROR: "помилка",
+        en: {
+            BUY: "buy",
+            SELL: "sell",
+            NEUTRAL: "neutral",
+            WAIT: "wait",
+            NEWS_WAIT: "news pause",
+            ERROR: "error",
+            UNKNOWN: "unknown",
+        },
+        uk: {
+            BUY: "купівля",
+            SELL: "продаж",
+            NEUTRAL: "нейтрально",
+            WAIT: "очікування",
+            NEWS_WAIT: "пауза через новини",
+            ERROR: "помилка",
+            UNKNOWN: "невідомо",
+        },
     };
 
-    return labels[String(value || "").toUpperCase()] || "невідомо";
+    return labels[userLang][String(value || "").toUpperCase()] || labels[userLang].UNKNOWN;
 }
 
 function labelSentiment(value) {
     const labels = {
-        GO: "дозволено",
-        BLOCK: "заблоковано",
+        en: { GO: "allowed", BLOCK: "blocked", UNKNOWN: "unknown" },
+        uk: { GO: "дозволено", BLOCK: "заблоковано", UNKNOWN: "невідомо" },
     };
 
-    return labels[String(value || "").toUpperCase()] || "невідомо";
+    return labels[userLang][String(value || "").toUpperCase()] || labels[userLang].UNKNOWN;
 }
 
 function labelTimeframe(value) {
     const labels = {
-        "1m": "1 хв",
-        "5m": "5 хв",
-        "15m": "15 хв",
+        en: { "1m": "1 min", "5m": "5 min", "15m": "15 min" },
+        uk: { "1m": "1 хв", "5m": "5 хв", "15m": "15 хв" },
     };
 
-    return labels[String(value || "")] || String(value || "");
+    return labels[userLang][String(value || "")] || String(value || "");
 }
 
 function localizeReason(reason) {
     let text = String(reason || "");
-    const replacements = [
-        ["NEWS_WAIT", "пауза через новини"],
-        ["NEUTRAL", "нейтрально"],
-        ["BLOCK", "заблоковано"],
-        ["BUY", "купівля"],
-        ["SELL", "продаж"],
-        ["WAIT", "очікування"],
-        ["ERROR", "помилка"],
-        ["GO", "дозволено"],
-        ["TF:", "Таймфрейми:"],
-        ["News filter:", "Фільтр новин:"],
-        ["ML", "ШІ"],
-        ["fallback", "резервний режим"],
-        ["timeout", "час очікування вичерпано"],
-        ["invalid_json_response", "некоректна відповідь"],
-        ["all_models_unavailable", "моделі недоступні"],
-        ["Symbol not found", "символ не знайдено"],
-        ["No Account ID", "акаунт не готовий"],
-        ["Unsupported timeframe", "непідтримуваний таймфрейм"],
-        ["No trendbars returned", "історичні дані не отримано"],
-        [" for ", " для "],
-        ["1m", "1 хв"],
-        ["5m", "5 хв"],
-        ["15m", "15 хв"],
-    ];
+    const replacements = {
+        en: [
+            ["NEWS_WAIT", "news pause"],
+            ["NEUTRAL", "neutral"],
+            ["BLOCK", "blocked"],
+            ["BUY", "buy"],
+            ["SELL", "sell"],
+            ["WAIT", "wait"],
+            ["ERROR", "error"],
+            ["GO", "allowed"],
+            ["Таймфрейми:", "Timeframes:"],
+            ["Новини:", "News:"],
+            ["Фільтр новин:", "News filter:"],
+            ["ШІ", "AI"],
+            ["пауза через новини", "news pause"],
+            ["нейтрально", "neutral"],
+            ["купівля", "buy"],
+            ["продаж", "sell"],
+            ["дозволено", "allowed"],
+            ["заблоковано", "blocked"],
+            ["немає даних", "no data"],
+            ["подій високої важливості поруч немає", "no nearby high-impact events"],
+            ["Symbol not found", "symbol not found"],
+            ["No Account ID", "account is not ready"],
+            ["Unsupported timeframe", "unsupported timeframe"],
+            ["No trendbars returned", "historical data not received"],
+            ["invalid_json_response", "invalid response"],
+            ["all_models_unavailable", "all models unavailable"],
+            ["1 хв", "1 min"],
+            ["5 хв", "5 min"],
+            ["15 хв", "15 min"],
+        ],
+        uk: [
+            ["NEWS_WAIT", "пауза через новини"],
+            ["NEUTRAL", "нейтрально"],
+            ["BLOCK", "заблоковано"],
+            ["BUY", "купівля"],
+            ["SELL", "продаж"],
+            ["WAIT", "очікування"],
+            ["ERROR", "помилка"],
+            ["GO", "дозволено"],
+            ["TF:", "Таймфрейми:"],
+            ["News filter:", "Фільтр новин:"],
+            ["ML", "ШІ"],
+            ["fallback", "резервний режим"],
+            ["timeout", "час очікування вичерпано"],
+            ["invalid_json_response", "некоректна відповідь"],
+            ["all_models_unavailable", "моделі недоступні"],
+            ["Symbol not found", "символ не знайдено"],
+            ["No Account ID", "акаунт не готовий"],
+            ["Unsupported timeframe", "непідтримуваний таймфрейм"],
+            ["No trendbars returned", "історичні дані не отримано"],
+            [" for ", " для "],
+            ["1m", "1 хв"],
+            ["5m", "5 хв"],
+            ["15m", "15 хв"],
+        ],
+    };
 
-    replacements.forEach(([source, target]) => {
+    replacements[userLang].forEach(([source, target]) => {
         text = text.split(source).join(target);
     });
 
@@ -364,10 +511,10 @@ function updateScannerButtons(stateDict) {
     if (!stateDict || !scannerControls) return;
 
     const textMap = {
-        forex: "Валюти",
-        crypto: "Криптовалюти",
-        commodities: "Сировина",
-        watchlist: "Обране",
+        forex: tr("forex"),
+        crypto: tr("crypto"),
+        commodities: tr("commodities"),
+        watchlist: tr("watchlist"),
     };
 
     Object.keys(textMap).forEach((cat) => {
@@ -448,12 +595,12 @@ function populateLists(data, query = "") {
             const brokerUnavailable = brokerSymbolsLoaded && unavailablePairs.has(pairNorm);
             const priceText =
                 brokerUnavailable
-                    ? "немає у брокера"
+                    ? tr("noBroker")
                     : (price && typeof price.mid === "number" ? price.mid.toFixed(5) : "—");
             const unavailableClass = brokerUnavailable ? " unavailable" : "";
             const disabledAttr = brokerUnavailable ? " disabled" : "";
             const titleAttr = brokerUnavailable
-                ? ' title="Цього символу немає в списку брокера"'
+                ? ` title="${escapeHtml(tr("noBrokerTitle"))}"`
                 : "";
 
             sectionHtml += `
@@ -483,7 +630,7 @@ function populateLists(data, query = "") {
         const wl = currentWatchlist.map(
             (pairNorm) => allPairs.find((p) => normalizePair(p) === pairNorm) || pairNorm
         );
-        html += createSection("⭐ Обране", wl);
+        html += createSection(`⭐ ${tr("watchlist")}`, wl);
     }
 
     if (data.forex) {
@@ -492,9 +639,9 @@ function populateLists(data, query = "") {
         });
     }
 
-    if (data.crypto) html += createSection("💎 Криптовалюти", data.crypto);
-    if (data.commodities) html += createSection("🥇 Сировина", data.commodities);
-    if (data.stocks) html += createSection("📈 Акції/Індекси", data.stocks);
+    if (data.crypto) html += createSection(`💎 ${tr("crypto")}`, data.crypto);
+    if (data.commodities) html += createSection(`🥇 ${tr("commodities")}`, data.commodities);
+    if (data.stocks) html += createSection(`📈 ${tr("stocks")}`, data.stocks);
 
     listsContainer.innerHTML = html;
 
@@ -591,7 +738,7 @@ async function toggleFavorite(event, button, pair) {
             const searchInput = document.getElementById("searchInput");
             populateLists(allData, searchInput ? searchInput.value : "");
         } else {
-            throw new Error(res.error || "Обране не оновлено");
+            throw new Error(res.error || tr("favoriteNotUpdated"));
         }
     } catch (err) {
         console.error("Toggle favorite error:", err);
@@ -605,7 +752,7 @@ async function toggleFavorite(event, button, pair) {
         populateLists(allData, searchInput ? searchInput.value : "");
 
         if (window.Telegram && tg && typeof tg.showAlert === "function") {
-            tg.showAlert("Обране збережено на цьому пристрої. Сервер тимчасово не відповів.");
+            tg.showAlert(tr("favoriteSavedLocal"));
         }
     } finally {
         if (button && button.textContent === "…") {
@@ -624,7 +771,7 @@ async function fetchSignal(pair) {
         showLoader(false);
         signalOutput.innerHTML = `
             <div style="text-align:center; color:#ff9800; padding:10px;">
-                ⚠️ Цього символу немає в списку брокера: ${escapeHtml(pair)}
+                ⚠️ ${escapeHtml(tr("noBrokerTitle"))}: ${escapeHtml(pair)}
             </div>
         `;
         setTimeout(() => {
@@ -635,7 +782,7 @@ async function fetchSignal(pair) {
 
     lastSelectedPair = pair;
     showLoader(true);
-    signalOutput.innerHTML = `<div style="text-align:center; padding:10px;">⏳ Аналіз ${escapeHtml(pair)}...</div>`;
+    signalOutput.innerHTML = `<div style="text-align:center; padding:10px;">⏳ ${escapeHtml(tr("analyzing", { pair }))}</div>`;
 
     try {
         const url = `${API_BASE_URL}/api/signal${buildQuery({
@@ -657,7 +804,7 @@ async function fetchSignal(pair) {
         currentSignalData = null;
         signalOutput.innerHTML = `
             <div style="text-align:center; color:#ef5350; padding:10px;">
-                ❌ Помилка запиту до сервера
+                ${escapeHtml(tr("requestFailed"))}
             </div>
         `;
     } finally {
@@ -671,7 +818,7 @@ function renderTimeframeDetails(signalData) {
     if (!entries.length) return "";
 
     const rows = entries.map(([tf, item]) => {
-        const rawVerdict = item?.verdict || "немає даних";
+        const rawVerdict = item?.verdict || "WAIT";
         const verdict = escapeHtml(labelVerdict(rawVerdict));
         const score = Number.isFinite(Number(item?.score)) ? Number(item.score) : 50;
 
@@ -697,27 +844,39 @@ function renderTimeframeDetails(signalData) {
 
 function labelSignalQuality(value) {
     const labels = {
-        strong: "сильний",
-        medium: "середній",
-        weak: "слабкий",
-        wait: "чекати",
-        "сильний": "сильний",
-        "середній": "середній",
-        "слабкий": "слабкий",
-        "чекати": "чекати",
+        en: {
+            strong: "strong",
+            medium: "medium",
+            weak: "weak",
+            wait: "wait",
+            "сильний": "strong",
+            "середній": "medium",
+            "слабкий": "weak",
+            "чекати": "wait",
+        },
+        uk: {
+            strong: "сильний",
+            medium: "середній",
+            weak: "слабкий",
+            wait: "чекати",
+            "сильний": "сильний",
+            "середній": "середній",
+            "слабкий": "слабкий",
+            "чекати": "чекати",
+        },
     };
 
-    return labels[String(value || "").toLowerCase()] || "чекати";
+    return labels[userLang][String(value || "").toLowerCase()] || labels[userLang].wait;
 }
 
 function renderDataStatus(signalData) {
     const status = signalData?.data_status || {};
     const items = [
         ["cTrader", status.ctrader],
-        ["Ціна", status.price],
-        ["Календар", status.calendar],
-        ["Модель", status.ml],
-        ["Історичні дані", status.market_data],
+        [tr("price"), status.price],
+        [tr("calendar"), status.calendar],
+        [tr("model"), status.ml],
+        [tr("marketData"), status.market_data],
     ].filter(([, item]) => item && typeof item === "object");
 
     if (!items.length) return "";
@@ -726,7 +885,7 @@ function renderDataStatus(signalData) {
         const ok = item.ok;
         const icon = ok === true ? "✅" : ok === false ? "⚠️" : "⏳";
         const color = ok === true ? "#26a69a" : ok === false ? "#ef5350" : "#94a3b8";
-        const label = escapeHtml(localizeReason(item.label || "немає даних"));
+        const label = escapeHtml(localizeReason(item.label || tr("noData")));
 
         return `
             <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; padding:4px 0; border-bottom:1px solid rgba(255,255,255,0.06);">
@@ -738,7 +897,7 @@ function renderDataStatus(signalData) {
 
     return `
         <div style="margin:8px 0 6px; padding:8px 10px; border:1px solid rgba(255,255,255,0.08); border-radius:8px; background:rgba(255,255,255,0.02); font-size:12px; line-height:1.25;">
-            <div style="font-weight:800; margin-bottom:4px; color:#ffffff;">Перевірка джерел</div>
+            <div style="font-weight:800; margin-bottom:4px; color:#ffffff;">${escapeHtml(tr("sourceCheck"))}</div>
             ${rows}
         </div>
     `;
@@ -748,7 +907,7 @@ function formatSignalAsHtml(signalData, exp) {
     if (signalData && signalData.unavailable_symbol) {
         return `
             <div style="text-align:center; color:#ff9800; padding:10px;">
-                ⚠️ Цього символу немає в списку брокера: ${escapeHtml(signalData.pair || "")}
+                ⚠️ ${escapeHtml(tr("noBrokerTitle"))}: ${escapeHtml(signalData.pair || "")}
             </div>
         `;
     }
@@ -756,12 +915,12 @@ function formatSignalAsHtml(signalData, exp) {
     if (!signalData || signalData.error) {
         return `
             <div style="text-align:center; color:#ef5350; padding:10px;">
-                ❌ Помилка: технічна помилка аналізу
+                ❌ ${escapeHtml(tr("analysisError"))}
             </div>
         `;
     }
 
-    const pair = escapeHtml(signalData.pair || "немає даних");
+    const pair = escapeHtml(signalData.pair || tr("noData"));
     const price = signalData.price;
     const verdictText = escapeHtml(labelVerdict(signalData.verdict_text || "WAIT"));
     const score = Number.isFinite(Number(signalData.score)) ? Number(signalData.score) : 50;
@@ -788,11 +947,11 @@ function formatSignalAsHtml(signalData, exp) {
     const safePrice =
         typeof price === "number"
             ? price.toFixed(5)
-            : "немає даних";
+            : tr("noData");
 
     return `
         <div class="signal-header" style="text-align:center; font-size:1em; margin-bottom:6px;">
-            <strong>${pair}</strong> <span style="color:#64748b; font-size:0.74em;">(Експірація: ${escapeHtml(labelTimeframe(exp))})</span>
+            <strong>${pair}</strong> <span style="color:#64748b; font-size:0.74em;">(${escapeHtml(tr("expiration"))}: ${escapeHtml(labelTimeframe(exp))})</span>
         </div>
         <div class="verdict-container" style="text-align:center; margin:6px 0 10px;">
             <div class="arrow" style="font-size:48px; line-height:0.95; display:block; margin-bottom:2px;">${arrow}</div>
@@ -802,7 +961,7 @@ function formatSignalAsHtml(signalData, exp) {
         ${
             sentiment
                 ? `<div class="ai-verdict" style="padding:5px 9px; border-radius:8px; text-align:center; font-weight:bold; margin:5px auto; border:1px solid; background:rgba(0,0,0,0.1); color:${rawSentiment === "GO" ? "#26a69a" : "#ef5350"}; width:fit-content; font-size:12px;">
-                    ${rawSentiment === "GO" ? "✅" : "🚨"} Новини: ${sentiment}
+                    ${rawSentiment === "GO" ? "✅" : "🚨"} ${escapeHtml(tr("news"))}: ${sentiment}
                    </div>`
                 : ""
         }
@@ -813,10 +972,10 @@ function formatSignalAsHtml(signalData, exp) {
         ${renderTimeframeDetails(signalData)}
         ${renderDataStatus(signalData)}
         <div style="text-align:center; margin-top:5px; font-weight:bold; color:#f8fafc; font-size:13px;">
-            🔎 Якість сигналу: ${quality}
+            🔎 ${escapeHtml(tr("signalQuality"))}: ${quality}
         </div>
         <div style="text-align:center; margin-top:5px; font-weight:bold; color:${tradeAllowed ? "#26a69a" : "#ef5350"}; font-size:13px;">
-            ${tradeAllowed ? "✅ Вхід дозволено" : "⛔ Вхід не рекомендований"}
+            ${tradeAllowed ? escapeHtml(tr("entryAllowed")) : escapeHtml(tr("entryNotRecommended"))}
         </div>
         ${
             reasons.length

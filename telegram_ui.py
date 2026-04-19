@@ -18,19 +18,39 @@ from twisted.internet.threads import deferToThreadPool
 import db
 from analysis import get_api_detailed_signal_data
 from config import COMMODITIES, CRYPTO_PAIRS, FOREX_SESSIONS, STOCK_TICKERS, TRADING_HOURS
+from locales import (
+    localize_reason,
+    localize_signal_payload,
+    normalize_lang,
+    quality_label,
+    session_label,
+    sentiment_label,
+    t,
+    timeframe_label,
+    verdict_label,
+)
 from state import app_state
 from utils_message_cleanup import bot_clear_messages, bot_track_message
 
 logger = logging.getLogger(__name__)
 
 EXPIRATIONS = ["1m", "5m", "15m"]
-CATEGORY_LABELS = {
-    "forex": "Валютні пари",
-    "crypto": "Криптовалюти",
-    "stocks": "Акції/Індекси",
-    "commodities": "Сировина",
-    "watchlist": "Обране",
+CATEGORY_KEYS = {
+    "forex": "forex_pairs",
+    "crypto": "crypto",
+    "stocks": "stocks",
+    "commodities": "commodities",
+    "watchlist": "watchlist",
 }
+
+
+def _lang(update: Update | None = None) -> str:
+    user = getattr(update, "effective_user", None)
+    return normalize_lang(getattr(user, "language_code", None))
+
+
+def _category_label(category: str, lang: str) -> str:
+    return t(CATEGORY_KEYS.get(category, "watchlist"), lang)
 
 
 def _blocking_pool():
@@ -70,56 +90,56 @@ def _bot_call_async(func: Callable, *args, **kwargs):
     )
 
 
-def get_reply_keyboard() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup([[KeyboardButton("МЕНЮ")]], resize_keyboard=True)
+def get_reply_keyboard(lang: str = "en") -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup([[KeyboardButton(t("reply_menu", lang))]], resize_keyboard=True)
 
 
-def get_main_menu_kb() -> InlineKeyboardMarkup:
+def get_main_menu_kb(lang: str = "en") -> InlineKeyboardMarkup:
     keyboard = [
-        [InlineKeyboardButton("⭐ Мій список (Обране)", callback_data="category_watchlist")],
-        [InlineKeyboardButton("💹 Валютні пари", callback_data="category_forex")],
-        [InlineKeyboardButton("💎 Криптовалюти", callback_data="category_crypto")],
-        [InlineKeyboardButton("📈 Акції/Індекси", callback_data="category_stocks")],
-        [InlineKeyboardButton("🥇 Сировина", callback_data="category_commodities")],
+        [InlineKeyboardButton(t("my_watchlist", lang), callback_data="category_watchlist")],
+        [InlineKeyboardButton(t("forex_pairs", lang), callback_data="category_forex")],
+        [InlineKeyboardButton(t("crypto", lang), callback_data="category_crypto")],
+        [InlineKeyboardButton(t("stocks", lang), callback_data="category_stocks")],
+        [InlineKeyboardButton(t("commodities", lang), callback_data="category_commodities")],
     ]
 
     scanner_map = {
-        "forex": "💹 Валюти",
-        "crypto": "💎 Криптовалюти",
-        "commodities": "🥇 Сировина",
-        "watchlist": "⭐ Обране",
+        "forex": t("scanner_forex", lang),
+        "crypto": t("scanner_crypto", lang),
+        "commodities": t("scanner_commodities", lang),
+        "watchlist": t("scanner_watchlist", lang),
     }
 
     for key, text in scanner_map.items():
         status = "✅" if app_state.get_scanner_state(key) else "❌"
         keyboard.append(
-            [InlineKeyboardButton(f"{status} Сканер {text}", callback_data=f"toggle_scanner_{key}")]
+            [InlineKeyboardButton(f"{status} {t('scanner', lang)} {text}", callback_data=f"toggle_scanner_{key}")]
         )
 
     return InlineKeyboardMarkup(keyboard)
 
 
-def get_expiration_kb(category: str) -> InlineKeyboardMarkup:
+def get_expiration_kb(category: str, lang: str = "en") -> InlineKeyboardMarkup:
     kb = [[InlineKeyboardButton(exp, callback_data=f"exp_{category}_{exp}") for exp in EXPIRATIONS]]
-    kb.append([InlineKeyboardButton("⬅️ Назад до категорій", callback_data="main_menu")])
+    kb.append([InlineKeyboardButton(t("back_categories", lang), callback_data="main_menu")])
     return InlineKeyboardMarkup(kb)
 
 
-def get_forex_sessions_kb(expiration: str) -> InlineKeyboardMarkup:
+def get_forex_sessions_kb(expiration: str, lang: str = "en") -> InlineKeyboardMarkup:
     kb = [
         [
             InlineKeyboardButton(
-                f"{TRADING_HOURS.get(s, '')} {s}".strip(),
+                f"{TRADING_HOURS.get(s, '')} {session_label(s, lang)}".strip(),
                 callback_data=f"session_forex_{expiration}_{s}",
             )
         ]
         for s in FOREX_SESSIONS
     ]
-    kb.append([InlineKeyboardButton("⬅️ Назад до експірацій", callback_data="category_forex")])
+    kb.append([InlineKeyboardButton(t("back_expirations", lang), callback_data="category_forex")])
     return InlineKeyboardMarkup(kb)
 
 
-def get_assets_kb(asset_list: list, category: str, expiration: str) -> InlineKeyboardMarkup:
+def get_assets_kb(asset_list: list, category: str, expiration: str, lang: str = "en") -> InlineKeyboardMarkup:
     kb, row = [], []
 
     for asset in asset_list:
@@ -135,7 +155,7 @@ def get_assets_kb(asset_list: list, category: str, expiration: str) -> InlineKey
     if row:
         kb.append(row)
 
-    back = "⬅️ Назад до сесій" if category == "forex" else "⬅️ Назад до експірацій"
+    back = t("back_sessions", lang) if category == "forex" else t("back_expirations", lang)
     callback_back = f"exp_forex_{expiration}" if category == "forex" else f"category_{category}"
     kb.append([InlineKeyboardButton(back, callback_data=callback_back)])
 
@@ -146,119 +166,53 @@ def _safe_html(value) -> str:
     return html.escape("" if value is None else str(value))
 
 
-def _label_verdict(value) -> str:
-    labels = {
-        "BUY": "купівля",
-        "SELL": "продаж",
-        "NEUTRAL": "нейтрально",
-        "WAIT": "очікування",
-        "NEWS_WAIT": "пауза через новини",
-        "ERROR": "помилка",
-    }
-    return labels.get(str(value or "").upper(), "невідомо")
+def _label_verdict(value, lang: str = "en") -> str:
+    return verdict_label(value, lang)
 
 
-def _label_verdict_strong(value) -> str:
-    labels = {
-        "BUY": "КУПІВЛЯ",
-        "SELL": "ПРОДАЖ",
-        "NEUTRAL": "НЕЙТРАЛЬНО",
-        "WAIT": "ОЧІКУВАННЯ",
-        "NEWS_WAIT": "ПАУЗА ЧЕРЕЗ НОВИНИ",
-        "ERROR": "ПОМИЛКА",
-    }
-    return labels.get(str(value or "").upper(), "НЕВІДОМО")
+def _label_verdict_strong(value, lang: str = "en") -> str:
+    return verdict_label(value, lang, strong=True)
 
 
-def _label_sentiment(value) -> str:
-    labels = {
-        "GO": "дозволено",
-        "BLOCK": "заблоковано",
-    }
-    return labels.get(str(value or "").upper(), "невідомо")
+def _label_sentiment(value, lang: str = "en") -> str:
+    return sentiment_label(value, lang)
 
 
-def _label_timeframe(value) -> str:
-    labels = {
-        "1m": "1 хв",
-        "5m": "5 хв",
-        "15m": "15 хв",
-    }
-    return labels.get(str(value or ""), "" if value is None else str(value))
+def _label_timeframe(value, lang: str = "en") -> str:
+    return timeframe_label(value, lang)
 
 
-def _format_reason_uk(reason) -> str:
-    text = "" if reason is None else str(reason)
-
-    replacements = {
-        "NEWS_WAIT": "пауза через новини",
-        "NEUTRAL": "нейтрально",
-        "BLOCK": "заблоковано",
-        "BUY": "купівля",
-        "SELL": "продаж",
-        "WAIT": "очікування",
-        "ERROR": "помилка",
-        "GO": "дозволено",
-        "TF:": "Таймфрейми:",
-        "News filter:": "Фільтр новин:",
-        "ML": "ШІ",
-        "fallback": "резервний режим",
-        "timeout": "час очікування вичерпано",
-        "invalid_json_response": "некоректна відповідь",
-        "all_models_unavailable": "моделі недоступні",
-        "Symbol not found": "символ не знайдено",
-        "No Account ID": "акаунт не готовий",
-        "Unsupported timeframe": "непідтримуваний таймфрейм",
-        "No trendbars returned": "історичні дані не отримано",
-    }
-
-    for source, target in replacements.items():
-        text = text.replace(source, target)
-
-    text = text.replace("1m", "1 хв")
-    text = text.replace("5m", "5 хв")
-    text = text.replace("15m", "15 хв")
-    text = text.replace(" for ", " для ")
-    return text
+def _format_reason(reason, lang: str = "en") -> str:
+    return localize_reason(reason, lang)
 
 
-def _format_timeframe_details(result: dict) -> list[str]:
+def _format_timeframe_details(result: dict, lang: str = "en") -> list[str]:
     details = result.get("timeframe_details") or {}
     if not details:
         return []
 
-    lines = ["🧠 <b>Таймфрейми:</b>"]
+    lines = [t("timeframes", lang)]
 
     for tf, item in details.items():
-        verdict = _safe_html(_label_verdict_strong(item.get("verdict", "немає даних")))
-        score = _safe_html(item.get("score", "немає даних"))
-        lines.append(f"• <b>{_safe_html(_label_timeframe(tf))}</b>: {verdict} ({score}%)")
+        verdict = _safe_html(_label_verdict_strong(item.get("verdict", "WAIT"), lang))
+        score = _safe_html(item.get("score", t("no_data", lang)))
+        lines.append(f"• <b>{_safe_html(_label_timeframe(tf, lang))}</b>: {verdict} ({score}%)")
 
     return lines
 
 
-def _label_signal_quality(value) -> str:
-    labels = {
-        "strong": "сильний",
-        "medium": "середній",
-        "weak": "слабкий",
-        "wait": "чекати",
-        "сильний": "сильний",
-        "середній": "середній",
-        "слабкий": "слабкий",
-        "чекати": "чекати",
-    }
-    return labels.get(str(value or "").lower(), "чекати")
+def _label_signal_quality(value, lang: str = "en") -> str:
+    return quality_label(value, lang)
 
 
-def _format_data_status(result: dict) -> list[str]:
+def _format_data_status(result: dict, lang: str = "en") -> list[str]:
     status = result.get("data_status") or {}
     items = [
         ("cTrader", status.get("ctrader")),
-        ("Ціна", status.get("price")),
-        ("Календар", status.get("calendar")),
-        ("Модель", status.get("ml")),
-        ("Історичні дані", status.get("market_data")),
+        (t("price", lang), status.get("price")),
+        (t("calendar", lang), status.get("calendar")),
+        (t("model", lang), status.get("ml")),
+        (t("market_data", lang), status.get("market_data")),
     ]
 
     lines = []
@@ -268,21 +222,21 @@ def _format_data_status(result: dict) -> list[str]:
 
         ok = item.get("ok")
         icon = "✅" if ok is True else "⚠️" if ok is False else "⏳"
-        label = _format_reason_uk(item.get("label") or "немає даних")
+        label = _format_reason(item.get("label") or t("no_data", lang), lang)
         lines.append(f"• {icon} <b>{_safe_html(title)}:</b> {_safe_html(label)}")
 
     if not lines:
         return []
 
-    return ["🔎 <b>Перевірка джерел:</b>", *lines]
+    return [t("source_check", lang), *lines]
 
 
-def _format_action_panel(pair: str, expiration: str, raw_verdict: str, verdict: str, trade_allowed: str) -> list[str]:
-    tf = _safe_html(_label_timeframe(expiration))
+def _format_action_panel(pair: str, expiration: str, raw_verdict: str, verdict: str, trade_allowed: str, lang: str = "en") -> list[str]:
+    tf = _safe_html(_label_timeframe(expiration, lang))
 
     if raw_verdict == "BUY":
         return [
-            "🟩🟩🟩 <b>КУПІВЛЯ</b> 🟩🟩🟩",
+            t("buy_panel", lang),
             f"⬆️⬆️⬆️ <b>{verdict}</b> ⬆️⬆️⬆️",
             f"<b>{pair}</b> · {tf}",
             f"<b>{trade_allowed}</b>",
@@ -290,7 +244,7 @@ def _format_action_panel(pair: str, expiration: str, raw_verdict: str, verdict: 
 
     if raw_verdict == "SELL":
         return [
-            "🟥🟥🟥 <b>ПРОДАЖ</b> 🟥🟥🟥",
+            t("sell_panel", lang),
             f"⬇️⬇️⬇️ <b>{verdict}</b> ⬇️⬇️⬇️",
             f"<b>{pair}</b> · {tf}",
             f"<b>{trade_allowed}</b>",
@@ -298,30 +252,32 @@ def _format_action_panel(pair: str, expiration: str, raw_verdict: str, verdict: 
 
     if raw_verdict == "NEWS_WAIT":
         return [
-            "🟨🟨🟨 <b>ПАУЗА</b> 🟨🟨🟨",
+            t("pause_panel", lang),
             f"⏸️⏸️⏸️ <b>{verdict}</b> ⏸️⏸️⏸️",
             f"<b>{pair}</b> · {tf}",
             f"<b>{trade_allowed}</b>",
         ]
 
     return [
-        "⬜⬜⬜ <b>НЕ СТАВИТИ</b> ⬜⬜⬜",
+        t("no_trade_panel", lang),
         f"↔️↔️↔️ <b>{verdict}</b> ↔️↔️↔️",
         f"<b>{pair}</b> · {tf}",
         f"<b>{trade_allowed}</b>",
     ]
 
 
-def _format_signal_message(result: dict, expiration: str) -> str:
-    if result.get("error"):
-        return "❌ Помилка: <code>технічна помилка аналізу</code>"
+def _format_signal_message(result: dict, expiration: str, lang: str = "en") -> str:
+    result = localize_signal_payload(result, lang)
 
-    pair = _safe_html(result.get("pair", "немає даних"))
+    if result.get("error"):
+        return f"❌ {t('error', lang)}: <code>{_safe_html(t('technical_error', lang))}</code>"
+
+    pair = _safe_html(result.get("pair", t("no_data", lang)))
     price = result.get("price")
     raw_verdict = str(result.get("verdict_text", "WAIT") or "WAIT").upper()
-    verdict = _safe_html(_label_verdict_strong(raw_verdict))
-    sentiment = _safe_html(_label_sentiment(result.get("sentiment", "GO")))
-    trade_allowed = "✅ ВХІД ДОЗВОЛЕНО" if result.get("is_trade_allowed") else "⛔ ВХІД НЕ РЕКОМЕНДОВАНИЙ"
+    verdict = _safe_html(_label_verdict_strong(raw_verdict, lang))
+    sentiment = _safe_html(_label_sentiment(result.get("sentiment", "GO"), lang))
+    trade_allowed = t("trade_allowed", lang) if result.get("is_trade_allowed") else t("trade_not_recommended", lang)
     score = int(float(result.get("score", 50) or 50))
     bear_score = max(0, min(100, 100 - score))
 
@@ -333,42 +289,42 @@ def _format_signal_message(result: dict, expiration: str) -> str:
     elif raw_verdict == "NEWS_WAIT":
         arrow = "⏸️"
 
-    price_str = "немає даних"
+    price_str = t("no_data", lang)
     if isinstance(price, (int, float)):
         price_str = f"{price:.5f}"
 
     lines = [
-        f"📈 <b>{pair}</b>  <i>Експірація: {_safe_html(_label_timeframe(expiration))}</i>",
+        f"📈 <b>{pair}</b>  <i>{t('expiration', lang)}: {_safe_html(_label_timeframe(expiration, lang))}</i>",
         "",
         f"{arrow} <b>{verdict}</b>",
         f"💵 <code>{price_str}</code>",
-        f"✅ <b>Новини:</b> {sentiment}",
+        f"✅ <b>{t('news', lang)}:</b> {sentiment}",
         "",
-        f"🐂 <b>Бики:</b> {score}%    🐃 <b>Ведмеді:</b> {bear_score}%",
+        f"🐂 <b>{t('bulls', lang)}:</b> {score}%    🐃 <b>{t('bears', lang)}:</b> {bear_score}%",
         "",
     ]
 
-    lines.extend(_format_timeframe_details(result))
-    status_lines = _format_data_status(result)
+    lines.extend(_format_timeframe_details(result, lang))
+    status_lines = _format_data_status(result, lang)
     if status_lines:
         lines.extend(["", *status_lines])
 
-    quality = _safe_html(_label_signal_quality(result.get("signal_quality")))
-    lines.extend(["", f"🔎 <b>Якість сигналу:</b> {quality}"])
+    quality = _safe_html(_label_signal_quality(result.get("signal_quality"), lang))
+    lines.extend(["", t("signal_quality", lang, quality=quality)])
 
     reasons = result.get("reasons", [])
     if reasons:
         lines.append("")
-        lines.append("📑 <b>Фактори аналізу:</b>")
+        lines.append(t("analysis_factors", lang))
 
         for reason in reasons:
-            lines.append(f"• <i>{_safe_html(_format_reason_uk(reason))}</i>")
+            lines.append(f"• <i>{_safe_html(_format_reason(reason, lang))}</i>")
 
     lines.extend(
         [
             "",
-            "⚡ <b>КОРОТКО:</b>",
-            *_format_action_panel(pair, expiration, raw_verdict, verdict, trade_allowed),
+            t("short", lang),
+            *_format_action_panel(pair, expiration, raw_verdict, verdict, trade_allowed, lang),
         ]
     )
 
@@ -376,13 +332,15 @@ def _format_signal_message(result: dict, expiration: str) -> str:
 
 
 def start(update: Update, context: CallbackContext):
+    lang = _lang(update)
     chat_id = _get_chat_id(update)
-    sent = update.message.reply_text("👋 Вітаю! Натисніть «МЕНЮ».", reply_markup=get_reply_keyboard())
+    sent = update.message.reply_text(t("start", lang), reply_markup=get_reply_keyboard(lang))
     bot_track_message(context.bot_data, chat_id, sent.message_id)
     menu(update, context)
 
 
 def menu(update: Update, context: CallbackContext):
+    lang = _lang(update)
     chat_id = _get_chat_id(update)
 
     try:
@@ -390,35 +348,37 @@ def menu(update: Update, context: CallbackContext):
     except Exception:
         pass
 
-    _send_tracked(context, chat_id, "🏠 Головне меню:", reply_markup=get_main_menu_kb())
+    _send_tracked(context, chat_id, t("main_menu", lang), reply_markup=get_main_menu_kb(lang))
 
 
 def stats_command(update, context):
+    lang = _lang(update)
     now = time.time()
     cache = app_state.latest_analysis_cache
 
-    lines = ["📊 <b>Статистика за 1 год:</b>"]
+    lines = [t("stats_title", lang)]
 
     for pair, result in cache.items():
         if now - result.get("ts", 0) < 3600:
-            verdict = _safe_html(_label_verdict(result.get("verdict_text", "немає даних")))
-            score = _safe_html(result.get("score", "немає даних"))
+            verdict = _safe_html(_label_verdict(result.get("verdict_text", "WAIT"), lang))
+            score = _safe_html(result.get("score", t("no_data", lang)))
             lines.append(f"• <b>{_safe_html(pair)}</b>: {verdict} ({score}%)")
 
     update.message.reply_text(
-        "\n".join(lines) if len(lines) > 1 else "Немає даних",
+        "\n".join(lines) if len(lines) > 1 else t("no_data", lang),
         parse_mode="HTML",
-        reply_markup=get_reply_keyboard(),
+        reply_markup=get_reply_keyboard(lang),
     )
 
 
 def live_command(update, context):
-    lines = ["💹 <b>Ціни:</b>"]
+    lang = _lang(update)
+    lines = [t("prices", lang)]
 
     for pair, data in app_state.get_live_prices_snapshot().items():
         age = time.time() - data.get("ts", 0)
         mid = data.get("mid")
-        mid_str = f"{mid:.5f}" if isinstance(mid, (float, int)) else "немає даних"
+        mid_str = f"{mid:.5f}" if isinstance(mid, (float, int)) else t("no_data", lang)
 
         lines.append(
             f"{'🟢' if age < 30 else '🔴'} <code>{_safe_html(pair)}</code>: "
@@ -426,13 +386,14 @@ def live_command(update, context):
         )
 
     update.message.reply_text(
-        "\n".join(lines) if len(lines) > 1 else "Ефір порожній",
+        "\n".join(lines) if len(lines) > 1 else t("empty_feed", lang),
         parse_mode="HTML",
-        reply_markup=get_reply_keyboard(),
+        reply_markup=get_reply_keyboard(lang),
     )
 
 
 def button_handler(update: Update, context: CallbackContext):
+    lang = _lang(update)
     query = update.callback_query
     query.answer()
 
@@ -461,22 +422,22 @@ def button_handler(update: Update, context: CallbackContext):
                 _send_tracked(
                     context,
                     chat_id,
-                    "📭 Список порожній.",
-                    reply_markup=get_main_menu_kb(),
+                    t("watchlist_empty", lang),
+                    reply_markup=get_main_menu_kb(lang),
                 )
             else:
                 _send_tracked(
                     context,
                     chat_id,
-                    "⭐ Обране. Оберіть ТФ:",
-                    reply_markup=get_expiration_kb("watchlist"),
+                    t("watchlist_choose_tf", lang),
+                    reply_markup=get_expiration_kb("watchlist", lang),
                 )
         else:
             _send_tracked(
                 context,
                 chat_id,
-                f"Експірація для {CATEGORY_LABELS.get(cat, 'категорії')}:",
-                reply_markup=get_expiration_kb(cat),
+                t("choose_timeframe", lang, category=_category_label(cat, lang)),
+                reply_markup=get_expiration_kb(cat, lang),
             )
         return
 
@@ -487,15 +448,15 @@ def button_handler(update: Update, context: CallbackContext):
             _send_tracked(
                 context,
                 chat_id,
-                f"⭐ Обране ({exp}):",
-                reply_markup=get_assets_kb(db.get_watchlist(chat_id), "watchlist", exp),
+                t("watchlist_exp", lang, exp=exp),
+                reply_markup=get_assets_kb(db.get_watchlist(chat_id), "watchlist", exp, lang),
             )
         elif cat == "forex":
             _send_tracked(
                 context,
                 chat_id,
-                "Валютні сесії:",
-                reply_markup=get_forex_sessions_kb(exp),
+                t("forex_sessions", lang),
+                reply_markup=get_forex_sessions_kb(exp, lang),
             )
         else:
             assets = {
@@ -507,8 +468,8 @@ def button_handler(update: Update, context: CallbackContext):
             _send_tracked(
                 context,
                 chat_id,
-                "Оберіть актив:",
-                reply_markup=get_assets_kb(assets, cat, exp),
+                t("choose_asset", lang),
+                reply_markup=get_assets_kb(assets, cat, exp, lang),
             )
         return
 
@@ -518,8 +479,8 @@ def button_handler(update: Update, context: CallbackContext):
         _send_tracked(
             context,
             chat_id,
-            f"Пари {sess}:",
-            reply_markup=get_assets_kb(FOREX_SESSIONS.get(sess, []), "forex", exp),
+            t("session_pairs", lang, session=sess),
+            reply_markup=get_assets_kb(FOREX_SESSIONS.get(sess, []), "forex", exp, lang),
         )
         return
 
@@ -527,7 +488,7 @@ def button_handler(update: Update, context: CallbackContext):
         exp = parts[1]
         symbol = "_".join(parts[2:]).replace("/", "").upper()
 
-        loading = _send_tracked(context, chat_id, f"⏳ Аналіз {symbol}...")
+        loading = _send_tracked(context, chat_id, t("analyzing", lang, symbol=symbol))
 
         d = get_api_detailed_signal_data(
             app_state.client,
@@ -535,11 +496,12 @@ def button_handler(update: Update, context: CallbackContext):
             symbol,
             chat_id,
             exp,
+            lang,
         )
 
         def on_res(res):
             result = res if isinstance(res, dict) else {}
-            result_message = _format_signal_message(result, exp)
+            result_message = _format_signal_message(result, exp, lang)
 
             chain = _bot_call_async(
                 context.bot.delete_message,
@@ -554,7 +516,7 @@ def button_handler(update: Update, context: CallbackContext):
                     text=result_message,
                     parse_mode="HTML",
                     disable_web_page_preview=True,
-                    reply_markup=get_reply_keyboard(),
+                    reply_markup=get_reply_keyboard(lang),
                 )
                 d_send.addCallback(
                     lambda sent: bot_track_message(context.bot_data, chat_id, sent.message_id)
@@ -588,9 +550,9 @@ def button_handler(update: Update, context: CallbackContext):
                 d_send = _bot_call_async(
                     context.bot.send_message,
                     chat_id=chat_id,
-                    text=f"❌ Помилка аналізу для <b>{_safe_html(symbol)}</b>",
+                    text=t("analysis_error", lang, symbol=_safe_html(symbol)),
                     parse_mode="HTML",
-                    reply_markup=get_reply_keyboard(),
+                    reply_markup=get_reply_keyboard(lang),
                 )
                 d_send.addCallback(
                     lambda sent: bot_track_message(context.bot_data, chat_id, sent.message_id)
@@ -606,11 +568,13 @@ def button_handler(update: Update, context: CallbackContext):
 
 
 def reset_ui(update, context):
-    update.message.reply_text("Натисніть МЕНЮ.", reply_markup=get_reply_keyboard())
+    lang = _lang(update)
+    update.message.reply_text(t("press_menu", lang), reply_markup=get_reply_keyboard(lang))
 
 
 def symbols_command(update, context):
+    lang = _lang(update)
     update.message.reply_text(
-        f"Символів: {len(getattr(app_state, 'all_symbol_names', []))}",
-        reply_markup=get_reply_keyboard(),
+        t("symbols", lang, count=len(getattr(app_state, "all_symbol_names", []))),
+        reply_markup=get_reply_keyboard(lang),
     )

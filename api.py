@@ -28,6 +28,7 @@ from config import (
     TRADING_HOURS,
     get_fly_app_name,
 )
+from locales import localize_reason, localize_signal_payload, normalize_lang, session_label, t
 from state import app_state
 
 logger = logging.getLogger("api")
@@ -38,12 +39,21 @@ def _request_init_data() -> str | None:
     return request.values.get("initData")
 
 
+def _request_lang() -> str:
+    return normalize_lang(
+        request.values.get("lang")
+        or request.headers.get("X-User-Language")
+        or request.headers.get("Accept-Language")
+    )
+
+
 def _protected_route(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
+        lang = _request_lang()
         init_data = _request_init_data()
         if not is_valid_init_data(init_data):
-            return jsonify({"success": False, "error": "Немає доступу"}), 401
+            return jsonify({"success": False, "error": t("unauthorized", lang)}), 401
         return f(*args, **kwargs)
     return decorated_function
 
@@ -95,7 +105,7 @@ def _broker_pair_availability(watchlist: list[str]) -> tuple[list[str], list[str
     return available, unavailable
 
 
-def _unavailable_symbol_payload(pair: str, tf: str) -> dict:
+def _unavailable_symbol_payload(pair: str, tf: str, lang: str = "en") -> dict:
     return {
         "success": False,
         "pair": _pair_key(pair) or pair,
@@ -104,7 +114,7 @@ def _unavailable_symbol_payload(pair: str, tf: str) -> dict:
         "score": 50,
         "price": None,
         "sentiment": "BLOCK",
-        "reasons": ["Цього символу немає в списку брокера"],
+        "reasons": [t("symbol_unavailable", lang)],
         "is_trade_allowed": False,
         "unavailable_symbol": True,
     }
@@ -182,10 +192,11 @@ class SSEStreamResource(Resource):
 
     def render_GET(self, request):
         init_data = self._get_query_arg(request, b"initData")
+        lang = normalize_lang(self._get_query_arg(request, b"lang"))
         if not is_valid_init_data(init_data):
             request.setResponseCode(401)
             request.setHeader(b"Content-Type", b"application/json; charset=utf-8")
-            return '{"success":false,"error":"Немає доступу"}'.encode("utf-8")
+            return _safe_json_dumps({"success": False, "error": t("unauthorized", lang)}).encode("utf-8")
 
         request.setHeader(b"Content-Type", b"text/event-stream; charset=utf-8")
         request.setHeader(b"Cache-Control", b"no-cache")
@@ -270,13 +281,14 @@ def build_root_resource(flask_app, reactor_obj, wsgi_pool):
 
 
 @defer.inlineCallbacks
-def _call_analysis_in_reactor(pair: str, uid: int | None, tf: str):
+def _call_analysis_in_reactor(pair: str, uid: int | None, tf: str, lang: str):
     d = analysis_module.get_api_detailed_signal_data(
         app_state.client,
         app_state.symbol_cache,
         pair.replace("/", ""),
         uid,
         tf,
+        lang,
     )
     d.addTimeout(50, reactor)
     result = yield d
@@ -286,10 +298,11 @@ def _call_analysis_in_reactor(pair: str, uid: int | None, tf: str):
 def register_routes(app):
     @app.route("/api/health")
     def health_check():
+        lang = _request_lang()
         try:
             prices = app_state.get_live_prices_snapshot()
             stale_count = sum(1 for d in prices.values() if time.time() - d.get("ts", 0) > 300)
-            tg_status = "✅ АКТИВНИЙ" if app_state.updater else "❌ ВИМКНЕНО"
+            tg_status = f"✅ {t('active', lang)}" if app_state.updater else f"❌ {t('disabled', lang)}"
 
             html = f"""
             <html><head><meta charset="UTF-8"><style>
@@ -301,29 +314,36 @@ def register_routes(app):
                 .ok {{ color:#4caf50; }} .info {{ color:#3390ec; }} .err {{ color:#ef5350; }}
             </style></head>
             <body><div class="card">
-                <h1>📊 Стан ZigZag</h1>
-                <div class="stat"><span>cTrader:</span><span class="val {'ok' if app_state.SYMBOLS_LOADED else 'err'}">{'✅ ГОТОВО' if app_state.SYMBOLS_LOADED else '❌ ПОМИЛКА'}</span></div>
-                <div class="stat"><span>Telegram Бот:</span><span class="val {'ok' if app_state.updater else 'err'}">{tg_status}</span></div>
-                <div class="stat"><span>SSE клієнтів сигналів:</span><span class="val info">{app_state.sse_listener_count('signal')}</span></div>
-                <div class="stat"><span>SSE клієнтів цін:</span><span class="val info">{app_state.sse_listener_count('price')}</span></div>
-                <div class="stat"><span>Цін в ефірі:</span><span class="val">{len(prices)}</span></div>
-                <div class="stat"><span>Застарілих:</span><span class="val">{stale_count}</span></div>
-                <p style='text-align:center;color:#555;font-size:11px;margin-top:20px;'>Оновлено: {time.strftime('%H:%M:%S')}</p>
+                <h1>{t('health_title', lang)}</h1>
+                <div class="stat"><span>cTrader:</span><span class="val {'ok' if app_state.SYMBOLS_LOADED else 'err'}">{'✅ ' + t('ready', lang) if app_state.SYMBOLS_LOADED else '❌ ' + t('error', lang)}</span></div>
+                <div class="stat"><span>{t('telegram_bot', lang)}:</span><span class="val {'ok' if app_state.updater else 'err'}">{tg_status}</span></div>
+                <div class="stat"><span>{t('sse_signal_clients', lang)}:</span><span class="val info">{app_state.sse_listener_count('signal')}</span></div>
+                <div class="stat"><span>{t('sse_price_clients', lang)}:</span><span class="val info">{app_state.sse_listener_count('price')}</span></div>
+                <div class="stat"><span>{t('live_prices', lang)}:</span><span class="val">{len(prices)}</span></div>
+                <div class="stat"><span>{t('stale_prices', lang)}:</span><span class="val">{stale_count}</span></div>
+                <p style='text-align:center;color:#555;font-size:11px;margin-top:20px;'>{t('updated', lang)}: {time.strftime('%H:%M:%S')}</p>
             </div></body></html>
             """
             return Response(html, mimetype="text/html")
         except Exception as e:
             logger.exception("Health endpoint failed")
-            return f"Помилка: {str(e)}", 500
+            return f"{t('error', lang)}: {str(e)}", 500
 
     @app.route("/api/diagnostics")
     @_protected_route
     def diagnostics():
-        return jsonify(_diagnostics_payload())
+        lang = _request_lang()
+        payload = _diagnostics_payload()
+        for section in ("ctrader", "telegram", "ml"):
+            item = payload.get(section)
+            if isinstance(item, dict) and "label" in item:
+                item["label"] = localize_reason(item["label"], lang)
+        return jsonify(payload)
 
     @app.route("/api/get_pairs")
     @_protected_route
     def get_pairs():
+        lang = _request_lang()
         uid = get_user_id_from_init_data(_request_init_data())
         raw_watchlist = db.get_watchlist(uid) if uid else []
         configured_pairs = set(_collect_ui_pairs([]))
@@ -331,7 +351,7 @@ def register_routes(app):
         available_pairs, unavailable_pairs = _broker_pair_availability(watchlist)
         forex_data = [
             {
-                "title": f"{k} {TRADING_HOURS.get(k, '')}".strip(),
+                "title": f"{session_label(k, lang)} {TRADING_HOURS.get(k, '')}".strip(),
                 "pairs": v,
             }
             for k, v in FOREX_SESSIONS.items()
@@ -366,17 +386,18 @@ def register_routes(app):
     @app.route("/api/toggle_watchlist", methods=["GET", "POST"])
     @_protected_route
     def toggle_watchlist():
+        lang = _request_lang()
         uid = get_user_id_from_init_data(_request_init_data())
         pair = (request.values.get("pair") or "").strip()
 
         if not uid:
-            return jsonify({"success": False, "error": "Користувача не визначено"}), 400
+            return jsonify({"success": False, "error": t("user_not_resolved", lang)}), 400
 
         if not pair:
-            return jsonify({"success": False, "error": "Пару не вказано"}), 400
+            return jsonify({"success": False, "error": t("pair_required", lang)}), 400
 
         if _pair_key(pair) not in set(_collect_ui_pairs([])):
-            return jsonify({"success": False, "error": "Цієї пари немає в актуальному списку"}), 400
+            return jsonify({"success": False, "error": t("pair_not_actual", lang)}), 400
 
         ok = db.toggle_watchlist(uid, pair.replace("/", "").upper())
         watchlist = db.get_watchlist(uid) if ok else []
@@ -392,15 +413,16 @@ def register_routes(app):
     @app.route("/api/signal")
     @_protected_route
     def api_signal():
+        lang = _request_lang()
         pair = request.args.get("pair", "").strip()
         tf = request.args.get("timeframe", "15m").strip()
         uid = get_user_id_from_init_data(_request_init_data())
 
         if not pair:
-            return jsonify({"success": False, "error": "Пару не вказано"}), 400
+            return jsonify({"success": False, "error": t("pair_required", lang)}), 400
 
         if app_state.SYMBOLS_LOADED and ctrader._resolve_broker_symbol(pair) is None:
-            return jsonify(_unavailable_symbol_payload(pair, tf))
+            return jsonify(_unavailable_symbol_payload(pair, tf, lang))
 
         try:
             result = blockingCallFromThread(
@@ -409,6 +431,7 @@ def register_routes(app):
                 pair,
                 uid,
                 tf,
+                lang,
             )
 
             if not isinstance(result, dict):
@@ -417,21 +440,23 @@ def register_routes(app):
                     "timeframe": tf,
                     "verdict_text": "ERROR",
                     "score": 50,
-                    "reasons": ["Невірний формат відповіді аналізу"],
-                    "error": "Невірний формат відповіді аналізу",
+                    "reasons": [t("bad_analysis_response", lang)],
+                    "error": t("bad_analysis_response", lang),
                     "is_trade_allowed": False,
                 }
 
-            return jsonify(result)
+            return jsonify(localize_signal_payload(result, lang))
 
         except Exception as e:
             logger.exception("api_signal failed")
 
             msg = str(e)
             if msg in {"(45, 'Deferred')", "(50, 'Deferred')"} or "Deferred" in msg:
-                msg = "Час очікування аналізу вичерпано"
+                msg = t("analysis_timeout", lang)
             elif "Timed out" in msg or "timeout" in msg.lower():
-                msg = "Час очікування аналізу вичерпано"
+                msg = t("analysis_timeout", lang)
+            else:
+                msg = localize_reason(msg, lang)
 
             return jsonify(
                 {
@@ -459,7 +484,7 @@ def register_routes(app):
                 content = content.replace(".js", f".js?v={version}")
                 content = content.replace(".css", f".css?v={version}")
                 return Response(content, mimetype="text/html")
-        return "Not found", 404
+        return t("not_found", _request_lang()), 404
 
     @app.route("/<path:filename>")
     def static_files(filename):
