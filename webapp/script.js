@@ -61,6 +61,7 @@ const APP_I18N = {
         bulls: "Bulls",
         bears: "Bears",
         sourceCheck: "Source check",
+        quoteFeed: "Quote feed",
         price: "Price",
         calendar: "Calendar",
         model: "Model",
@@ -96,6 +97,7 @@ const APP_I18N = {
         bulls: "Бики",
         bears: "Ведмеді",
         sourceCheck: "Перевірка джерел",
+        quoteFeed: "Котирування",
         price: "Ціна",
         calendar: "Календар",
         model: "Модель",
@@ -131,6 +133,7 @@ const APP_I18N = {
         bulls: "Toros",
         bears: "Osos",
         sourceCheck: "Verificación de fuentes",
+        quoteFeed: "Cotizaciones",
         price: "Precio",
         calendar: "Calendario",
         model: "Modelo",
@@ -166,6 +169,7 @@ const APP_I18N = {
         bulls: "Bullen",
         bears: "Bären",
         sourceCheck: "Quellenprüfung",
+        quoteFeed: "Kurse",
         price: "Preis",
         calendar: "Kalender",
         model: "Modell",
@@ -201,6 +205,7 @@ const APP_I18N = {
         bulls: "Быки",
         bears: "Медведи",
         sourceCheck: "Проверка источников",
+        quoteFeed: "Котировки",
         price: "Цена",
         calendar: "Календарь",
         model: "Модель",
@@ -1223,7 +1228,7 @@ function labelSignalQuality(value) {
 function renderDataStatus(signalData) {
     const status = signalData?.data_status || {};
     const items = [
-        ["cTrader", status.ctrader],
+        [tr("quoteFeed"), status.ctrader],
         [tr("price"), status.price],
         [tr("calendar"), status.calendar],
         [tr("model"), status.ml],

@@ -293,7 +293,7 @@ def _analysis_flow(client, symbol_cache, symbol, user_id, timeframe="5m", lang: 
                 "verdict_text": "WAIT",
                 "score": 50,
                 "sentiment": "GO",
-                "reasons": ["cTrader клієнт не готовий"],
+                "reasons": ["джерело котирувань не готове"],
                 "data_status": data_status,
                 "is_trade_allowed": False,
             }

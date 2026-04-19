@@ -274,7 +274,7 @@ def _label_signal_quality(value, lang: str = "en") -> str:
 def _format_data_status(result: dict, lang: str = "en") -> list[str]:
     status = result.get("data_status") or {}
     items = [
-        ("cTrader", status.get("ctrader")),
+        (t("quote_feed", lang), status.get("ctrader")),
         (t("price", lang), status.get("price")),
         (t("calendar", lang), status.get("calendar")),
         (t("model", lang), status.get("ml")),

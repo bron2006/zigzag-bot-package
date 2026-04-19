@@ -351,7 +351,7 @@ def register_routes(app):
             </style></head>
             <body><div class="card">
                 <h1>{t('health_title', lang)}</h1>
-                <div class="stat"><span>cTrader:</span><span class="val {'ok' if app_state.SYMBOLS_LOADED else 'err'}">{'✅ ' + t('ready', lang) if app_state.SYMBOLS_LOADED else '❌ ' + t('error', lang)}</span></div>
+                <div class="stat"><span>{t('quote_feed', lang)}:</span><span class="val {'ok' if app_state.SYMBOLS_LOADED else 'err'}">{'✅ ' + t('ready', lang) if app_state.SYMBOLS_LOADED else '❌ ' + t('error', lang)}</span></div>
                 <div class="stat"><span>{t('telegram_bot', lang)}:</span><span class="val {'ok' if app_state.updater else 'err'}">{tg_status}</span></div>
                 <div class="stat"><span>{t('sse_signal_clients', lang)}:</span><span class="val info">{app_state.sse_listener_count('signal')}</span></div>
                 <div class="stat"><span>{t('sse_price_clients', lang)}:</span><span class="val info">{app_state.sse_listener_count('price')}</span></div>
