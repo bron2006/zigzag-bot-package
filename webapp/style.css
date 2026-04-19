@@ -175,11 +175,26 @@ h1 { text-align: center; color: var(--text-color); font-size: 24px; margin-top: 
 
 .category { margin-bottom: 15px; }
 .category-title { font-size: 18px; font-weight: bold; margin-bottom: 10px; padding-bottom: 5px; border-bottom: 1px solid var(--secondary-bg-color); }
-.pair-list { display: flex; flex-wrap: wrap; gap: 8px; }
-.pair-item { display: flex; flex-grow: 1; min-width: 120px; }
+.pair-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+    gap: 8px;
+    align-items: stretch;
+}
+.pair-item {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 50px;
+    min-width: 0;
+    height: 58px;
+}
 .pair-button {
-    flex-grow: 1;
-    padding: 10px 15px;
+    display: grid;
+    grid-template-columns: minmax(78px, 0.85fr) minmax(92px, 1.15fr);
+    align-items: center;
+    column-gap: 8px;
+    min-width: 0;
+    width: 100%;
+    padding: 10px 12px;
     background: var(--secondary-bg-color);
     color: var(--text-color);
     border: none;
@@ -188,10 +203,27 @@ h1 { text-align: center; color: var(--text-color); font-size: 24px; margin-top: 
     cursor: pointer;
     font-size: 14px;
     transition: background-color 0.2s;
-    text-align: center;
+    text-align: left;
+}
+.pair-symbol {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-align: right;
+}
+.pair-price {
+    display: inline-block;
+    min-width: 92px;
+    overflow: hidden;
+    text-overflow: clip;
+    white-space: nowrap;
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    font-variant-numeric: tabular-nums;
+    text-align: left;
 }
 .fav-btn {
-    padding: 10px 12px;
+    width: 50px;
+    padding: 10px 0;
     background: var(--secondary-bg-color);
     color: var(--text-color);
     border: none;
@@ -221,6 +253,12 @@ h1 { text-align: center; color: var(--text-color); font-size: 24px; margin-top: 
 .pair-item.unavailable .pair-price {
     color: var(--warning-color);
     font-size: 12px;
+}
+
+@media (max-width: 520px) {
+    .pair-list {
+        grid-template-columns: 1fr;
+    }
 }
 
 #signalContainer { text-align: left; }

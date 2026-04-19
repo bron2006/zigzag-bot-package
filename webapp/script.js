@@ -859,7 +859,7 @@ function populateLists(data, query = "") {
             sectionHtml += `
                 <div class="pair-item${unavailableClass}">
                     <button class="pair-button${unavailableClass}" data-pair="${escapeHtml(pair)}"${disabledAttr}${titleAttr}>
-                        <span>${escapeHtml(pair)}</span>
+                        <span class="pair-symbol">${escapeHtml(pair)}</span>
                         <span class="pair-price" data-pair="${pairNorm}">${priceText}</span>
                     </button>
                     <button class="fav-btn" onclick="toggleFavorite(event, this, '${escapeJsString(pair)}')">
