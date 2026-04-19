@@ -465,16 +465,6 @@ def set_user_language(user_id: int, lang: str) -> str:
             user = _get_or_create_user_row(db, user_id, language=lang)
             user.language = lang
 
-            legacy = (
-                db.query(UserSettings)
-                .filter(UserSettings.user_id == int(user_id))
-                .first()
-            )
-            if legacy is None:
-                db.add(UserSettings(user_id=int(user_id), language=lang))
-            else:
-                legacy.language = lang
-
             status = _user_to_status(user)
     except OperationalError:
         logger.exception("OperationalError while saving user language")
@@ -489,16 +479,7 @@ def set_user_language(user_id: int, lang: str) -> str:
 
 
 def _get_legacy_language(db, user_id: int) -> str | None:
-    try:
-        row = (
-            db.query(UserSettings)
-            .filter(UserSettings.user_id == int(user_id))
-            .first()
-        )
-        return _normalize_language(row.language) if row else None
-    except SQLAlchemyError:
-        logger.exception("Error loading legacy user language")
-        return None
+    return None
 
 
 def _get_or_create_user_row(db, user_id: int, language: str | None = None) -> User:
