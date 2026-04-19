@@ -70,6 +70,8 @@ const APP_I18N = {
         entryNotRecommended: "⛔ Entry not recommended",
         favoriteNotUpdated: "Favorites were not updated",
         favoriteSavedLocal: "Favorites were saved on this device. The server did not respond.",
+        subscribe: "💳 Subscribe",
+        paymentError: "Could not create the invoice. Please try again later.",
     },
     uk: {
         languageLabel: "Мова",
@@ -103,6 +105,8 @@ const APP_I18N = {
         entryNotRecommended: "⛔ Вхід не рекомендований",
         favoriteNotUpdated: "Обране не оновлено",
         favoriteSavedLocal: "Обране збережено на цьому пристрої. Сервер тимчасово не відповів.",
+        subscribe: "💳 Оформити підписку",
+        paymentError: "Не вдалося створити інвойс. Спробуйте ще раз трохи пізніше.",
     },
     es: {
         languageLabel: "Idioma",
@@ -136,6 +140,8 @@ const APP_I18N = {
         entryNotRecommended: "⛔ Entrada no recomendada",
         favoriteNotUpdated: "Favoritos no actualizados",
         favoriteSavedLocal: "Favoritos guardados en este dispositivo. El servidor no respondió.",
+        subscribe: "💳 Suscribirse",
+        paymentError: "No se pudo crear la factura. Inténtalo más tarde.",
     },
     de: {
         languageLabel: "Sprache",
@@ -169,6 +175,8 @@ const APP_I18N = {
         entryNotRecommended: "⛔ Einstieg nicht empfohlen",
         favoriteNotUpdated: "Favoriten wurden nicht aktualisiert",
         favoriteSavedLocal: "Favoriten wurden auf diesem Gerät gespeichert. Der Server antwortete nicht.",
+        subscribe: "💳 Abo abschließen",
+        paymentError: "Rechnung konnte nicht erstellt werden. Bitte später erneut versuchen.",
     },
     ru: {
         languageLabel: "Язык",
@@ -202,6 +210,8 @@ const APP_I18N = {
         entryNotRecommended: "⛔ Вход не рекомендован",
         favoriteNotUpdated: "Избранное не обновлено",
         favoriteSavedLocal: "Избранное сохранено на этом устройстве. Сервер не ответил.",
+        subscribe: "💳 Оформить подписку",
+        paymentError: "Не удалось создать инвойс. Попробуйте позже.",
     },
 };
 
@@ -300,6 +310,32 @@ async function apiGet(path, params = {}) {
     }
 
     return response.json();
+}
+
+async function createPaymentInvoice() {
+    try {
+        const url = `${API_BASE_URL}/api/payment/invoice${buildQuery()}`;
+        const response = await fetch(url, { method: "POST" });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.success || !data.invoice_url) {
+            throw new Error(data.error || `HTTP ${response.status}`);
+        }
+
+        if (tg && typeof tg.openLink === "function") {
+            tg.openLink(data.invoice_url);
+        } else {
+            window.open(data.invoice_url, "_blank", "noopener");
+        }
+    } catch (err) {
+        console.error("Payment invoice error:", err);
+        alert(tr("paymentError"));
+    }
+}
+
+function bindPaymentButtons() {
+    document.querySelectorAll("[data-payment-button]").forEach((button) => {
+        button.addEventListener("click", createPaymentInvoice);
+    });
 }
 
 function applyPairMetadata(staticData) {
@@ -1078,6 +1114,7 @@ async function fetchSignal(pair) {
 
         currentSignalData = data;
         signalOutput.innerHTML = formatSignalAsHtml(data, currentExpiration);
+        bindPaymentButtons();
 
         setTimeout(() => {
             signalContainer.scrollIntoView({ behavior: "smooth" });
@@ -1222,6 +1259,20 @@ function formatSignalAsHtml(signalData, exp) {
         return `
             <div style="text-align:center; color:#ff9800; padding:10px;">
                 ⚠️ ${escapeHtml(tr("noBrokerTitle"))}: ${escapeHtml(signalData.pair || "")}
+            </div>
+        `;
+    }
+
+    if (signalData && signalData.payment_required) {
+        const message = signalData.error || tr("requestFailed");
+        return `
+            <div style="text-align:center; color:#ef5350; padding:12px;">
+                ${escapeHtml(message)}
+            </div>
+            <div style="text-align:center; margin-top:8px;">
+                <button class="tf-button active" type="button" data-payment-button>
+                    ${escapeHtml(tr("subscribe"))}
+                </button>
             </div>
         `;
     }

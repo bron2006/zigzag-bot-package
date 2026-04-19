@@ -16,6 +16,7 @@ from twisted.web.wsgi import WSGIResource
 
 import analysis as analysis_module
 import ctrader
+import crypto_pay
 import db
 import ml_models
 import news_filter
@@ -25,6 +26,7 @@ from config import (
     CRYPTO_PAIRS,
     FOREX_SESSIONS,
     STOCK_TICKERS,
+    SUBSCRIPTION_DAYS,
     get_fly_app_name,
 )
 from locales import localize_reason, localize_signal_payload, normalize_lang, session_label, t
@@ -430,17 +432,114 @@ def register_routes(app):
             return jsonify({"success": False, "error": t("user_not_resolved", lang)}), 400
 
         _sync_user_timezone(uid)
-        status = db.get_cached_user_status(uid, language_hint=lang) or {}
+        status = db.get_user_access_status(uid, language_hint=lang, notify_expired=False) or {}
         return jsonify(
             {
                 "success": True,
                 "plan_type": status.get("plan_type", "free"),
+                "subscription_status": status.get("subscription_status", "free"),
+                "trial_used": bool(status.get("trial_used")),
+                "subscription_end_date": status.get("subscription_end_date"),
                 "subscription_ends_at": status.get("subscription_ends_at"),
                 "timezone": status.get("timezone", DEFAULT_TIMEZONE),
                 "is_pro": bool(status.get("is_pro")),
+                "is_admin": bool(status.get("is_admin")),
+                "access_allowed": bool(status.get("access_allowed")),
                 "has_active_subscription": bool(status.get("has_active_subscription")),
             }
         )
+
+    @app.route("/api/trial/start", methods=["POST"])
+    @_protected_route
+    def trial_start():
+        lang = _request_lang()
+        uid = get_user_id_from_init_data(_request_init_data())
+        if not uid:
+            return jsonify({"success": False, "error": t("user_not_resolved", lang)}), 400
+
+        status, activated = db.start_user_trial(uid, language=lang)
+        if not activated and not bool((status or {}).get("access_allowed")):
+            return jsonify(
+                {
+                    "success": False,
+                    "error": t("trial_already_used", lang),
+                    "payment_required": True,
+                    "user": status,
+                }
+            ), 402
+
+        return jsonify({"success": True, "activated": bool(activated), "user": status})
+
+    @app.route("/api/payment/invoice", methods=["POST"])
+    @_protected_route
+    def payment_invoice():
+        lang = _request_lang()
+        uid = get_user_id_from_init_data(_request_init_data())
+        if not uid:
+            return jsonify({"success": False, "error": t("user_not_resolved", lang)}), 400
+
+        try:
+            invoice = crypto_pay.create_subscription_invoice(uid, language=lang)
+        except Exception:
+            logger.exception("Could not create Crypto Pay invoice for user_id=%s", uid)
+            return jsonify({"success": False, "error": t("payment_invoice_error", lang)}), 500
+
+        return jsonify(
+            {
+                "success": True,
+                "invoice_url": invoice.get("invoice_url"),
+                "invoice_id": invoice.get("invoice_id"),
+                "amount": invoice.get("subscription_amount"),
+                "asset": invoice.get("subscription_asset"),
+                "days": invoice.get("subscription_days"),
+            }
+        )
+
+    @app.route("/api/crypto_webhook", methods=["POST"])
+    def crypto_webhook():
+        raw_body = request.get_data() or b""
+        signature = request.headers.get("crypto-pay-api-signature")
+        if not crypto_pay.verify_webhook_signature(raw_body, signature):
+            logger.warning("Crypto Pay webhook rejected: invalid signature")
+            return jsonify({"ok": False, "error": "invalid_signature"}), 403
+
+        update = request.get_json(silent=True) or {}
+        if update.get("update_type") != "invoice_paid":
+            return jsonify({"ok": True, "ignored": True})
+
+        invoice = update.get("payload") or {}
+        if not isinstance(invoice, dict) or invoice.get("status") != "paid":
+            return jsonify({"ok": True, "ignored": True})
+
+        payload = crypto_pay.parse_invoice_payload(invoice)
+        try:
+            uid = int(payload.get("user_id") or 0)
+            days = int(payload.get("days") or SUBSCRIPTION_DAYS or 30)
+        except (TypeError, ValueError):
+            uid = 0
+            days = int(SUBSCRIPTION_DAYS or 30)
+
+        invoice_id = invoice.get("invoice_id")
+        if not uid or not invoice_id:
+            logger.warning("Crypto Pay webhook without user_id or invoice_id: %s", update)
+            return jsonify({"ok": False, "error": "bad_payload"}), 400
+
+        if not db.mark_payment_invoice_processed(invoice_id, uid):
+            logger.info("Crypto Pay webhook duplicate ignored: invoice_id=%s user_id=%s", invoice_id, uid)
+            return jsonify({"ok": True, "duplicate": True})
+
+        status = db.activate_paid_subscription(uid, days=days)
+        end_date = (status or {}).get("subscription_end_date")
+
+        try:
+            from notifier import notify_admin, send_signal
+
+            notify_admin(f"💳 Оплата успішна\nuser_id: {uid}\ninvoice: {invoice_id}\nдоступ до: {end_date}")
+            send_signal(uid, t("subscription_paid", "uk", date=(end_date or "∞")))
+        except Exception:
+            logger.debug("Could not send payment notifications", exc_info=True)
+
+        return jsonify({"ok": True, "user_id": uid, "subscription_end_date": end_date})
 
     @app.route("/api/language", methods=["GET", "POST"])
     @_protected_route
@@ -510,6 +609,26 @@ def register_routes(app):
 
         if not pair:
             return jsonify({"success": False, "error": t("pair_required", lang)}), 400
+
+        if not uid:
+            return jsonify({"success": False, "error": t("user_not_resolved", lang)}), 400
+
+        access = db.get_user_access_status(uid, language_hint=lang)
+        if not access or not access.get("access_allowed"):
+            return jsonify(
+                {
+                    "success": False,
+                    "error": t("access_denied_subscription", lang),
+                    "payment_required": True,
+                    "user": access,
+                    "pair": pair,
+                    "timeframe": tf,
+                    "verdict_text": "WAIT",
+                    "score": 50,
+                    "reasons": [t("access_denied_subscription", lang)],
+                    "is_trade_allowed": False,
+                }
+            ), 402
 
         if app_state.SYMBOLS_LOADED and ctrader._resolve_broker_symbol(pair) is None:
             return jsonify(_unavailable_symbol_payload(pair, tf, lang))

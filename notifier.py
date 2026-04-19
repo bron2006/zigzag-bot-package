@@ -28,9 +28,9 @@ def _get_bot_token() -> str:
 
 def _get_admin_chat_id():
     try:
-        from config import get_chat_id
+        from config import DEV_USER_ID, get_chat_id
 
-        return get_chat_id()
+        return DEV_USER_ID or get_chat_id()
     except Exception:
         return None
 

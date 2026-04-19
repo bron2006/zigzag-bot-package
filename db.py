@@ -2,13 +2,13 @@
 import logging
 import threading
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import Column, DateTime, Float, Integer, String, create_engine, event, func, inspect, text
+from sqlalchemy import Boolean, Column, DateTime, Float, Integer, String, create_engine, event, func, inspect, text
 from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from sqlalchemy.orm import declarative_base, scoped_session, sessionmaker
 
-from config import get_database_url
+from config import DEV_USER_ID, SUBSCRIPTION_DAYS, TRIAL_HOURS, get_database_url
 from session_times import DEFAULT_TIMEZONE, normalize_timezone
 
 logger = logging.getLogger(__name__)
@@ -52,6 +52,18 @@ class User(Base):
     timezone = Column(String(64), nullable=False, default=DEFAULT_TIMEZONE)
     subscription_ends_at = Column(DateTime, nullable=True)
     plan_type = Column(String(16), nullable=False, default="free")
+    subscription_status = Column(String(16), nullable=False, default="free")
+    trial_used = Column(Boolean, nullable=False, default=False)
+    subscription_end_date = Column(DateTime, nullable=True)
+
+
+class PaymentInvoice(Base):
+    __tablename__ = "payment_invoices"
+
+    invoice_id = Column(String(64), primary_key=True)
+    user_id = Column(Integer, nullable=False, index=True)
+    status = Column(String(16), nullable=False, default="paid")
+    processed_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
 
 class UserSettings(Base):
@@ -73,6 +85,18 @@ def _normalize_timezone(value: str | None) -> str:
 def _normalize_plan(plan_type: str | None) -> str:
     value = (plan_type or "free").strip().lower()
     return value if value in {"free", "pro"} else "free"
+
+
+def _normalize_subscription_status(status: str | None) -> str:
+    value = (status or "free").strip().lower()
+    return value if value in {"free", "trial", "active"} else "free"
+
+
+def is_admin_user(user_id: int | str | None) -> bool:
+    try:
+        return bool(DEV_USER_ID) and int(user_id or 0) == int(DEV_USER_ID)
+    except (TypeError, ValueError):
+        return False
 
 
 def _normalize_datetime(value) -> datetime | None:
@@ -114,20 +138,48 @@ def _subscription_active(plan_type: str, subscription_ends_at: datetime | None) 
     return subscription_ends_at is None or subscription_ends_at > _utcnow()
 
 
+def _status_active(status: str, subscription_end_date: datetime | None) -> bool:
+    status = _normalize_subscription_status(status)
+    if status not in {"trial", "active"}:
+        return False
+    return subscription_end_date is None or subscription_end_date > _utcnow()
+
+
 def _user_to_status(user: User | None, fallback_language: str | None = None) -> dict:
+    user_id = int(getattr(user, "user_id", 0) or 0)
     lang = _normalize_language(getattr(user, "language", None) or fallback_language)
     tz = _normalize_timezone(getattr(user, "timezone", None))
     plan = _normalize_plan(getattr(user, "plan_type", None))
-    ends_at = getattr(user, "subscription_ends_at", None)
-    active = _subscription_active(plan, ends_at)
+    legacy_ends_at = getattr(user, "subscription_ends_at", None)
+    status = _normalize_subscription_status(getattr(user, "subscription_status", None))
+    end_date = getattr(user, "subscription_end_date", None) or legacy_ends_at
+    trial_used = bool(getattr(user, "trial_used", False))
+
+    legacy_active = _subscription_active(plan, legacy_ends_at)
+    if status == "free" and legacy_active:
+        status = "active"
+        end_date = legacy_ends_at
+
+    active = _status_active(status, end_date)
+    admin = is_admin_user(user_id)
+    if admin:
+        plan = "pro"
+        status = "active"
+        end_date = None
+        active = True
 
     return {
-        "user_id": int(getattr(user, "user_id", 0) or 0),
+        "user_id": user_id,
         "language": lang,
         "timezone": tz,
         "plan_type": plan,
-        "subscription_ends_at": _dt_to_iso(ends_at),
+        "subscription_status": status,
+        "trial_used": trial_used,
+        "subscription_end_date": _dt_to_iso(end_date),
+        "subscription_ends_at": _dt_to_iso(end_date),
         "is_pro": active,
+        "is_admin": admin,
+        "access_allowed": active,
         "has_active_subscription": active,
     }
 
@@ -247,6 +299,12 @@ def _ensure_user_columns() -> None:
 
         if "timezone" not in existing:
             statements.append(f"ALTER TABLE users ADD COLUMN timezone VARCHAR(64) DEFAULT '{DEFAULT_TIMEZONE}' NOT NULL")
+        if "subscription_status" not in existing:
+            statements.append("ALTER TABLE users ADD COLUMN subscription_status VARCHAR(16) DEFAULT 'free' NOT NULL")
+        if "trial_used" not in existing:
+            statements.append("ALTER TABLE users ADD COLUMN trial_used BOOLEAN DEFAULT FALSE NOT NULL")
+        if "subscription_end_date" not in existing:
+            statements.append("ALTER TABLE users ADD COLUMN subscription_end_date TIMESTAMP NULL")
 
         if not statements:
             return
@@ -308,9 +366,14 @@ def _fallback_set_user_language(user_id: int, lang: str, *, log_warning: bool = 
                 "language": lang,
                 "timezone": _fallback_user_timezones.get(int(user_id), DEFAULT_TIMEZONE),
                 "plan_type": "free",
+                "subscription_status": "free",
+                "trial_used": False,
+                "subscription_end_date": None,
                 "subscription_ends_at": None,
-                "is_pro": False,
-                "has_active_subscription": False,
+                "is_pro": is_admin_user(user_id),
+                "is_admin": is_admin_user(user_id),
+                "access_allowed": is_admin_user(user_id),
+                "has_active_subscription": is_admin_user(user_id),
             },
         )
         profile["language"] = lang
@@ -330,9 +393,14 @@ def _fallback_set_user_timezone(user_id: int, timezone_name: str, *, log_warning
                 "language": _fallback_user_languages.get(int(user_id), "en"),
                 "timezone": tz,
                 "plan_type": "free",
+                "subscription_status": "free",
+                "trial_used": False,
+                "subscription_end_date": None,
                 "subscription_ends_at": None,
-                "is_pro": False,
-                "has_active_subscription": False,
+                "is_pro": is_admin_user(user_id),
+                "is_admin": is_admin_user(user_id),
+                "access_allowed": is_admin_user(user_id),
+                "has_active_subscription": is_admin_user(user_id),
             },
         )
         profile["timezone"] = tz
@@ -357,9 +425,14 @@ def _fallback_get_user_status(user_id: int) -> dict | None:
             "language": lang or "en",
             "timezone": tz,
             "plan_type": "free",
+            "subscription_status": "free",
+            "trial_used": False,
+            "subscription_end_date": None,
             "subscription_ends_at": None,
-            "is_pro": False,
-            "has_active_subscription": False,
+            "is_pro": is_admin_user(user_id),
+            "is_admin": is_admin_user(user_id),
+            "access_allowed": is_admin_user(user_id),
+            "has_active_subscription": is_admin_user(user_id),
         }
 
 
@@ -375,14 +448,21 @@ def _fallback_set_user_subscription(
     ends_at = _normalize_datetime(subscription_ends_at)
     lang = _normalize_language(language or _fallback_get_user_language(user_id))
     tz = _normalize_timezone(_fallback_get_user_timezone(user_id))
-    active = _subscription_active(plan, ends_at)
+    admin = is_admin_user(user_id)
+    status = "active" if plan == "pro" else "free"
+    active = admin or _status_active(status, ends_at)
     profile = {
         "user_id": int(user_id),
         "language": lang,
         "timezone": tz,
-        "plan_type": plan,
-        "subscription_ends_at": _dt_to_iso(ends_at),
+        "plan_type": "pro" if admin else plan,
+        "subscription_status": "active" if admin else status,
+        "trial_used": False,
+        "subscription_end_date": None if admin else _dt_to_iso(ends_at),
+        "subscription_ends_at": None if admin else _dt_to_iso(ends_at),
         "is_pro": active,
+        "is_admin": admin,
+        "access_allowed": active,
         "has_active_subscription": active,
     }
     with _fallback_lock:
@@ -601,6 +681,9 @@ def _get_or_create_user_row(db, user_id: int, language: str | None = None) -> Us
         timezone=_fallback_get_user_timezone(user_id) or DEFAULT_TIMEZONE,
         plan_type="free",
         subscription_ends_at=None,
+        subscription_status="free",
+        trial_used=False,
+        subscription_end_date=None,
     )
     db.add(user)
     return user
@@ -654,13 +737,10 @@ def get_user_status(user_id: int, *, language_hint: str | None = None) -> dict |
 
             user = _get_or_create_user_row(db, user_id, language=language_hint)
             status = _user_to_status(user)
-            _fallback_set_user_subscription(
-                user_id,
-                status["plan_type"],
-                status["subscription_ends_at"],
-                status["language"],
-                log_warning=False,
-            )
+            with _fallback_lock:
+                _fallback_user_profiles[int(user_id)] = dict(status)
+                _fallback_user_languages[int(user_id)] = status.get("language") or "en"
+                _fallback_user_timezones[int(user_id)] = status.get("timezone") or DEFAULT_TIMEZONE
             return status
     except SQLAlchemyError:
         logger.exception("Error loading user status")
@@ -687,6 +767,8 @@ def set_user_subscription(user_id: int, plan_type: str = "free", subscription_en
                 user.language = _normalize_language(language)
             user.plan_type = plan
             user.subscription_ends_at = ends_at if plan == "pro" else None
+            user.subscription_status = "active" if plan == "pro" else "free"
+            user.subscription_end_date = ends_at if plan == "pro" else None
             status = _user_to_status(user)
     except OperationalError:
         logger.exception("OperationalError while saving user subscription")
@@ -696,6 +778,234 @@ def set_user_subscription(user_id: int, plan_type: str = "free", subscription_en
         status = _fallback_set_user_subscription(user_id, plan, ends_at, language)
 
     _cache_user_status(user_id, status)
+    return status
+
+
+def _notify_subscription_event(text: str, key: str | None = None) -> None:
+    try:
+        from notifier import notify_admin
+
+        notify_admin(text, alert_key=key)
+    except Exception:
+        logger.debug("Could not send subscription admin notification", exc_info=True)
+
+
+def start_user_trial(user_id: int, *, language: str | None = None) -> tuple[dict | None, bool]:
+    if not user_id:
+        return None, False
+
+    if is_admin_user(user_id):
+        return get_user_status(user_id, language_hint=language), True
+
+    end_at = _utcnow() + timedelta(hours=max(1, int(TRIAL_HOURS or 24)))
+    status = None
+    activated = False
+
+    try:
+        with session_scope() as db:
+            if db is None:
+                profile = _fallback_get_user_status(user_id) or _fallback_set_user_subscription(user_id, "free", None, language)
+                if profile.get("trial_used"):
+                    return profile, False
+
+                profile.update(
+                    {
+                        "plan_type": "pro",
+                        "subscription_status": "trial",
+                        "trial_used": True,
+                        "subscription_end_date": _dt_to_iso(end_at),
+                        "subscription_ends_at": _dt_to_iso(end_at),
+                        "is_pro": True,
+                        "access_allowed": True,
+                        "has_active_subscription": True,
+                    }
+                )
+                with _fallback_lock:
+                    _fallback_user_profiles[int(user_id)] = dict(profile)
+                _cache_user_status(user_id, profile)
+                _notify_subscription_event(
+                    f"🔥 Демо активовано\nuser_id: {user_id}\nдо: {_dt_to_iso(end_at)}",
+                    key=f"trial_started_{user_id}",
+                )
+                return profile, True
+
+            user = _get_or_create_user_row(db, user_id, language=language)
+            if bool(getattr(user, "trial_used", False)):
+                status = _user_to_status(user)
+                return status, False
+
+            if language:
+                user.language = _normalize_language(language)
+            user.subscription_status = "trial"
+            user.trial_used = True
+            user.subscription_end_date = end_at
+            user.plan_type = "pro"
+            user.subscription_ends_at = end_at
+            status = _user_to_status(user)
+            activated = True
+    except SQLAlchemyError:
+        logger.exception("Error starting trial for user_id=%s", user_id)
+        return get_user_status(user_id, language_hint=language), False
+
+    _cache_user_status(user_id, status)
+    if activated:
+        _notify_subscription_event(
+            f"🔥 Демо активовано\nuser_id: {user_id}\nдо: {_dt_to_iso(end_at)}",
+            key=f"trial_started_{user_id}",
+        )
+    return status, activated
+
+
+def activate_paid_subscription(user_id: int, *, days: int | None = None, language: str | None = None) -> dict | None:
+    if not user_id:
+        return None
+
+    if is_admin_user(user_id):
+        return get_user_status(user_id, language_hint=language)
+
+    days = max(1, int(days or SUBSCRIPTION_DAYS or 30))
+    status = None
+
+    try:
+        with session_scope() as db:
+            if db is None:
+                current = _fallback_get_user_status(user_id) or _fallback_set_user_subscription(user_id, "free", None, language)
+                current_end = _normalize_datetime(current.get("subscription_end_date") or current.get("subscription_ends_at"))
+                base = current_end if current_end and current_end > _utcnow() else _utcnow()
+                new_end = base + timedelta(days=days)
+                current.update(
+                    {
+                        "plan_type": "pro",
+                        "subscription_status": "active",
+                        "subscription_end_date": _dt_to_iso(new_end),
+                        "subscription_ends_at": _dt_to_iso(new_end),
+                        "is_pro": True,
+                        "access_allowed": True,
+                        "has_active_subscription": True,
+                    }
+                )
+                with _fallback_lock:
+                    _fallback_user_profiles[int(user_id)] = dict(current)
+                _cache_user_status(user_id, current)
+                return current
+
+            user = _get_or_create_user_row(db, user_id, language=language)
+            if language:
+                user.language = _normalize_language(language)
+            current_end = _normalize_datetime(getattr(user, "subscription_end_date", None) or getattr(user, "subscription_ends_at", None))
+            base = current_end if current_end and current_end > _utcnow() else _utcnow()
+            new_end = base + timedelta(days=days)
+            user.subscription_status = "active"
+            user.subscription_end_date = new_end
+            user.plan_type = "pro"
+            user.subscription_ends_at = new_end
+            status = _user_to_status(user)
+    except SQLAlchemyError:
+        logger.exception("Error activating paid subscription for user_id=%s", user_id)
+        return None
+
+    return _cache_user_status(user_id, status)
+
+
+def mark_payment_invoice_processed(invoice_id, user_id: int) -> bool:
+    invoice_key = str(invoice_id or "").strip()
+    if not invoice_key or not user_id:
+        return False
+
+    try:
+        with session_scope() as db:
+            if db is None:
+                return True
+
+            existing = db.query(PaymentInvoice).filter(PaymentInvoice.invoice_id == invoice_key).first()
+            if existing is not None:
+                return False
+
+            db.add(
+                PaymentInvoice(
+                    invoice_id=invoice_key,
+                    user_id=int(user_id),
+                    status="paid",
+                    processed_at=_utcnow(),
+                )
+            )
+            return True
+    except SQLAlchemyError:
+        logger.exception("Error marking payment invoice as processed: %s", invoice_key)
+        return False
+
+
+def expire_user_access_if_needed(user_id: int, *, notify: bool = True, language_hint: str | None = None) -> dict | None:
+    if not user_id:
+        return None
+
+    if is_admin_user(user_id):
+        return get_user_status(user_id, language_hint=language_hint)
+
+    status = None
+    expired_trial_at = None
+
+    try:
+        with session_scope() as db:
+            if db is None:
+                status = _fallback_get_user_status(user_id) or _fallback_set_user_subscription(user_id, "free", None, language_hint)
+                current_status = _normalize_subscription_status(status.get("subscription_status"))
+                end_at = _normalize_datetime(status.get("subscription_end_date") or status.get("subscription_ends_at"))
+                if current_status in {"trial", "active"} and end_at and end_at <= _utcnow():
+                    if current_status == "trial":
+                        expired_trial_at = end_at
+                    status.update(
+                        {
+                            "plan_type": "free",
+                            "subscription_status": "free",
+                            "subscription_end_date": _dt_to_iso(end_at),
+                            "subscription_ends_at": None,
+                            "is_pro": False,
+                            "access_allowed": False,
+                            "has_active_subscription": False,
+                        }
+                    )
+                    with _fallback_lock:
+                        _fallback_user_profiles[int(user_id)] = dict(status)
+                _cache_user_status(user_id, status)
+                if notify and expired_trial_at:
+                    _notify_subscription_event(
+                        f"⏱ Демо завершилося\nuser_id: {user_id}\nбуло до: {_dt_to_iso(expired_trial_at)}",
+                        key=f"trial_expired_{user_id}",
+                    )
+                return status
+
+            user = _get_or_create_user_row(db, user_id, language=language_hint)
+            current_status = _normalize_subscription_status(getattr(user, "subscription_status", None))
+            end_at = _normalize_datetime(getattr(user, "subscription_end_date", None) or getattr(user, "subscription_ends_at", None))
+            if current_status in {"trial", "active"} and end_at and end_at <= _utcnow():
+                if current_status == "trial":
+                    expired_trial_at = end_at
+                user.subscription_status = "free"
+                user.plan_type = "free"
+                user.subscription_ends_at = None
+                user.subscription_end_date = end_at
+            status = _user_to_status(user)
+    except SQLAlchemyError:
+        logger.exception("Error expiring user access for user_id=%s", user_id)
+        status = get_user_status(user_id, language_hint=language_hint)
+
+    _cache_user_status(user_id, status)
+    if notify and expired_trial_at:
+        _notify_subscription_event(
+            f"⏱ Демо завершилося\nuser_id: {user_id}\nбуло до: {_dt_to_iso(expired_trial_at)}",
+            key=f"trial_expired_{user_id}",
+        )
+    return status
+
+
+def get_user_access_status(user_id: int, *, language_hint: str | None = None, notify_expired: bool = True) -> dict | None:
+    status = expire_user_access_if_needed(user_id, notify=notify_expired, language_hint=language_hint)
+    if not status:
+        return None
+
+    allowed = bool(status.get("is_admin") or status.get("has_active_subscription") or status.get("is_pro"))
+    status["access_allowed"] = allowed
     return status
 
 

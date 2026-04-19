@@ -16,6 +16,7 @@ from twisted.internet import reactor
 from twisted.internet.threads import deferToThreadPool
 
 import db
+import crypto_pay
 from analysis import get_api_detailed_signal_data
 from config import COMMODITIES, CRYPTO_PAIRS, FOREX_SESSIONS, STOCK_TICKERS
 from locales import (
@@ -109,8 +110,38 @@ def _bot_call_async(func: Callable, *args, **kwargs):
     )
 
 
+def _send_subscription_denied(context: CallbackContext, chat_id: int, lang: str):
+    return _send_tracked(
+        context,
+        chat_id,
+        t("access_denied_subscription", lang),
+        reply_markup=get_payment_kb(lang),
+    )
+
+
+def _format_subscription_date(value: str | None) -> str:
+    if not value:
+        return "∞"
+    return value.replace("T", " ").replace("Z", " UTC")
+
+
 def get_reply_keyboard(lang: str = "en") -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup([[KeyboardButton(t("reply_menu", lang))]], resize_keyboard=True)
+
+
+def get_start_kb(lang: str = "en") -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton(t("trial_button", lang), callback_data="trial_start")],
+            [InlineKeyboardButton(t("pay_button", lang), callback_data="pay_subscription")],
+        ]
+    )
+
+
+def get_payment_kb(lang: str = "en", invoice_url: str | None = None) -> InlineKeyboardMarkup:
+    if invoice_url:
+        return InlineKeyboardMarkup([[InlineKeyboardButton(t("open_invoice", lang), url=invoice_url)]])
+    return InlineKeyboardMarkup([[InlineKeyboardButton(t("pay_button", lang), callback_data="pay_subscription")]])
 
 
 def get_main_menu_kb(lang: str = "en") -> InlineKeyboardMarkup:
@@ -369,9 +400,15 @@ def _format_signal_message(result: dict, expiration: str, lang: str = "en") -> s
 def start(update: Update, context: CallbackContext):
     lang = _lang(update)
     chat_id = _get_chat_id(update)
-    sent = update.message.reply_text(t("start", lang), reply_markup=get_reply_keyboard(lang))
+    user_id = _get_user_id(update) or chat_id
+    status = db.get_user_access_status(user_id, language_hint=lang, notify_expired=False)
+    sent = update.message.reply_text(
+        t("start", lang),
+        reply_markup=get_reply_keyboard(lang),
+    )
     bot_track_message(context.bot_data, chat_id, sent.message_id)
-    menu(update, context)
+    keyboard = get_main_menu_kb(lang) if (status or {}).get("access_allowed") else get_start_kb(lang)
+    _send_tracked(context, chat_id, t("main_menu", lang), reply_markup=keyboard)
 
 
 def menu(update: Update, context: CallbackContext):
@@ -491,6 +528,54 @@ def button_handler(update: Update, context: CallbackContext):
         _send_tracked(context, chat_id, t("main_menu", new_lang), reply_markup=get_main_menu_kb(new_lang))
         return
 
+    if action == "trial":
+        user_id = _get_user_id(update) or chat_id
+        status, activated = db.start_user_trial(user_id, language=lang)
+        if activated:
+            end_date = _format_subscription_date((status or {}).get("subscription_end_date"))
+            _send_tracked(
+                context,
+                chat_id,
+                f"{t('trial_activated', lang)}\n{t('subscription_active_until', lang, date=end_date)}",
+                reply_markup=get_main_menu_kb(lang),
+            )
+        else:
+            _send_tracked(
+                context,
+                chat_id,
+                t("trial_already_used", lang),
+                reply_markup=get_payment_kb(lang),
+            )
+        return
+
+    if action == "pay":
+        user_id = _get_user_id(update) or chat_id
+        try:
+            invoice = crypto_pay.create_subscription_invoice(user_id, language=lang)
+        except Exception:
+            logger.exception("Не вдалося створити Crypto Pay інвойс для user_id=%s", user_id)
+            _send_tracked(
+                context,
+                chat_id,
+                t("payment_invoice_error", lang),
+                reply_markup=get_payment_kb(lang),
+            )
+            return
+
+        _send_tracked(
+            context,
+            chat_id,
+            t(
+                "payment_invoice_created",
+                lang,
+                amount=invoice.get("subscription_amount", ""),
+                asset=invoice.get("subscription_asset", ""),
+                days=invoice.get("subscription_days", ""),
+            ),
+            reply_markup=get_payment_kb(lang, invoice.get("invoice_url")),
+        )
+        return
+
     if action == "toggle" and len(parts) > 2:
         cat = parts[2]
         app_state.set_scanner_state(cat, not app_state.get_scanner_state(cat))
@@ -575,6 +660,12 @@ def button_handler(update: Update, context: CallbackContext):
     if action == "analyze":
         exp = parts[1]
         symbol = "_".join(parts[2:]).replace("/", "").upper()
+        user_id = _get_user_id(update) or chat_id
+
+        access = db.get_user_access_status(user_id, language_hint=lang)
+        if not access or not access.get("access_allowed"):
+            _send_subscription_denied(context, chat_id, lang)
+            return
 
         loading = _send_tracked(context, chat_id, t("analyzing", lang, symbol=symbol))
 

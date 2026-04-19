@@ -52,6 +52,12 @@ TELEGRAM_BOT_TOKEN = _env_str("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = _env_str("GEMINI_API_KEY")
 IS_DEV_MODE = _env_bool("NORD", False)
 DEV_USER_ID = _env_int("MY_TELEGRAM_ID", 123456789)
+CRYPTO_PAY_TOKEN = _env_str("CRYPTO_PAY_TOKEN")
+CRYPTO_PAY_API_URL = (_env_str("CRYPTO_PAY_API_URL", "https://pay.crypt.bot/api") or "https://pay.crypt.bot/api").rstrip("/")
+SUBSCRIPTION_PRICE_AMOUNT = _env_str("SUBSCRIPTION_PRICE_AMOUNT", "10") or "10"
+SUBSCRIPTION_PRICE_ASSET = (_env_str("SUBSCRIPTION_PRICE_ASSET", "USDT") or "USDT").upper()
+SUBSCRIPTION_DAYS = _env_int("SUBSCRIPTION_DAYS", 30) or 30
+TRIAL_HOURS = _env_int("TRIAL_HOURS", 24) or 24
 
 APP_MODE = (_env_str("APP_MODE", "full") or "full").lower()
 if APP_MODE not in {"full", "light"}:
