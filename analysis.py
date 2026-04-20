@@ -32,6 +32,7 @@ PERIOD_MAP = {
 MARKET_DATA_TIMEOUT = 45
 CPU_ANALYSIS_TIMEOUT = 30
 PRICE_FRESH_SECONDS = 60
+MAX_ENTRY_DRIFT_PERCENT = 0.005
 
 MODEL_FEATURE_NAMES = ["ATR", "ADX", "RSI", "EMA50", "EMA200"]
 
@@ -280,6 +281,36 @@ def _signal_quality(score: int, trade_allowed: bool) -> str:
     return "слабкий"
 
 
+def _is_directional(verdict: str) -> bool:
+    return verdict in {"BUY", "SELL"}
+
+
+def _confirmed_verdict(verdict_a: str, verdict_b: str) -> str:
+    if _is_directional(verdict_a) and verdict_a == verdict_b:
+        return verdict_a
+    return "NEUTRAL"
+
+
+def _entry_drift_block_reason(verdict: str, signal_price, live_price) -> str | None:
+    if not _is_directional(verdict):
+        return None
+    if not isinstance(signal_price, (int, float)) or not isinstance(live_price, (int, float)):
+        return None
+    if signal_price <= 0:
+        return None
+
+    drift_percent = abs((live_price - signal_price) / signal_price) * 100
+    if drift_percent < MAX_ENTRY_DRIFT_PERCENT:
+        return None
+
+    if verdict == "BUY" and live_price < signal_price:
+        return f"Ціна вже пішла проти купівлі: {live_price:.5f} нижче ціни сигналу {signal_price:.5f}"
+    if verdict == "SELL" and live_price > signal_price:
+        return f"Ціна вже пішла проти продажу: {live_price:.5f} вище ціни сигналу {signal_price:.5f}"
+
+    return None
+
+
 @defer.inlineCallbacks
 def _analysis_flow(client, symbol_cache, symbol, user_id, timeframe="5m", lang: str | None = None):
     pair_norm = _normalize_pair(symbol)
@@ -373,18 +404,35 @@ def _analysis_flow(client, symbol_cache, symbol, user_id, timeframe="5m", lang: 
                 reasons.append(f"Фільтр новин: {news_res['reason']} (вхід не блокується)")
 
         score = int((score_a + score_b) / 2)
-        verdict = "NEWS_WAIT" if news_v == "BLOCK" else verdict_a
+        confirmed_verdict = _confirmed_verdict(verdict_a, verdict_b)
+        verdict = "NEWS_WAIT" if news_v == "BLOCK" else confirmed_verdict
         price_ok = bool(data_status["price"].get("ok"))
+        signal_price = _latest_price_from_df(df_a)
+        live_price = data_status["price"].get("mid")
         if not price_ok:
             reasons.append(f"Ціна: {data_status['price'].get('label', 'не готова')}")
 
-        trade_allowed = verdict_a in ("BUY", "SELL") and news_v == "GO" and price_ok
+        if confirmed_verdict == "NEUTRAL" and news_v == "GO":
+            reasons.append(
+                "Вхід заблоковано: таймфрейми не підтвердили один напрямок"
+            )
+
+        drift_reason = _entry_drift_block_reason(confirmed_verdict, signal_price, live_price)
+        if drift_reason:
+            reasons.append(drift_reason)
+
+        trade_allowed = (
+            _is_directional(confirmed_verdict)
+            and news_v == "GO"
+            and price_ok
+            and not drift_reason
+        )
         quality = _signal_quality(score, trade_allowed)
 
         return {
             "pair": pair_norm,
             "timeframe": timeframe,
-            "price": _latest_price_from_df(df_a),
+            "price": signal_price,
             "verdict_text": verdict,
             "score": score,
             "sentiment": news_v,
