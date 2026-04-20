@@ -67,6 +67,8 @@ const APP_I18N = {
         model: "Model",
         marketData: "Historical data",
         signalQuality: "Signal quality",
+        signalPrice: "Signal price",
+        currentPrice: "Current price",
         entryAllowed: "✅ Entry allowed",
         entryNotRecommended: "⛔ Entry not recommended",
         favoriteNotUpdated: "Favorites were not updated",
@@ -103,6 +105,8 @@ const APP_I18N = {
         model: "Модель",
         marketData: "Історичні дані",
         signalQuality: "Якість сигналу",
+        signalPrice: "Ціна сигналу",
+        currentPrice: "Поточна ціна",
         entryAllowed: "✅ Вхід дозволено",
         entryNotRecommended: "⛔ Вхід не рекомендований",
         favoriteNotUpdated: "Обране не оновлено",
@@ -139,6 +143,8 @@ const APP_I18N = {
         model: "Modelo",
         marketData: "Datos históricos",
         signalQuality: "Calidad de señal",
+        signalPrice: "Precio de señal",
+        currentPrice: "Precio actual",
         entryAllowed: "✅ Entrada permitida",
         entryNotRecommended: "⛔ Entrada no recomendada",
         favoriteNotUpdated: "Favoritos no actualizados",
@@ -175,6 +181,8 @@ const APP_I18N = {
         model: "Modell",
         marketData: "Historische Daten",
         signalQuality: "Signalqualität",
+        signalPrice: "Signalpreis",
+        currentPrice: "Aktueller Preis",
         entryAllowed: "✅ Einstieg erlaubt",
         entryNotRecommended: "⛔ Einstieg nicht empfohlen",
         favoriteNotUpdated: "Favoriten wurden nicht aktualisiert",
@@ -211,6 +219,8 @@ const APP_I18N = {
         model: "Модель",
         marketData: "Исторические данные",
         signalQuality: "Качество сигнала",
+        signalPrice: "Цена сигнала",
+        currentPrice: "Текущая цена",
         entryAllowed: "✅ Вход разрешен",
         entryNotRecommended: "⛔ Вход не рекомендован",
         favoriteNotUpdated: "Избранное не обновлено",
@@ -831,6 +841,22 @@ function isPricePayload(data) {
     );
 }
 
+function pickPrice(priceData) {
+    if (!priceData || typeof priceData !== "object") return null;
+    if (typeof priceData.mid === "number") return priceData.mid;
+    if (typeof priceData.bid === "number") return priceData.bid;
+    if (typeof priceData.ask === "number") return priceData.ask;
+    return null;
+}
+
+function normalizeSignalSnapshot(signalData) {
+    const snapshot = { ...(signalData || {}) };
+    if (typeof snapshot.signal_price !== "number" && typeof snapshot.price === "number") {
+        snapshot.signal_price = snapshot.price;
+    }
+    return snapshot;
+}
+
 function updateScannerButtons(stateDict) {
     if (!stateDict || !scannerControls) return;
 
@@ -884,7 +910,7 @@ function displayLiveSignal(signalData) {
     signalDiv.innerHTML = html;
 
     signalDiv.onclick = () => {
-        currentSignalData = { ...signalData };
+        currentSignalData = normalizeSignalSnapshot(signalData);
         signalOutput.innerHTML = formatSignalAsHtml(currentSignalData, currentExpiration);
         signalContainer.scrollIntoView({ behavior: "smooth" });
         signalDiv.remove();
@@ -1003,20 +1029,14 @@ function updateOpenSignalPrice(pairNorm, priceData) {
     const selectedNorm = normalizePair(lastSelectedPair);
     if (selectedNorm !== pairNorm) return;
 
-    const nextPrice =
-        typeof priceData.mid === "number"
-            ? priceData.mid
-            : typeof priceData.bid === "number"
-                ? priceData.bid
-                : typeof priceData.ask === "number"
-                    ? priceData.ask
-                    : null;
+    const nextPrice = pickPrice(priceData);
 
     if (typeof nextPrice !== "number") return;
 
     currentSignalData = {
         ...currentSignalData,
-        price: nextPrice,
+        live_price: nextPrice,
+        live_price_ts: priceData.ts || Date.now() / 1000,
     };
 
     signalOutput.innerHTML = formatSignalAsHtml(currentSignalData, currentExpiration);
@@ -1117,8 +1137,8 @@ async function fetchSignal(pair) {
         const res = await fetch(url);
         const data = await res.json();
 
-        currentSignalData = data;
-        signalOutput.innerHTML = formatSignalAsHtml(data, currentExpiration);
+        currentSignalData = normalizeSignalSnapshot(data);
+        signalOutput.innerHTML = formatSignalAsHtml(currentSignalData, currentExpiration);
         bindPaymentButtons();
 
         setTimeout(() => {
@@ -1291,7 +1311,11 @@ function formatSignalAsHtml(signalData, exp) {
     }
 
     const pair = escapeHtml(signalData.pair || tr("noData"));
-    const price = signalData.price;
+    const signalPrice =
+        typeof signalData.signal_price === "number"
+            ? signalData.signal_price
+            : signalData.price;
+    const livePrice = signalData.live_price;
     const verdictText = escapeHtml(labelVerdict(signalData.verdict_text || "WAIT"));
     const score = Number.isFinite(Number(signalData.score)) ? Number(signalData.score) : 50;
     const rawSentiment = signalData.sentiment || "";
@@ -1314,10 +1338,18 @@ function formatSignalAsHtml(signalData, exp) {
         cClass = "neutral";
     }
 
-    const safePrice =
-        typeof price === "number"
-            ? price.toFixed(5)
+    const safeSignalPrice =
+        typeof signalPrice === "number"
+            ? signalPrice.toFixed(5)
             : tr("noData");
+    const safeLivePrice =
+        typeof livePrice === "number"
+            ? livePrice.toFixed(5)
+            : null;
+    const livePriceLine =
+        safeLivePrice && safeLivePrice !== safeSignalPrice
+            ? `<div style="font-size:12px; color:#94a3b8; font-family:monospace; margin-top:4px;">${escapeHtml(tr("currentPrice"))}: ${safeLivePrice}</div>`
+            : "";
 
     return `
         <div class="signal-header" style="text-align:center; font-size:1em; margin-bottom:6px;">
@@ -1326,7 +1358,9 @@ function formatSignalAsHtml(signalData, exp) {
         <div class="verdict-container" style="text-align:center; margin:6px 0 10px;">
             <div class="arrow" style="font-size:48px; line-height:0.95; display:block; margin-bottom:2px;">${arrow}</div>
             <div class="v-text ${cClass}" style="font-size:23px; font-weight:900; display:block; line-height:1;">${verdictText}</div>
-            <div style="font-size:16px; color:#3390ec; font-family:monospace; margin-top:3px; display:block; line-height:1;">${safePrice}</div>
+            <div style="font-size:11px; color:#94a3b8; margin-top:5px;">${escapeHtml(tr("signalPrice"))}</div>
+            <div style="font-size:16px; color:#3390ec; font-family:monospace; margin-top:2px; display:block; line-height:1;">${safeSignalPrice}</div>
+            ${livePriceLine}
         </div>
         ${
             sentiment
