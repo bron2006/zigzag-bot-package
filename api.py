@@ -753,7 +753,7 @@ def register_routes(app):
         if not uid:
             return jsonify({"success": False, "error": t("user_not_resolved", lang)}), 400
 
-        access = db.get_user_access_status(uid, language_hint=lang)
+        access, trial_started = db.ensure_trial_or_access(uid, language_hint=lang)
         if not access or not access.get("access_allowed"):
             return jsonify(
                 {
@@ -793,6 +793,10 @@ def register_routes(app):
                     "error": t("bad_analysis_response", lang),
                     "is_trade_allowed": False,
                 }
+
+            if trial_started:
+                result["trial_started"] = True
+                result["user"] = access
 
             return jsonify(localize_signal_payload(result, lang))
 

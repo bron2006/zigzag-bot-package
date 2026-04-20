@@ -1009,6 +1009,48 @@ def get_user_access_status(user_id: int, *, language_hint: str | None = None, no
     return status
 
 
+def ensure_trial_or_access(user_id: int, *, language_hint: str | None = None) -> tuple[dict | None, bool]:
+    status = get_user_access_status(user_id, language_hint=language_hint)
+    if not status:
+        return None, False
+
+    if status.get("access_allowed"):
+        return status, False
+
+    if not status.get("trial_used"):
+        return start_user_trial(user_id, language=language_hint)
+
+    return status, False
+
+
+def notify_new_user_once(user_id: int, *, language_hint: str | None = None) -> None:
+    if not user_id or is_admin_user(user_id):
+        return
+
+    created = False
+    try:
+        with session_scope() as db:
+            if db is None:
+                with _fallback_lock:
+                    created = int(user_id) not in _fallback_user_profiles
+                if created:
+                    _fallback_set_user_subscription(user_id, "free", None, language_hint, log_warning=False)
+            else:
+                existing = db.query(User).filter(User.user_id == int(user_id)).first()
+                created = existing is None
+                if created:
+                    _get_or_create_user_row(db, user_id, language=language_hint)
+    except SQLAlchemyError:
+        logger.exception("Error checking new user notification for user_id=%s", user_id)
+        return
+
+    if created:
+        _notify_subscription_event(
+            f"👤 Новий користувач запустив бота\nuser_id: {user_id}\nмова: {_normalize_language(language_hint)}",
+            key=f"new_user_{user_id}",
+        )
+
+
 def refresh_cached_user_statuses() -> None:
     try:
         from state import app_state

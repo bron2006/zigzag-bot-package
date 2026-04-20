@@ -401,6 +401,7 @@ def start(update: Update, context: CallbackContext):
     lang = _lang(update)
     chat_id = _get_chat_id(update)
     user_id = _get_user_id(update) or chat_id
+    db.notify_new_user_once(user_id, language_hint=lang)
     status = db.get_user_access_status(user_id, language_hint=lang, notify_expired=False)
     sent = update.message.reply_text(
         t("start", lang),
@@ -662,10 +663,18 @@ def button_handler(update: Update, context: CallbackContext):
         symbol = "_".join(parts[2:]).replace("/", "").upper()
         user_id = _get_user_id(update) or chat_id
 
-        access = db.get_user_access_status(user_id, language_hint=lang)
+        access, trial_started = db.ensure_trial_or_access(user_id, language_hint=lang)
         if not access or not access.get("access_allowed"):
             _send_subscription_denied(context, chat_id, lang)
             return
+        if trial_started:
+            end_date = _format_subscription_date((access or {}).get("subscription_end_date"))
+            _send_tracked(
+                context,
+                chat_id,
+                f"{t('trial_activated', lang)}\n{t('subscription_active_until', lang, date=end_date)}",
+                reply_markup=get_reply_keyboard(lang),
+            )
 
         loading = _send_tracked(context, chat_id, t("analyzing", lang, symbol=symbol))
 
