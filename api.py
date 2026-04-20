@@ -332,6 +332,146 @@ def _call_analysis_in_reactor(pair: str, uid: int | None, tf: str, lang: str):
 
 
 def register_routes(app):
+    @app.route("/privacy")
+    @app.route("/privacy.html")
+    def privacy_policy():
+        html = """
+        <!doctype html>
+        <html lang="en">
+        <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <title>ZigZag Signals Privacy Policy</title>
+            <style>
+                body {
+                    margin: 0;
+                    background: #101214;
+                    color: #eef2f6;
+                    font-family: Arial, sans-serif;
+                    line-height: 1.6;
+                }
+                main {
+                    max-width: 860px;
+                    margin: 0 auto;
+                    padding: 42px 20px 56px;
+                }
+                h1, h2 {
+                    color: #ffffff;
+                    line-height: 1.25;
+                }
+                h1 {
+                    font-size: 32px;
+                    margin-bottom: 6px;
+                }
+                h2 {
+                    font-size: 20px;
+                    margin-top: 30px;
+                    border-top: 1px solid #2c333a;
+                    padding-top: 22px;
+                }
+                p, li {
+                    color: #cbd5df;
+                    font-size: 16px;
+                }
+                ul {
+                    padding-left: 22px;
+                }
+                a {
+                    color: #4aa3ff;
+                }
+                .muted {
+                    color: #8b98a5;
+                    font-size: 14px;
+                }
+                .notice {
+                    background: #171c21;
+                    border: 1px solid #2c333a;
+                    border-radius: 8px;
+                    padding: 16px 18px;
+                    margin-top: 22px;
+                }
+            </style>
+        </head>
+        <body>
+            <main>
+                <h1>Privacy Policy</h1>
+                <p class="muted">Last updated: April 20, 2026</p>
+
+                <p>
+                    This Privacy Policy explains how ZigZag Signals handles user data in the Telegram bot
+                    and Web App available at zigzag-bot-package.fly.dev.
+                </p>
+
+                <h2>Data We Collect</h2>
+                <p>We may process and store the following data:</p>
+                <ul>
+                    <li>Telegram user ID, language preference and timezone.</li>
+                    <li>Favorites/watchlist selected by the user.</li>
+                    <li>Subscription status, trial status and subscription expiration date.</li>
+                    <li>Payment invoice identifiers and payment status received through Crypto Pay webhooks.</li>
+                    <li>Basic technical logs required to keep the service stable and secure.</li>
+                </ul>
+
+                <h2>How We Use Data</h2>
+                <p>We use this data to:</p>
+                <ul>
+                    <li>Provide access to the bot, Web App and trading signal features.</li>
+                    <li>Save user preferences such as language, timezone and favorites.</li>
+                    <li>Manage free trials, paid subscriptions and payment confirmations.</li>
+                    <li>Detect errors, prevent abuse and improve service reliability.</li>
+                </ul>
+
+                <h2>Payments</h2>
+                <p>
+                    Payments are processed through Crypto Pay. We do not store private wallet keys,
+                    bank card data or full payment credentials. We only store the information needed
+                    to confirm that a payment was completed and to activate the subscription.
+                </p>
+
+                <h2>Third-Party Services</h2>
+                <p>
+                    The service may use Telegram, Crypto Pay, hosting providers and market data providers.
+                    These services may process data according to their own privacy policies.
+                </p>
+
+                <h2>Data Retention</h2>
+                <p>
+                    We keep user data only as long as needed to provide the service, maintain subscription
+                    records, prevent duplicate trial usage and comply with operational requirements.
+                </p>
+
+                <h2>Data Deletion</h2>
+                <p>
+                    Users may request deletion of their stored data by contacting the bot owner through Telegram.
+                    Some payment or security records may be retained when necessary for fraud prevention,
+                    dispute handling or legal compliance.
+                </p>
+
+                <h2>Trading Risk Notice</h2>
+                <div class="notice">
+                    <p>
+                        ZigZag Signals provides analytical information only. It is not financial advice,
+                        investment advice or a guarantee of profit. Trading financial instruments involves risk,
+                        and users are responsible for their own decisions.
+                    </p>
+                </div>
+
+                <h2>Changes</h2>
+                <p>
+                    We may update this Privacy Policy from time to time. The latest version will always be
+                    available on this page.
+                </p>
+
+                <h2>Contact</h2>
+                <p>
+                    For privacy requests, contact the bot owner through the Telegram bot profile.
+                </p>
+            </main>
+        </body>
+        </html>
+        """
+        return Response(html, mimetype="text/html")
+
     @app.route("/api/health")
     def health_check():
         lang = _request_lang()
