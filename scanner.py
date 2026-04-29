@@ -12,11 +12,15 @@ import analysis as analysis_module
 import db
 import telegram_ui
 from config import (
+    ANALYSIS_CACHE_TTL_SECONDS,
     COMMODITIES,
     CRYPTO_PAIRS,
     FOREX_SESSIONS,
+    SCANNER_BATCH_SIZE,
     SESSION_WINDOWS_UTC,
     SCANNER_COOLDOWN_SECONDS,
+    SCANNER_MANUAL_PRIORITY_WINDOW_SECONDS,
+    SCANNER_RATE_LIMIT_PAUSE_SECONDS,
     SCANNER_TIMEFRAME,
     STOCK_TICKERS,
     get_chat_id,
@@ -28,12 +32,14 @@ from state import app_state
 logger = logging.getLogger("scanner")
 
 STALE_PRICE_THRESHOLD = 300
-_MAX_CONCURRENT_ANALYSIS = 4
+_MAX_CONCURRENT_ANALYSIS = 2
 
 get_api_detailed_signal_data = analysis_module.get_api_detailed_signal_data
 
 _scan_semaphore = DeferredSemaphore(tokens=_MAX_CONCURRENT_ANALYSIS)
 _scan_active = False
+_scan_cursor = 0
+_scanner_paused_until = 0.0
 
 
 def _pair_key(pair: str) -> str:
@@ -108,6 +114,39 @@ def _collect_assets_to_scan() -> list:
             normalized.append(pair)
 
     return normalized
+
+
+def pause_scanning_for_rate_limit(reason: str, seconds: int | None = None) -> None:
+    global _scanner_paused_until
+
+    pause_seconds = max(30, int(seconds or SCANNER_RATE_LIMIT_PAUSE_SECONDS))
+    until = time.time() + pause_seconds
+    if until <= _scanner_paused_until:
+        return
+
+    _scanner_paused_until = until
+    logger.warning(
+        "SCANNER: пауза на %ss через rate limit (%s)",
+        pause_seconds,
+        reason,
+    )
+
+
+def _take_scan_batch(assets: list[str]) -> list[str]:
+    global _scan_cursor
+
+    if not assets:
+        return []
+
+    if len(assets) <= SCANNER_BATCH_SIZE:
+        _scan_cursor = 0
+        return list(assets)
+
+    start = _scan_cursor % len(assets)
+    batch_size = min(SCANNER_BATCH_SIZE, len(assets))
+    batch = [assets[(start + offset) % len(assets)] for offset in range(batch_size)]
+    _scan_cursor = (start + batch_size) % len(assets)
+    return batch
 
 
 def _send_signal_async(chat_id: int, message: str, reply_markup=None):
@@ -236,6 +275,14 @@ def _process_one_asset(pair_norm: str):
         )
         return succeed(None)
 
+    cached = app_state.get_cached_signal(
+        pair_norm,
+        SCANNER_TIMEFRAME,
+        max_age_seconds=ANALYSIS_CACHE_TTL_SECONDS,
+    )
+    if cached:
+        return _handle_analysis_result(pair_norm, cached)
+
     try:
         d = get_api_detailed_signal_data(
             app_state.client,
@@ -267,6 +314,16 @@ def _process_one_asset(pair_norm: str):
 def scan_markets_once() -> None:
     global _scan_active
 
+    now = time.time()
+    if _scanner_paused_until and now < _scanner_paused_until:
+        logger.info("SCANNER: пауза через rate limit ще %ss", int(_scanner_paused_until - now))
+        return
+
+    manual_age = app_state.last_manual_analysis_age()
+    if manual_age is not None and manual_age < SCANNER_MANUAL_PRIORITY_WINDOW_SECONDS:
+        logger.info("SCANNER: пропускаю цикл, ручний аналіз був %ss тому", int(manual_age))
+        return
+
     if _scan_active:
         logger.warning("SCANNER: попередній цикл ще триває, пропускаємо новий запуск")
         return
@@ -277,8 +334,12 @@ def scan_markets_once() -> None:
         return
 
     assets = _collect_assets_to_scan()
+    batch = _take_scan_batch(assets)
     if not assets:
         logger.info("Немає активів для сканування.")
+        return
+
+    if not batch:
         return
 
     if not app_state.get_live_prices_snapshot() and app_state.SYMBOLS_LOADED:
@@ -291,9 +352,15 @@ def scan_markets_once() -> None:
             logger.exception("Не вдалося запустити перевірку потоку цін")
 
     logger.info("SCANNER: запускаю скан для %s активів...", len(assets))
+    logger.info(
+        "SCANNER: реальний батч %s/%s активів (batch_size=%s)",
+        len(batch),
+        len(assets),
+        SCANNER_BATCH_SIZE,
+    )
     _scan_active = True
 
-    deferreds = [_scan_semaphore.run(_process_one_asset, asset) for asset in assets]
+    deferreds = [_scan_semaphore.run(_process_one_asset, asset) for asset in batch]
     dl = DeferredList(deferreds, consumeErrors=True)
 
     def _finish(_):

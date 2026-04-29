@@ -36,6 +36,7 @@ class AppState:
         self.latest_analysis_cache: Dict[str, Dict[str, Any]] = {}
         self.SIGNAL_CACHE: Dict[str, Dict[str, Any]] = {}
         self.user_status_cache: Dict[int, Dict[str, Any]] = {}
+        self.last_manual_analysis_request_ts: float = 0.0
 
         self.SCANNER_STATE: Dict[str, bool] = {
             "forex": False,
@@ -166,16 +167,47 @@ class AppState:
     # Signal cache
     # ------------------------------------------------------------------
 
-    def cache_signal(self, pair: str, timeframe: str, signal_data: dict) -> None:
-        key = f"{pair}_{timeframe}"
+    def cache_signal(self, pair: str, timeframe: str, signal_data: dict, lang: str | None = None) -> None:
+        key = f"{pair}_{timeframe}_{(lang or '').lower()}"
+        payload = dict(signal_data or {})
+        payload["_cached_at"] = time.time()
         with self._state_lock:
-            self.SIGNAL_CACHE[key] = signal_data
+            self.SIGNAL_CACHE[key] = payload
         logger.debug(f"Кеш оновлено: {key}")
 
-    def get_cached_signal(self, pair: str, timeframe: str):
-        key = f"{pair}_{timeframe}"
+    def get_cached_signal(
+        self,
+        pair: str,
+        timeframe: str,
+        lang: str | None = None,
+        max_age_seconds: int | None = None,
+    ):
+        key = f"{pair}_{timeframe}_{(lang or '').lower()}"
         with self._state_lock:
-            return self.SIGNAL_CACHE.get(key)
+            cached = self.SIGNAL_CACHE.get(key)
+
+        if not cached:
+            return None
+
+        if max_age_seconds is not None:
+            cached_at = float(cached.get("_cached_at") or 0)
+            if not cached_at or (time.time() - cached_at) > max_age_seconds:
+                return None
+
+        return dict(cached)
+
+    def mark_manual_analysis_request(self) -> None:
+        with self._state_lock:
+            self.last_manual_analysis_request_ts = time.time()
+
+    def last_manual_analysis_age(self) -> Optional[float]:
+        with self._state_lock:
+            ts = float(self.last_manual_analysis_request_ts or 0)
+
+        if not ts:
+            return None
+
+        return max(0.0, time.time() - ts)
 
     # ------------------------------------------------------------------
     # User / subscription cache

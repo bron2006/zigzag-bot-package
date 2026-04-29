@@ -774,6 +774,7 @@ def register_routes(app):
             return jsonify(_unavailable_symbol_payload(pair, tf, lang))
 
         try:
+            app_state.mark_manual_analysis_request()
             result = blockingCallFromThread(
                 reactor,
                 _call_analysis_in_reactor,

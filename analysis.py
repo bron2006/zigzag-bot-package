@@ -1,5 +1,7 @@
 import logging
+import threading
 import time
+from copy import deepcopy
 from typing import Optional, Tuple
 
 import pandas as pd
@@ -10,7 +12,13 @@ from twisted.internet.threads import deferToThreadPool
 
 import ml_models
 import news_filter
-from config import broker_symbol_key
+from config import (
+    ANALYSIS_CACHE_TTL_SECONDS,
+    MARKET_DATA_CACHE_TTL_SECONDS,
+    MARKET_DATA_MAX_CONCURRENT_REQUESTS,
+    MARKET_DATA_REQUEST_INTERVAL_MS,
+    broker_symbol_key,
+)
 from ctrader_open_api.messages.OpenApiMessages_pb2 import (
     ProtoOAGetTrendbarsReq,
     ProtoOAGetTrendbarsRes,
@@ -33,6 +41,7 @@ MARKET_DATA_TIMEOUT = 45
 CPU_ANALYSIS_TIMEOUT = 30
 PRICE_FRESH_SECONDS = 60
 MAX_ENTRY_DRIFT_PERCENT = 0.005
+MARKET_DATA_REQUEST_INTERVAL_SECONDS = max(0.0, MARKET_DATA_REQUEST_INTERVAL_MS / 1000.0)
 
 MODEL_FEATURE_NAMES = ["ATR", "ADX", "RSI", "EMA50", "EMA200"]
 
@@ -43,6 +52,14 @@ FEATURE_SOURCE_MAP = {
     "EMA50": ["EMA_50"],
     "EMA200": ["EMA_200"],
 }
+
+_analysis_cache_lock = threading.RLock()
+_analysis_inflight: dict[tuple[str, str, str], Deferred] = {}
+_market_data_lock = threading.RLock()
+_market_data_cache: dict[tuple[str, str, int], dict] = {}
+_market_data_inflight: dict[tuple[str, str, int], Deferred] = {}
+_market_data_semaphore = defer.DeferredSemaphore(tokens=max(1, MARKET_DATA_MAX_CONCURRENT_REQUESTS))
+_last_market_data_request_ts = 0.0
 
 
 def _label_verdict(value: str) -> str:
@@ -80,6 +97,36 @@ def _blocking_pool():
 
 def _normalize_pair(pair: str) -> str:
     return (pair or "").replace("/", "").upper().strip()
+
+
+def _clone_result(payload: dict | None) -> dict | None:
+    if payload is None:
+        return None
+    return deepcopy(payload)
+
+
+def _clone_dataframe(df: pd.DataFrame | None):
+    if df is None:
+        return None
+    return df.copy(deep=True)
+
+
+def _chain_clone(shared: Deferred, clone_fn):
+    d = Deferred()
+
+    def _done(value):
+        try:
+            d.callback(clone_fn(value))
+        except Exception as exc:
+            d.errback(exc)
+        return value
+
+    def _failed(failure):
+        d.errback(failure)
+        return failure
+
+    shared.addCallbacks(_done, _failed)
+    return d
 
 
 def _resolve_symbol_details(symbol_cache, pair: str):
@@ -463,7 +510,49 @@ def _analysis_flow(client, symbol_cache, symbol, user_id, timeframe="5m", lang: 
 
 
 def get_api_detailed_signal_data(client, symbol_cache, symbol, user_id, timeframe="5m", lang: str | None = None):
-    return defer.maybeDeferred(_analysis_flow, client, symbol_cache, symbol, user_id, timeframe, lang)
+    pair_norm = _normalize_pair(symbol)
+    tf = timeframe or "5m"
+    lang_key = ""
+
+    cached = app_state.get_cached_signal(
+        pair_norm,
+        tf,
+        lang_key,
+        max_age_seconds=ANALYSIS_CACHE_TTL_SECONDS,
+    )
+    if cached is not None:
+        return succeed(_clone_result(cached))
+
+    inflight_key = (pair_norm, tf, lang_key)
+    with _analysis_cache_lock:
+        inflight = _analysis_inflight.get(inflight_key)
+
+    if inflight is not None:
+        return _chain_clone(inflight, _clone_result)
+
+    shared = defer.maybeDeferred(_analysis_flow, client, symbol_cache, pair_norm, user_id, tf, None)
+
+    with _analysis_cache_lock:
+        _analysis_inflight[inflight_key] = shared
+
+    def _store(result):
+        if isinstance(result, dict) and not result.get("error"):
+            payload = dict(result)
+            payload["pair"] = pair_norm
+            payload["timeframe"] = payload.get("timeframe", tf)
+            payload["ts"] = time.time()
+            app_state.cache_signal(pair_norm, tf, payload, lang_key)
+            app_state.latest_analysis_cache[pair_norm] = payload
+        return result
+
+    def _cleanup(outcome):
+        with _analysis_cache_lock:
+            _analysis_inflight.pop(inflight_key, None)
+        return outcome
+
+    shared.addCallback(_store)
+    shared.addBoth(_cleanup)
+    return _chain_clone(shared, _clone_result)
 
 
 def _trendbar_to_row(bar, divisor: float) -> dict:
@@ -488,20 +577,88 @@ def _trendbar_to_row(bar, divisor: float) -> dict:
     return row
 
 
+def _send_market_data_request(client, req, *, response_timeout: int = 25):
+    return _market_data_semaphore.run(
+        _dispatch_market_data_request,
+        client,
+        req,
+        response_timeout,
+    )
+
+
+def _dispatch_market_data_request(client, req, response_timeout: int):
+    outer = Deferred()
+    delay = 0.0
+
+    global _last_market_data_request_ts
+    with _market_data_lock:
+        elapsed = time.time() - _last_market_data_request_ts
+        if elapsed < MARKET_DATA_REQUEST_INTERVAL_SECONDS:
+            delay = MARKET_DATA_REQUEST_INTERVAL_SECONDS - elapsed
+
+    def _do_send():
+        global _last_market_data_request_ts
+        with _market_data_lock:
+            _last_market_data_request_ts = time.time()
+
+        try:
+            api_d = client.send(req, responseTimeoutInSeconds=response_timeout)
+        except Exception as exc:
+            if not outer.called:
+                outer.errback(exc)
+            return
+
+        def _done(value):
+            if not outer.called:
+                outer.callback(value)
+            return value
+
+        def _failed(failure):
+            if not outer.called:
+                outer.errback(failure)
+            return failure
+
+        api_d.addCallbacks(_done, _failed)
+
+    reactor.callLater(delay, _do_send) if delay > 0 else _do_send()
+    return outer
+
+
 def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: int):
+    cache_key = (_normalize_pair(norm_pair), period, int(count))
+
+    with _market_data_lock:
+        cached = _market_data_cache.get(cache_key)
+        inflight = _market_data_inflight.get(cache_key)
+
+    if cached and (time.time() - cached.get("ts", 0)) <= MARKET_DATA_CACHE_TTL_SECONDS:
+        return succeed(_clone_dataframe(cached.get("df")))
+
+    if inflight is not None:
+        return _chain_clone(inflight, _clone_dataframe)
+
     d = Deferred()
+
+    with _market_data_lock:
+        _market_data_inflight[cache_key] = d
 
     symbol_details = _resolve_symbol_details(symbol_cache, norm_pair)
     if not symbol_details:
+        with _market_data_lock:
+            _market_data_inflight.pop(cache_key, None)
         reactor.callLater(0, d.errback, Exception(f"Symbol not found: {norm_pair}"))
         return d
 
     if period not in PERIOD_MAP:
+        with _market_data_lock:
+            _market_data_inflight.pop(cache_key, None)
         reactor.callLater(0, d.errback, Exception(f"Unsupported timeframe: {period}"))
         return d
 
     account_id = getattr(getattr(client, "_client", None), "account_id", None)
     if not account_id:
+        with _market_data_lock:
+            _market_data_inflight.pop(cache_key, None)
         reactor.callLater(0, d.errback, Exception("No Account ID"))
         return d
 
@@ -518,8 +675,10 @@ def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: in
     )
 
     try:
-        api_d = client.send(req, responseTimeoutInSeconds=25)
+        api_d = _send_market_data_request(client, req, response_timeout=25)
     except Exception as e:
+        with _market_data_lock:
+            _market_data_inflight.pop(cache_key, None)
         reactor.callLater(0, d.errback, e)
         return d
 
@@ -542,17 +701,32 @@ def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: in
             if "Timestamp" in df.columns:
                 df = df.sort_values("Timestamp").reset_index(drop=True)
 
+            with _market_data_lock:
+                _market_data_cache[cache_key] = {"ts": time.time(), "df": _clone_dataframe(df)}
+                _market_data_inflight.pop(cache_key, None)
+
             d.callback(df)
         except Exception as e:
+            with _market_data_lock:
+                _market_data_inflight.pop(cache_key, None)
             d.errback(e)
 
         return None
 
     def on_err(failure):
         if not d.called:
+            with _market_data_lock:
+                _market_data_inflight.pop(cache_key, None)
             d.errback(failure)
         return None
 
     api_d.addCallbacks(on_res, on_err)
     d.addTimeout(MARKET_DATA_TIMEOUT, reactor)
+
+    def _finalize(outcome):
+        with _market_data_lock:
+            _market_data_inflight.pop(cache_key, None)
+        return outcome
+
+    d.addBoth(_finalize)
     return d

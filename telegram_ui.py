@@ -678,6 +678,7 @@ def button_handler(update: Update, context: CallbackContext):
 
         loading = _send_tracked(context, chat_id, t("analyzing", lang, symbol=symbol))
 
+        app_state.mark_manual_analysis_request()
         d = get_api_detailed_signal_data(
             app_state.client,
             app_state.symbol_cache,

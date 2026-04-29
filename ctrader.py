@@ -166,7 +166,15 @@ def start_ctrader_client():
 def _handle_error(reason):
     logger.error("cTrader error handler: %s", reason)
 
-    delay = 300 if reason == "RATE_LIMIT_BLOCKED" else 30
+    if reason in {"RATE_LIMIT_BLOCKED", "REQUEST_FREQUENCY_EXCEEDED"}:
+        try:
+            from scanner import pause_scanning_for_rate_limit
+
+            pause_scanning_for_rate_limit(reason)
+        except Exception:
+            logger.exception("Failed to pause scanner after rate limit event")
+
+    delay = 180 if reason in {"RATE_LIMIT_BLOCKED", "REQUEST_FREQUENCY_EXCEEDED"} else 30
     _schedule_reconnect(delay)
 
 
