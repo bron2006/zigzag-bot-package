@@ -910,8 +910,9 @@ function displayLiveSignal(signalData) {
     signalDiv.innerHTML = html;
 
     signalDiv.onclick = () => {
+        lastSelectedPair = signalData.pair || pairNorm;
         currentSignalData = normalizeSignalSnapshot(signalData);
-        signalOutput.innerHTML = formatSignalAsHtml(currentSignalData, currentExpiration);
+        signalOutput.innerHTML = formatSignalAsHtml(currentSignalData, currentSignalData.timeframe || currentExpiration);
         signalContainer.scrollIntoView({ behavior: "smooth" });
         signalDiv.remove();
     };
@@ -1024,10 +1025,10 @@ function updatePairPriceInList(pairNorm, priceData) {
 }
 
 function updateOpenSignalPrice(pairNorm, priceData) {
-    if (!currentSignalData || !lastSelectedPair) return;
+    if (!currentSignalData) return;
 
-    const selectedNorm = normalizePair(lastSelectedPair);
-    if (selectedNorm !== pairNorm) return;
+    const openSignalPairNorm = normalizePair(currentSignalData.pair || lastSelectedPair);
+    if (!openSignalPairNorm || openSignalPairNorm !== pairNorm) return;
 
     const nextPrice = pickPrice(priceData);
 
@@ -1039,7 +1040,7 @@ function updateOpenSignalPrice(pairNorm, priceData) {
         live_price_ts: priceData.ts || Date.now() / 1000,
     };
 
-    signalOutput.innerHTML = formatSignalAsHtml(currentSignalData, currentExpiration);
+    signalOutput.innerHTML = formatSignalAsHtml(currentSignalData, currentSignalData.timeframe || currentExpiration);
 }
 
 async function toggleFavorite(event, button, pair) {
