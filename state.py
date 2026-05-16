@@ -3,6 +3,7 @@ import logging
 import queue
 import threading
 import time
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from telegram.error import BadRequest
@@ -63,6 +64,7 @@ class AppState:
         self.access_token_expires_at: float = 0.0
         self.ctrader_auth_issue: Optional[str] = None
         self.ctrader_auth_updated_at: float = 0.0
+        self._load_persisted_ctrader_tokens()
 
     # ------------------------------------------------------------------
     # Thread pools / background tasks
@@ -106,13 +108,39 @@ class AppState:
         with self._state_lock:
             return self.refresh_token
 
+    def _load_persisted_ctrader_tokens(self) -> None:
+        try:
+            import db
+
+            bundle = db.get_ctrader_token_bundle()
+        except Exception:
+            logger.debug("Could not load persisted cTrader token bundle", exc_info=True)
+            return
+
+        if not bundle:
+            return
+
+        access_token = bundle.get("access_token")
+        refresh_token = bundle.get("refresh_token")
+        expires_at = bundle.get("expires_at")
+
+        with self._state_lock:
+            if access_token:
+                self.access_token = access_token
+            if refresh_token:
+                self.refresh_token = refresh_token
+            if isinstance(expires_at, datetime):
+                self.access_token_expires_at = expires_at.timestamp()
+
     def set_ctrader_tokens(
         self,
         *,
         access_token: Optional[str] = None,
         refresh_token: Optional[str] = None,
         expires_in: Optional[int] = None,
+        persist: bool = True,
     ) -> None:
+        expires_at_dt = None
         with self._state_lock:
             if access_token:
                 self.access_token = access_token
@@ -120,8 +148,21 @@ class AppState:
                 self.refresh_token = refresh_token
             if expires_in:
                 self.access_token_expires_at = time.time() + max(0, int(expires_in))
+                expires_at_dt = datetime.utcfromtimestamp(self.access_token_expires_at)
             self.ctrader_auth_issue = None
             self.ctrader_auth_updated_at = time.time()
+
+        if persist:
+            try:
+                import db
+
+                db.persist_ctrader_token_bundle(
+                    access_token=access_token,
+                    refresh_token=refresh_token,
+                    expires_at=expires_at_dt,
+                )
+            except Exception:
+                logger.debug("Could not persist cTrader token bundle", exc_info=True)
 
     def set_ctrader_auth_issue(self, issue: Optional[str]) -> None:
         with self._state_lock:

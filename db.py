@@ -73,6 +73,14 @@ class UserSettings(Base):
     language = Column(String(8), nullable=False, default="en")
 
 
+class AppRuntimeSetting(Base):
+    __tablename__ = "app_runtime_settings"
+
+    key = Column(String(64), primary_key=True)
+    value = Column(String, nullable=True)
+    updated_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
+
+
 def _normalize_language(lang: str | None) -> str:
     value = (lang or "").split(",", 1)[0].split("-")[0].split("_")[0].lower()
     return value if value in {"en", "uk", "es", "de", "ru"} else "en"
@@ -316,6 +324,69 @@ def _ensure_user_columns() -> None:
         logger.info("Database users table migrated: %s", ", ".join(statements))
     except Exception:
         logger.exception("Could not ensure users table columns")
+
+
+def _set_runtime_setting(session, key: str, value: str | None) -> None:
+    row = session.query(AppRuntimeSetting).filter(AppRuntimeSetting.key == key).first()
+    if row is None:
+        row = AppRuntimeSetting(key=key)
+        session.add(row)
+    row.value = value
+    row.updated_at = _utcnow()
+
+
+def _get_runtime_setting(session, key: str) -> str | None:
+    row = session.query(AppRuntimeSetting).filter(AppRuntimeSetting.key == key).first()
+    return None if row is None else row.value
+
+
+def get_ctrader_token_bundle() -> dict | None:
+    try:
+        with get_db() as db:
+            if db is None:
+                return None
+
+            access_token = _get_runtime_setting(db, "ctrader_access_token")
+            refresh_token = _get_runtime_setting(db, "ctrader_refresh_token")
+            expires_at_raw = _get_runtime_setting(db, "ctrader_access_token_expires_at")
+            expires_at = _normalize_datetime(expires_at_raw)
+
+            if not access_token and not refresh_token:
+                return None
+
+            return {
+                "access_token": access_token,
+                "refresh_token": refresh_token,
+                "expires_at": expires_at,
+            }
+    except SQLAlchemyError:
+        logger.exception("Error loading persisted cTrader token bundle")
+        return None
+
+
+def persist_ctrader_token_bundle(
+    *,
+    access_token: str | None = None,
+    refresh_token: str | None = None,
+    expires_at: datetime | None = None,
+) -> bool:
+    try:
+        with session_scope() as db:
+            if db is None:
+                return False
+
+            if access_token is not None:
+                _set_runtime_setting(db, "ctrader_access_token", access_token)
+            if refresh_token is not None:
+                _set_runtime_setting(db, "ctrader_refresh_token", refresh_token)
+            if expires_at is not None:
+                _set_runtime_setting(db, "ctrader_access_token_expires_at", _dt_to_iso(expires_at))
+            elif access_token is not None or refresh_token is not None:
+                _set_runtime_setting(db, "ctrader_access_token_expires_at", None)
+            return True
+    except SQLAlchemyError:
+        logger.exception("Error persisting cTrader token bundle")
+        return False
 
 
 def add_signal_to_history(data: dict) -> bool:

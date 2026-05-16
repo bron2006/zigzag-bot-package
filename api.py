@@ -574,10 +574,9 @@ def register_routes(app):
         <html><head><meta charset="UTF-8"><title>cTrader OAuth Success</title></head>
         <body style="background:#101214;color:#eef2f6;font-family:Arial,sans-serif;padding:24px;line-height:1.6;">
             <h1>cTrader reconnected</h1>
-            <p>New access and refresh tokens were loaded into the running app.</p>
+            <p>New access and refresh tokens were loaded into the running app and saved for future restarts.</p>
             <p>The quote feed should recover in the next 10-30 seconds.</p>
             <p><a href="{base_url}/api/health" style="color:#4aa3ff;">Open health page</a></p>
-            <p style="color:#8b98a5;">Important: runtime tokens are updated now, but you should still save the new tokens into Fly secrets later so they survive the next restart.</p>
         </body></html>
         """
         return Response(html, mimetype="text/html")
