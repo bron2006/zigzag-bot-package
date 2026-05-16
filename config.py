@@ -111,6 +111,22 @@ def get_fly_app_name() -> str | None:
     return _env_str("FLY_APP_NAME")
 
 
+def get_public_base_url() -> str:
+    explicit = _env_str("PUBLIC_BASE_URL")
+    if explicit:
+        return explicit.rstrip("/")
+
+    fly_app = get_fly_app_name() or "zigzag-bot-package"
+    return f"https://{fly_app}.fly.dev"
+
+
+def get_ctrader_redirect_uri() -> str:
+    explicit = _env_str("CTRADER_REDIRECT_URI")
+    if explicit:
+        return explicit.strip()
+    return f"{get_public_base_url()}/api/ctrader/oauth/callback"
+
+
 def load_assets_from_json() -> dict:
     try:
         with open(BASE_DIR / "assets.json", "r", encoding="utf-8") as f:

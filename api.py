@@ -5,8 +5,9 @@ import os
 import queue
 import time
 from functools import wraps
+from urllib.parse import quote
 
-from flask import Response, jsonify, request, send_from_directory
+from flask import Response, jsonify, redirect, request, send_from_directory
 from twisted.internet import defer, reactor
 from twisted.internet.task import LoopingCall
 from twisted.internet.threads import blockingCallFromThread
@@ -27,8 +28,13 @@ from config import (
     FOREX_SESSIONS,
     STOCK_TICKERS,
     SUBSCRIPTION_DAYS,
+    get_ct_client_id,
+    get_ct_client_secret,
+    get_ctrader_redirect_uri,
     get_fly_app_name,
+    get_public_base_url,
 )
+from ctrader_open_api.auth import Auth as CTraderAuth
 from locales import localize_reason, localize_signal_payload, normalize_lang, session_label, t
 from session_times import DEFAULT_TIMEZONE, normalize_timezone, session_time_label
 from state import app_state
@@ -173,6 +179,7 @@ def _diagnostics_payload() -> dict:
         "ctrader": {
             "ok": bool(app_state.SYMBOLS_LOADED),
             "label": "символи завантажені" if app_state.SYMBOLS_LOADED else "символи не завантажені",
+            "auth_issue": app_state.get_ctrader_auth_issue(),
             "configured_pairs": len(configured_pairs),
             "prices_live": len(prices),
             "missing_prices": missing_prices,
@@ -331,6 +338,14 @@ def _call_analysis_in_reactor(pair: str, uid: int | None, tf: str, lang: str):
     return result
 
 
+def _ctrader_oauth_client() -> CTraderAuth:
+    return CTraderAuth(
+        get_ct_client_id() or "",
+        get_ct_client_secret() or "",
+        get_ctrader_redirect_uri(),
+    )
+
+
 def register_routes(app):
     @app.route("/privacy")
     @app.route("/privacy.html")
@@ -472,6 +487,101 @@ def register_routes(app):
         """
         return Response(html, mimetype="text/html")
 
+    @app.route("/api/ctrader/oauth/start")
+    def ctrader_oauth_start():
+        client_id = get_ct_client_id()
+        client_secret = get_ct_client_secret()
+        redirect_uri = get_ctrader_redirect_uri()
+
+        if not client_id or not client_secret:
+            return Response("cTrader OAuth is not configured.", status=500, mimetype="text/plain")
+
+        auth_url = (
+            "https://id.ctrader.com/my/settings/openapi/grantingaccess/"
+            f"?client_id={quote(client_id, safe='')}"
+            f"&redirect_uri={quote(redirect_uri, safe='')}"
+            "&scope=trading"
+            "&product=web"
+        )
+        return redirect(auth_url, code=302)
+
+    @app.route("/api/ctrader/oauth/callback")
+    def ctrader_oauth_callback():
+        code = request.args.get("code")
+        error_code = request.args.get("error") or request.args.get("errorCode")
+        error_description = request.args.get("error_description") or request.args.get("description")
+
+        if error_code:
+            app_state.set_ctrader_auth_issue(f"oauth_callback_{error_code}: {error_description or 'unknown'}")
+            html = f"""
+            <html><head><meta charset="UTF-8"><title>cTrader OAuth Error</title></head>
+            <body style="background:#101214;color:#eef2f6;font-family:Arial,sans-serif;padding:24px;">
+                <h1>cTrader authorization failed</h1>
+                <p>Error: <strong>{error_code}</strong></p>
+                <p>{error_description or 'Unknown error'}</p>
+            </body></html>
+            """
+            return Response(html, status=400, mimetype="text/html")
+
+        if not code:
+            return Response("Missing OAuth code.", status=400, mimetype="text/plain")
+
+        try:
+            payload = _ctrader_oauth_client().getToken(code)
+        except Exception:
+            logger.exception("Failed to exchange cTrader OAuth code")
+            app_state.set_ctrader_auth_issue("oauth_code_exchange_failed")
+            return Response("Failed to exchange OAuth code.", status=500, mimetype="text/plain")
+
+        payload_error = payload.get("errorCode") or payload.get("error")
+        if payload_error:
+            description = payload.get("description") or payload.get("error_description") or "unknown error"
+            logger.error("cTrader OAuth token exchange failed: %s - %s", payload_error, description)
+            app_state.set_ctrader_auth_issue(f"{payload_error}: {description}")
+            html = f"""
+            <html><head><meta charset="UTF-8"><title>cTrader OAuth Error</title></head>
+            <body style="background:#101214;color:#eef2f6;font-family:Arial,sans-serif;padding:24px;">
+                <h1>Token exchange failed</h1>
+                <p>Error: <strong>{payload_error}</strong></p>
+                <p>{description}</p>
+            </body></html>
+            """
+            return Response(html, status=400, mimetype="text/html")
+
+        access_token = payload.get("accessToken")
+        refresh_token = payload.get("refreshToken")
+        expires_in = payload.get("expiresIn")
+        if not access_token or not refresh_token:
+            logger.error("cTrader OAuth token exchange returned incomplete payload: %s", sorted(payload.keys()))
+            app_state.set_ctrader_auth_issue("oauth_exchange_incomplete_payload")
+            return Response("OAuth token payload is incomplete.", status=500, mimetype="text/plain")
+
+        app_state.set_ctrader_tokens(
+            access_token=access_token,
+            refresh_token=refresh_token,
+            expires_in=expires_in,
+        )
+        os.environ["CTRADER_ACCESS_TOKEN"] = access_token
+        os.environ["CTRADER_REFRESH_TOKEN"] = refresh_token
+
+        try:
+            reactor.callFromThread(ctrader._do_reconnect)
+        except Exception:
+            logger.exception("Failed to reconnect cTrader after OAuth callback")
+
+        base_url = get_public_base_url()
+        html = f"""
+        <html><head><meta charset="UTF-8"><title>cTrader OAuth Success</title></head>
+        <body style="background:#101214;color:#eef2f6;font-family:Arial,sans-serif;padding:24px;line-height:1.6;">
+            <h1>cTrader reconnected</h1>
+            <p>New access and refresh tokens were loaded into the running app.</p>
+            <p>The quote feed should recover in the next 10-30 seconds.</p>
+            <p><a href="{base_url}/api/health" style="color:#4aa3ff;">Open health page</a></p>
+            <p style="color:#8b98a5;">Important: runtime tokens are updated now, but you should still save the new tokens into Fly secrets later so they survive the next restart.</p>
+        </body></html>
+        """
+        return Response(html, mimetype="text/html")
+
     @app.route("/api/health")
     def health_check():
         lang = _request_lang()
@@ -479,6 +589,11 @@ def register_routes(app):
             prices = app_state.get_live_prices_snapshot()
             stale_count = sum(1 for d in prices.values() if time.time() - d.get("ts", 0) > 300)
             tg_status = f"✅ {t('active', lang)}" if app_state.updater else f"❌ {t('disabled', lang)}"
+            ctrader_issue = app_state.get_ctrader_auth_issue()
+            quote_label = "✅ " + t("ready", lang) if app_state.SYMBOLS_LOADED else "❌ " + t("error", lang)
+            auth_row = ""
+            if ctrader_issue:
+                auth_row = f'<div class="stat"><span>cTrader auth:</span><span class="val err">{ctrader_issue}</span></div>'
 
             html = f"""
             <html><head><meta charset="UTF-8"><style>
@@ -491,8 +606,9 @@ def register_routes(app):
             </style></head>
             <body><div class="card">
                 <h1>{t('health_title', lang)}</h1>
-                <div class="stat"><span>{t('quote_feed', lang)}:</span><span class="val {'ok' if app_state.SYMBOLS_LOADED else 'err'}">{'✅ ' + t('ready', lang) if app_state.SYMBOLS_LOADED else '❌ ' + t('error', lang)}</span></div>
+                <div class="stat"><span>{t('quote_feed', lang)}:</span><span class="val {'ok' if app_state.SYMBOLS_LOADED else 'err'}">{quote_label}</span></div>
                 <div class="stat"><span>{t('telegram_bot', lang)}:</span><span class="val {'ok' if app_state.updater else 'err'}">{tg_status}</span></div>
+                {auth_row}
                 <div class="stat"><span>{t('sse_signal_clients', lang)}:</span><span class="val info">{app_state.sse_listener_count('signal')}</span></div>
                 <div class="stat"><span>{t('sse_price_clients', lang)}:</span><span class="val info">{app_state.sse_listener_count('price')}</span></div>
                 <div class="stat"><span>{t('live_prices', lang)}:</span><span class="val">{len(prices)}</span></div>

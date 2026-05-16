@@ -3,7 +3,9 @@ import logging
 
 from twisted.internet import reactor
 from twisted.internet.defer import Deferred
+from twisted.internet.threads import deferToThread
 
+from ctrader_open_api.auth import Auth as CTraderAuth
 from ctrader_open_api.client import Client as SpotwareClientBase
 from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import ProtoMessage
 from ctrader_open_api.messages.OpenApiMessages_pb2 import (
@@ -12,8 +14,8 @@ from ctrader_open_api.messages.OpenApiMessages_pb2 import (
     ProtoOAAccountsTokenInvalidatedEvent,
     ProtoOAApplicationAuthReq,
     ProtoOAErrorRes,
-    ProtoOARefreshTokenReq,
-    ProtoOARefreshTokenRes,
+    ProtoOAGetAccountListByAccessTokenReq,
+    ProtoOAGetAccountListByAccessTokenRes,
     ProtoOASpotEvent,
     ProtoOASymbolsListReq,
 )
@@ -57,6 +59,7 @@ class SpotwareConnect(EventEmitter):
         self.is_authorized = False
         self._stopping = False
         self._refresh_in_progress = False
+        self._oauth_client = CTraderAuth(client_id or "", client_secret or "", "")
 
         self._client = SpotwareClientBase(self.host, self.port, TcpProtocol)
         self._client.setConnectedCallback(self._on_connected)
@@ -119,12 +122,25 @@ class SpotwareConnect(EventEmitter):
         )
         self.send(req, responseTimeoutInSeconds=15)
 
-    def _authorize_account(self):
-        acc_id = get_demo_account_id()
+    def _request_account_list(self):
+        token = app_state.get_ctrader_access_token()
+
+        if not token:
+            logger.warning("Missing cTrader access token. Trying refresh token flow.")
+            self._refresh_access_token("missing_access_token")
+            return
+
+        logger.info("Step 2: Requesting account list by access token...")
+        req = ProtoOAGetAccountListByAccessTokenReq(accessToken=token)
+        self.send(req, responseTimeoutInSeconds=15)
+
+    def _authorize_account(self, account_id=None):
+        acc_id = account_id or get_demo_account_id()
         token = app_state.get_ctrader_access_token()
 
         if not acc_id:
             logger.error("Missing cTrader Account ID")
+            app_state.set_ctrader_auth_issue("missing_account_id")
             self.emit("error", "MISSING_ACCOUNT_CREDENTIALS")
             return
 
@@ -144,6 +160,7 @@ class SpotwareConnect(EventEmitter):
         refresh_token = app_state.get_ctrader_refresh_token()
         if not refresh_token:
             logger.error("Missing cTrader refresh token. Cannot refresh access token.")
+            app_state.set_ctrader_auth_issue("missing_refresh_token")
             self.emit("error", "MISSING_REFRESH_TOKEN")
             return
 
@@ -153,21 +170,90 @@ class SpotwareConnect(EventEmitter):
 
         self._refresh_in_progress = True
         logger.warning("Refreshing cTrader access token (%s)...", reason)
+        app_state.set_ctrader_auth_issue(f"refreshing:{reason}")
 
-        req = ProtoOARefreshTokenReq(refreshToken=refresh_token)
-        try:
-            self.send(req, responseTimeoutInSeconds=15)
-        except Exception:
+        d = deferToThread(self._refresh_access_token_http)
+        d.addCallbacks(
+            lambda payload: reactor.callFromThread(self._on_refresh_success, payload),
+            lambda failure: reactor.callFromThread(self._on_refresh_failure, failure),
+        )
+
+    def _refresh_access_token_http(self):
+        refresh_token = app_state.get_ctrader_refresh_token()
+        return self._oauth_client.refreshToken(refresh_token)
+
+    def _on_refresh_success(self, payload):
+        if not isinstance(payload, dict):
             self._refresh_in_progress = False
-            logger.exception("Failed to send cTrader refresh token request")
-            self.emit("error", "REFRESH_REQUEST_FAILED")
+            logger.error("cTrader refresh flow returned unexpected payload type: %r", type(payload))
+            app_state.set_ctrader_auth_issue("refresh_invalid_payload")
+            self.emit("error", "REFRESH_INVALID_PAYLOAD")
+            return
+
+        error_code = payload.get("errorCode") or payload.get("error")
+        if error_code:
+            self._refresh_in_progress = False
+            description = payload.get("description") or payload.get("error_description") or "unknown error"
+            logger.error("cTrader refresh flow failed: %s - %s", error_code, description)
+            app_state.set_ctrader_auth_issue(f"{error_code}: {description}")
+            self.emit("error", error_code)
+            return
+
+        access_token = payload.get("accessToken")
+        refresh_token = payload.get("refreshToken")
+        expires_in = payload.get("expiresIn")
+        if not access_token:
+            self._refresh_in_progress = False
+            logger.error("cTrader refresh flow succeeded without accessToken")
+            app_state.set_ctrader_auth_issue("refresh_missing_access_token")
+            self.emit("error", "REFRESH_MISSING_ACCESS_TOKEN")
+            return
+
+        self._refresh_in_progress = False
+        app_state.set_ctrader_tokens(
+            access_token=access_token,
+            refresh_token=refresh_token,
+            expires_in=expires_in,
+        )
+        logger.info("cTrader access token refreshed successfully (expires_in=%ss).", expires_in)
+        reactor.callLater(0.2, self._authorize_account)
+
+    def _on_refresh_failure(self, failure):
+        self._refresh_in_progress = False
+        logger.exception("Failed to refresh cTrader access token")
+        app_state.set_ctrader_auth_issue("refresh_request_failed")
+        self.emit("error", "REFRESH_REQUEST_FAILED")
 
     def _on_message_received(self, client, message: ProtoMessage):
         pt = message.payloadType
 
         if pt == ProtoOAPayloadType.PROTO_OA_APPLICATION_AUTH_RES:
-            logger.info("Step 1 OK. Waiting 2s before Account Auth...")
-            reactor.callLater(2.0, self._authorize_account)
+            logger.info("Step 1 OK. Waiting 1s before requesting account list...")
+            reactor.callLater(1.0, self._request_account_list)
+            return
+
+        if pt == ProtoOAPayloadType.PROTO_OA_GET_ACCOUNTS_BY_ACCESS_TOKEN_RES:
+            res = ProtoOAGetAccountListByAccessTokenRes()
+            res.ParseFromString(message.payload)
+
+            requested_account_id = get_demo_account_id()
+            selected_account_id = None
+            for account in res.ctidTraderAccount:
+                candidate = int(account.ctidTraderAccountId)
+                if requested_account_id and candidate == int(requested_account_id):
+                    selected_account_id = candidate
+                    break
+                if selected_account_id is None:
+                    selected_account_id = candidate
+
+            if not selected_account_id:
+                logger.error("cTrader account list is empty for this access token")
+                app_state.set_ctrader_auth_issue("account_list_empty")
+                self.emit("error", "ACCOUNT_LIST_EMPTY")
+                return
+
+            logger.info("Step 2 OK. Using cTrader account %s.", selected_account_id)
+            reactor.callLater(0.2, self._authorize_account, selected_account_id)
             return
 
         if pt == ProtoOAPayloadType.PROTO_OA_ACCOUNT_AUTH_RES:
@@ -176,26 +262,10 @@ class SpotwareConnect(EventEmitter):
 
             self._client.account_id = res.ctidTraderAccountId
             self.is_authorized = True
+            app_state.set_ctrader_auth_issue(None)
 
             logger.info("Step 2 OK. Account %s authorized.", res.ctidTraderAccountId)
             self.emit("ready")
-            return
-
-        if pt == ProtoOAPayloadType.PROTO_OA_REFRESH_TOKEN_RES:
-            res = ProtoOARefreshTokenRes()
-            res.ParseFromString(message.payload)
-
-            self._refresh_in_progress = False
-            app_state.set_ctrader_tokens(
-                access_token=res.accessToken,
-                refresh_token=res.refreshToken,
-                expires_in=getattr(res, "expiresIn", None),
-            )
-            logger.info(
-                "cTrader access token refreshed successfully (expires_in=%ss).",
-                getattr(res, "expiresIn", None),
-            )
-            reactor.callLater(0.2, self._authorize_account)
             return
 
         if pt == ProtoOAPayloadType.PROTO_OA_ERROR_RES:
@@ -231,11 +301,11 @@ class SpotwareConnect(EventEmitter):
 
         if res.errorCode == "BLOCKED_PAYLOAD_TYPE":
             logger.critical("cTrader rate limit. Waiting before reconnect.")
+            app_state.set_ctrader_auth_issue("rate_limit_blocked")
             self.emit("error", "RATE_LIMIT_BLOCKED")
             return
 
         if res.errorCode in {"CH_ACCESS_TOKEN_INVALID", "OA_AUTH_TOKEN_EXPIRED"}:
-            self._refresh_in_progress = False
             logger.warning("cTrader access token is invalid/expired. Trying refresh flow.")
             self._refresh_access_token(res.errorCode)
             return
@@ -243,10 +313,12 @@ class SpotwareConnect(EventEmitter):
         if self._refresh_in_progress:
             self._refresh_in_progress = False
             logger.error("cTrader refresh flow failed: %s - %s", res.errorCode, res.description)
+            app_state.set_ctrader_auth_issue(f"{res.errorCode}: {res.description}")
             self.emit("error", res.errorCode)
             return
 
         logger.error("cTrader API Error: %s - %s", res.errorCode, res.description)
+        app_state.set_ctrader_auth_issue(f"{res.errorCode}: {res.description}")
         self.emit("error", res.errorCode)
 
     def get_all_symbols(self):

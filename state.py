@@ -61,6 +61,8 @@ class AppState:
         self.access_token = get_ctrader_access_token()
         self.refresh_token = get_ctrader_refresh_token()
         self.access_token_expires_at: float = 0.0
+        self.ctrader_auth_issue: Optional[str] = None
+        self.ctrader_auth_updated_at: float = 0.0
 
     # ------------------------------------------------------------------
     # Thread pools / background tasks
@@ -118,6 +120,17 @@ class AppState:
                 self.refresh_token = refresh_token
             if expires_in:
                 self.access_token_expires_at = time.time() + max(0, int(expires_in))
+            self.ctrader_auth_issue = None
+            self.ctrader_auth_updated_at = time.time()
+
+    def set_ctrader_auth_issue(self, issue: Optional[str]) -> None:
+        with self._state_lock:
+            self.ctrader_auth_issue = issue
+            self.ctrader_auth_updated_at = time.time()
+
+    def get_ctrader_auth_issue(self) -> Optional[str]:
+        with self._state_lock:
+            return self.ctrader_auth_issue
 
     def set_scanner_state(self, category: str, enabled: bool) -> None:
         with self._state_lock:
