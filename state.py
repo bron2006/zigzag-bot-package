@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from telegram.error import BadRequest
 from twisted.python.threadpool import ThreadPool
 
-from config import IDEAL_ENTRY_THRESHOLD, get_ctrader_access_token
+from config import IDEAL_ENTRY_THRESHOLD, get_ctrader_access_token, get_ctrader_refresh_token
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +59,8 @@ class AppState:
 
         self.IDEAL_ENTRY_THRESHOLD = IDEAL_ENTRY_THRESHOLD
         self.access_token = get_ctrader_access_token()
+        self.refresh_token = get_ctrader_refresh_token()
+        self.access_token_expires_at: float = 0.0
 
     # ------------------------------------------------------------------
     # Thread pools / background tasks
@@ -93,6 +95,29 @@ class AppState:
     # ------------------------------------------------------------------
     # Scanner state
     # ------------------------------------------------------------------
+
+    def get_ctrader_access_token(self) -> Optional[str]:
+        with self._state_lock:
+            return self.access_token
+
+    def get_ctrader_refresh_token(self) -> Optional[str]:
+        with self._state_lock:
+            return self.refresh_token
+
+    def set_ctrader_tokens(
+        self,
+        *,
+        access_token: Optional[str] = None,
+        refresh_token: Optional[str] = None,
+        expires_in: Optional[int] = None,
+    ) -> None:
+        with self._state_lock:
+            if access_token:
+                self.access_token = access_token
+            if refresh_token:
+                self.refresh_token = refresh_token
+            if expires_in:
+                self.access_token_expires_at = time.time() + max(0, int(expires_in))
 
     def set_scanner_state(self, category: str, enabled: bool) -> None:
         with self._state_lock:
