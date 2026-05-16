@@ -1351,6 +1351,13 @@ function formatSignalAsHtml(signalData, exp) {
         safeLivePrice && safeLivePrice !== safeSignalPrice
             ? `<div style="font-size:12px; color:#94a3b8; font-family:monospace; margin-top:4px;">${escapeHtml(tr("currentPrice"))}: ${safeLivePrice}</div>`
             : "";
+    const entryStatusInline = tradeAllowed
+        ? `<div style="display:inline-flex; align-items:center; gap:6px; margin-top:8px; padding:6px 12px; border-radius:8px; background:rgba(38,166,154,0.12); border:1px solid rgba(38,166,154,0.5); color:#26a69a; font-size:13px; font-weight:900; letter-spacing:0;">
+                ${escapeHtml(tr("entryAllowed"))}
+           </div>`
+        : `<div style="display:inline-flex; align-items:center; gap:6px; margin-top:8px; padding:7px 12px; border-radius:8px; background:rgba(239,83,80,0.16); border:1px solid rgba(239,83,80,0.58); color:#ff6b6b; font-size:14px; font-weight:900; letter-spacing:0; text-transform:uppercase;">
+                ${escapeHtml(tr("entryNotRecommended"))}
+           </div>`;
 
     return `
         <div class="signal-header" style="text-align:center; font-size:1em; margin-bottom:6px;">
@@ -1359,6 +1366,7 @@ function formatSignalAsHtml(signalData, exp) {
         <div class="verdict-container" style="text-align:center; margin:6px 0 10px;">
             <div class="arrow" style="font-size:48px; line-height:0.95; display:block; margin-bottom:2px;">${arrow}</div>
             <div class="v-text ${cClass}" style="font-size:23px; font-weight:900; display:block; line-height:1;">${verdictText}</div>
+            ${entryStatusInline}
             <div style="font-size:11px; color:#94a3b8; margin-top:5px;">${escapeHtml(tr("signalPrice"))}</div>
             <div style="font-size:16px; color:#3390ec; font-family:monospace; margin-top:2px; display:block; line-height:1;">${safeSignalPrice}</div>
             ${livePriceLine}
