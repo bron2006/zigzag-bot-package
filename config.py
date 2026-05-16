@@ -107,6 +107,29 @@ def get_demo_account_id() -> int | None:
     return _env_int("DEMO_ACCOUNT_ID")
 
 
+def get_ctrader_proto_hosts() -> list[str]:
+    raw = _env_str("CTRADER_PROTO_HOSTS")
+    if raw:
+        hosts = [part.strip() for part in raw.replace(";", ",").split(",") if part.strip()]
+    else:
+        single = _env_str("CTRADER_PROTO_HOST")
+        hosts = [single] if single else ["demo1.p.ctrader.com", "demo.ctraderapi.com"]
+
+    deduped = []
+    seen = set()
+    for host in hosts:
+        normalized = host.strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        deduped.append(normalized)
+    return deduped or ["demo1.p.ctrader.com", "demo.ctraderapi.com"]
+
+
+def get_ctrader_proto_port() -> int:
+    return _env_int("CTRADER_PROTO_PORT", 5035) or 5035
+
+
 def get_fly_app_name() -> str | None:
     return _env_str("FLY_APP_NAME")
 

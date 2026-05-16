@@ -22,7 +22,7 @@ from ctrader_open_api.messages.OpenApiMessages_pb2 import (
 from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOAPayloadType
 from ctrader_open_api.tcpProtocol import TcpProtocol
 
-from config import get_demo_account_id
+from config import get_ctrader_proto_hosts, get_ctrader_proto_port, get_demo_account_id
 from state import app_state
 
 logger = logging.getLogger(__name__)
@@ -52,23 +52,71 @@ class SpotwareConnect(EventEmitter):
     def __init__(self, client_id, client_secret):
         super().__init__()
 
-        self.host = "demo.ctraderapi.com"
-        self.port = 5035
+        self._host_candidates = get_ctrader_proto_hosts()
+        self._host_index = 0
+        self.host = self._host_candidates[self._host_index]
+        self.port = get_ctrader_proto_port()
         self._client_id = client_id
         self._client_secret = client_secret
         self.is_authorized = False
         self._stopping = False
+        self._switching_host = False
         self._refresh_in_progress = False
+        self._app_auth_completed = False
         self._oauth_client = CTraderAuth(client_id or "", client_secret or "", "")
 
-        self._client = SpotwareClientBase(self.host, self.port, TcpProtocol)
-        self._client.setConnectedCallback(self._on_connected)
-        self._client.setMessageReceivedCallback(self._on_message_received)
-        self._client.setDisconnectedCallback(self._on_disconnected)
-        self._client.account_id = None
+        self._client = self._create_client(self.host)
+
+    def _create_client(self, host):
+        client = SpotwareClientBase(host, self.port, TcpProtocol)
+        client.setConnectedCallback(self._on_connected)
+        client.setMessageReceivedCallback(self._on_message_received)
+        client.setDisconnectedCallback(self._on_disconnected)
+        client.account_id = None
+        return client
+
+    def _schedule_switch_to_next_host(self) -> bool:
+        if self._switching_host:
+            return True
+
+        next_index = self._host_index + 1
+        if next_index >= len(self._host_candidates):
+            return False
+
+        old_host = self.host
+        self._host_index = next_index
+        self.host = self._host_candidates[self._host_index]
+        self._switching_host = True
+        self._stopping = True
+        self.is_authorized = False
+        self._app_auth_completed = False
+
+        logger.warning(
+            "cTrader app auth failed on %s. Switching to backup host %s:%s",
+            old_host,
+            self.host,
+            self.port,
+        )
+
+        try:
+            stop_method = getattr(self._client, "stopService", None)
+            if callable(stop_method):
+                stop_method()
+        except Exception:
+            logger.exception("Failed to stop cTrader client before host switch")
+
+        self._client = self._create_client(self.host)
+        reactor.callLater(0.5, self._finish_host_switch)
+        return True
+
+    def _finish_host_switch(self):
+        self._stopping = False
+        self._switching_host = False
+        self._client.startService()
 
     def start(self):
         self._stopping = False
+        self._app_auth_completed = False
         self._client.startService()
 
     def stop(self):
@@ -95,7 +143,7 @@ class SpotwareConnect(EventEmitter):
         )
 
     def _on_connected(self, client):
-        logger.info("Connected to cTrader. Waiting 2s before Application Auth...")
+        logger.info("Connected to cTrader at %s:%s. Waiting 2s before Application Auth...", self.host, self.port)
         reactor.callLater(2.0, self._send_app_auth)
 
     def _on_disconnected(self, client, reason=None):
@@ -228,6 +276,7 @@ class SpotwareConnect(EventEmitter):
         pt = message.payloadType
 
         if pt == ProtoOAPayloadType.PROTO_OA_APPLICATION_AUTH_RES:
+            self._app_auth_completed = True
             logger.info("Step 1 OK. Waiting 1s before requesting account list...")
             reactor.callLater(1.0, self._request_account_list)
             return
@@ -304,6 +353,11 @@ class SpotwareConnect(EventEmitter):
             app_state.set_ctrader_auth_issue("rate_limit_blocked")
             self.emit("error", "RATE_LIMIT_BLOCKED")
             return
+
+        if res.errorCode == "CANT_ROUTE_REQUEST" and not self._app_auth_completed:
+            if self._schedule_switch_to_next_host():
+                app_state.set_ctrader_auth_issue(f"{res.errorCode}: {res.description}")
+                return
 
         if res.errorCode in {"CH_ACCESS_TOKEN_INVALID", "OA_AUTH_TOKEN_EXPIRED"}:
             logger.warning("cTrader access token is invalid/expired. Trying refresh flow.")
