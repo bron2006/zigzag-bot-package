@@ -25,6 +25,7 @@ let signalEventSource = null;
 let priceEventSource = null;
 
 const debouncedFetchSignal = debounce(fetchSignal, 300);
+const MAX_ENTRY_DRIFT_PERCENT_CLIENT = 0.005;
 const WATCHLIST_STORAGE_KEY = "zigzag_watchlist";
 const LANG_STORAGE_KEY = "zigzag_language";
 const TIMEZONE_STORAGE_KEY = "zigzag_timezone";
@@ -71,6 +72,7 @@ const APP_I18N = {
         currentPrice: "Current price",
         entryAllowed: "✅ Entry allowed",
         entryNotRecommended: "⛔ Entry not recommended",
+        entryMovedAgainst: "Price already moved against the signal",
         favoriteNotUpdated: "Favorites were not updated",
         favoriteSavedLocal: "Favorites were saved on this device. The server did not respond.",
         subscribe: "💳 Subscribe",
@@ -109,6 +111,7 @@ const APP_I18N = {
         currentPrice: "Поточна ціна",
         entryAllowed: "✅ Вхід дозволено",
         entryNotRecommended: "⛔ Вхід не рекомендований",
+        entryMovedAgainst: "Ціна вже пішла проти сигналу",
         favoriteNotUpdated: "Обране не оновлено",
         favoriteSavedLocal: "Обране збережено на цьому пристрої. Сервер тимчасово не відповів.",
         subscribe: "💳 Оформити підписку",
@@ -147,6 +150,7 @@ const APP_I18N = {
         currentPrice: "Precio actual",
         entryAllowed: "✅ Entrada permitida",
         entryNotRecommended: "⛔ Entrada no recomendada",
+        entryMovedAgainst: "El precio ya fue en contra de la señal",
         favoriteNotUpdated: "Favoritos no actualizados",
         favoriteSavedLocal: "Favoritos guardados en este dispositivo. El servidor no respondió.",
         subscribe: "💳 Suscribirse",
@@ -185,6 +189,7 @@ const APP_I18N = {
         currentPrice: "Aktueller Preis",
         entryAllowed: "✅ Einstieg erlaubt",
         entryNotRecommended: "⛔ Einstieg nicht empfohlen",
+        entryMovedAgainst: "Der Preis lief bereits gegen das Signal",
         favoriteNotUpdated: "Favoriten wurden nicht aktualisiert",
         favoriteSavedLocal: "Favoriten wurden auf diesem Gerät gespeichert. Der Server antwortete nicht.",
         subscribe: "💳 Abo abschließen",
@@ -223,6 +228,7 @@ const APP_I18N = {
         currentPrice: "Текущая цена",
         entryAllowed: "✅ Вход разрешен",
         entryNotRecommended: "⛔ Вход не рекомендован",
+        entryMovedAgainst: "Цена уже пошла против сигнала",
         favoriteNotUpdated: "Избранное не обновлено",
         favoriteSavedLocal: "Избранное сохранено на этом устройстве. Сервер не ответил.",
         subscribe: "💳 Оформить подписку",
@@ -857,6 +863,38 @@ function normalizeSignalSnapshot(signalData) {
     return snapshot;
 }
 
+function evaluateLiveEntryStatus(signalData) {
+    const originalTradeAllowed = Boolean(signalData?.is_trade_allowed);
+    const verdict = String(signalData?.verdict_text || "").toUpperCase();
+    const signalPrice = Number(signalData?.signal_price);
+    const livePrice = Number(signalData?.live_price);
+
+    if (!["BUY", "SELL"].includes(verdict)) {
+        return { tradeAllowed: originalTradeAllowed, driftReason: null };
+    }
+
+    if (!Number.isFinite(signalPrice) || !Number.isFinite(livePrice) || signalPrice <= 0) {
+        return { tradeAllowed: originalTradeAllowed, driftReason: null };
+    }
+
+    const driftPercent = Math.abs((livePrice - signalPrice) / signalPrice) * 100;
+    if (driftPercent < MAX_ENTRY_DRIFT_PERCENT_CLIENT) {
+        return { tradeAllowed: originalTradeAllowed, driftReason: null };
+    }
+
+    const movedAgainstBuy = verdict === "BUY" && livePrice < signalPrice;
+    const movedAgainstSell = verdict === "SELL" && livePrice > signalPrice;
+
+    if (!movedAgainstBuy && !movedAgainstSell) {
+        return { tradeAllowed: originalTradeAllowed, driftReason: null };
+    }
+
+    return {
+        tradeAllowed: false,
+        driftReason: `${tr("entryMovedAgainst")}: ${livePrice.toFixed(5)} ${movedAgainstSell ? ">" : "<"} ${signalPrice.toFixed(5)}`,
+    };
+}
+
 function updateScannerButtons(stateDict) {
     if (!stateDict || !scannerControls) return;
 
@@ -1321,9 +1359,13 @@ function formatSignalAsHtml(signalData, exp) {
     const score = Number.isFinite(Number(signalData.score)) ? Number(signalData.score) : 50;
     const rawSentiment = signalData.sentiment || "";
     const sentiment = rawSentiment ? escapeHtml(labelSentiment(rawSentiment)) : "";
-    const reasons = Array.isArray(signalData.reasons) ? signalData.reasons : [];
-    const tradeAllowed = Boolean(signalData.is_trade_allowed);
+    const reasons = Array.isArray(signalData.reasons) ? [...signalData.reasons] : [];
+    const liveEntryStatus = evaluateLiveEntryStatus(signalData);
+    const tradeAllowed = liveEntryStatus.tradeAllowed;
     const quality = escapeHtml(labelSignalQuality(signalData.signal_quality));
+    if (liveEntryStatus.driftReason && !reasons.includes(liveEntryStatus.driftReason)) {
+        reasons.push(liveEntryStatus.driftReason);
+    }
 
     let arrow = "↔️";
     let cClass = "neutral";
