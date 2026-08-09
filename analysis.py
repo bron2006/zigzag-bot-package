@@ -1,3 +1,7 @@
+import importlib.metadata  # noqa: F401 - pandas_ta_openbb does a bare `import importlib`
+# and then calls importlib.metadata.distribution(...); that submodule is only
+# reachable as an attribute once something has explicitly imported it, so make
+# sure that happens before pandas_ta loads instead of relying on import-order luck.
 import logging
 import threading
 import time
