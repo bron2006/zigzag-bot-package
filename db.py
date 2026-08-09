@@ -831,6 +831,7 @@ def set_user_subscription(user_id: int, plan_type: str = "free", subscription_en
             if db is None:
                 status = _fallback_set_user_subscription(user_id, plan, ends_at, language)
                 _cache_user_status(user_id, status)
+                _notify_payment_at_risk("set_user_subscription_no_engine", user_id)
                 return status
 
             user = _get_or_create_user_row(db, user_id, language=language)
@@ -844,9 +845,11 @@ def set_user_subscription(user_id: int, plan_type: str = "free", subscription_en
     except OperationalError:
         logger.exception("OperationalError while saving user subscription")
         status = _fallback_set_user_subscription(user_id, plan, ends_at, language)
+        _notify_payment_at_risk("set_user_subscription_operational_error", user_id)
     except SQLAlchemyError:
         logger.exception("Error saving user subscription")
         status = _fallback_set_user_subscription(user_id, plan, ends_at, language)
+        _notify_payment_at_risk("set_user_subscription_sqlalchemy_error", user_id)
 
     _cache_user_status(user_id, status)
     return status
@@ -859,6 +862,15 @@ def _notify_subscription_event(text: str, key: str | None = None) -> None:
         notify_admin(text, alert_key=key)
     except Exception:
         logger.debug("Could not send subscription admin notification", exc_info=True)
+
+
+def _notify_payment_at_risk(context: str, user_id: int) -> None:
+    _notify_subscription_event(
+        f"🚨 PAYMENT AT RISK: DB unavailable, subscription stored in-memory only\n"
+        f"context: {context}\nuser_id: {user_id}\n"
+        "This record will be LOST on restart unless the database recovers.",
+        key=f"payment_at_risk_{context}",
+    )
 
 
 def start_user_trial(user_id: int, *, language: str | None = None) -> tuple[dict | None, bool]:
@@ -958,6 +970,7 @@ def activate_paid_subscription(user_id: int, *, days: int | None = None, languag
                 with _fallback_lock:
                     _fallback_user_profiles[int(user_id)] = dict(current)
                 _cache_user_status(user_id, current)
+                _notify_payment_at_risk("activate_paid_subscription_no_engine", user_id)
                 return current
 
             user = _get_or_create_user_row(db, user_id, language=language)
@@ -973,6 +986,7 @@ def activate_paid_subscription(user_id: int, *, days: int | None = None, languag
             status = _user_to_status(user)
     except SQLAlchemyError:
         logger.exception("Error activating paid subscription for user_id=%s", user_id)
+        _notify_payment_at_risk("activate_paid_subscription_sqlalchemy_error", user_id)
         return None
 
     return _cache_user_status(user_id, status)
@@ -986,6 +1000,7 @@ def mark_payment_invoice_processed(invoice_id, user_id: int) -> bool:
     try:
         with session_scope() as db:
             if db is None:
+                _notify_payment_at_risk("mark_payment_invoice_processed_no_engine", user_id)
                 return True
 
             existing = db.query(PaymentInvoice).filter(PaymentInvoice.invoice_id == invoice_key).first()
