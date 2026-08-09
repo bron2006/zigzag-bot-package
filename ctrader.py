@@ -153,6 +153,13 @@ def start_ctrader_client():
         client.on("spot_event", _on_spot_event)
         client.on("error", _handle_error)
 
+        try:
+            import autotrader
+
+            client.on("execution_event", autotrader.handle_execution_event)
+        except Exception:
+            logger.exception("Failed to wire autotrader execution event handler")
+
         client.start()
         logger.info("cTrader client started")
         return client

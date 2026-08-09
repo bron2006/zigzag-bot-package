@@ -9,6 +9,7 @@ from twisted.internet.defer import DeferredList, DeferredSemaphore, succeed
 from twisted.internet.threads import deferToThreadPool
 
 import analysis as analysis_module
+import autotrader
 import db
 import signal_tracking
 import telegram_ui
@@ -233,6 +234,12 @@ def _handle_analysis_result(pair_norm: str, result: dict):
             "SCANNER: не вдалося записати SignalOutcome для %s: %s", pair_norm, failure.getErrorMessage()
         )
     )
+
+    try:
+        # No-op unless AUTOTRADE_ENABLED=true; manages its own threading.
+        autotrader.maybe_enter_trade(result)
+    except Exception:
+        logger.exception("SCANNER: autotrader.maybe_enter_trade failed for %s", pair_norm)
 
     chat_id = get_chat_id()
     if not chat_id:
