@@ -524,6 +524,25 @@ def register_routes(app):
                 item["label"] = localize_reason(item["label"], lang)
         return jsonify(payload)
 
+    @app.route("/api/live_price")
+    @_protected_route
+    def live_price():
+        # Lets external tools that don't share this process's memory (e.g.
+        # binomo_executor.py's --correlation-check, running locally) read
+        # current cTrader mid prices over HTTP instead of the SSE stream.
+        pairs = [p.strip().upper() for p in (request.args.get("pairs") or "").split(",") if p.strip()]
+        if not pairs:
+            return jsonify({"success": False, "error": t("pair_required", _request_lang())}), 400
+
+        snapshot = app_state.get_live_prices_snapshot()
+        prices = {}
+        for pair in pairs:
+            data = snapshot.get(pair)
+            if data and isinstance(data.get("mid"), (int, float)):
+                prices[pair] = {"mid": data["mid"], "ts": data.get("ts")}
+
+        return jsonify({"success": True, "prices": prices})
+
     @app.route("/api/stats/signals")
     @_protected_route
     def stats_signals():

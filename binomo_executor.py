@@ -46,6 +46,7 @@ own stability requirement). Nothing here guesses or falls back to a
 structural selector if the intended one is missing — see _safe_find().
 """
 import argparse
+import csv
 import json
 import logging
 import queue
@@ -68,6 +69,12 @@ BINOMO_BASE_URL = "https://binomo.com"
 BINOMO_TRADE_URL = "https://binomo.com/trading"
 
 SCREENSHOT_DIR = Path("logs") / "binomo_screenshots"
+CORRELATION_LOG_PATH = Path("logs") / "binomo_correlation_check.csv"
+CORRELATION_LOG_FIELDS = [
+    "logged_at", "pair", "binomo_asset", "verdict", "horizon_seconds",
+    "ctrader_entry_price", "ctrader_exit_price", "ctrader_direction",
+    "binomo_entry_price", "binomo_exit_price", "binomo_direction", "match",
+]
 
 # ----------------------------------------------------------------------
 # VERIFY-SELECTOR: placeholders. Replace with real selectors from the live
@@ -82,6 +89,7 @@ SELECTORS = {
     "account_mode_switch": "[data-testid='account-mode-switch']",
     "asset_search_input": "[data-testid='asset-search-input']",
     "asset_option": "[data-testid='asset-option']",  # filter by text=asset name
+    "asset_price_display": "[data-testid='asset-current-price']",  # used only by --correlation-check
     "amount_input": "[data-testid='trade-amount-input']",
     "expiry_selector": "[data-testid='trade-expiry-selector']",
     "expiry_option": "[data-testid='expiry-option']",  # filter by text/seconds
@@ -576,17 +584,204 @@ def run(*, headless: bool = None) -> None:
             browser.close()
 
 
+# ----------------------------------------------------------------------
+# --correlation-check: does the cTrader feed's direction actually match
+# Binomo's own feed for the same asset/horizon? Places NO trades and
+# ignores risk limits/kill switch entirely — pure observation, logged to
+# a CSV. Deliberately independent of Part 1's SignalOutcome table (which
+# only ever tracks cTrader-side movement) per the task's own instruction
+# not to conflate the two.
+# ----------------------------------------------------------------------
+
+
+def _fetch_ctrader_price(pair: str) -> Optional[float]:
+    base = config.get_public_base_url()
+    token = config.get_admin_access_token()
+    if not token:
+        logger.error("Correlation-check: ADMIN_ACCESS_TOKEN not set, cannot fetch cTrader price")
+        return None
+
+    try:
+        response = requests.get(
+            f"{base}/api/live_price", params={"pairs": pair, "admin_token": token}, timeout=10
+        )
+        response.raise_for_status()
+        data = response.json()
+        entry = (data.get("prices") or {}).get(pair)
+        return entry.get("mid") if entry else None
+    except Exception:
+        logger.exception("Correlation-check: failed to fetch cTrader price for %s", pair)
+        return None
+
+
+def _read_binomo_price(page, asset_name: str) -> Optional[float]:
+    el = _safe_find(page, SELECTORS["asset_price_display"], description="asset_price_display")
+    if el is None:
+        return None
+    try:
+        text = el.inner_text().strip()
+        cleaned = "".join(ch for ch in text if ch.isdigit() or ch in ".,").replace(",", "")
+        return float(cleaned) if cleaned else None
+    except Exception:
+        logger.exception("Could not parse Binomo price text for %s", asset_name)
+        return None
+
+
+def _classify_or_unknown(entry: Optional[float], exit_: Optional[float]) -> str:
+    if not isinstance(entry, (int, float)) or not isinstance(exit_, (int, float)):
+        return "unknown"
+    return signal_tracking._classify_move(entry, exit_)
+
+
+def _append_correlation_log(row: dict) -> None:
+    CORRELATION_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    is_new = not CORRELATION_LOG_PATH.exists()
+    with open(CORRELATION_LOG_PATH, "a", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=CORRELATION_LOG_FIELDS)
+        if is_new:
+            writer.writeheader()
+        writer.writerow(row)
+
+
+def _start_correlation_entry(page, asset_map: dict, signal: dict, pending: list, lock: threading.Lock) -> None:
+    verdict = str(signal.get("verdict_text") or "").upper()
+    if verdict not in ("BUY", "SELL"):
+        return
+
+    pair = str(signal.get("pair") or "").upper()
+    entry = asset_map.get(pair)
+    if not entry or not entry.get("binomo_name"):
+        return
+
+    ctrader_entry_price = signal.get("price")
+    if not isinstance(ctrader_entry_price, (int, float)):
+        return
+
+    binomo_entry_price = _read_binomo_price(page, entry["binomo_name"])
+    horizon_seconds = signal_tracking.compute_horizon_seconds(signal.get("timeframe"))
+
+    record = {
+        "pair": pair,
+        "binomo_asset": entry["binomo_name"],
+        "verdict": verdict,
+        "horizon_seconds": horizon_seconds,
+        "ctrader_entry_price": ctrader_entry_price,
+        "binomo_entry_price": binomo_entry_price,
+        "due_at": time.time() + horizon_seconds,
+    }
+    with lock:
+        pending.append(record)
+
+    logger.info(
+        "Correlation-check: tracking %s %s ctrader_entry=%s binomo_entry=%s (horizon=%ss)",
+        pair, verdict, ctrader_entry_price, binomo_entry_price, horizon_seconds,
+    )
+
+
+def _resolve_due_correlation_entries(page, pending: list, lock: threading.Lock) -> None:
+    now = time.time()
+    with lock:
+        due = [r for r in pending if r["due_at"] <= now]
+        for r in due:
+            pending.remove(r)
+
+    for record in due:
+        ctrader_exit_price = _fetch_ctrader_price(record["pair"])
+        binomo_exit_price = _read_binomo_price(page, record["binomo_asset"])
+
+        ctrader_direction = _classify_or_unknown(record["ctrader_entry_price"], ctrader_exit_price)
+        binomo_direction = _classify_or_unknown(record["binomo_entry_price"], binomo_exit_price)
+        match = ctrader_direction == binomo_direction and ctrader_direction != "unknown"
+
+        _append_correlation_log(
+            {
+                "logged_at": datetime.now(timezone.utc).isoformat(),
+                "pair": record["pair"],
+                "binomo_asset": record["binomo_asset"],
+                "verdict": record["verdict"],
+                "horizon_seconds": record["horizon_seconds"],
+                "ctrader_entry_price": record["ctrader_entry_price"],
+                "ctrader_exit_price": ctrader_exit_price,
+                "ctrader_direction": ctrader_direction,
+                "binomo_entry_price": record["binomo_entry_price"],
+                "binomo_exit_price": binomo_exit_price,
+                "binomo_direction": binomo_direction,
+                "match": match,
+            }
+        )
+        logger.info(
+            "Correlation-check RESULT: %s ctrader=%s binomo=%s match=%s",
+            record["pair"], ctrader_direction, binomo_direction, match,
+        )
+
+
+def run_correlation_check(*, headless: bool = None) -> None:
+    from playwright.sync_api import sync_playwright
+
+    asset_map = load_asset_map()
+    if not asset_map:
+        logger.error("Binomo asset map is empty — nothing to check. See %s", config.BINOMO_ASSET_MAP_PATH)
+        return
+
+    pending: list = []
+    lock = threading.Lock()
+
+    signal_queue: "queue.Queue[dict]" = queue.Queue()
+    stop_event = threading.Event()
+    stream_thread = threading.Thread(
+        target=_stream_signals, args=(signal_queue, stop_event), name="binomo-correlation-stream", daemon=True
+    )
+    stream_thread.start()
+
+    with sync_playwright() as p:
+        browser, context, page = _launch_session(p, headless=config.BINOMO_HEADLESS if headless is None else headless)
+
+        if not _is_logged_in(page):
+            logger.critical("Correlation-check: not logged in. Run `python binomo_executor.py --login` first.")
+            browser.close()
+            stop_event.set()
+            return
+
+        logger.info(
+            "Correlation-check started — NO trades will be placed, only price "
+            "comparisons logged to %s. Leave this running for a few days before "
+            "trusting these signals with real money.",
+            CORRELATION_LOG_PATH,
+        )
+
+        try:
+            while True:
+                try:
+                    signal = signal_queue.get(timeout=2.0)
+                    _start_correlation_entry(page, asset_map, signal, pending, lock)
+                except queue.Empty:
+                    pass
+
+                _resolve_due_correlation_entries(page, pending, lock)
+        except KeyboardInterrupt:
+            logger.info("Correlation-check stopping (KeyboardInterrupt).")
+        finally:
+            stop_event.set()
+            browser.close()
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
     parser = argparse.ArgumentParser(description="Binomo binary-option executor (local, Playwright-based).")
     parser.add_argument("--login", action="store_true", help="One-time/manual login helper; saves storage_state.json.")
-    parser.add_argument("--run", action="store_true", help="Run the live executor loop.")
-    parser.add_argument("--headless", action="store_true", help="Force headless mode for --run.")
+    parser.add_argument("--run", action="store_true", help="Run the live executor loop (places real demo/live trades).")
+    parser.add_argument(
+        "--correlation-check", action="store_true",
+        help="Log cTrader-vs-Binomo directional agreement only — places NO trades. Run this first.",
+    )
+    parser.add_argument("--headless", action="store_true", help="Force headless mode for --run/--correlation-check.")
     args = parser.parse_args()
 
     if args.login:
         login_and_save_session()
+    elif args.correlation_check:
+        run_correlation_check(headless=True if args.headless else None)
     elif args.run:
         run(headless=True if args.headless else None)
     else:

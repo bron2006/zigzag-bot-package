@@ -88,5 +88,32 @@ class SignalStreamUrlTest(unittest.TestCase):
         self.assertEqual(url, "https://example.fly.dev/api/signal-stream?admin_token=tok123")
 
 
+class ClassifyOrUnknownTest(unittest.TestCase):
+    def test_up_and_down(self):
+        self.assertEqual(binomo_executor._classify_or_unknown(100.0, 101.0), "up")
+        self.assertEqual(binomo_executor._classify_or_unknown(100.0, 99.0), "down")
+
+    def test_unknown_when_price_missing(self):
+        self.assertEqual(binomo_executor._classify_or_unknown(None, 101.0), "unknown")
+        self.assertEqual(binomo_executor._classify_or_unknown(100.0, None), "unknown")
+
+
+class CorrelationLogTest(unittest.TestCase):
+    def test_writes_header_once_then_appends(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = binomo_executor.Path(tmp) / "correlation.csv"
+            with patch.object(binomo_executor, "CORRELATION_LOG_PATH", log_path):
+                row = {field: "x" for field in binomo_executor.CORRELATION_LOG_FIELDS}
+                binomo_executor._append_correlation_log(row)
+                binomo_executor._append_correlation_log(row)
+
+            content = log_path.read_text(encoding="utf-8")
+            lines = [line for line in content.splitlines() if line]
+            self.assertEqual(len(lines), 3)  # header + 2 rows
+            self.assertEqual(lines[0].split(",")[0], "logged_at")
+
+
 if __name__ == "__main__":
     unittest.main()
