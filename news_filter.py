@@ -18,14 +18,6 @@ from state import app_state
 
 logger = logging.getLogger("news_filter")
 
-_OPENROUTER_API_KEY = (os.environ.get("OPENROUTER_API_KEY") or "").strip()
-_OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-
-_MODELS = [
-    (os.environ.get("OPENROUTER_MODEL_PRIMARY") or "google/gemini-2.0-flash-001").strip(),
-    (os.environ.get("OPENROUTER_MODEL_FALLBACK") or "openai/gpt-4o-mini").strip(),
-]
-
 _cache: Dict[str, dict] = {}
 _cache_lock = threading.RLock()
 
@@ -54,22 +46,13 @@ _NEWS_BLOCK_IMPACTS = {
     if item.strip()
 }
 
-_REQUEST_TIMEOUT = (5, 15)
-_RETRY_TIMEOUT = (5, 10)
-
 _calendar_cache: dict = {"ts": 0.0, "events": [], "error": None}
 
-_SYSTEM_PROMPT = (
-    "You are a short-term trading news gate. "
-    "Reply with EXACTLY ONE WORD only: GO or BLOCK."
-)
-
-_USER_PROMPT = (
-    "Asset: {pair}\n"
-    "Check if there are dangerous high-impact news or market-moving events "
-    "in the next 30 minutes.\n"
-    "Reply exactly one word: GO or BLOCK."
-)
+# If the calendar keeps returning zero parsed events for this long despite
+# successful HTTP fetches, that's more likely a broken scraper (site markup
+# changed) than a genuinely quiet calendar, so alert an admin.
+_CALENDAR_ZERO_EVENT_ALERT_SECONDS = _env_int("NEWS_CALENDAR_ZERO_EVENT_ALERT_SECONDS", 6 * 3600)
+_calendar_zero_event_streak_since: Optional[float] = None
 
 
 def _blocking_pool():
@@ -82,14 +65,6 @@ def _normalize_pair(pair: str) -> str:
 
 def _now() -> float:
     return time.time()
-
-
-def _mask_key(value: Optional[str]) -> str:
-    if not value:
-        return "<empty>"
-    if len(value) < 10:
-        return "*" * len(value)
-    return f"{value[:4]}...{value[-4:]}"
 
 
 def _get_cached(pair: str) -> Optional[dict]:
@@ -230,6 +205,8 @@ def _load_calendar_events() -> tuple[list[dict], Optional[str]]:
         if now - _calendar_cache.get("ts", 0) < _CALENDAR_CACHE_TTL:
             return list(_calendar_cache.get("events") or []), _calendar_cache.get("error")
 
+    global _calendar_zero_event_streak_since
+
     try:
         response = requests.get(
             _CALENDAR_URL,
@@ -238,17 +215,57 @@ def _load_calendar_events() -> tuple[list[dict], Optional[str]]:
         )
         response.raise_for_status()
         events = _parse_calendar_events(response.text)
-        error = None if events else "календар не містить подій"
-        logger.info("Календар новин завантажено: %s подій із %s", len(events), _CALENDAR_URL)
+
+        if events:
+            error = None
+            with _cache_lock:
+                _calendar_zero_event_streak_since = None
+            logger.info("Календар новин завантажено: %s подій із %s", len(events), _CALENDAR_URL)
+        else:
+            error = "календар не містить подій"
+            logger.info("Календар новин завантажено без подій із %s", _CALENDAR_URL)
+            _note_zero_event_fetch(now)
     except Exception as exc:
         events = []
         error = f"календар недоступний: {exc}"
         logger.warning("Не вдалося завантажити календар новин: %s", exc)
+        # A network/HTTP failure isn't evidence the HTML parser broke, so it
+        # doesn't count towards the zero-events-despite-success streak.
+        with _cache_lock:
+            _calendar_zero_event_streak_since = None
 
     with _cache_lock:
         _calendar_cache.update({"ts": now, "events": events, "error": error})
 
     return list(events), error
+
+
+def _note_zero_event_fetch(now: float) -> None:
+    """Track successful-but-empty calendar fetches and alert if the streak
+    looks like a broken parser rather than a genuinely quiet calendar."""
+    global _calendar_zero_event_streak_since
+
+    with _cache_lock:
+        if _calendar_zero_event_streak_since is None:
+            _calendar_zero_event_streak_since = now
+        streak_seconds = now - _calendar_zero_event_streak_since
+
+    if streak_seconds < _CALENDAR_ZERO_EVENT_ALERT_SECONDS:
+        return
+
+    try:
+        from notifier import notify_admin
+
+        notify_admin(
+            "⚠️ Календар новин: успішні запити повертають 0 подій "
+            f"вже {int(streak_seconds // 3600)}г. Схоже, парсер зламався "
+            "(сайт міг змінити розмітку), а не що подій справді немає. "
+            "Фільтр новин продовжує пропускати угоди (fail-open) — перевірте "
+            f"{_CALENDAR_URL}.",
+            alert_key="news_calendar_parser_suspected_broken",
+        )
+    except Exception:
+        logger.debug("Could not notify admin about suspected calendar parser breakage", exc_info=True)
 
 
 def _format_event_time_utc(event_time: datetime) -> str:
@@ -326,18 +343,6 @@ def _calendar_verdict(pair: str) -> dict:
     }
 
 
-def _success(verdict: str, *, model: str, raw: str = "", http_status: int = 200) -> dict:
-    return {
-        "verdict": verdict,
-        "reason": "",
-        "available": True,
-        "source": "openrouter",
-        "model": model,
-        "http_status": http_status,
-        "raw": (raw or "")[:200],
-    }
-
-
 def _fallback(reason: str, *, source: str, model: Optional[str] = None, http_status: Optional[int] = None, raw: str = "") -> dict:
     return {
         "verdict": "GO",
@@ -348,236 +353,6 @@ def _fallback(reason: str, *, source: str, model: Optional[str] = None, http_sta
         "http_status": http_status,
         "raw": (raw or "")[:200],
     }
-
-
-def _extract_text_from_openrouter(data: dict) -> str:
-    try:
-        choices = data.get("choices") or []
-        if not choices:
-            return ""
-
-        message = choices[0].get("message") or {}
-        content = message.get("content", "")
-
-        if isinstance(content, str):
-            return content.strip()
-
-        if isinstance(content, list):
-            chunks = []
-            for item in content:
-                if isinstance(item, dict):
-                    text = item.get("text")
-                    if text:
-                        chunks.append(text)
-            return "\n".join(chunks).strip()
-
-        return ""
-    except Exception:
-        logger.exception("Не вдалося витягнути текст із OpenRouter response")
-        return ""
-
-
-def _parse_verdict(text: str, model: str) -> dict:
-    cleaned = (text or "").strip()
-    upper = cleaned.upper()
-
-    if re.search(r"\bBLOCK\b", upper):
-        return _success("BLOCK", model=model, raw=cleaned)
-
-    if re.search(r"\bGO\b", upper):
-        return _success("GO", model=model, raw=cleaned)
-
-    if not cleaned:
-        logger.warning("OpenRouter returned empty response")
-        return _fallback(
-            "Порожня відповідь від моделі",
-            source="fallback_empty",
-            model=model,
-            http_status=200,
-        )
-
-    logger.warning("OpenRouter malformed response: %r", cleaned[:200])
-    return _fallback(
-        "Некоректний формат відповіді моделі",
-        source="fallback_malformed",
-        model=model,
-        http_status=200,
-        raw=cleaned,
-    )
-
-
-def _call_model_once(model: str, pair: str, prompt: str, timeout_value) -> dict:
-    if not _OPENROUTER_API_KEY:
-        return _fallback(
-            "OPENROUTER_API_KEY не налаштований",
-            source="fallback_no_key",
-            model=model,
-        )
-
-    headers = {
-        "Authorization": f"Bearer {_OPENROUTER_API_KEY}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://zigzag-bot-package.fly.dev",
-        "X-Title": "zigzag-bot",
-    }
-
-    body = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": _SYSTEM_PROMPT},
-            {"role": "user", "content": prompt},
-        ],
-        "temperature": 0,
-        "max_tokens": 4,
-    }
-
-    response = requests.post(
-        _OPENROUTER_URL,
-        headers=headers,
-        json=body,
-        timeout=timeout_value,
-    )
-
-    logger.info(
-        "OpenRouter [%s] model=%s status=%s key=%s",
-        pair,
-        model,
-        response.status_code,
-        _mask_key(_OPENROUTER_API_KEY),
-    )
-
-    body_text = response.text[:500]
-
-    if response.status_code != 200:
-        return _fallback(
-            f"http_{response.status_code}",
-            source="fallback_http_error",
-            model=model,
-            http_status=response.status_code,
-            raw=body_text,
-        )
-
-    try:
-        data = response.json()
-    except Exception:
-        return _fallback(
-            "invalid_json_response",
-            source="fallback_invalid_json",
-            model=model,
-            http_status=200,
-            raw=body_text,
-        )
-
-    text = _extract_text_from_openrouter(data)
-    logger.info("OpenRouter raw response for %s [%s]: %s", pair, model, text)
-
-    return _parse_verdict(text, model)
-
-
-def _call_openrouter_sync(pair: str) -> dict:
-    pair = _normalize_pair(pair)
-
-    if not _OPENROUTER_API_KEY:
-        logger.warning("OPENROUTER_API_KEY не встановлений — fallback GO")
-        return _fallback(
-            "OPENROUTER_API_KEY не налаштований",
-            source="fallback_no_key",
-            model=None,
-        )
-
-    prompt = _USER_PROMPT.format(pair=pair)
-    last_result = None
-
-    for model in [m for m in _MODELS if m]:
-        for attempt in range(3):
-            try:
-                timeout_value = _REQUEST_TIMEOUT if attempt == 0 else _RETRY_TIMEOUT
-                result = _call_model_once(model, pair, prompt, timeout_value)
-
-                if result.get("available"):
-                    logger.info(
-                        "OpenRouter [%s]: %s (model=%s)",
-                        pair,
-                        result["verdict"],
-                        model,
-                    )
-                    return result
-
-                status = result.get("http_status")
-                reason = result.get("reason", "")
-                last_result = result
-
-                if status in (429, 500, 502, 503, 504):
-                    wait = 2 ** attempt
-                    logger.warning(
-                        "OpenRouter [%s] model=%s status=%s reason=%s wait=%ss attempt=%s/3",
-                        pair,
-                        model,
-                        status,
-                        reason,
-                        wait,
-                        attempt + 1,
-                    )
-                    time.sleep(wait)
-                    continue
-
-                if status == 200 and reason in (
-                    "Порожня відповідь від моделі",
-                    "Некоректний формат відповіді моделі",
-                    "invalid_json_response",
-                ):
-                    logger.warning(
-                        "OpenRouter [%s] model=%s returned unusable 200 response: %s",
-                        pair,
-                        model,
-                        reason,
-                    )
-                    break
-
-                logger.warning(
-                    "OpenRouter [%s] model=%s fallback result: status=%s reason=%s",
-                    pair,
-                    model,
-                    status,
-                    reason,
-                )
-                break
-
-            except requests.exceptions.Timeout:
-                wait = 2 ** attempt
-                logger.warning(
-                    "OpenRouter [%s] model=%s timeout wait=%ss attempt=%s/3",
-                    pair,
-                    model,
-                    wait,
-                    attempt + 1,
-                )
-                last_result = _fallback(
-                    "timeout",
-                    source="fallback_timeout",
-                    model=model,
-                    http_status=None,
-                )
-                time.sleep(wait)
-                continue
-
-            except Exception as e:
-                logger.error("OpenRouter [%s] model=%s exception: %s", pair, model, e)
-                last_result = _fallback(
-                    str(e),
-                    source="fallback_exception",
-                    model=model,
-                    http_status=None,
-                )
-                break
-
-    logger.warning("OpenRouter [%s]: всі моделі недоступні — fallback GO", pair)
-    return last_result or _fallback(
-        "all_models_unavailable",
-        source="fallback_all_models_unavailable",
-        model=None,
-        http_status=None,
-    )
 
 
 def get_latest_news_sentiment_async(pair: str, lang: str | None = None):
@@ -648,17 +423,20 @@ def get_cache_stats() -> dict:
         if now - v.get("ts", 0) >= v.get("_ttl", _CACHE_TTL)
     }
 
+    with _cache_lock:
+        zero_streak_since = _calendar_zero_event_streak_since
+
+    zero_streak_seconds = int(now - zero_streak_since) if zero_streak_since else 0
+
     return {
         "fresh": len(fresh),
         "stale": len(stale),
         "total": len(items),
-        "models": list(_MODELS),
-        "has_api_key": bool(_OPENROUTER_API_KEY),
-        "masked_key": _mask_key(_OPENROUTER_API_KEY),
         "calendar_url": _CALENDAR_URL,
         "calendar_block_impacts": sorted(_NEWS_BLOCK_IMPACTS),
         "calendar_window_minutes": {
             "before": _NEWS_BLOCK_BEFORE_MINUTES,
             "after": _NEWS_BLOCK_AFTER_MINUTES,
         },
+        "calendar_zero_event_streak_seconds": zero_streak_seconds,
     }
