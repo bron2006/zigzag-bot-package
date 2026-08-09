@@ -50,7 +50,13 @@ def _env_float(name: str, default: float) -> float:
 
 TELEGRAM_BOT_TOKEN = _env_str("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = _env_str("GEMINI_API_KEY")
-IS_DEV_MODE = _env_bool("NORD", False)
+DEV_MODE_UNSAFE_AUTH_BYPASS = _env_bool("DEV_MODE_UNSAFE_AUTH_BYPASS", False)
+if DEV_MODE_UNSAFE_AUTH_BYPASS:
+    logger.critical(
+        "DEV_MODE_UNSAFE_AUTH_BYPASS=true — Telegram initData НЕ перевіряється і будь-хто "
+        "може видавати себе за DEV_USER_ID. Це НІКОЛИ не повинно бути увімкнено на Fly.io "
+        "чи будь-якому продакшн-середовищі."
+    )
 DEV_USER_ID = _env_int("MY_TELEGRAM_ID", 123456789)
 CRYPTO_PAY_TOKEN = _env_str("CRYPTO_PAY_TOKEN")
 CRYPTO_PAY_API_URL = (_env_str("CRYPTO_PAY_API_URL", "https://pay.crypt.bot/api") or "https://pay.crypt.bot/api").rstrip("/")

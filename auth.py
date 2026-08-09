@@ -5,7 +5,7 @@ import logging
 import time
 from urllib.parse import parse_qs, parse_qsl
 
-from config import DEV_USER_ID, IS_DEV_MODE, TELEGRAM_BOT_TOKEN
+from config import DEV_MODE_UNSAFE_AUTH_BYPASS, DEV_USER_ID, TELEGRAM_BOT_TOKEN
 
 logger = logging.getLogger("auth")
 
@@ -32,8 +32,8 @@ def _is_fresh(auth_date: str | None) -> bool:
 
 
 def is_valid_init_data(init_data_str: str) -> bool:
-    if IS_DEV_MODE:
-        logger.debug("DEV MODE is ON. Bypassing Telegram initData validation.")
+    if DEV_MODE_UNSAFE_AUTH_BYPASS:
+        logger.debug("DEV_MODE_UNSAFE_AUTH_BYPASS is ON. Bypassing Telegram initData validation.")
         return True
 
     if not init_data_str:
@@ -84,7 +84,7 @@ def is_valid_init_data(init_data_str: str) -> bool:
 
 
 def get_user_id_from_init_data(init_data_str: str) -> int | None:
-    if IS_DEV_MODE and not init_data_str:
+    if DEV_MODE_UNSAFE_AUTH_BYPASS and not init_data_str:
         return DEV_USER_ID
 
     if not init_data_str:
