@@ -16,3 +16,8 @@ venv.bak/
 # Специфічні файли IDE
 .idea/
 .vscode/
+
+# Тимчасові/сміттєві файли Jupyter та Google Drive sync
+.ipynb_checkpoints/
+.tmp.driveupload/
+Untitled*.ipynb
