@@ -6,6 +6,11 @@ const signalOutput = document.getElementById("signalOutput");
 const scannerControls = document.getElementById("scannerControls");
 const liveSignalsContainer = document.getElementById("liveSignalsContainer");
 const signalContainer = document.getElementById("signalContainer");
+const adminControls = document.getElementById("adminControls");
+const winrateButton = document.getElementById("winrateButton");
+const winrateModal = document.getElementById("winrateModal");
+const winrateModalBody = document.getElementById("winrateModalBody");
+const winrateModalClose = document.getElementById("winrateModalClose");
 
 let tg = window.Telegram.WebApp;
 tg.ready();
@@ -77,6 +82,22 @@ const APP_I18N = {
         favoriteSavedLocal: "Favorites were saved on this device. The server did not respond.",
         subscribe: "💳 Subscribe",
         paymentError: "Could not create the invoice. Please try again later.",
+        winrateButton: "📊 Win-rate",
+        winrateModalTitle: "📊 Signal win-rate",
+        winrateWeek: "Week (7d)",
+        winrateMonth: "Month (30d)",
+        winrateTotal: "Signals",
+        winrateResolved: "closed",
+        winratePending: "pending",
+        winrateWins: "TP",
+        winrateLosses: "SL",
+        winrateTimeouts: "Timeout",
+        winrateByPair: "Top pairs (30d)",
+        winrateEmpty: "Not enough resolved signals yet to show win-rate.",
+        winrateLoading: "⏳ Loading...",
+        winrateError: "Could not load win-rate stats.",
+        winrateNoRate: "n/a",
+        winrateTrades: "{count} trades",
     },
     uk: {
         languageLabel: "Мова",
@@ -116,6 +137,22 @@ const APP_I18N = {
         favoriteSavedLocal: "Обране збережено на цьому пристрої. Сервер тимчасово не відповів.",
         subscribe: "💳 Оформити підписку",
         paymentError: "Не вдалося створити інвойс. Спробуйте ще раз трохи пізніше.",
+        winrateButton: "📊 Win-rate",
+        winrateModalTitle: "📊 Win-rate сигналів",
+        winrateWeek: "Тиждень (7д)",
+        winrateMonth: "Місяць (30д)",
+        winrateTotal: "Сигналів",
+        winrateResolved: "закрито",
+        winratePending: "очікує",
+        winrateWins: "TP",
+        winrateLosses: "SL",
+        winrateTimeouts: "Timeout",
+        winrateByPair: "Топ пар (30д)",
+        winrateEmpty: "Ще недостатньо закритих сигналів для статистики.",
+        winrateLoading: "⏳ Завантаження...",
+        winrateError: "Не вдалося завантажити статистику.",
+        winrateNoRate: "н/д",
+        winrateTrades: "{count} угод",
     },
     es: {
         languageLabel: "Idioma",
@@ -155,6 +192,22 @@ const APP_I18N = {
         favoriteSavedLocal: "Favoritos guardados en este dispositivo. El servidor no respondió.",
         subscribe: "💳 Suscribirse",
         paymentError: "No se pudo crear la factura. Inténtalo más tarde.",
+        winrateButton: "📊 Win-rate",
+        winrateModalTitle: "📊 Win-rate de señales",
+        winrateWeek: "Semana (7d)",
+        winrateMonth: "Mes (30d)",
+        winrateTotal: "Señales",
+        winrateResolved: "cerradas",
+        winratePending: "pendientes",
+        winrateWins: "TP",
+        winrateLosses: "SL",
+        winrateTimeouts: "Timeout",
+        winrateByPair: "Top pares (30d)",
+        winrateEmpty: "Aún no hay suficientes señales cerradas para mostrar el win-rate.",
+        winrateLoading: "⏳ Cargando...",
+        winrateError: "No se pudieron cargar las estadísticas.",
+        winrateNoRate: "n/d",
+        winrateTrades: "{count} operaciones",
     },
     de: {
         languageLabel: "Sprache",
@@ -194,6 +247,22 @@ const APP_I18N = {
         favoriteSavedLocal: "Favoriten wurden auf diesem Gerät gespeichert. Der Server antwortete nicht.",
         subscribe: "💳 Abo abschließen",
         paymentError: "Rechnung konnte nicht erstellt werden. Bitte später erneut versuchen.",
+        winrateButton: "📊 Win-rate",
+        winrateModalTitle: "📊 Signal-Trefferquote",
+        winrateWeek: "Woche (7T)",
+        winrateMonth: "Monat (30T)",
+        winrateTotal: "Signale",
+        winrateResolved: "geschlossen",
+        winratePending: "offen",
+        winrateWins: "TP",
+        winrateLosses: "SL",
+        winrateTimeouts: "Timeout",
+        winrateByPair: "Top-Paare (30T)",
+        winrateEmpty: "Noch nicht genug geschlossene Signale für eine Trefferquote.",
+        winrateLoading: "⏳ Wird geladen...",
+        winrateError: "Statistik konnte nicht geladen werden.",
+        winrateNoRate: "k.A.",
+        winrateTrades: "{count} Trades",
     },
     ru: {
         languageLabel: "Язык",
@@ -233,6 +302,22 @@ const APP_I18N = {
         favoriteSavedLocal: "Избранное сохранено на этом устройстве. Сервер не ответил.",
         subscribe: "💳 Оформить подписку",
         paymentError: "Не удалось создать инвойс. Попробуйте позже.",
+        winrateButton: "📊 Win-rate",
+        winrateModalTitle: "📊 Win-rate сигналов",
+        winrateWeek: "Неделя (7д)",
+        winrateMonth: "Месяц (30д)",
+        winrateTotal: "Сигналов",
+        winrateResolved: "закрыто",
+        winratePending: "ожидает",
+        winrateWins: "TP",
+        winrateLosses: "SL",
+        winrateTimeouts: "Timeout",
+        winrateByPair: "Топ пар (30д)",
+        winrateEmpty: "Пока недостаточно закрытых сигналов для статистики.",
+        winrateLoading: "⏳ Загрузка...",
+        winrateError: "Не удалось загрузить статистику.",
+        winrateNoRate: "н/д",
+        winrateTrades: "{count} сделок",
     },
 };
 
@@ -245,6 +330,7 @@ document.addEventListener("DOMContentLoaded", function () {
     bindLanguageSelector();
     bindTimeframeButtons();
     bindSearch();
+    bindWinrateModal();
     connectSignalStream();
     connectPriceStream();
 });
@@ -316,6 +402,10 @@ function applyStaticTranslations() {
     if (tf5) tf5.textContent = tr("expiration5m");
 
     if (signalOutput) signalOutput.textContent = tr("chooseAsset");
+
+    if (winrateButton) winrateButton.textContent = tr("winrateButton");
+    const winrateModalTitle = document.getElementById("winrateModalTitle");
+    if (winrateModalTitle) winrateModalTitle.textContent = tr("winrateModalTitle");
 
     document.querySelectorAll(".lang-button").forEach((button) => {
         button.classList.toggle("active", button.dataset.lang === userLang);
@@ -425,6 +515,7 @@ async function loadInitialData() {
         allData = staticData || {};
         setCurrentWatchlist(mergeWatchlists((staticData && staticData.watchlist) || []));
         applyPairMetadata(staticData);
+        updateAdminControls(staticData && staticData.user);
 
         populateLists(allData);
         showLoader(false);
@@ -913,6 +1004,143 @@ function updateScannerButtons(stateDict) {
         btn.textContent = `${isEnabled ? "✅" : "❌"} ${textMap[cat]}`;
         btn.classList.toggle("enabled", isEnabled);
     });
+}
+
+function updateAdminControls(user) {
+    if (!adminControls) return;
+    adminControls.classList.toggle("hidden", !(user && user.is_admin));
+}
+
+function bindWinrateModal() {
+    if (winrateButton) {
+        winrateButton.addEventListener("click", openWinrateModal);
+    }
+    if (winrateModalClose) {
+        winrateModalClose.addEventListener("click", closeWinrateModal);
+    }
+    if (winrateModal) {
+        winrateModal.addEventListener("click", (event) => {
+            if (event.target === winrateModal) closeWinrateModal();
+        });
+    }
+    document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && winrateModal && !winrateModal.classList.contains("hidden")) {
+            closeWinrateModal();
+        }
+    });
+}
+
+function openWinrateModal() {
+    if (!winrateModal) return;
+    winrateModal.classList.remove("hidden");
+    loadWinrateStats();
+}
+
+function closeWinrateModal() {
+    if (!winrateModal) return;
+    winrateModal.classList.add("hidden");
+}
+
+async function loadWinrateStats() {
+    if (!winrateModalBody) return;
+
+    winrateModalBody.innerHTML = `<div class="winrate-loading">${escapeHtml(tr("winrateLoading"))}</div>`;
+
+    try {
+        const [week, month] = await Promise.all([
+            apiGet("/api/stats/signals", { days: 7 }),
+            apiGet("/api/stats/signals", { days: 30 }),
+        ]);
+        renderWinrateStats(week, month);
+    } catch (err) {
+        console.error("Winrate stats load error:", err);
+        winrateModalBody.innerHTML = `<div class="winrate-error">${escapeHtml(tr("winrateError"))}</div>`;
+    }
+}
+
+function winrateRateClass(winRate) {
+    if (typeof winRate !== "number") return "neutral";
+    if (winRate >= 50) return "positive";
+    return "negative";
+}
+
+function formatWinrate(winRate) {
+    return typeof winRate === "number" ? `${winRate}%` : tr("winrateNoRate");
+}
+
+function renderWinratePeriodSummary(label, stats) {
+    if (!stats) {
+        return `
+            <div class="winrate-section">
+                <div class="winrate-section-title">${escapeHtml(label)}</div>
+                <div class="winrate-empty">${escapeHtml(tr("winrateEmpty"))}</div>
+            </div>
+        `;
+    }
+
+    const rateClass = winrateRateClass(stats.win_rate);
+    return `
+        <div class="winrate-section">
+            <div class="winrate-section-title">${escapeHtml(label)}</div>
+            <div class="winrate-summary">
+                <span class="winrate-rate ${rateClass}">${formatWinrate(stats.win_rate)}</span>
+                <span class="winrate-counts">
+                    ${escapeHtml(tr("winrateTotal"))}: ${stats.total ?? 0}
+                    (${stats.resolved ?? 0} ${escapeHtml(tr("winrateResolved"))}, ${stats.pending ?? 0} ${escapeHtml(tr("winratePending"))})<br>
+                    ${escapeHtml(tr("winrateWins"))}: ${stats.wins ?? 0} ·
+                    ${escapeHtml(tr("winrateLosses"))}: ${stats.losses ?? 0} ·
+                    ${escapeHtml(tr("winrateTimeouts"))}: ${stats.timeouts ?? 0}
+                </span>
+            </div>
+        </div>
+    `;
+}
+
+function renderWinrateByPair(monthStats) {
+    const byPair = (monthStats && Array.isArray(monthStats.by_pair)) ? monthStats.by_pair : [];
+    const topPairs = byPair
+        .filter((item) => (item.resolved || 0) > 0)
+        .sort((a, b) => (b.resolved || 0) - (a.resolved || 0))
+        .slice(0, 8);
+
+    if (!topPairs.length) return "";
+
+    const rows = topPairs.map((item) => {
+        const rateClass = winrateRateClass(item.win_rate);
+        return `
+            <div class="winrate-row">
+                <span>${escapeHtml(item.pair || "?")}</span>
+                <span class="winrate-row-rate ${rateClass}">
+                    ${formatWinrate(item.win_rate)}
+                    <span style="color:var(--hint-color); font-weight:normal;"> · ${escapeHtml(tr("winrateTrades", { count: item.resolved || 0 }))}</span>
+                </span>
+            </div>
+        `;
+    }).join("");
+
+    return `
+        <div class="winrate-section">
+            <div class="winrate-section-title">${escapeHtml(tr("winrateByPair"))}</div>
+            ${rows}
+        </div>
+    `;
+}
+
+function renderWinrateStats(weekStats, monthStats) {
+    if (!winrateModalBody) return;
+
+    const weekHasData = weekStats && weekStats.resolved > 0;
+    const monthHasData = monthStats && monthStats.resolved > 0;
+
+    if (!weekHasData && !monthHasData) {
+        winrateModalBody.innerHTML = `<div class="winrate-empty">${escapeHtml(tr("winrateEmpty"))}</div>`;
+        return;
+    }
+
+    winrateModalBody.innerHTML =
+        renderWinratePeriodSummary(tr("winrateWeek"), weekStats) +
+        renderWinratePeriodSummary(tr("winrateMonth"), monthStats) +
+        renderWinrateByPair(monthStats);
 }
 
 function displayLiveSignal(signalData) {
