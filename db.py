@@ -1484,6 +1484,7 @@ def get_signal_outcome_score_breakdown(days: int = 30, bucket_size: int = 5) -> 
         agg = _aggregate_signal_outcomes(items)
         result.append(
             {
+                "bucket_start": bucket_start,
                 "score_range": f"{bucket_start}-{bucket_start + bucket_size}",
                 **agg,
             }

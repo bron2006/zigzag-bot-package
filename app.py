@@ -19,6 +19,7 @@ import db
 import ml_models
 import scanner
 import signal_tracking
+import threshold_advisor
 from errors import ConfigError
 from notifier import notify_bot_failed
 from state import app_state
@@ -99,6 +100,12 @@ def _start_background_services() -> None:
         signal_tracking.resolve_pending_signals,
         now=False,
         name="signal_outcome_resolver",
+    )
+    _start_loop(
+        max(3600.0, config.THRESHOLD_RECOMMENDATION_INTERVAL_HOURS * 3600.0),
+        threshold_advisor.send_daily_recommendation,
+        now=False,
+        name="threshold_advisor",
     )
 
 
