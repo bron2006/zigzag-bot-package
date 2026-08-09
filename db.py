@@ -99,6 +99,27 @@ class SignalOutcome(Base):
     pnl_pips = Column(Float, nullable=True)
 
 
+class AutoTrade(Base):
+    __tablename__ = "auto_trades"
+
+    id = Column(Integer, primary_key=True, index=True)
+    pair = Column(String, nullable=False, index=True)
+    direction = Column(String(8), nullable=False)  # BUY | SELL
+    volume = Column(Integer, nullable=False)  # cTrader volume units (already x100)
+    entry_price = Column(Float, nullable=True)
+    sl_price = Column(Float, nullable=True)
+    tp_price = Column(Float, nullable=True)
+    ts = Column(DateTime, server_default=func.now(), nullable=False, index=True)
+    account_mode = Column(String(8), nullable=False, index=True)  # demo | live
+    broker_order_id = Column(String(32), nullable=True, index=True)
+    broker_position_id = Column(String(32), nullable=True, index=True)
+    # submitted -> open -> closed_tp | closed_sl | closed_manual | error
+    status = Column(String(16), nullable=False, default="submitted", index=True)
+    pnl_amount = Column(Float, nullable=True)
+    closed_at = Column(DateTime, nullable=True)
+    error_message = Column(String(255), nullable=True)
+
+
 def _normalize_language(lang: str | None) -> str:
     value = (lang or "").split(",", 1)[0].split("-")[0].split("_")[0].lower()
     return value if value in {"en", "uk", "es", "de", "ru"} else "en"
@@ -1491,6 +1512,210 @@ def get_signal_outcome_score_breakdown(days: int = 30, bucket_size: int = 5) -> 
         )
 
     return result
+
+
+# ----------------------------------------------------------------------
+# Autotrader (Part 3)
+# ----------------------------------------------------------------------
+
+
+def _auto_trade_to_dict(row: "AutoTrade") -> dict:
+    return {
+        "id": row.id,
+        "pair": row.pair,
+        "direction": row.direction,
+        "volume": row.volume,
+        "entry_price": row.entry_price,
+        "sl_price": row.sl_price,
+        "tp_price": row.tp_price,
+        "ts": row.ts,
+        "account_mode": row.account_mode,
+        "broker_order_id": row.broker_order_id,
+        "broker_position_id": row.broker_position_id,
+        "status": row.status,
+        "pnl_amount": row.pnl_amount,
+        "closed_at": row.closed_at,
+        "error_message": row.error_message,
+    }
+
+
+def create_auto_trade(
+    *,
+    pair: str,
+    direction: str,
+    volume: int,
+    sl_price: float | None,
+    tp_price: float | None,
+    account_mode: str,
+) -> int | None:
+    try:
+        with session_scope() as session:
+            if session is None:
+                logger.warning("Autotrade skipped: no database engine")
+                return None
+
+            row = AutoTrade(
+                pair=(pair or "").strip().upper(),
+                direction=(direction or "").strip().upper(),
+                volume=int(volume),
+                sl_price=float(sl_price) if sl_price is not None else None,
+                tp_price=float(tp_price) if tp_price is not None else None,
+                account_mode=(account_mode or "demo").strip().lower(),
+                status="submitted",
+            )
+            session.add(row)
+            session.flush()
+            return row.id
+    except SQLAlchemyError:
+        logger.exception("Error creating auto trade for pair=%s", pair)
+        return None
+
+
+def get_auto_trade(trade_id: int) -> dict | None:
+    try:
+        with get_db() as session:
+            if session is None:
+                return None
+            row = session.query(AutoTrade).filter(AutoTrade.id == trade_id).first()
+            return _auto_trade_to_dict(row) if row else None
+    except SQLAlchemyError:
+        logger.exception("Error loading auto trade id=%s", trade_id)
+        return None
+
+
+def find_auto_trade_by_broker_order_id(broker_order_id: str) -> dict | None:
+    try:
+        with get_db() as session:
+            if session is None:
+                return None
+            row = (
+                session.query(AutoTrade)
+                .filter(AutoTrade.broker_order_id == str(broker_order_id))
+                .first()
+            )
+            return _auto_trade_to_dict(row) if row else None
+    except SQLAlchemyError:
+        logger.exception("Error looking up auto trade by broker_order_id=%s", broker_order_id)
+        return None
+
+
+def find_auto_trade_by_broker_position_id(broker_position_id: str) -> dict | None:
+    try:
+        with get_db() as session:
+            if session is None:
+                return None
+            row = (
+                session.query(AutoTrade)
+                .filter(AutoTrade.broker_position_id == str(broker_position_id))
+                .order_by(AutoTrade.ts.desc())
+                .first()
+            )
+            return _auto_trade_to_dict(row) if row else None
+    except SQLAlchemyError:
+        logger.exception("Error looking up auto trade by broker_position_id=%s", broker_position_id)
+        return None
+
+
+def mark_auto_trade_open(
+    trade_id: int,
+    *,
+    broker_order_id: str | None,
+    broker_position_id: str | None,
+    entry_price: float | None,
+) -> bool:
+    try:
+        with session_scope() as session:
+            if session is None:
+                return False
+            row = session.query(AutoTrade).filter(AutoTrade.id == trade_id).first()
+            if row is None:
+                return False
+
+            if broker_order_id:
+                row.broker_order_id = str(broker_order_id)
+            if broker_position_id:
+                row.broker_position_id = str(broker_position_id)
+            if entry_price is not None:
+                row.entry_price = float(entry_price)
+            row.status = "open"
+            return True
+    except SQLAlchemyError:
+        logger.exception("Error marking auto trade open id=%s", trade_id)
+        return False
+
+
+def mark_auto_trade_closed(trade_id: int, *, status: str, pnl_amount: float | None) -> bool:
+    try:
+        with session_scope() as session:
+            if session is None:
+                return False
+            row = session.query(AutoTrade).filter(AutoTrade.id == trade_id).first()
+            if row is None or row.status not in {"submitted", "open"}:
+                return False
+
+            row.status = status
+            row.pnl_amount = pnl_amount
+            row.closed_at = _utcnow()
+            return True
+    except SQLAlchemyError:
+        logger.exception("Error marking auto trade closed id=%s", trade_id)
+        return False
+
+
+def mark_auto_trade_error(trade_id: int, error_message: str) -> bool:
+    try:
+        with session_scope() as session:
+            if session is None:
+                return False
+            row = session.query(AutoTrade).filter(AutoTrade.id == trade_id).first()
+            if row is None:
+                return False
+
+            row.status = "error"
+            row.error_message = (error_message or "")[:255]
+            row.closed_at = _utcnow()
+            return True
+    except SQLAlchemyError:
+        logger.exception("Error marking auto trade as error id=%s", trade_id)
+        return False
+
+
+def count_open_auto_trades(account_mode: str) -> int:
+    try:
+        with get_db() as session:
+            if session is None:
+                return 0
+            return (
+                session.query(AutoTrade)
+                .filter(AutoTrade.account_mode == (account_mode or "demo").lower())
+                .filter(AutoTrade.status.in_(("submitted", "open")))
+                .count()
+            )
+    except SQLAlchemyError:
+        logger.exception("Error counting open auto trades")
+        return 0
+
+
+def get_daily_auto_trade_pnl(account_mode: str) -> float:
+    day_start = _utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+
+    try:
+        with get_db() as session:
+            if session is None:
+                return 0.0
+
+            rows = (
+                session.query(AutoTrade)
+                .filter(AutoTrade.account_mode == (account_mode or "demo").lower())
+                .filter(AutoTrade.closed_at.isnot(None))
+                .filter(AutoTrade.closed_at >= day_start)
+                .filter(AutoTrade.pnl_amount.isnot(None))
+                .all()
+            )
+            return sum(row.pnl_amount for row in rows)
+    except SQLAlchemyError:
+        logger.exception("Error computing daily auto trade pnl")
+        return 0.0
 
 
 initialize_database()

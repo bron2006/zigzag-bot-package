@@ -100,6 +100,29 @@ THRESHOLD_RECOMMENDATION_MIN_SAMPLES = _env_int("THRESHOLD_RECOMMENDATION_MIN_SA
 THRESHOLD_RECOMMENDATION_MIN_IMPROVEMENT_PP = _env_float("THRESHOLD_RECOMMENDATION_MIN_IMPROVEMENT_PP", 5.0)
 THRESHOLD_RECOMMENDATION_INTERVAL_HOURS = _env_float("THRESHOLD_RECOMMENDATION_INTERVAL_HOURS", 24.0)
 
+# Part 3: autotrader. Disabled by default. AUTOTRADE_ACCOUNT_MODE has NO
+# Telegram/Web App toggle anywhere in this codebase on purpose — switching to
+# 'live' requires manually editing the env var on Fly.io and redeploying.
+AUTOTRADE_ENABLED = _env_bool("AUTOTRADE_ENABLED", False)
+AUTOTRADE_ACCOUNT_MODE = (_env_str("AUTOTRADE_ACCOUNT_MODE", "demo") or "demo").strip().lower()
+if AUTOTRADE_ACCOUNT_MODE not in {"demo", "live"}:
+    logger.warning("Unsupported AUTOTRADE_ACCOUNT_MODE=%r. Falling back to 'demo'.", AUTOTRADE_ACCOUNT_MODE)
+    AUTOTRADE_ACCOUNT_MODE = "demo"
+
+if AUTOTRADE_ENABLED and AUTOTRADE_ACCOUNT_MODE == "live":
+    logger.critical(
+        "AUTOTRADE_ENABLED=true with AUTOTRADE_ACCOUNT_MODE=live — the autotrader "
+        "will place REAL orders with REAL money on the configured cTrader account."
+    )
+elif AUTOTRADE_ENABLED:
+    logger.warning("AUTOTRADE_ENABLED=true (mode=demo) — autotrader will place demo-account orders.")
+
+# Risk limits — all parameters, never hardcoded in autotrader.py.
+MAX_RISK_PERCENT_PER_TRADE = _env_float("MAX_RISK_PERCENT_PER_TRADE", 1.0)
+MAX_OPEN_POSITIONS = _env_int("MAX_OPEN_POSITIONS", 3) or 3
+MAX_DAILY_LOSS_PERCENT = _env_float("MAX_DAILY_LOSS_PERCENT", 5.0)
+AUTOTRADE_BALANCE_CACHE_SECONDS = _env_float("AUTOTRADE_BALANCE_CACHE_SECONDS", 30.0)
+
 
 def get_database_url() -> str | None:
     return _env_str("DATABASE_URL")
