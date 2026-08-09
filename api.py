@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import queue
+import re
 import time
 from functools import wraps
 from html import escape as html_escape
@@ -43,6 +44,10 @@ from state import app_state
 logger = logging.getLogger("api")
 WEBAPP_DIR = os.path.join(os.path.dirname(__file__), "webapp")
 TEMPLATES_DIR = os.path.join(WEBAPP_DIR, "templates")
+# Matches only src="...file.js" / href="...file.css" attribute values, so
+# cache-busting can't corrupt unrelated ".js"/".css" substrings elsewhere in
+# the page (e.g. inside inline <script> text or a ".json" reference).
+_ASSET_VERSION_PATTERN = re.compile(r'((?:src|href)=")([^"?]+\.(?:js|css))(")')
 
 
 def _render_template(name: str, **kwargs) -> str:
@@ -817,8 +822,7 @@ def register_routes(app):
                     f"https://{get_fly_app_name()}.fly.dev" if get_fly_app_name() else "",
                 )
                 version = int(time.time())
-                content = content.replace(".js", f".js?v={version}")
-                content = content.replace(".css", f".css?v={version}")
+                content = _ASSET_VERSION_PATTERN.sub(rf"\1\2?v={version}\3", content)
                 return Response(content, mimetype="text/html")
         return t("not_found", _request_lang()), 404
 
