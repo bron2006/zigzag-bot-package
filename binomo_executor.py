@@ -104,8 +104,12 @@ SELECTORS = {
     "amount_input": "way-input-controls[type='currency'] input",
     "time_control": "#qa_trading_dealTimeInput",
     "time_input": "#qa_trading_dealTimeInput input",
-    "time_plus_button": "#qa_trading_dealTimeInput button:has(use[href='/assets/sprite/plus-l1.svg#plus-l1'])",
-    "time_minus_button": "#qa_trading_dealTimeInput button:has(use[href='/assets/sprite/minus-l1.svg#minus-l1'])",
+    # DOM order confirmed live (minus at smaller x, plus at larger x); the
+    # earlier icon-href :has() selector didn't match live (see git history)
+    # so this uses position instead — still not a guess, just a different
+    # empirically-confirmed anchor.
+    "time_minus_button": "#qa_trading_dealTimeInput button >> nth=0",
+    "time_plus_button": "#qa_trading_dealTimeInput button >> nth=1",
     "up_button": "#qa_trading_dealUpButton",
     "down_button": "#qa_trading_dealDownButton",
     "trade_confirmation_toast": "way-toast, .toast",  # best-effort; absence is not treated as failure, see place_binary_trade
@@ -309,15 +313,29 @@ def _safe_find(page, selector: str, *, description: str, timeout_ms: int = _DEFA
 # ----------------------------------------------------------------------
 
 
+def _parse_numeric_text(text: str) -> Optional[float]:
+    """Binomo displays numbers in Ukrainian/European locale - comma as the
+    decimal separator, space as the thousands separator (e.g. balance shown
+    as "350 712,00 ₴"). Just deleting the comma (as an earlier version of
+    this did) silently produced a balance 100x too large, confirmed
+    2026-08-09 - a real risk since balance directly feeds stake sizing.
+    Spaces are already excluded by the digit/./, filter below."""
+    try:
+        cleaned = "".join(ch for ch in text if ch.isdigit() or ch in ".,")
+        if "," in cleaned:
+            cleaned = cleaned.replace(".", "").replace(",", ".")
+        return float(cleaned) if cleaned else None
+    except Exception:
+        return None
+
+
 def get_account_balance(page) -> Optional[float]:
     el = _safe_find(page, SELECTORS["balance_amount"], description="balance_amount")
     if el is None:
         return None
 
     try:
-        text = el.inner_text().strip()
-        cleaned = "".join(ch for ch in text if ch.isdigit() or ch in ".,").replace(",", "")
-        return float(cleaned) if cleaned else None
+        return _parse_numeric_text(el.inner_text().strip())
     except Exception:
         logger.exception("Could not parse Binomo balance text")
         return None
@@ -376,6 +394,43 @@ def _set_expiry_time(page, expiry_seconds: int) -> bool:
     return False
 
 
+def _fill_amount(page, amount: float) -> bool:
+    """A plain .fill() on this Angular currency-masked input was confirmed
+    live to silently mangle the value (typed "40.00", field showed "₴40.4")
+    instead of erroring. Switching to character-by-character typing
+    surfaced a second finding: this field doesn't accept a decimal point at
+    all — it silently drops "." and concatenates the remaining digits (typed
+    "40.00" -> field showed "₴4000"), confirmed 2026-08-09 on this UAH demo
+    account. Rounds to the nearest whole currency unit and types digits
+    only, then reads the field back and refuses to proceed on any mismatch
+    rather than trusting the input silently worked."""
+    amount_input = _safe_find(page, SELECTORS["amount_input"], description="amount_input")
+    if amount_input is None:
+        return False
+
+    target = int(round(amount))
+    amount_input.click()
+    amount_input.press("Control+A")
+    amount_input.press("Backspace")
+    amount_input.type(str(target))
+
+    actual = _parse_numeric_text(amount_input.input_value())
+    if actual is None or abs(actual - target) > 0.5:
+        shot = _screenshot(page, "amount_mismatch")
+        logger.error(
+            "Binomo executor: amount field shows %r after typing %d (requested %.2f) — "
+            "mismatch, not trusting it and aborting. Screenshot: %s",
+            amount_input.input_value(), target, amount, shot,
+        )
+        notify_admin(
+            f"⚠️ Binomo executor: поле суми показує {amount_input.input_value()!r} "
+            f"замість {target} — угоду скасовано, потрібна ручна перевірка."
+        )
+        return False
+
+    return True
+
+
 def place_binary_trade(page, asset: str, direction: str, amount: float, expiry_seconds: int) -> dict:
     """direction: 'up' | 'down'. Returns {"success": bool, "error": str|None}.
     Every real click on amount/direction is preceded by an audit screenshot,
@@ -399,12 +454,10 @@ def place_binary_trade(page, asset: str, direction: str, amount: float, expiry_s
         return {"success": False, "error": f"asset row not found for {asset!r}"}
     asset_row.click()
 
-    amount_input = _safe_find(page, SELECTORS["amount_input"], description="amount_input")
-    if amount_input is None:
-        return {"success": False, "error": "amount_input not found"}
+    if not _fill_amount(page, amount):
+        return {"success": False, "error": "could not set amount"}
 
     _screenshot(page, f"before_amount_{asset}_{direction}")
-    amount_input.fill(f"{amount:.2f}")
 
     if not _set_expiry_time(page, expiry_seconds):
         return {"success": False, "error": "could not set expiry time"}
@@ -732,9 +785,7 @@ def _read_binomo_price(page, asset_name: str) -> Optional[float]:
     if el is None:
         return None
     try:
-        text = el.inner_text().strip()
-        cleaned = "".join(ch for ch in text if ch.isdigit() or ch in ".,").replace(",", "")
-        return float(cleaned) if cleaned else None
+        return _parse_numeric_text(el.inner_text().strip())
     except Exception:
         logger.exception("Could not parse Binomo price text for %s", asset_name)
         return None

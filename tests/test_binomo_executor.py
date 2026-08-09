@@ -12,6 +12,23 @@ class LoadAssetMapTest(unittest.TestCase):
         self.assertEqual(asset_map["EURUSD"]["binomo_name"], "EUR/USD")
 
 
+class ParseNumericTextTest(unittest.TestCase):
+    def test_ukrainian_locale_balance(self):
+        # Comma decimal + space thousands separator, as shown live on the
+        # Binomo balance display - a naive comma-strip previously produced
+        # 35071200.0 instead of 350712.0 (100x too large).
+        self.assertEqual(binomo_executor._parse_numeric_text("350 712,00 ₴"), 350712.0)
+
+    def test_plain_integer_amount_field(self):
+        self.assertEqual(binomo_executor._parse_numeric_text("₴4000"), 4000.0)
+
+    def test_full_european_format(self):
+        self.assertEqual(binomo_executor._parse_numeric_text("1.234,56"), 1234.56)
+
+    def test_empty_or_unparseable_returns_none(self):
+        self.assertIsNone(binomo_executor._parse_numeric_text("₴"))
+
+
 class ResolveBinomoAssetNameTest(unittest.TestCase):
     _WEEKDAY = datetime(2026, 8, 10, 12, 0, tzinfo=timezone.utc)  # Monday
     _WEEKEND = datetime(2026, 8, 8, 12, 0, tzinfo=timezone.utc)  # Saturday
