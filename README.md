@@ -9,6 +9,11 @@ Telegram-бот і Telegram Web App для аналізу ринкових да�
 - ML-оцінка напрямку руху на базі RSI, ADX, ATR, EMA50 та EMA200.
 - News-фільтр на основі економічного календаря, який блокує сигнали під час ризикових подій.
 - Watchlist і історія сигналів через SQLAlchemy.
+- Відстеження результату сигналів (TP/SL/timeout) і win-rate (`/api/stats/signals`, `/winrate`).
+- Опціональний автотрейдер поверх cTrader Open API — вимкнений за замовчуванням
+  (`AUTOTRADE_ENABLED=false`), керується адмін-командами `/autotrade_status`,
+  `/autotrade_on`, `/autotrade_off`. Перехід на реальний рахунок можливий
+  лише через ручну зміну `AUTOTRADE_ACCOUNT_MODE` на Fly.io.
 - Деплой на Fly.io через `fly.toml`.
 
 ## Швидкий старт
