@@ -73,6 +73,14 @@ if APP_MODE not in {"full", "light"}:
 ANALYSIS_CONFIG = {"min_bars_for_analysis": 50}
 
 IDEAL_ENTRY_THRESHOLD = _env_int("IDEAL_ENTRY_THRESHOLD", 78)
+
+# ML model BUY/SELL/NEUTRAL split (analysis.py _run_technical_analysis).
+# score > ML_BUY_SCORE_THRESHOLD -> BUY, score < ML_SELL_SCORE_THRESHOLD ->
+# SELL, otherwise NEUTRAL. This sits below IDEAL_ENTRY_THRESHOLD, which is
+# the separate, higher bar the scanner uses to decide whether to actually
+# fire a signal.
+ML_BUY_SCORE_THRESHOLD = _env_int("ML_BUY_SCORE_THRESHOLD", 75) or 75
+ML_SELL_SCORE_THRESHOLD = _env_int("ML_SELL_SCORE_THRESHOLD", 25) or 25
 SCANNER_TIMEFRAME = _env_str("SCANNER_TIMEFRAME", "1m") or "1m"
 SCANNER_COOLDOWN_SECONDS = _env_int("SCANNER_COOLDOWN_SECONDS", 300)
 SCANNER_BATCH_SIZE = _env_int("SCANNER_BATCH_SIZE", 8) or 8
@@ -84,13 +92,18 @@ MARKET_DATA_REQUEST_INTERVAL_MS = _env_int("MARKET_DATA_REQUEST_INTERVAL_MS", 40
 MARKET_DATA_MAX_CONCURRENT_REQUESTS = _env_int("MARKET_DATA_MAX_CONCURRENT_REQUESTS", 1) or 1
 MIN_ATR_PERCENTAGE = _env_float("MIN_ATR_PERCENTAGE", 0.05)
 
-# Signal outcome tracking (Part 1): TP/SL distance as ATR multiples, how long
-# a pending signal is tracked before being closed as "timeout", and how
-# often the resolver loop checks pending signals against live prices.
+# Signal outcome tracking (Part 1, legacy TP/SL fields — kept only so old
+# rows/paths don't break; no longer used to size new tracking).
 SIGNAL_TP_ATR_MULTIPLIER = _env_float("SIGNAL_TP_ATR_MULTIPLIER", 1.5)
 SIGNAL_SL_ATR_MULTIPLIER = _env_float("SIGNAL_SL_ATR_MULTIPLIER", 1.0)
 SIGNAL_OUTCOME_TIMEOUT_HOURS = _env_float("SIGNAL_OUTCOME_TIMEOUT_HOURS", 4.0)
-SIGNAL_OUTCOME_CHECK_INTERVAL_MINUTES = _env_float("SIGNAL_OUTCOME_CHECK_INTERVAL_MINUTES", 5.0)
+
+# Signal outcome tracking (binary-option style): how often the resolver
+# loop checks pending signals whose horizon has elapsed, and how big a
+# price move (as % of entry price) counts as noise ("flat") rather than a
+# real up/down move.
+SIGNAL_OUTCOME_CHECK_INTERVAL_MINUTES = _env_float("SIGNAL_OUTCOME_CHECK_INTERVAL_MINUTES", 1.0)
+SIGNAL_OUTCOME_FLAT_THRESHOLD_PERCENT = _env_float("SIGNAL_OUTCOME_FLAT_THRESHOLD_PERCENT", 0.02)
 
 # Part 2: adaptive threshold recommendations. This ONLY produces a
 # notify_admin suggestion once a day — it never changes IDEAL_ENTRY_THRESHOLD

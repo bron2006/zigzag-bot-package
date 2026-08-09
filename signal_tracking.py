@@ -1,40 +1,38 @@
 # signal_tracking.py
-"""Tracks whether BUY/SELL signals the bot actually issued went on to hit
-their take-profit or stop-loss, so win-rate can be measured instead of
-guessed. TP/SL are sized off ATR at signal time (config.py multipliers);
-outcomes are resolved later against live prices by resolve_pending_signals()."""
+"""Tracks whether BUY/SELL signals the bot actually issued went on to move
+price in the predicted direction — binary-option style: no TP/SL, just
+"did price end up higher or lower than entry after a fixed horizon".
+The horizon is tied to which pair of timeframes confirmed the signal (see
+compute_horizon_seconds), matching the expiry binomo_executor.py would use
+for the same signal. This module knows nothing about Binomo itself — it
+only tracks outcomes against cTrader live prices."""
 import logging
 from datetime import datetime, timedelta, timezone
 
 import db
-from config import (
-    SIGNAL_OUTCOME_TIMEOUT_HOURS,
-    SIGNAL_SL_ATR_MULTIPLIER,
-    SIGNAL_TP_ATR_MULTIPLIER,
-)
+from config import SIGNAL_OUTCOME_FLAT_THRESHOLD_PERCENT
 from state import app_state
 
 logger = logging.getLogger("signal_tracking")
+
+# Confirmed-timeframe-pair -> horizon in seconds. analysis.py picks
+# ("1m", "5m") when the requested timeframe is "1m", and ("5m", "15m")
+# otherwise; the horizon is the longer of the two, giving price more time
+# to move in the signal's direction.
+_HORIZON_BY_TIMEFRAME = {
+    "1m": 5 * 60,
+    "5m": 15 * 60,
+    "15m": 15 * 60,
+}
+_DEFAULT_HORIZON_SECONDS = 15 * 60
 
 
 def _utcnow_naive() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
-def compute_tp_sl(verdict: str, entry_price: float, atr: float) -> tuple[float, float] | None:
-    if not isinstance(entry_price, (int, float)) or not isinstance(atr, (int, float)):
-        return None
-    if entry_price <= 0 or atr <= 0:
-        return None
-
-    tp_distance = atr * SIGNAL_TP_ATR_MULTIPLIER
-    sl_distance = atr * SIGNAL_SL_ATR_MULTIPLIER
-
-    if verdict == "BUY":
-        return entry_price + tp_distance, entry_price - sl_distance
-    if verdict == "SELL":
-        return entry_price - tp_distance, entry_price + sl_distance
-    return None
+def compute_horizon_seconds(timeframe: str) -> int:
+    return _HORIZON_BY_TIMEFRAME.get(timeframe, _DEFAULT_HORIZON_SECONDS)
 
 
 def maybe_record_signal(result: dict) -> int | None:
@@ -50,55 +48,38 @@ def maybe_record_signal(result: dict) -> int | None:
 
     pair = result.get("pair")
     entry_price = result.get("price")
-    atr = result.get("atr")
 
-    if not pair or not isinstance(entry_price, (int, float)):
+    if not pair or not isinstance(entry_price, (int, float)) or entry_price <= 0:
         logger.debug("Skipping outcome tracking for %s: no entry price", pair)
         return None
 
-    if not isinstance(atr, (int, float)) or atr <= 0:
-        logger.debug("Skipping outcome tracking for %s: no ATR available", pair)
-        return None
+    horizon_seconds = compute_horizon_seconds(result.get("timeframe"))
 
-    levels = compute_tp_sl(verdict, entry_price, atr)
-    if levels is None:
-        return None
-
-    tp_price, sl_price = levels
     outcome_id = db.create_signal_outcome(
         pair=pair,
         timeframe=result.get("timeframe") or "",
         verdict=verdict,
         score=result.get("score"),
         entry_price=entry_price,
-        tp_price=tp_price,
-        sl_price=sl_price,
+        horizon_seconds=horizon_seconds,
     )
     if outcome_id:
         logger.info(
-            "SIGNAL_OUTCOME: recorded pending #%s %s %s entry=%.5f tp=%.5f sl=%.5f",
-            outcome_id, pair, verdict, entry_price, tp_price, sl_price,
+            "SIGNAL_OUTCOME: recorded pending #%s %s %s entry=%.5f horizon=%ss",
+            outcome_id, pair, verdict, entry_price, horizon_seconds,
         )
     return outcome_id
 
 
-def _pip_multiplier(pair: str) -> float:
-    symbol = app_state.get_symbol_details(pair)
-    pip_position = getattr(symbol, "pipPosition", None)
-    if isinstance(pip_position, int) and pip_position >= 0:
-        return float(10 ** pip_position)
+def _classify_move(entry_price: float, exit_price: float) -> str:
+    if entry_price <= 0:
+        return "flat"
 
-    digits = getattr(symbol, "digits", None)
-    if isinstance(digits, int) and digits >= 1:
-        return float(10 ** (digits - 1))
+    change_percent = abs(exit_price - entry_price) / entry_price * 100
+    if change_percent < SIGNAL_OUTCOME_FLAT_THRESHOLD_PERCENT:
+        return "flat"
 
-    return 10000.0
-
-
-def _calc_pnl_pips(pair: str, verdict: str, entry_price: float, exit_price: float) -> float:
-    multiplier = _pip_multiplier(pair)
-    diff = (exit_price - entry_price) if verdict == "BUY" else (entry_price - exit_price)
-    return diff * multiplier
+    return "up" if exit_price > entry_price else "down"
 
 
 def resolve_pending_signals() -> None:
@@ -107,54 +88,28 @@ def resolve_pending_signals() -> None:
         return
 
     now = _utcnow_naive()
-    timeout_delta = timedelta(hours=max(0.25, float(SIGNAL_OUTCOME_TIMEOUT_HOURS or 4)))
 
     for row in pending:
-        pair = row["pair"]
-        verdict = row["verdict"]
-        entry_price = row["entry_price"]
-        tp_price = row["tp_price"]
-        sl_price = row["sl_price"]
         entry_ts = row["entry_ts"]
+        horizon_seconds = row["horizon_seconds"]
+        if not isinstance(entry_ts, datetime) or not horizon_seconds:
+            continue
 
+        if now - entry_ts < timedelta(seconds=horizon_seconds):
+            continue  # horizon hasn't elapsed yet
+
+        pair = row["pair"]
         price_data = app_state.get_live_price(pair)
         live_price = price_data.get("mid") if price_data else None
 
-        outcome = None
-        exit_price = None
-
-        if isinstance(live_price, (int, float)) and tp_price is not None and sl_price is not None:
-            if verdict == "BUY":
-                if live_price >= tp_price:
-                    outcome, exit_price = "tp", tp_price
-                elif live_price <= sl_price:
-                    outcome, exit_price = "sl", sl_price
-            elif verdict == "SELL":
-                if live_price <= tp_price:
-                    outcome, exit_price = "tp", tp_price
-                elif live_price >= sl_price:
-                    outcome, exit_price = "sl", sl_price
-
-        if outcome is None and isinstance(entry_ts, datetime) and (now - entry_ts) >= timeout_delta:
-            outcome = "timeout"
-            exit_price = live_price if isinstance(live_price, (int, float)) else entry_price
-
-        if outcome is None:
+        if not isinstance(live_price, (int, float)):
+            logger.debug("SIGNAL_OUTCOME: no live price for %s yet, will retry", pair)
             continue
 
-        pnl_pips = None
-        if exit_price is not None:
-            try:
-                pnl_pips = _calc_pnl_pips(pair, verdict, entry_price, exit_price)
-            except Exception:
-                logger.debug("Could not compute pnl_pips for %s", pair, exc_info=True)
+        outcome = _classify_move(row["entry_price"], live_price)
 
-        if db.resolve_signal_outcome(row["id"], outcome=outcome, pnl_pips=pnl_pips):
+        if db.resolve_signal_outcome(row["id"], outcome=outcome, exit_price=live_price):
             logger.info(
-                "SIGNAL_OUTCOME: #%s %s %s -> %s (pnl_pips=%s)",
-                row["id"],
-                pair,
-                verdict,
-                outcome,
-                f"{pnl_pips:.1f}" if pnl_pips is not None else "n/a",
+                "SIGNAL_OUTCOME: #%s %s %s -> %s (entry=%.5f exit=%.5f)",
+                row["id"], pair, row["verdict"], outcome, row["entry_price"], live_price,
             )

@@ -91,12 +91,18 @@ class SignalOutcome(Base):
     score = Column(Integer, nullable=True)
     entry_price = Column(Float, nullable=False)
     entry_ts = Column(DateTime, server_default=func.now(), nullable=False, index=True)
+    # Legacy forex/ATR-based fields (previous TP/SL tracking generation).
+    # Kept so old rows don't break on read; no longer written for new rows.
     tp_price = Column(Float, nullable=True)
     sl_price = Column(Float, nullable=True)
-    resolved_at = Column(DateTime, nullable=True)
-    # 'pending' | 'tp' | 'sl' | 'timeout'
-    outcome = Column(String(16), nullable=False, default="pending", index=True)
     pnl_pips = Column(Float, nullable=True)
+    # Binary-option-style tracking: did price move the predicted direction
+    # over a fixed horizon, rather than hit a TP/SL level.
+    horizon_seconds = Column(Integer, nullable=True)
+    exit_price = Column(Float, nullable=True)
+    resolved_at = Column(DateTime, nullable=True)
+    # 'pending' | 'up' | 'down' | 'flat' (legacy rows may still have 'tp' | 'sl' | 'timeout')
+    outcome = Column(String(16), nullable=False, default="pending", index=True)
 
 
 class AutoTrade(Base):
@@ -333,6 +339,7 @@ def initialize_database():
     try:
         Base.metadata.create_all(bind=engine)
         _ensure_user_columns()
+        _ensure_signal_outcome_columns()
         logger.info("Database initialization complete.")
     except Exception as e:
         logger.error(f"Error initializing database: {e}", exc_info=True)
@@ -363,6 +370,36 @@ def _ensure_user_columns() -> None:
         logger.info("Database users table migrated: %s", ", ".join(statements))
     except Exception:
         logger.exception("Could not ensure users table columns")
+
+
+def _ensure_signal_outcome_columns() -> None:
+    """Adds the horizon-based tracking columns to a signal_outcomes table
+    created by an earlier (TP/SL-based) version of this model. Additive
+    only - never drops the legacy tp_price/sl_price/pnl_pips columns, so
+    old rows and old code paths keep working."""
+    try:
+        inspector = inspect(engine)
+        if "signal_outcomes" not in inspector.get_table_names():
+            return
+
+        existing = {column["name"] for column in inspector.get_columns("signal_outcomes")}
+        statements = []
+
+        if "horizon_seconds" not in existing:
+            statements.append("ALTER TABLE signal_outcomes ADD COLUMN horizon_seconds INTEGER NULL")
+        if "exit_price" not in existing:
+            statements.append("ALTER TABLE signal_outcomes ADD COLUMN exit_price FLOAT NULL")
+
+        if not statements:
+            return
+
+        with engine.begin() as conn:
+            for statement in statements:
+                conn.execute(text(statement))
+
+        logger.info("Database signal_outcomes table migrated: %s", ", ".join(statements))
+    except Exception:
+        logger.exception("Could not ensure signal_outcomes table columns")
 
 
 def _set_runtime_setting(session, key: str, value: str | None) -> None:
@@ -1333,8 +1370,7 @@ def create_signal_outcome(
     verdict: str,
     score: int | float | None,
     entry_price: float,
-    tp_price: float | None,
-    sl_price: float | None,
+    horizon_seconds: int,
 ) -> int | None:
     try:
         with session_scope() as session:
@@ -1348,8 +1384,7 @@ def create_signal_outcome(
                 verdict=(verdict or "").strip().upper(),
                 score=int(score) if isinstance(score, (int, float)) else None,
                 entry_price=float(entry_price),
-                tp_price=float(tp_price) if tp_price is not None else None,
-                sl_price=float(sl_price) if sl_price is not None else None,
+                horizon_seconds=int(horizon_seconds),
                 outcome="pending",
             )
             session.add(row)
@@ -1361,6 +1396,10 @@ def create_signal_outcome(
 
 
 def get_pending_signal_outcomes(limit: int = 500) -> list[dict]:
+    """Only returns horizon-based (new-style) pending rows. Legacy TP/SL
+    rows from the previous tracking generation (horizon_seconds IS NULL)
+    are left untouched — nothing resolves them anymore, but they're
+    harmless leftover history."""
     limit = max(1, min(int(limit or 500), 2000))
 
     try:
@@ -1371,6 +1410,7 @@ def get_pending_signal_outcomes(limit: int = 500) -> list[dict]:
             rows = (
                 session.query(SignalOutcome)
                 .filter(SignalOutcome.outcome == "pending")
+                .filter(SignalOutcome.horizon_seconds.isnot(None))
                 .order_by(SignalOutcome.entry_ts.asc())
                 .limit(limit)
                 .all()
@@ -1382,8 +1422,7 @@ def get_pending_signal_outcomes(limit: int = 500) -> list[dict]:
                     "timeframe": row.timeframe,
                     "verdict": row.verdict,
                     "entry_price": row.entry_price,
-                    "tp_price": row.tp_price,
-                    "sl_price": row.sl_price,
+                    "horizon_seconds": row.horizon_seconds,
                     "entry_ts": row.entry_ts,
                 }
                 for row in rows
@@ -1393,7 +1432,7 @@ def get_pending_signal_outcomes(limit: int = 500) -> list[dict]:
         return []
 
 
-def resolve_signal_outcome(outcome_id: int, *, outcome: str, pnl_pips: float | None) -> bool:
+def resolve_signal_outcome(outcome_id: int, *, outcome: str, exit_price: float | None) -> bool:
     try:
         with session_scope() as session:
             if session is None:
@@ -1404,7 +1443,7 @@ def resolve_signal_outcome(outcome_id: int, *, outcome: str, pnl_pips: float | N
                 return False
 
             row.outcome = outcome
-            row.pnl_pips = pnl_pips
+            row.exit_price = exit_price
             row.resolved_at = _utcnow()
             return True
     except SQLAlchemyError:
@@ -1412,11 +1451,26 @@ def resolve_signal_outcome(outcome_id: int, *, outcome: str, pnl_pips: float | N
         return False
 
 
+def _row_is_correct_direction(row) -> bool:
+    return (row.verdict == "BUY" and row.outcome == "up") or (row.verdict == "SELL" and row.outcome == "down")
+
+
+def _row_is_wrong_direction(row) -> bool:
+    return (row.verdict == "BUY" and row.outcome == "down") or (row.verdict == "SELL" and row.outcome == "up")
+
+
 def _aggregate_signal_outcomes(rows: list) -> dict:
-    wins = sum(1 for r in rows if r.outcome == "tp")
-    losses = sum(1 for r in rows if r.outcome == "sl")
-    timeouts = sum(1 for r in rows if r.outcome == "timeout")
-    resolved = wins + losses + timeouts
+    """Binary-option-style aggregation: a 'win' is price moving in the
+    signal's predicted direction over its horizon, a 'loss' is the
+    opposite, 'flat' means the move was inside the noise threshold
+    (excluded from win_rate, like a push). Legacy tp/sl/timeout rows from
+    the previous tracking generation are counted as resolved-but-excluded
+    so they don't skew win_rate."""
+    wins = sum(1 for r in rows if _row_is_correct_direction(r))
+    losses = sum(1 for r in rows if _row_is_wrong_direction(r))
+    flats = sum(1 for r in rows if r.outcome == "flat")
+    legacy = sum(1 for r in rows if r.outcome in ("tp", "sl", "timeout"))
+    resolved = wins + losses + flats + legacy
     decided = wins + losses
     return {
         "total": len(rows),
@@ -1424,7 +1478,7 @@ def _aggregate_signal_outcomes(rows: list) -> dict:
         "pending": len(rows) - resolved,
         "wins": wins,
         "losses": losses,
-        "timeouts": timeouts,
+        "flats": flats,
         "win_rate": round(100.0 * wins / decided, 1) if decided else None,
     }
 
@@ -1485,7 +1539,7 @@ def get_signal_outcome_score_breakdown(days: int = 30, bucket_size: int = 5) -> 
             rows = (
                 session.query(SignalOutcome)
                 .filter(SignalOutcome.entry_ts >= since)
-                .filter(SignalOutcome.outcome.in_(("tp", "sl")))
+                .filter(SignalOutcome.outcome.in_(("up", "down")))
                 .filter(SignalOutcome.score.isnot(None))
                 .all()
             )

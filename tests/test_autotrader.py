@@ -5,6 +5,26 @@ from unittest.mock import patch
 import autotrader
 
 
+class ComputeTpSlTest(unittest.TestCase):
+    def test_buy_tp_above_sl_below_entry(self):
+        tp, sl = autotrader._compute_tp_sl("BUY", 100.0, atr=2.0)
+        self.assertAlmostEqual(tp, 103.0)  # entry + 1.5x ATR
+        self.assertAlmostEqual(sl, 98.0)  # entry - 1.0x ATR
+
+    def test_sell_tp_below_sl_above_entry(self):
+        tp, sl = autotrader._compute_tp_sl("SELL", 100.0, atr=2.0)
+        self.assertAlmostEqual(tp, 97.0)
+        self.assertAlmostEqual(sl, 102.0)
+
+    def test_rejects_non_directional_verdict(self):
+        self.assertIsNone(autotrader._compute_tp_sl("NEUTRAL", 100.0, atr=2.0))
+
+    def test_rejects_non_positive_inputs(self):
+        self.assertIsNone(autotrader._compute_tp_sl("BUY", 0, atr=2.0))
+        self.assertIsNone(autotrader._compute_tp_sl("BUY", 100.0, atr=0))
+        self.assertIsNone(autotrader._compute_tp_sl("BUY", 100.0, atr=-1))
+
+
 class NormalizeVolumeTest(unittest.TestCase):
     def _symbol(self, min_volume=1000, max_volume=5_000_000, step_volume=1000):
         return SimpleNamespace(minVolume=min_volume, maxVolume=max_volume, stepVolume=step_volume, symbolId=1)
