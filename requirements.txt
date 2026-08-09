@@ -10,12 +10,13 @@ pyOpenSSL==24.1.0
 cryptography==42.0.8
 
 requests==2.32.3
+urllib3<2
 
 SQLAlchemy==2.0.23
 psycopg2-binary==2.9.9
 
 protobuf==3.20.1
-ctrader-open-api @ git+https://github.com/spotware/OpenApiPy.git
+ctrader-open-api @ git+https://github.com/spotware/OpenApiPy.git@e944996e6fe9436b8b4a1b668da4ac41a826bb85
 
 numpy==1.26.4
 pandas==2.2.2
