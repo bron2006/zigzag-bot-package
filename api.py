@@ -24,10 +24,11 @@ import db
 import ml_models
 import news_filter
 import signal_tracking
-from auth import get_user_id_from_init_data, is_valid_init_data
+from auth import get_user_id_from_init_data, is_valid_admin_token, is_valid_init_data
 from config import (
     COMMODITIES,
     CRYPTO_PAIRS,
+    DEV_USER_ID,
     FOREX_SESSIONS,
     STOCK_TICKERS,
     SUBSCRIPTION_DAYS,
@@ -61,14 +62,33 @@ def _request_init_data() -> str | None:
     return request.values.get("initData")
 
 
-def _request_lang() -> str:
+def _request_admin_token() -> str | None:
+    return request.values.get("admin_token")
+
+
+def _is_admin_request() -> bool:
+    return is_valid_admin_token(_request_admin_token())
+
+
+def _current_user_id() -> int | None:
+    """Resolves the requesting user, accepting either a valid (signature-
+    checked) Telegram initData or the bookmarkable ADMIN_ACCESS_TOKEN (which
+    always resolves to DEV_USER_ID, never to an arbitrary account)."""
+    if _is_admin_request():
+        return DEV_USER_ID
+
     init_data = _request_init_data()
+    if init_data and is_valid_init_data(init_data):
+        return get_user_id_from_init_data(init_data)
+    return None
+
+
+def _request_lang() -> str:
     try:
-        if init_data and is_valid_init_data(init_data):
-            uid = get_user_id_from_init_data(init_data)
-            saved_lang = db.get_user_language(uid) if uid else None
-            if saved_lang:
-                return normalize_lang(saved_lang)
+        uid = _current_user_id()
+        saved_lang = db.get_user_language(uid) if uid else None
+        if saved_lang:
+            return normalize_lang(saved_lang)
     except Exception:
         logger.debug("Could not resolve saved user language", exc_info=True)
 
@@ -106,6 +126,8 @@ def _sync_user_timezone(uid: int | None) -> str:
 def _protected_route(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
+        if _is_admin_request():
+            return f(*args, **kwargs)
         lang = _request_lang()
         init_data = _request_init_data()
         if not is_valid_init_data(init_data):
@@ -249,8 +271,9 @@ class SSEStreamResource(Resource):
 
     def render_GET(self, request):
         init_data = self._get_query_arg(request, b"initData")
+        admin_token = self._get_query_arg(request, b"admin_token")
         lang = normalize_lang(self._get_query_arg(request, b"lang"))
-        if not is_valid_init_data(init_data):
+        if not is_valid_admin_token(admin_token) and not is_valid_init_data(init_data):
             request.setResponseCode(401)
             request.setHeader(b"Content-Type", b"application/json; charset=utf-8")
             return _safe_json_dumps({"success": False, "error": t("unauthorized", lang)}).encode("utf-8")
@@ -505,7 +528,7 @@ def register_routes(app):
     @_protected_route
     def stats_signals():
         lang = _request_lang()
-        uid = get_user_id_from_init_data(_request_init_data())
+        uid = _current_user_id()
         if not db.is_admin_user(uid):
             return jsonify({"success": False, "error": t("unauthorized", lang)}), 403
 
@@ -522,7 +545,7 @@ def register_routes(app):
     @_protected_route
     def get_pairs():
         lang = _request_lang()
-        uid = get_user_id_from_init_data(_request_init_data())
+        uid = _current_user_id()
         user_timezone = _sync_user_timezone(uid)
         user_status = db.get_cached_user_status(uid, language_hint=lang) if uid else None
         raw_watchlist = db.get_watchlist(uid) if uid else []
@@ -557,7 +580,7 @@ def register_routes(app):
     @_protected_route
     def user_status():
         lang = _request_lang()
-        uid = get_user_id_from_init_data(_request_init_data())
+        uid = _current_user_id()
         if not uid:
             return jsonify({"success": False, "error": t("user_not_resolved", lang)}), 400
 
@@ -569,7 +592,7 @@ def register_routes(app):
     @_protected_route
     def subscription_status():
         lang = _request_lang()
-        uid = get_user_id_from_init_data(_request_init_data())
+        uid = _current_user_id()
         if not uid:
             return jsonify({"success": False, "error": t("user_not_resolved", lang)}), 400
 
@@ -595,7 +618,7 @@ def register_routes(app):
     @_protected_route
     def trial_start():
         lang = _request_lang()
-        uid = get_user_id_from_init_data(_request_init_data())
+        uid = _current_user_id()
         if not uid:
             return jsonify({"success": False, "error": t("user_not_resolved", lang)}), 400
 
@@ -616,7 +639,7 @@ def register_routes(app):
     @_protected_route
     def payment_invoice():
         lang = _request_lang()
-        uid = get_user_id_from_init_data(_request_init_data())
+        uid = _current_user_id()
         if not uid:
             return jsonify({"success": False, "error": t("user_not_resolved", lang)}), 400
 
@@ -686,7 +709,7 @@ def register_routes(app):
     @app.route("/api/language", methods=["GET", "POST"])
     @_protected_route
     def language_settings():
-        uid = get_user_id_from_init_data(_request_init_data())
+        uid = _current_user_id()
         if not uid:
             return jsonify({"success": False, "error": t("user_not_resolved", _request_lang())}), 400
 
@@ -718,7 +741,7 @@ def register_routes(app):
     @_protected_route
     def toggle_watchlist():
         lang = _request_lang()
-        uid = get_user_id_from_init_data(_request_init_data())
+        uid = _current_user_id()
         pair = (request.values.get("pair") or "").strip()
 
         if not uid:
@@ -747,7 +770,7 @@ def register_routes(app):
         lang = _request_lang()
         pair = request.args.get("pair", "").strip()
         tf = request.args.get("timeframe", "15m").strip()
-        uid = get_user_id_from_init_data(_request_init_data())
+        uid = _current_user_id()
 
         if not pair:
             return jsonify({"success": False, "error": t("pair_required", lang)}), 400

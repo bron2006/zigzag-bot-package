@@ -16,8 +16,28 @@ let tg = window.Telegram.WebApp;
 tg.ready();
 tg.expand();
 
+const ADMIN_TOKEN_STORAGE_KEY = "zigzag_admin_token";
+
+function resolveAdminToken() {
+    try {
+        const url = new URL(window.location.href);
+        const fromUrl = url.searchParams.get("admin_token");
+        if (fromUrl) {
+            localStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, fromUrl);
+            // Remember it, then scrub it from the visible/shareable URL bar.
+            url.searchParams.delete("admin_token");
+            window.history.replaceState({}, "", url.toString());
+            return fromUrl;
+        }
+    } catch (err) {
+        console.warn("Could not read admin_token from URL:", err);
+    }
+    return localStorage.getItem(ADMIN_TOKEN_STORAGE_KEY) || "";
+}
+
 let currentWatchlist = [];
 let initData = tg.initData || "";
+let adminToken = resolveAdminToken();
 let currentExpiration = "1m";
 let allData = {};
 let lastSelectedPair = null;
@@ -343,6 +363,9 @@ function buildQuery(params = {}) {
 
     if (initData) {
         search.set("initData", initData);
+    }
+    if (adminToken) {
+        search.set("admin_token", adminToken);
     }
 
     Object.entries(params).forEach(([key, value]) => {

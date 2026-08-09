@@ -5,11 +5,21 @@ import logging
 import time
 from urllib.parse import parse_qs, parse_qsl
 
-from config import DEV_MODE_UNSAFE_AUTH_BYPASS, DEV_USER_ID, TELEGRAM_BOT_TOKEN
+from config import DEV_MODE_UNSAFE_AUTH_BYPASS, DEV_USER_ID, TELEGRAM_BOT_TOKEN, get_admin_access_token
 
 logger = logging.getLogger("auth")
 
 _MAX_INIT_DATA_AGE_SECONDS = 24 * 60 * 60
+
+
+def is_valid_admin_token(token: str | None) -> bool:
+    """Checks a bookmarkable-link admin token (ADMIN_ACCESS_TOKEN secret).
+    Narrower than DEV_MODE_UNSAFE_AUTH_BYPASS: it only grants access to
+    whoever holds this specific secret, not to anyone reaching the URL."""
+    expected = get_admin_access_token()
+    if not expected or not token:
+        return False
+    return hmac.compare_digest(str(token), expected)
 
 
 def _parse_init_data(init_data_str: str) -> dict[str, str]:

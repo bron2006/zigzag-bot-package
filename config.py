@@ -132,6 +132,14 @@ def get_chat_id() -> int | None:
     return _env_int("CHAT_ID")
 
 
+def get_admin_access_token() -> str | None:
+    """Secret bookmarkable-link token letting the admin (DEV_USER_ID) use the
+    Web App outside Telegram (e.g. a plain desktop browser), without
+    disabling Telegram initData validation for everyone else. Unset by
+    default — the feature is off unless this secret is explicitly set."""
+    return _env_str("ADMIN_ACCESS_TOKEN")
+
+
 def get_ct_client_id() -> str | None:
     return _env_str("CT_CLIENT_ID")
 
