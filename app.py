@@ -74,6 +74,11 @@ def _publish_sse_ping() -> None:
 
 def _start_background_services() -> None:
     try:
+        app_state.restore_scanner_state()
+    except Exception:
+        logger.exception("Не вдалося відновити стан сканера з БД")
+
+    try:
         bot.start_telegram_bot()
     except ConfigError as e:
         logger.critical(f"Конфіг помилка при запуску Telegram bot: {e}")

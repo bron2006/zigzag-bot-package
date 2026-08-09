@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from telegram.error import BadRequest
 from twisted.python.threadpool import ThreadPool
 
+import db
 from config import IDEAL_ENTRY_THRESHOLD, get_ctrader_access_token, get_ctrader_refresh_token
 
 logger = logging.getLogger(__name__)
@@ -175,9 +176,11 @@ class AppState:
 
     def set_scanner_state(self, category: str, enabled: bool) -> None:
         with self._state_lock:
-            if category in self.SCANNER_STATE:
-                self.SCANNER_STATE[category] = enabled
-                logger.info(f"Сканер '{category}' => {'ON' if enabled else 'OFF'}")
+            if category not in self.SCANNER_STATE:
+                return
+            self.SCANNER_STATE[category] = enabled
+            logger.info(f"Сканер '{category}' => {'ON' if enabled else 'OFF'}")
+        db.set_persisted_scanner_state(category, enabled)
 
     def get_scanner_state(self, category: str) -> bool:
         with self._state_lock:
@@ -186,6 +189,19 @@ class AppState:
     def get_scanner_state_snapshot(self) -> Dict[str, bool]:
         with self._state_lock:
             return dict(self.SCANNER_STATE)
+
+    def restore_scanner_state(self) -> None:
+        """Scanner toggles otherwise live only in memory and silently reset
+        to all-off on every process restart/deploy - see db.py's
+        get_persisted_scanner_state docstring. Called once at startup."""
+        persisted = db.get_persisted_scanner_state()
+        if not persisted:
+            return
+        with self._state_lock:
+            for category, enabled in persisted.items():
+                if category in self.SCANNER_STATE:
+                    self.SCANNER_STATE[category] = enabled
+        logger.info(f"Стан сканера відновлено з БД: {persisted}")
 
     # ------------------------------------------------------------------
     # Symbol / price helpers

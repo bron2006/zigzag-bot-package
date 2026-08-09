@@ -2062,4 +2062,44 @@ def clear_binomo_kill_switch() -> bool:
         return False
 
 
+# ----------------------------------------------------------------------
+# Scanner category toggles (forex/crypto/commodities/watchlist) — these
+# used to live only in app_state.SCANNER_STATE (in-memory), which silently
+# resets to all-off on every process restart/deploy, since nothing ever
+# persisted the last-known state. That meant every deploy silently stopped
+# all signal generation until someone noticed and manually re-toggled it in
+# the Web App. Persisted here the same way as Binomo's runtime flags.
+# ----------------------------------------------------------------------
+
+_SCANNER_STATE_KEY_PREFIX = "scanner_state_"
+
+
+def get_persisted_scanner_state() -> dict:
+    try:
+        with get_db() as session:
+            if session is None:
+                return {}
+            state = {}
+            for category in ("forex", "crypto", "commodities", "watchlist"):
+                raw = _get_runtime_setting(session, _SCANNER_STATE_KEY_PREFIX + category)
+                if raw is not None:
+                    state[category] = raw == "true"
+            return state
+    except SQLAlchemyError:
+        logger.exception("Error loading persisted scanner state")
+        return {}
+
+
+def set_persisted_scanner_state(category: str, enabled: bool) -> bool:
+    try:
+        with session_scope() as session:
+            if session is None:
+                return False
+            _set_runtime_setting(session, _SCANNER_STATE_KEY_PREFIX + category, "true" if enabled else "false")
+            return True
+    except SQLAlchemyError:
+        logger.exception("Error persisting scanner state %s=%s", category, enabled)
+        return False
+
+
 initialize_database()

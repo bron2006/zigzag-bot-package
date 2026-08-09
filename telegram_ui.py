@@ -463,7 +463,7 @@ def _format_winrate_period(label: str, stats: dict) -> list[str]:
         f"<b>{label}</b>",
         f"Сигналів: {stats.get('total', 0)} "
         f"(закрито: {stats.get('resolved', 0)}, в очікуванні: {stats.get('pending', 0)})",
-        f"Вгору: {stats.get('wins', 0)} · Вниз: {stats.get('losses', 0)} · Флет: {stats.get('flats', 0)}",
+        f"Виграші: {stats.get('wins', 0)} · Програші: {stats.get('losses', 0)} · Флет: {stats.get('flats', 0)}",
         f"Win-rate: {win_rate_str}",
         "",
     ]
