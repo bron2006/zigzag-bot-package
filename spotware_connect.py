@@ -14,6 +14,7 @@ from ctrader_open_api.messages.OpenApiMessages_pb2 import (
     ProtoOAAccountsTokenInvalidatedEvent,
     ProtoOAApplicationAuthReq,
     ProtoOAErrorRes,
+    ProtoOAExecutionEvent,
     ProtoOAGetAccountListByAccessTokenReq,
     ProtoOAGetAccountListByAccessTokenRes,
     ProtoOASpotEvent,
@@ -332,6 +333,12 @@ class SpotwareConnect(EventEmitter):
             spot_event = ProtoOASpotEvent()
             spot_event.ParseFromString(message.payload)
             self.emit("spot_event", spot_event)
+            return
+
+        if pt == ProtoOAPayloadType.PROTO_OA_EXECUTION_EVENT:
+            execution_event = ProtoOAExecutionEvent()
+            execution_event.ParseFromString(message.payload)
+            self.emit("execution_event", execution_event)
             return
 
     def _handle_api_error(self, message: ProtoMessage):

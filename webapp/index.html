@@ -32,6 +32,9 @@
                 <button class="scanner-button" data-cat="commodities">🥇 Commodities</button>
                 <button class="scanner-button" data-cat="watchlist">⭐ Favorites</button>
             </div>
+            <div id="adminControls" class="admin-controls hidden">
+                <button id="winrateButton" class="tf-button" type="button">📊 Win-rate</button>
+            </div>
         </div>
 
         <div id="liveSignalsContainer"></div>
@@ -43,6 +46,17 @@
         </div>
         <div id="loader" class="hidden"></div>
     </div>
+
+    <div id="winrateModal" class="modal-overlay hidden">
+        <div class="modal-card">
+            <div class="modal-header">
+                <span id="winrateModalTitle">📊 Win-rate</span>
+                <button id="winrateModalClose" class="modal-close" type="button" aria-label="Close">✕</button>
+            </div>
+            <div id="winrateModalBody" class="modal-body"></div>
+        </div>
+    </div>
+
     <script src="script.js"></script>
 </body>
 </html>

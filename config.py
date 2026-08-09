@@ -50,7 +50,13 @@ def _env_float(name: str, default: float) -> float:
 
 TELEGRAM_BOT_TOKEN = _env_str("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = _env_str("GEMINI_API_KEY")
-IS_DEV_MODE = _env_bool("NORD", False)
+DEV_MODE_UNSAFE_AUTH_BYPASS = _env_bool("DEV_MODE_UNSAFE_AUTH_BYPASS", False)
+if DEV_MODE_UNSAFE_AUTH_BYPASS:
+    logger.critical(
+        "DEV_MODE_UNSAFE_AUTH_BYPASS=true — Telegram initData НЕ перевіряється і будь-хто "
+        "може видавати себе за DEV_USER_ID. Це НІКОЛИ не повинно бути увімкнено на Fly.io "
+        "чи будь-якому продакшн-середовищі."
+    )
 DEV_USER_ID = _env_int("MY_TELEGRAM_ID", 123456789)
 CRYPTO_PAY_TOKEN = _env_str("CRYPTO_PAY_TOKEN")
 CRYPTO_PAY_API_URL = (_env_str("CRYPTO_PAY_API_URL", "https://pay.crypt.bot/api") or "https://pay.crypt.bot/api").rstrip("/")
@@ -77,6 +83,45 @@ MARKET_DATA_CACHE_TTL_SECONDS = _env_int("MARKET_DATA_CACHE_TTL_SECONDS", 20) or
 MARKET_DATA_REQUEST_INTERVAL_MS = _env_int("MARKET_DATA_REQUEST_INTERVAL_MS", 400) or 400
 MARKET_DATA_MAX_CONCURRENT_REQUESTS = _env_int("MARKET_DATA_MAX_CONCURRENT_REQUESTS", 1) or 1
 MIN_ATR_PERCENTAGE = _env_float("MIN_ATR_PERCENTAGE", 0.05)
+
+# Signal outcome tracking (Part 1): TP/SL distance as ATR multiples, how long
+# a pending signal is tracked before being closed as "timeout", and how
+# often the resolver loop checks pending signals against live prices.
+SIGNAL_TP_ATR_MULTIPLIER = _env_float("SIGNAL_TP_ATR_MULTIPLIER", 1.5)
+SIGNAL_SL_ATR_MULTIPLIER = _env_float("SIGNAL_SL_ATR_MULTIPLIER", 1.0)
+SIGNAL_OUTCOME_TIMEOUT_HOURS = _env_float("SIGNAL_OUTCOME_TIMEOUT_HOURS", 4.0)
+SIGNAL_OUTCOME_CHECK_INTERVAL_MINUTES = _env_float("SIGNAL_OUTCOME_CHECK_INTERVAL_MINUTES", 5.0)
+
+# Part 2: adaptive threshold recommendations. This ONLY produces a
+# notify_admin suggestion once a day — it never changes IDEAL_ENTRY_THRESHOLD
+# itself. A human decides whether to update it.
+THRESHOLD_RECOMMENDATION_LOOKBACK_DAYS = _env_int("THRESHOLD_RECOMMENDATION_LOOKBACK_DAYS", 30) or 30
+THRESHOLD_RECOMMENDATION_MIN_SAMPLES = _env_int("THRESHOLD_RECOMMENDATION_MIN_SAMPLES", 20) or 20
+THRESHOLD_RECOMMENDATION_MIN_IMPROVEMENT_PP = _env_float("THRESHOLD_RECOMMENDATION_MIN_IMPROVEMENT_PP", 5.0)
+THRESHOLD_RECOMMENDATION_INTERVAL_HOURS = _env_float("THRESHOLD_RECOMMENDATION_INTERVAL_HOURS", 24.0)
+
+# Part 3: autotrader. Disabled by default. AUTOTRADE_ACCOUNT_MODE has NO
+# Telegram/Web App toggle anywhere in this codebase on purpose — switching to
+# 'live' requires manually editing the env var on Fly.io and redeploying.
+AUTOTRADE_ENABLED = _env_bool("AUTOTRADE_ENABLED", False)
+AUTOTRADE_ACCOUNT_MODE = (_env_str("AUTOTRADE_ACCOUNT_MODE", "demo") or "demo").strip().lower()
+if AUTOTRADE_ACCOUNT_MODE not in {"demo", "live"}:
+    logger.warning("Unsupported AUTOTRADE_ACCOUNT_MODE=%r. Falling back to 'demo'.", AUTOTRADE_ACCOUNT_MODE)
+    AUTOTRADE_ACCOUNT_MODE = "demo"
+
+if AUTOTRADE_ENABLED and AUTOTRADE_ACCOUNT_MODE == "live":
+    logger.critical(
+        "AUTOTRADE_ENABLED=true with AUTOTRADE_ACCOUNT_MODE=live — the autotrader "
+        "will place REAL orders with REAL money on the configured cTrader account."
+    )
+elif AUTOTRADE_ENABLED:
+    logger.warning("AUTOTRADE_ENABLED=true (mode=demo) — autotrader will place demo-account orders.")
+
+# Risk limits — all parameters, never hardcoded in autotrader.py.
+MAX_RISK_PERCENT_PER_TRADE = _env_float("MAX_RISK_PERCENT_PER_TRADE", 1.0)
+MAX_OPEN_POSITIONS = _env_int("MAX_OPEN_POSITIONS", 3) or 3
+MAX_DAILY_LOSS_PERCENT = _env_float("MAX_DAILY_LOSS_PERCENT", 5.0)
+AUTOTRADE_BALANCE_CACHE_SECONDS = _env_float("AUTOTRADE_BALANCE_CACHE_SECONDS", 30.0)
 
 
 def get_database_url() -> str | None:

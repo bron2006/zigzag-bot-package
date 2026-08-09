@@ -1,3 +1,7 @@
+import importlib.metadata  # noqa: F401 - pandas_ta_openbb does a bare `import importlib`
+# and then calls importlib.metadata.distribution(...); that submodule is only
+# reachable as an attribute once something has explicitly imported it, so make
+# sure that happens before pandas_ta loads instead of relying on import-order luck.
 import logging
 import threading
 import time
@@ -239,6 +243,22 @@ def _latest_price_from_df(df: pd.DataFrame):
     return None
 
 
+def _latest_atr_from_df(df: pd.DataFrame, length: int = 14) -> Optional[float]:
+    """ATR of the most recent bar, used for signal-outcome TP/SL sizing."""
+    if df is None or len(df) <= length:
+        return None
+
+    try:
+        atr_series = df.ta.atr(high=df["High"], low=df["Low"], close=df["Close"], length=length)
+        if atr_series is None or atr_series.empty:
+            return None
+        val = atr_series.iloc[-1]
+        return float(val) if pd.notna(val) and val > 0 else None
+    except Exception:
+        logger.debug("Failed to compute ATR for outcome tracking", exc_info=True)
+        return None
+
+
 def _price_status(pair_norm: str) -> dict:
     price_data = app_state.get_live_price(pair_norm)
     if not price_data:
@@ -475,11 +495,13 @@ def _analysis_flow(client, symbol_cache, symbol, user_id, timeframe="5m", lang: 
             and not drift_reason
         )
         quality = _signal_quality(score, trade_allowed)
+        atr = _latest_atr_from_df(df_a)
 
         return {
             "pair": pair_norm,
             "timeframe": timeframe,
             "price": signal_price,
+            "atr": atr,
             "verdict_text": verdict,
             "score": score,
             "sentiment": news_v,

@@ -3,8 +3,10 @@ import json
 import logging
 import os
 import queue
+import re
 import time
 from functools import wraps
+from html import escape as html_escape
 from urllib.parse import quote
 
 from flask import Response, jsonify, redirect, request, send_from_directory
@@ -21,6 +23,7 @@ import crypto_pay
 import db
 import ml_models
 import news_filter
+import signal_tracking
 from auth import get_user_id_from_init_data, is_valid_init_data
 from config import (
     COMMODITIES,
@@ -41,6 +44,17 @@ from state import app_state
 
 logger = logging.getLogger("api")
 WEBAPP_DIR = os.path.join(os.path.dirname(__file__), "webapp")
+TEMPLATES_DIR = os.path.join(WEBAPP_DIR, "templates")
+# Matches only src="...file.js" / href="...file.css" attribute values, so
+# cache-busting can't corrupt unrelated ".js"/".css" substrings elsewhere in
+# the page (e.g. inside inline <script> text or a ".json" reference).
+_ASSET_VERSION_PATTERN = re.compile(r'((?:src|href)=")([^"?]+\.(?:js|css))(")')
+
+
+def _render_template(name: str, **kwargs) -> str:
+    with open(os.path.join(TEMPLATES_DIR, name), "r", encoding="utf-8") as f:
+        template = f.read()
+    return template.format(**kwargs) if kwargs else template
 
 
 def _request_init_data() -> str | None:
@@ -350,142 +364,7 @@ def register_routes(app):
     @app.route("/privacy")
     @app.route("/privacy.html")
     def privacy_policy():
-        html = """
-        <!doctype html>
-        <html lang="en">
-        <head>
-            <meta charset="utf-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1">
-            <title>ZigZag Signals Privacy Policy</title>
-            <style>
-                body {
-                    margin: 0;
-                    background: #101214;
-                    color: #eef2f6;
-                    font-family: Arial, sans-serif;
-                    line-height: 1.6;
-                }
-                main {
-                    max-width: 860px;
-                    margin: 0 auto;
-                    padding: 42px 20px 56px;
-                }
-                h1, h2 {
-                    color: #ffffff;
-                    line-height: 1.25;
-                }
-                h1 {
-                    font-size: 32px;
-                    margin-bottom: 6px;
-                }
-                h2 {
-                    font-size: 20px;
-                    margin-top: 30px;
-                    border-top: 1px solid #2c333a;
-                    padding-top: 22px;
-                }
-                p, li {
-                    color: #cbd5df;
-                    font-size: 16px;
-                }
-                ul {
-                    padding-left: 22px;
-                }
-                a {
-                    color: #4aa3ff;
-                }
-                .muted {
-                    color: #8b98a5;
-                    font-size: 14px;
-                }
-                .notice {
-                    background: #171c21;
-                    border: 1px solid #2c333a;
-                    border-radius: 8px;
-                    padding: 16px 18px;
-                    margin-top: 22px;
-                }
-            </style>
-        </head>
-        <body>
-            <main>
-                <h1>Privacy Policy</h1>
-                <p class="muted">Last updated: April 20, 2026</p>
-
-                <p>
-                    This Privacy Policy explains how ZigZag Signals handles user data in the Telegram bot
-                    and Web App available at zigzag-bot-package.fly.dev.
-                </p>
-
-                <h2>Data We Collect</h2>
-                <p>We may process and store the following data:</p>
-                <ul>
-                    <li>Telegram user ID, language preference and timezone.</li>
-                    <li>Favorites/watchlist selected by the user.</li>
-                    <li>Subscription status, trial status and subscription expiration date.</li>
-                    <li>Payment invoice identifiers and payment status received through Crypto Pay webhooks.</li>
-                    <li>Basic technical logs required to keep the service stable and secure.</li>
-                </ul>
-
-                <h2>How We Use Data</h2>
-                <p>We use this data to:</p>
-                <ul>
-                    <li>Provide access to the bot, Web App and trading signal features.</li>
-                    <li>Save user preferences such as language, timezone and favorites.</li>
-                    <li>Manage free trials, paid subscriptions and payment confirmations.</li>
-                    <li>Detect errors, prevent abuse and improve service reliability.</li>
-                </ul>
-
-                <h2>Payments</h2>
-                <p>
-                    Payments are processed through Crypto Pay. We do not store private wallet keys,
-                    bank card data or full payment credentials. We only store the information needed
-                    to confirm that a payment was completed and to activate the subscription.
-                </p>
-
-                <h2>Third-Party Services</h2>
-                <p>
-                    The service may use Telegram, Crypto Pay, hosting providers and market data providers.
-                    These services may process data according to their own privacy policies.
-                </p>
-
-                <h2>Data Retention</h2>
-                <p>
-                    We keep user data only as long as needed to provide the service, maintain subscription
-                    records, prevent duplicate trial usage and comply with operational requirements.
-                </p>
-
-                <h2>Data Deletion</h2>
-                <p>
-                    Users may request deletion of their stored data by contacting the bot owner through Telegram.
-                    Some payment or security records may be retained when necessary for fraud prevention,
-                    dispute handling or legal compliance.
-                </p>
-
-                <h2>Trading Risk Notice</h2>
-                <div class="notice">
-                    <p>
-                        ZigZag Signals provides analytical information only. It is not financial advice,
-                        investment advice or a guarantee of profit. Trading financial instruments involves risk,
-                        and users are responsible for their own decisions.
-                    </p>
-                </div>
-
-                <h2>Changes</h2>
-                <p>
-                    We may update this Privacy Policy from time to time. The latest version will always be
-                    available on this page.
-                </p>
-
-                <h2>Contact</h2>
-                <p>
-                    For privacy requests, contact the bot owner through the Telegram bot profile.
-                </p>
-            </main>
-        </body>
-        </html>
-        """
-        return Response(html, mimetype="text/html")
+        return Response(_render_template("privacy_policy.html"), mimetype="text/html")
 
     @app.route("/api/ctrader/oauth/start")
     def ctrader_oauth_start():
@@ -513,14 +392,13 @@ def register_routes(app):
 
         if error_code:
             app_state.set_ctrader_auth_issue(f"oauth_callback_{error_code}: {error_description or 'unknown'}")
-            html = f"""
-            <html><head><meta charset="UTF-8"><title>cTrader OAuth Error</title></head>
-            <body style="background:#101214;color:#eef2f6;font-family:Arial,sans-serif;padding:24px;">
-                <h1>cTrader authorization failed</h1>
-                <p>Error: <strong>{error_code}</strong></p>
-                <p>{error_description or 'Unknown error'}</p>
-            </body></html>
-            """
+            html = _render_template(
+                "ctrader_oauth_error.html",
+                title="cTrader OAuth Error",
+                heading="cTrader authorization failed",
+                error_code=html_escape(error_code),
+                error_description=html_escape(error_description or "Unknown error"),
+            )
             return Response(html, status=400, mimetype="text/html")
 
         if not code:
@@ -538,14 +416,13 @@ def register_routes(app):
             description = payload.get("description") or payload.get("error_description") or "unknown error"
             logger.error("cTrader OAuth token exchange failed: %s - %s", payload_error, description)
             app_state.set_ctrader_auth_issue(f"{payload_error}: {description}")
-            html = f"""
-            <html><head><meta charset="UTF-8"><title>cTrader OAuth Error</title></head>
-            <body style="background:#101214;color:#eef2f6;font-family:Arial,sans-serif;padding:24px;">
-                <h1>Token exchange failed</h1>
-                <p>Error: <strong>{payload_error}</strong></p>
-                <p>{description}</p>
-            </body></html>
-            """
+            html = _render_template(
+                "ctrader_oauth_error.html",
+                title="cTrader OAuth Error",
+                heading="Token exchange failed",
+                error_code=html_escape(str(payload_error)),
+                error_description=html_escape(str(description)),
+            )
             return Response(html, status=400, mimetype="text/html")
 
         access_token = payload.get("accessToken")
@@ -569,16 +446,7 @@ def register_routes(app):
         except Exception:
             logger.exception("Failed to reconnect cTrader after OAuth callback")
 
-        base_url = get_public_base_url()
-        html = f"""
-        <html><head><meta charset="UTF-8"><title>cTrader OAuth Success</title></head>
-        <body style="background:#101214;color:#eef2f6;font-family:Arial,sans-serif;padding:24px;line-height:1.6;">
-            <h1>cTrader reconnected</h1>
-            <p>New access and refresh tokens were loaded into the running app and saved for future restarts.</p>
-            <p>The quote feed should recover in the next 10-30 seconds.</p>
-            <p><a href="{base_url}/api/health" style="color:#4aa3ff;">Open health page</a></p>
-        </body></html>
-        """
+        html = _render_template("ctrader_oauth_success.html", base_url=get_public_base_url())
         return Response(html, mimetype="text/html")
 
     @app.route("/api/health")
@@ -588,37 +456,39 @@ def register_routes(app):
             prices = app_state.get_live_prices_snapshot()
             stale_count = sum(1 for d in prices.values() if time.time() - d.get("ts", 0) > 300)
             tg_status = f"✅ {t('active', lang)}" if app_state.updater else f"❌ {t('disabled', lang)}"
-            ctrader_issue = app_state.get_ctrader_auth_issue()
             quote_label = "✅ " + t("ready", lang) if app_state.SYMBOLS_LOADED else "❌ " + t("error", lang)
-            auth_row = ""
-            if ctrader_issue:
-                auth_row = f'<div class="stat"><span>cTrader auth:</span><span class="val err">{ctrader_issue}</span></div>'
+            # Public endpoint: no cTrader error details here (those can contain
+            # internal auth/config info) — just a coarse ok/degraded status.
+            # Full diagnostics, including the raw auth issue, live behind
+            # /api/diagnostics which requires a valid Telegram initData.
+            overall_status = "ok" if (app_state.SYMBOLS_LOADED and app_state.updater) else "degraded"
 
-            html = f"""
-            <html><head><meta charset="UTF-8"><style>
-                body {{ background:#0f0f0f; color:#e0e0e0; font-family:sans-serif; padding:20px; display:flex; justify-content:center; }}
-                .card {{ background:#1a1a1a; border-radius:16px; padding:24px; border:1px solid #333; width:520px; }}
-                h1 {{ color:#3390ec; border-bottom:1px solid #333; padding-bottom:10px; font-size:22px; }}
-                .stat {{ display:flex; justify-content:space-between; padding:10px 0; border-bottom:1px solid #252525; }}
-                .val {{ font-weight:bold; color:#fff; }}
-                .ok {{ color:#4caf50; }} .info {{ color:#3390ec; }} .err {{ color:#ef5350; }}
-            </style></head>
-            <body><div class="card">
-                <h1>{t('health_title', lang)}</h1>
-                <div class="stat"><span>{t('quote_feed', lang)}:</span><span class="val {'ok' if app_state.SYMBOLS_LOADED else 'err'}">{quote_label}</span></div>
-                <div class="stat"><span>{t('telegram_bot', lang)}:</span><span class="val {'ok' if app_state.updater else 'err'}">{tg_status}</span></div>
-                {auth_row}
-                <div class="stat"><span>{t('sse_signal_clients', lang)}:</span><span class="val info">{app_state.sse_listener_count('signal')}</span></div>
-                <div class="stat"><span>{t('sse_price_clients', lang)}:</span><span class="val info">{app_state.sse_listener_count('price')}</span></div>
-                <div class="stat"><span>{t('live_prices', lang)}:</span><span class="val">{len(prices)}</span></div>
-                <div class="stat"><span>{t('stale_prices', lang)}:</span><span class="val">{stale_count}</span></div>
-                <p style='text-align:center;color:#555;font-size:11px;margin-top:20px;'>{t('updated', lang)}: {time.strftime('%H:%M:%S')}</p>
-            </div></body></html>
-            """
+            html = _render_template(
+                "health.html",
+                health_title=t("health_title", lang),
+                status_class="ok" if overall_status == "ok" else "err",
+                overall_status=overall_status,
+                quote_feed_label=t("quote_feed", lang),
+                quote_feed_class="ok" if app_state.SYMBOLS_LOADED else "err",
+                quote_label=quote_label,
+                telegram_bot_label=t("telegram_bot", lang),
+                telegram_class="ok" if app_state.updater else "err",
+                tg_status=tg_status,
+                sse_signal_label=t("sse_signal_clients", lang),
+                sse_signal_count=app_state.sse_listener_count("signal"),
+                sse_price_label=t("sse_price_clients", lang),
+                sse_price_count=app_state.sse_listener_count("price"),
+                live_prices_label=t("live_prices", lang),
+                live_prices_count=len(prices),
+                stale_prices_label=t("stale_prices", lang),
+                stale_count=stale_count,
+                updated_label=t("updated", lang),
+                updated_at=time.strftime("%H:%M:%S"),
+            )
             return Response(html, mimetype="text/html")
-        except Exception as e:
+        except Exception:
             logger.exception("Health endpoint failed")
-            return f"{t('error', lang)}: {str(e)}", 500
+            return f"{t('error', lang)}: degraded", 500
 
     @app.route("/api/diagnostics")
     @_protected_route
@@ -630,6 +500,23 @@ def register_routes(app):
             if isinstance(item, dict) and "label" in item:
                 item["label"] = localize_reason(item["label"], lang)
         return jsonify(payload)
+
+    @app.route("/api/stats/signals")
+    @_protected_route
+    def stats_signals():
+        lang = _request_lang()
+        uid = get_user_id_from_init_data(_request_init_data())
+        if not db.is_admin_user(uid):
+            return jsonify({"success": False, "error": t("unauthorized", lang)}), 403
+
+        days = request.args.get("days", "7")
+        try:
+            days = int(days)
+        except ValueError:
+            days = 7
+
+        stats = db.get_signal_outcome_stats(days)
+        return jsonify({"success": True, **stats})
 
     @app.route("/api/get_pairs")
     @_protected_route
@@ -914,18 +801,26 @@ def register_routes(app):
                 result["trial_started"] = True
                 result["user"] = access
 
+            try:
+                signal_tracking.maybe_record_signal(result)
+            except Exception:
+                logger.exception("Failed to record signal outcome for pair=%s", pair)
+
             return jsonify(localize_signal_payload(result, lang))
 
         except Exception as e:
-            logger.exception("api_signal failed")
+            logger.exception("api_signal failed for pair=%s timeframe=%s", pair, tf)
 
-            msg = str(e)
-            if msg in {"(45, 'Deferred')", "(50, 'Deferred')"} or "Deferred" in msg:
+            raw_msg = str(e)
+            if raw_msg in {"(45, 'Deferred')", "(50, 'Deferred')"} or "Deferred" in raw_msg:
                 msg = t("analysis_timeout", lang)
-            elif "Timed out" in msg or "timeout" in msg.lower():
+            elif "Timed out" in raw_msg or "timeout" in raw_msg.lower():
                 msg = t("analysis_timeout", lang)
             else:
-                msg = localize_reason(msg, lang)
+                # Unclassified exceptions may contain internal details (paths,
+                # connection strings, symbol internals) — never forward the raw
+                # message to the client. The full traceback is already logged above.
+                msg = t("technical_error", lang)
 
             return jsonify(
                 {
@@ -950,11 +845,14 @@ def register_routes(app):
                     f"https://{get_fly_app_name()}.fly.dev" if get_fly_app_name() else "",
                 )
                 version = int(time.time())
-                content = content.replace(".js", f".js?v={version}")
-                content = content.replace(".css", f".css?v={version}")
+                content = _ASSET_VERSION_PATTERN.sub(rf"\1\2?v={version}\3", content)
                 return Response(content, mimetype="text/html")
         return t("not_found", _request_lang()), 404
 
     @app.route("/<path:filename>")
     def static_files(filename):
+        # webapp/templates/ holds server-rendered HTML fragments (with raw
+        # {placeholder} markers) — never serve them directly as static files.
+        if filename == "templates" or filename.startswith("templates/"):
+            return t("not_found", _request_lang()), 404
         return send_from_directory(WEBAPP_DIR, filename)

@@ -81,6 +81,45 @@ class AppRuntimeSetting(Base):
     updated_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
 
+class SignalOutcome(Base):
+    __tablename__ = "signal_outcomes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    pair = Column(String, nullable=False, index=True)
+    timeframe = Column(String(8), nullable=False, default="")
+    verdict = Column(String(8), nullable=False)
+    score = Column(Integer, nullable=True)
+    entry_price = Column(Float, nullable=False)
+    entry_ts = Column(DateTime, server_default=func.now(), nullable=False, index=True)
+    tp_price = Column(Float, nullable=True)
+    sl_price = Column(Float, nullable=True)
+    resolved_at = Column(DateTime, nullable=True)
+    # 'pending' | 'tp' | 'sl' | 'timeout'
+    outcome = Column(String(16), nullable=False, default="pending", index=True)
+    pnl_pips = Column(Float, nullable=True)
+
+
+class AutoTrade(Base):
+    __tablename__ = "auto_trades"
+
+    id = Column(Integer, primary_key=True, index=True)
+    pair = Column(String, nullable=False, index=True)
+    direction = Column(String(8), nullable=False)  # BUY | SELL
+    volume = Column(Integer, nullable=False)  # cTrader volume units (already x100)
+    entry_price = Column(Float, nullable=True)
+    sl_price = Column(Float, nullable=True)
+    tp_price = Column(Float, nullable=True)
+    ts = Column(DateTime, server_default=func.now(), nullable=False, index=True)
+    account_mode = Column(String(8), nullable=False, index=True)  # demo | live
+    broker_order_id = Column(String(32), nullable=True, index=True)
+    broker_position_id = Column(String(32), nullable=True, index=True)
+    # submitted -> open -> closed_tp | closed_sl | closed_manual | error
+    status = Column(String(16), nullable=False, default="submitted", index=True)
+    pnl_amount = Column(Float, nullable=True)
+    closed_at = Column(DateTime, nullable=True)
+    error_message = Column(String(255), nullable=True)
+
+
 def _normalize_language(lang: str | None) -> str:
     value = (lang or "").split(",", 1)[0].split("-")[0].split("_")[0].lower()
     return value if value in {"en", "uk", "es", "de", "ru"} else "en"
@@ -831,6 +870,7 @@ def set_user_subscription(user_id: int, plan_type: str = "free", subscription_en
             if db is None:
                 status = _fallback_set_user_subscription(user_id, plan, ends_at, language)
                 _cache_user_status(user_id, status)
+                _notify_payment_at_risk("set_user_subscription_no_engine", user_id)
                 return status
 
             user = _get_or_create_user_row(db, user_id, language=language)
@@ -844,9 +884,11 @@ def set_user_subscription(user_id: int, plan_type: str = "free", subscription_en
     except OperationalError:
         logger.exception("OperationalError while saving user subscription")
         status = _fallback_set_user_subscription(user_id, plan, ends_at, language)
+        _notify_payment_at_risk("set_user_subscription_operational_error", user_id)
     except SQLAlchemyError:
         logger.exception("Error saving user subscription")
         status = _fallback_set_user_subscription(user_id, plan, ends_at, language)
+        _notify_payment_at_risk("set_user_subscription_sqlalchemy_error", user_id)
 
     _cache_user_status(user_id, status)
     return status
@@ -859,6 +901,15 @@ def _notify_subscription_event(text: str, key: str | None = None) -> None:
         notify_admin(text, alert_key=key)
     except Exception:
         logger.debug("Could not send subscription admin notification", exc_info=True)
+
+
+def _notify_payment_at_risk(context: str, user_id: int) -> None:
+    _notify_subscription_event(
+        f"🚨 PAYMENT AT RISK: DB unavailable, subscription stored in-memory only\n"
+        f"context: {context}\nuser_id: {user_id}\n"
+        "This record will be LOST on restart unless the database recovers.",
+        key=f"payment_at_risk_{context}",
+    )
 
 
 def start_user_trial(user_id: int, *, language: str | None = None) -> tuple[dict | None, bool]:
@@ -958,6 +1009,7 @@ def activate_paid_subscription(user_id: int, *, days: int | None = None, languag
                 with _fallback_lock:
                     _fallback_user_profiles[int(user_id)] = dict(current)
                 _cache_user_status(user_id, current)
+                _notify_payment_at_risk("activate_paid_subscription_no_engine", user_id)
                 return current
 
             user = _get_or_create_user_row(db, user_id, language=language)
@@ -973,6 +1025,7 @@ def activate_paid_subscription(user_id: int, *, days: int | None = None, languag
             status = _user_to_status(user)
     except SQLAlchemyError:
         logger.exception("Error activating paid subscription for user_id=%s", user_id)
+        _notify_payment_at_risk("activate_paid_subscription_sqlalchemy_error", user_id)
         return None
 
     return _cache_user_status(user_id, status)
@@ -986,6 +1039,7 @@ def mark_payment_invoice_processed(invoice_id, user_id: int) -> bool:
     try:
         with session_scope() as db:
             if db is None:
+                _notify_payment_at_risk("mark_payment_invoice_processed_no_engine", user_id)
                 return True
 
             existing = db.query(PaymentInvoice).filter(PaymentInvoice.invoice_id == invoice_key).first()
@@ -1265,6 +1319,403 @@ def toggle_watchlist(user_id: int, pair: str) -> bool:
     except SQLAlchemyError:
         logger.exception("Error toggling watchlist")
         return False
+
+
+# ----------------------------------------------------------------------
+# Signal outcome tracking
+# ----------------------------------------------------------------------
+
+
+def create_signal_outcome(
+    *,
+    pair: str,
+    timeframe: str,
+    verdict: str,
+    score: int | float | None,
+    entry_price: float,
+    tp_price: float | None,
+    sl_price: float | None,
+) -> int | None:
+    try:
+        with session_scope() as session:
+            if session is None:
+                logger.debug("Signal outcome tracking skipped: no database engine")
+                return None
+
+            row = SignalOutcome(
+                pair=(pair or "").strip().upper(),
+                timeframe=(timeframe or "").strip(),
+                verdict=(verdict or "").strip().upper(),
+                score=int(score) if isinstance(score, (int, float)) else None,
+                entry_price=float(entry_price),
+                tp_price=float(tp_price) if tp_price is not None else None,
+                sl_price=float(sl_price) if sl_price is not None else None,
+                outcome="pending",
+            )
+            session.add(row)
+            session.flush()
+            return row.id
+    except SQLAlchemyError:
+        logger.exception("Error creating signal outcome for pair=%s", pair)
+        return None
+
+
+def get_pending_signal_outcomes(limit: int = 500) -> list[dict]:
+    limit = max(1, min(int(limit or 500), 2000))
+
+    try:
+        with get_db() as session:
+            if session is None:
+                return []
+
+            rows = (
+                session.query(SignalOutcome)
+                .filter(SignalOutcome.outcome == "pending")
+                .order_by(SignalOutcome.entry_ts.asc())
+                .limit(limit)
+                .all()
+            )
+            return [
+                {
+                    "id": row.id,
+                    "pair": row.pair,
+                    "timeframe": row.timeframe,
+                    "verdict": row.verdict,
+                    "entry_price": row.entry_price,
+                    "tp_price": row.tp_price,
+                    "sl_price": row.sl_price,
+                    "entry_ts": row.entry_ts,
+                }
+                for row in rows
+            ]
+    except SQLAlchemyError:
+        logger.exception("Error loading pending signal outcomes")
+        return []
+
+
+def resolve_signal_outcome(outcome_id: int, *, outcome: str, pnl_pips: float | None) -> bool:
+    try:
+        with session_scope() as session:
+            if session is None:
+                return False
+
+            row = session.query(SignalOutcome).filter(SignalOutcome.id == outcome_id).first()
+            if row is None or row.outcome != "pending":
+                return False
+
+            row.outcome = outcome
+            row.pnl_pips = pnl_pips
+            row.resolved_at = _utcnow()
+            return True
+    except SQLAlchemyError:
+        logger.exception("Error resolving signal outcome id=%s", outcome_id)
+        return False
+
+
+def _aggregate_signal_outcomes(rows: list) -> dict:
+    wins = sum(1 for r in rows if r.outcome == "tp")
+    losses = sum(1 for r in rows if r.outcome == "sl")
+    timeouts = sum(1 for r in rows if r.outcome == "timeout")
+    resolved = wins + losses + timeouts
+    decided = wins + losses
+    return {
+        "total": len(rows),
+        "resolved": resolved,
+        "pending": len(rows) - resolved,
+        "wins": wins,
+        "losses": losses,
+        "timeouts": timeouts,
+        "win_rate": round(100.0 * wins / decided, 1) if decided else None,
+    }
+
+
+def get_signal_outcome_stats(days: int = 7) -> dict:
+    days = max(1, min(int(days or 7), 365))
+    since = _utcnow() - timedelta(days=days)
+    empty = {"ok": False, "days": days, "by_pair": [], "by_timeframe": [], **_aggregate_signal_outcomes([])}
+
+    try:
+        with get_db() as session:
+            if session is None:
+                return empty
+
+            rows = session.query(SignalOutcome).filter(SignalOutcome.entry_ts >= since).all()
+    except SQLAlchemyError:
+        logger.exception("Error loading signal outcome stats")
+        return empty
+
+    by_pair_map: dict[str, list] = {}
+    by_tf_map: dict[str, list] = {}
+    for row in rows:
+        by_pair_map.setdefault(row.pair, []).append(row)
+        by_tf_map.setdefault(row.timeframe or "?", []).append(row)
+
+    by_pair = [
+        {"pair": pair, **_aggregate_signal_outcomes(items)}
+        for pair, items in sorted(by_pair_map.items(), key=lambda kv: -len(kv[1]))
+    ]
+    by_timeframe = [
+        {"timeframe": tf, **_aggregate_signal_outcomes(items)}
+        for tf, items in sorted(by_tf_map.items())
+    ]
+
+    return {
+        "ok": True,
+        "days": days,
+        **_aggregate_signal_outcomes(rows),
+        "by_pair": by_pair,
+        "by_timeframe": by_timeframe,
+    }
+
+
+def get_signal_outcome_score_breakdown(days: int = 30, bucket_size: int = 5) -> list[dict]:
+    """Win-rate per score bucket (e.g. 75-80, 80-85, ...), used to evaluate
+    whether the BUY/SELL threshold in config is well calibrated. BUY signals
+    use score directly and SELL signals use (100 - score) so both directions
+    land on the same "distance from 50 = confidence" scale."""
+    days = max(1, min(int(days or 30), 365))
+    bucket_size = max(1, min(int(bucket_size or 5), 25))
+    since = _utcnow() - timedelta(days=days)
+
+    try:
+        with get_db() as session:
+            if session is None:
+                return []
+
+            rows = (
+                session.query(SignalOutcome)
+                .filter(SignalOutcome.entry_ts >= since)
+                .filter(SignalOutcome.outcome.in_(("tp", "sl")))
+                .filter(SignalOutcome.score.isnot(None))
+                .all()
+            )
+    except SQLAlchemyError:
+        logger.exception("Error loading signal outcome score breakdown")
+        return []
+
+    buckets: dict[int, list] = {}
+    for row in rows:
+        normalized_score = row.score if row.verdict == "BUY" else (100 - row.score)
+        bucket_start = (normalized_score // bucket_size) * bucket_size
+        buckets.setdefault(bucket_start, []).append(row)
+
+    result = []
+    for bucket_start in sorted(buckets):
+        items = buckets[bucket_start]
+        agg = _aggregate_signal_outcomes(items)
+        result.append(
+            {
+                "bucket_start": bucket_start,
+                "score_range": f"{bucket_start}-{bucket_start + bucket_size}",
+                **agg,
+            }
+        )
+
+    return result
+
+
+# ----------------------------------------------------------------------
+# Autotrader (Part 3)
+# ----------------------------------------------------------------------
+
+
+def _auto_trade_to_dict(row: "AutoTrade") -> dict:
+    return {
+        "id": row.id,
+        "pair": row.pair,
+        "direction": row.direction,
+        "volume": row.volume,
+        "entry_price": row.entry_price,
+        "sl_price": row.sl_price,
+        "tp_price": row.tp_price,
+        "ts": row.ts,
+        "account_mode": row.account_mode,
+        "broker_order_id": row.broker_order_id,
+        "broker_position_id": row.broker_position_id,
+        "status": row.status,
+        "pnl_amount": row.pnl_amount,
+        "closed_at": row.closed_at,
+        "error_message": row.error_message,
+    }
+
+
+def create_auto_trade(
+    *,
+    pair: str,
+    direction: str,
+    volume: int,
+    sl_price: float | None,
+    tp_price: float | None,
+    account_mode: str,
+) -> int | None:
+    try:
+        with session_scope() as session:
+            if session is None:
+                logger.warning("Autotrade skipped: no database engine")
+                return None
+
+            row = AutoTrade(
+                pair=(pair or "").strip().upper(),
+                direction=(direction or "").strip().upper(),
+                volume=int(volume),
+                sl_price=float(sl_price) if sl_price is not None else None,
+                tp_price=float(tp_price) if tp_price is not None else None,
+                account_mode=(account_mode or "demo").strip().lower(),
+                status="submitted",
+            )
+            session.add(row)
+            session.flush()
+            return row.id
+    except SQLAlchemyError:
+        logger.exception("Error creating auto trade for pair=%s", pair)
+        return None
+
+
+def get_auto_trade(trade_id: int) -> dict | None:
+    try:
+        with get_db() as session:
+            if session is None:
+                return None
+            row = session.query(AutoTrade).filter(AutoTrade.id == trade_id).first()
+            return _auto_trade_to_dict(row) if row else None
+    except SQLAlchemyError:
+        logger.exception("Error loading auto trade id=%s", trade_id)
+        return None
+
+
+def find_auto_trade_by_broker_order_id(broker_order_id: str) -> dict | None:
+    try:
+        with get_db() as session:
+            if session is None:
+                return None
+            row = (
+                session.query(AutoTrade)
+                .filter(AutoTrade.broker_order_id == str(broker_order_id))
+                .first()
+            )
+            return _auto_trade_to_dict(row) if row else None
+    except SQLAlchemyError:
+        logger.exception("Error looking up auto trade by broker_order_id=%s", broker_order_id)
+        return None
+
+
+def find_auto_trade_by_broker_position_id(broker_position_id: str) -> dict | None:
+    try:
+        with get_db() as session:
+            if session is None:
+                return None
+            row = (
+                session.query(AutoTrade)
+                .filter(AutoTrade.broker_position_id == str(broker_position_id))
+                .order_by(AutoTrade.ts.desc())
+                .first()
+            )
+            return _auto_trade_to_dict(row) if row else None
+    except SQLAlchemyError:
+        logger.exception("Error looking up auto trade by broker_position_id=%s", broker_position_id)
+        return None
+
+
+def mark_auto_trade_open(
+    trade_id: int,
+    *,
+    broker_order_id: str | None,
+    broker_position_id: str | None,
+    entry_price: float | None,
+) -> bool:
+    try:
+        with session_scope() as session:
+            if session is None:
+                return False
+            row = session.query(AutoTrade).filter(AutoTrade.id == trade_id).first()
+            if row is None:
+                return False
+
+            if broker_order_id:
+                row.broker_order_id = str(broker_order_id)
+            if broker_position_id:
+                row.broker_position_id = str(broker_position_id)
+            if entry_price is not None:
+                row.entry_price = float(entry_price)
+            row.status = "open"
+            return True
+    except SQLAlchemyError:
+        logger.exception("Error marking auto trade open id=%s", trade_id)
+        return False
+
+
+def mark_auto_trade_closed(trade_id: int, *, status: str, pnl_amount: float | None) -> bool:
+    try:
+        with session_scope() as session:
+            if session is None:
+                return False
+            row = session.query(AutoTrade).filter(AutoTrade.id == trade_id).first()
+            if row is None or row.status not in {"submitted", "open"}:
+                return False
+
+            row.status = status
+            row.pnl_amount = pnl_amount
+            row.closed_at = _utcnow()
+            return True
+    except SQLAlchemyError:
+        logger.exception("Error marking auto trade closed id=%s", trade_id)
+        return False
+
+
+def mark_auto_trade_error(trade_id: int, error_message: str) -> bool:
+    try:
+        with session_scope() as session:
+            if session is None:
+                return False
+            row = session.query(AutoTrade).filter(AutoTrade.id == trade_id).first()
+            if row is None:
+                return False
+
+            row.status = "error"
+            row.error_message = (error_message or "")[:255]
+            row.closed_at = _utcnow()
+            return True
+    except SQLAlchemyError:
+        logger.exception("Error marking auto trade as error id=%s", trade_id)
+        return False
+
+
+def count_open_auto_trades(account_mode: str) -> int:
+    try:
+        with get_db() as session:
+            if session is None:
+                return 0
+            return (
+                session.query(AutoTrade)
+                .filter(AutoTrade.account_mode == (account_mode or "demo").lower())
+                .filter(AutoTrade.status.in_(("submitted", "open")))
+                .count()
+            )
+    except SQLAlchemyError:
+        logger.exception("Error counting open auto trades")
+        return 0
+
+
+def get_daily_auto_trade_pnl(account_mode: str) -> float:
+    day_start = _utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+
+    try:
+        with get_db() as session:
+            if session is None:
+                return 0.0
+
+            rows = (
+                session.query(AutoTrade)
+                .filter(AutoTrade.account_mode == (account_mode or "demo").lower())
+                .filter(AutoTrade.closed_at.isnot(None))
+                .filter(AutoTrade.closed_at >= day_start)
+                .filter(AutoTrade.pnl_amount.isnot(None))
+                .all()
+            )
+            return sum(row.pnl_amount for row in rows)
+    except SQLAlchemyError:
+        logger.exception("Error computing daily auto trade pnl")
+        return 0.0
 
 
 initialize_database()

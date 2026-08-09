@@ -15,6 +15,7 @@ from telegram.ext import CallbackContext
 from twisted.internet import reactor
 from twisted.internet.threads import deferToThreadPool
 
+import autotrader
 import db
 import crypto_pay
 from analysis import get_api_detailed_signal_data
@@ -442,6 +443,116 @@ def stats_command(update, context):
         parse_mode="HTML",
         reply_markup=get_reply_keyboard(lang),
     )
+
+
+def _format_winrate_period(label: str, stats: dict) -> list[str]:
+    win_rate = stats.get("win_rate")
+    win_rate_str = f"{win_rate}%" if win_rate is not None else "n/a"
+    return [
+        f"<b>{label}</b>",
+        f"Сигналів: {stats.get('total', 0)} "
+        f"(закрито: {stats.get('resolved', 0)}, в очікуванні: {stats.get('pending', 0)})",
+        f"TP: {stats.get('wins', 0)} · SL: {stats.get('losses', 0)} · Timeout: {stats.get('timeouts', 0)}",
+        f"Win-rate: {win_rate_str}",
+        "",
+    ]
+
+
+def winrate_command(update, context):
+    lang = _lang(update)
+    user_id = _get_user_id(update)
+
+    if not db.is_admin_user(user_id):
+        update.message.reply_text(t("unauthorized", lang))
+        return
+
+    week = db.get_signal_outcome_stats(7)
+    month = db.get_signal_outcome_stats(30)
+
+    lines = ["📊 <b>Win-rate сигналів</b>", ""]
+    lines.extend(_format_winrate_period("Тиждень (7д)", week))
+    lines.extend(_format_winrate_period("Місяць (30д)", month))
+
+    top_pairs = sorted(
+        (p for p in month.get("by_pair", []) if p.get("resolved")),
+        key=lambda p: -(p.get("resolved") or 0),
+    )[:5]
+    if top_pairs:
+        lines.append("<b>Топ пар за 30д:</b>")
+        for item in top_pairs:
+            wr = item.get("win_rate")
+            wr_str = f"{wr}%" if wr is not None else "n/a"
+            lines.append(f"• {_safe_html(item.get('pair', '?'))}: {item.get('resolved', 0)} угод, {wr_str}")
+
+    update.message.reply_text(
+        "\n".join(lines),
+        parse_mode="HTML",
+        reply_markup=get_reply_keyboard(lang),
+    )
+
+
+def _format_autotrade_status(status: dict) -> str:
+    active = "✅ активний" if status.get("active") else "⛔ неактивний"
+    kill_switch = "🛑 СПРАЦЮВАВ" if status.get("kill_switch_tripped") else "гаразд"
+    balance = status.get("cached_balance")
+    balance_str = f"{balance:.2f}" if isinstance(balance, (int, float)) else "n/a"
+    daily_pnl = status.get("daily_pnl")
+    daily_pnl_str = f"{daily_pnl:.2f}" if isinstance(daily_pnl, (int, float)) else "n/a"
+
+    return "\n".join(
+        [
+            "🤖 <b>Автотрейдер</b>",
+            f"Статус: {active}",
+            f"AUTOTRADE_ENABLED (config): {status.get('config_enabled')}",
+            f"Runtime увімкнено: {status.get('runtime_enabled')}",
+            f"Kill switch: {kill_switch}",
+            f"Режим рахунку: <b>{status.get('account_mode')}</b>",
+            f"Відкритих позицій: {status.get('open_positions')} / {status.get('max_open_positions')}",
+            f"Ризик на угоду: {status.get('max_risk_percent_per_trade')}%",
+            f"Ліміт денного збитку: {status.get('max_daily_loss_percent')}%",
+            f"Денний PnL: {daily_pnl_str}",
+            f"Баланс (кеш): {balance_str}",
+        ]
+    )
+
+
+def autotrade_status_command(update, context):
+    lang = _lang(update)
+    user_id = _get_user_id(update)
+
+    if not db.is_admin_user(user_id):
+        update.message.reply_text(t("unauthorized", lang))
+        return
+
+    update.message.reply_text(
+        _format_autotrade_status(autotrader.get_status()),
+        parse_mode="HTML",
+        reply_markup=get_reply_keyboard(lang),
+    )
+
+
+def autotrade_on_command(update, context):
+    lang = _lang(update)
+    user_id = _get_user_id(update)
+
+    if not db.is_admin_user(user_id):
+        update.message.reply_text(t("unauthorized", lang))
+        return
+
+    _, message = autotrader.enable()
+    update.message.reply_text(f"{message}\n\n{_format_autotrade_status(autotrader.get_status())}", parse_mode="HTML")
+
+
+def autotrade_off_command(update, context):
+    lang = _lang(update)
+    user_id = _get_user_id(update)
+
+    if not db.is_admin_user(user_id):
+        update.message.reply_text(t("unauthorized", lang))
+        return
+
+    _, message = autotrader.disable()
+    update.message.reply_text(f"{message}\n\n{_format_autotrade_status(autotrader.get_status())}", parse_mode="HTML")
 
 
 def live_command(update, context):

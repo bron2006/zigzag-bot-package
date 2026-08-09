@@ -48,7 +48,7 @@ class AnalysisContractTest(unittest.TestCase):
 
             self.assertEqual(score, 50)
             self.assertEqual(verdict, "WAIT")
-            self.assertIn("ML", reason)
+            self.assertIn("модель", reason.lower())
         finally:
             ml_models.LGBM_MODEL = old_model
             ml_models.SCALER = old_scaler

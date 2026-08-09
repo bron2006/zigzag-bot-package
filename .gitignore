@@ -9,6 +9,7 @@ ctrader_open_api/__pycache__/
 venv/
 venv.bak/
 .venv/
+.venv_test/
 
 # Файл зі змінними середовища (ніколи не додавайте його в Git!)
 .env
@@ -16,3 +17,11 @@ venv.bak/
 # Специфічні файли IDE
 .idea/
 .vscode/
+
+# Тимчасові/сміттєві файли Jupyter та Google Drive sync
+.ipynb_checkpoints/
+.tmp.driveupload/
+Untitled*.ipynb
+
+# Навчені ML-моделі (регенеруються ноутбуком, не мають бути в git-історії)
+*.pkl
