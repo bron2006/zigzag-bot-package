@@ -588,11 +588,12 @@ def register_routes(app):
             prices = app_state.get_live_prices_snapshot()
             stale_count = sum(1 for d in prices.values() if time.time() - d.get("ts", 0) > 300)
             tg_status = f"✅ {t('active', lang)}" if app_state.updater else f"❌ {t('disabled', lang)}"
-            ctrader_issue = app_state.get_ctrader_auth_issue()
             quote_label = "✅ " + t("ready", lang) if app_state.SYMBOLS_LOADED else "❌ " + t("error", lang)
-            auth_row = ""
-            if ctrader_issue:
-                auth_row = f'<div class="stat"><span>cTrader auth:</span><span class="val err">{ctrader_issue}</span></div>'
+            # Public endpoint: no cTrader error details here (those can contain
+            # internal auth/config info) — just a coarse ok/degraded status.
+            # Full diagnostics, including the raw auth issue, live behind
+            # /api/diagnostics which requires a valid Telegram initData.
+            overall_status = "ok" if (app_state.SYMBOLS_LOADED and app_state.updater) else "degraded"
 
             html = f"""
             <html><head><meta charset="UTF-8"><style>
@@ -605,9 +606,9 @@ def register_routes(app):
             </style></head>
             <body><div class="card">
                 <h1>{t('health_title', lang)}</h1>
+                <div class="stat"><span>status:</span><span class="val {'ok' if overall_status == 'ok' else 'err'}">{overall_status}</span></div>
                 <div class="stat"><span>{t('quote_feed', lang)}:</span><span class="val {'ok' if app_state.SYMBOLS_LOADED else 'err'}">{quote_label}</span></div>
                 <div class="stat"><span>{t('telegram_bot', lang)}:</span><span class="val {'ok' if app_state.updater else 'err'}">{tg_status}</span></div>
-                {auth_row}
                 <div class="stat"><span>{t('sse_signal_clients', lang)}:</span><span class="val info">{app_state.sse_listener_count('signal')}</span></div>
                 <div class="stat"><span>{t('sse_price_clients', lang)}:</span><span class="val info">{app_state.sse_listener_count('price')}</span></div>
                 <div class="stat"><span>{t('live_prices', lang)}:</span><span class="val">{len(prices)}</span></div>
@@ -616,9 +617,9 @@ def register_routes(app):
             </div></body></html>
             """
             return Response(html, mimetype="text/html")
-        except Exception as e:
+        except Exception:
             logger.exception("Health endpoint failed")
-            return f"{t('error', lang)}: {str(e)}", 500
+            return f"{t('error', lang)}: degraded", 500
 
     @app.route("/api/diagnostics")
     @_protected_route
@@ -917,15 +918,18 @@ def register_routes(app):
             return jsonify(localize_signal_payload(result, lang))
 
         except Exception as e:
-            logger.exception("api_signal failed")
+            logger.exception("api_signal failed for pair=%s timeframe=%s", pair, tf)
 
-            msg = str(e)
-            if msg in {"(45, 'Deferred')", "(50, 'Deferred')"} or "Deferred" in msg:
+            raw_msg = str(e)
+            if raw_msg in {"(45, 'Deferred')", "(50, 'Deferred')"} or "Deferred" in raw_msg:
                 msg = t("analysis_timeout", lang)
-            elif "Timed out" in msg or "timeout" in msg.lower():
+            elif "Timed out" in raw_msg or "timeout" in raw_msg.lower():
                 msg = t("analysis_timeout", lang)
             else:
-                msg = localize_reason(msg, lang)
+                # Unclassified exceptions may contain internal details (paths,
+                # connection strings, symbol internals) — never forward the raw
+                # message to the client. The full traceback is already logged above.
+                msg = t("technical_error", lang)
 
             return jsonify(
                 {
