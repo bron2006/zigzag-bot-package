@@ -91,12 +91,18 @@ class SignalOutcome(Base):
     score = Column(Integer, nullable=True)
     entry_price = Column(Float, nullable=False)
     entry_ts = Column(DateTime, server_default=func.now(), nullable=False, index=True)
+    # Legacy forex/ATR-based fields (previous TP/SL tracking generation).
+    # Kept so old rows don't break on read; no longer written for new rows.
     tp_price = Column(Float, nullable=True)
     sl_price = Column(Float, nullable=True)
-    resolved_at = Column(DateTime, nullable=True)
-    # 'pending' | 'tp' | 'sl' | 'timeout'
-    outcome = Column(String(16), nullable=False, default="pending", index=True)
     pnl_pips = Column(Float, nullable=True)
+    # Binary-option-style tracking: did price move the predicted direction
+    # over a fixed horizon, rather than hit a TP/SL level.
+    horizon_seconds = Column(Integer, nullable=True)
+    exit_price = Column(Float, nullable=True)
+    resolved_at = Column(DateTime, nullable=True)
+    # 'pending' | 'up' | 'down' | 'flat' (legacy rows may still have 'tp' | 'sl' | 'timeout')
+    outcome = Column(String(16), nullable=False, default="pending", index=True)
 
 
 class AutoTrade(Base):
@@ -117,6 +123,25 @@ class AutoTrade(Base):
     status = Column(String(16), nullable=False, default="submitted", index=True)
     pnl_amount = Column(Float, nullable=True)
     closed_at = Column(DateTime, nullable=True)
+    error_message = Column(String(255), nullable=True)
+
+
+class BinomoTrade(Base):
+    __tablename__ = "binomo_trades"
+
+    id = Column(Integer, primary_key=True, index=True)
+    asset = Column(String, nullable=False, index=True)  # Binomo asset name (data/binomo_asset_map.json)
+    pair = Column(String, nullable=True, index=True)  # originating cTrader pair, if any
+    direction = Column(String(8), nullable=False)  # up | down
+    amount = Column(Float, nullable=False)  # stake, account currency
+    expiry_seconds = Column(Integer, nullable=False)
+    entry_ts = Column(DateTime, server_default=func.now(), nullable=False, index=True)
+    account_mode = Column(String(8), nullable=False, index=True)  # demo | live
+    # pending -> win | loss | error
+    result = Column(String(16), nullable=False, default="pending", index=True)
+    payout_amount = Column(Float, nullable=True)  # net profit/loss once resolved
+    resolved_at = Column(DateTime, nullable=True)
+    signal_outcome_id = Column(Integer, nullable=True, index=True)
     error_message = Column(String(255), nullable=True)
 
 
@@ -333,6 +358,7 @@ def initialize_database():
     try:
         Base.metadata.create_all(bind=engine)
         _ensure_user_columns()
+        _ensure_signal_outcome_columns()
         logger.info("Database initialization complete.")
     except Exception as e:
         logger.error(f"Error initializing database: {e}", exc_info=True)
@@ -363,6 +389,36 @@ def _ensure_user_columns() -> None:
         logger.info("Database users table migrated: %s", ", ".join(statements))
     except Exception:
         logger.exception("Could not ensure users table columns")
+
+
+def _ensure_signal_outcome_columns() -> None:
+    """Adds the horizon-based tracking columns to a signal_outcomes table
+    created by an earlier (TP/SL-based) version of this model. Additive
+    only - never drops the legacy tp_price/sl_price/pnl_pips columns, so
+    old rows and old code paths keep working."""
+    try:
+        inspector = inspect(engine)
+        if "signal_outcomes" not in inspector.get_table_names():
+            return
+
+        existing = {column["name"] for column in inspector.get_columns("signal_outcomes")}
+        statements = []
+
+        if "horizon_seconds" not in existing:
+            statements.append("ALTER TABLE signal_outcomes ADD COLUMN horizon_seconds INTEGER NULL")
+        if "exit_price" not in existing:
+            statements.append("ALTER TABLE signal_outcomes ADD COLUMN exit_price FLOAT NULL")
+
+        if not statements:
+            return
+
+        with engine.begin() as conn:
+            for statement in statements:
+                conn.execute(text(statement))
+
+        logger.info("Database signal_outcomes table migrated: %s", ", ".join(statements))
+    except Exception:
+        logger.exception("Could not ensure signal_outcomes table columns")
 
 
 def _set_runtime_setting(session, key: str, value: str | None) -> None:
@@ -1333,8 +1389,7 @@ def create_signal_outcome(
     verdict: str,
     score: int | float | None,
     entry_price: float,
-    tp_price: float | None,
-    sl_price: float | None,
+    horizon_seconds: int,
 ) -> int | None:
     try:
         with session_scope() as session:
@@ -1348,8 +1403,7 @@ def create_signal_outcome(
                 verdict=(verdict or "").strip().upper(),
                 score=int(score) if isinstance(score, (int, float)) else None,
                 entry_price=float(entry_price),
-                tp_price=float(tp_price) if tp_price is not None else None,
-                sl_price=float(sl_price) if sl_price is not None else None,
+                horizon_seconds=int(horizon_seconds),
                 outcome="pending",
             )
             session.add(row)
@@ -1361,6 +1415,10 @@ def create_signal_outcome(
 
 
 def get_pending_signal_outcomes(limit: int = 500) -> list[dict]:
+    """Only returns horizon-based (new-style) pending rows. Legacy TP/SL
+    rows from the previous tracking generation (horizon_seconds IS NULL)
+    are left untouched — nothing resolves them anymore, but they're
+    harmless leftover history."""
     limit = max(1, min(int(limit or 500), 2000))
 
     try:
@@ -1371,6 +1429,7 @@ def get_pending_signal_outcomes(limit: int = 500) -> list[dict]:
             rows = (
                 session.query(SignalOutcome)
                 .filter(SignalOutcome.outcome == "pending")
+                .filter(SignalOutcome.horizon_seconds.isnot(None))
                 .order_by(SignalOutcome.entry_ts.asc())
                 .limit(limit)
                 .all()
@@ -1382,8 +1441,7 @@ def get_pending_signal_outcomes(limit: int = 500) -> list[dict]:
                     "timeframe": row.timeframe,
                     "verdict": row.verdict,
                     "entry_price": row.entry_price,
-                    "tp_price": row.tp_price,
-                    "sl_price": row.sl_price,
+                    "horizon_seconds": row.horizon_seconds,
                     "entry_ts": row.entry_ts,
                 }
                 for row in rows
@@ -1393,7 +1451,7 @@ def get_pending_signal_outcomes(limit: int = 500) -> list[dict]:
         return []
 
 
-def resolve_signal_outcome(outcome_id: int, *, outcome: str, pnl_pips: float | None) -> bool:
+def resolve_signal_outcome(outcome_id: int, *, outcome: str, exit_price: float | None) -> bool:
     try:
         with session_scope() as session:
             if session is None:
@@ -1404,7 +1462,7 @@ def resolve_signal_outcome(outcome_id: int, *, outcome: str, pnl_pips: float | N
                 return False
 
             row.outcome = outcome
-            row.pnl_pips = pnl_pips
+            row.exit_price = exit_price
             row.resolved_at = _utcnow()
             return True
     except SQLAlchemyError:
@@ -1412,11 +1470,26 @@ def resolve_signal_outcome(outcome_id: int, *, outcome: str, pnl_pips: float | N
         return False
 
 
+def _row_is_correct_direction(row) -> bool:
+    return (row.verdict == "BUY" and row.outcome == "up") or (row.verdict == "SELL" and row.outcome == "down")
+
+
+def _row_is_wrong_direction(row) -> bool:
+    return (row.verdict == "BUY" and row.outcome == "down") or (row.verdict == "SELL" and row.outcome == "up")
+
+
 def _aggregate_signal_outcomes(rows: list) -> dict:
-    wins = sum(1 for r in rows if r.outcome == "tp")
-    losses = sum(1 for r in rows if r.outcome == "sl")
-    timeouts = sum(1 for r in rows if r.outcome == "timeout")
-    resolved = wins + losses + timeouts
+    """Binary-option-style aggregation: a 'win' is price moving in the
+    signal's predicted direction over its horizon, a 'loss' is the
+    opposite, 'flat' means the move was inside the noise threshold
+    (excluded from win_rate, like a push). Legacy tp/sl/timeout rows from
+    the previous tracking generation are counted as resolved-but-excluded
+    so they don't skew win_rate."""
+    wins = sum(1 for r in rows if _row_is_correct_direction(r))
+    losses = sum(1 for r in rows if _row_is_wrong_direction(r))
+    flats = sum(1 for r in rows if r.outcome == "flat")
+    legacy = sum(1 for r in rows if r.outcome in ("tp", "sl", "timeout"))
+    resolved = wins + losses + flats + legacy
     decided = wins + losses
     return {
         "total": len(rows),
@@ -1424,7 +1497,7 @@ def _aggregate_signal_outcomes(rows: list) -> dict:
         "pending": len(rows) - resolved,
         "wins": wins,
         "losses": losses,
-        "timeouts": timeouts,
+        "flats": flats,
         "win_rate": round(100.0 * wins / decided, 1) if decided else None,
     }
 
@@ -1485,7 +1558,7 @@ def get_signal_outcome_score_breakdown(days: int = 30, bucket_size: int = 5) -> 
             rows = (
                 session.query(SignalOutcome)
                 .filter(SignalOutcome.entry_ts >= since)
-                .filter(SignalOutcome.outcome.in_(("tp", "sl")))
+                .filter(SignalOutcome.outcome.in_(("up", "down")))
                 .filter(SignalOutcome.score.isnot(None))
                 .all()
             )
@@ -1716,6 +1789,277 @@ def get_daily_auto_trade_pnl(account_mode: str) -> float:
     except SQLAlchemyError:
         logger.exception("Error computing daily auto trade pnl")
         return 0.0
+
+
+# ----------------------------------------------------------------------
+# Binomo executor (Part 3)
+# ----------------------------------------------------------------------
+
+
+def _binomo_trade_to_dict(row: "BinomoTrade") -> dict:
+    return {
+        "id": row.id,
+        "asset": row.asset,
+        "pair": row.pair,
+        "direction": row.direction,
+        "amount": row.amount,
+        "expiry_seconds": row.expiry_seconds,
+        "entry_ts": row.entry_ts,
+        "account_mode": row.account_mode,
+        "result": row.result,
+        "payout_amount": row.payout_amount,
+        "resolved_at": row.resolved_at,
+        "signal_outcome_id": row.signal_outcome_id,
+        "error_message": row.error_message,
+    }
+
+
+def create_binomo_trade(
+    *,
+    asset: str,
+    pair: str | None,
+    direction: str,
+    amount: float,
+    expiry_seconds: int,
+    account_mode: str,
+    signal_outcome_id: int | None = None,
+) -> int | None:
+    try:
+        with session_scope() as session:
+            if session is None:
+                logger.warning("Binomo trade skipped: no database engine")
+                return None
+
+            row = BinomoTrade(
+                asset=(asset or "").strip(),
+                pair=(pair or "").strip().upper() or None,
+                direction=(direction or "").strip().lower(),
+                amount=float(amount),
+                expiry_seconds=int(expiry_seconds),
+                account_mode=(account_mode or "demo").strip().lower(),
+                result="pending",
+                signal_outcome_id=signal_outcome_id,
+            )
+            session.add(row)
+            session.flush()
+            return row.id
+    except SQLAlchemyError:
+        logger.exception("Error creating binomo trade for asset=%s", asset)
+        return None
+
+
+def get_binomo_trade(trade_id: int) -> dict | None:
+    try:
+        with get_db() as session:
+            if session is None:
+                return None
+            row = session.query(BinomoTrade).filter(BinomoTrade.id == trade_id).first()
+            return _binomo_trade_to_dict(row) if row else None
+    except SQLAlchemyError:
+        logger.exception("Error loading binomo trade id=%s", trade_id)
+        return None
+
+
+def get_pending_binomo_trades(account_mode: str, limit: int = 200) -> list[dict]:
+    limit = max(1, min(int(limit or 200), 1000))
+
+    try:
+        with get_db() as session:
+            if session is None:
+                return []
+
+            rows = (
+                session.query(BinomoTrade)
+                .filter(BinomoTrade.account_mode == (account_mode or "demo").lower())
+                .filter(BinomoTrade.result == "pending")
+                .order_by(BinomoTrade.entry_ts.asc())
+                .limit(limit)
+                .all()
+            )
+            return [_binomo_trade_to_dict(row) for row in rows]
+    except SQLAlchemyError:
+        logger.exception("Error loading pending binomo trades")
+        return []
+
+
+def resolve_binomo_trade(trade_id: int, *, result: str, payout_amount: float | None) -> bool:
+    try:
+        with session_scope() as session:
+            if session is None:
+                return False
+
+            row = session.query(BinomoTrade).filter(BinomoTrade.id == trade_id).first()
+            if row is None or row.result != "pending":
+                return False
+
+            row.result = result
+            row.payout_amount = payout_amount
+            row.resolved_at = _utcnow()
+            return True
+    except SQLAlchemyError:
+        logger.exception("Error resolving binomo trade id=%s", trade_id)
+        return False
+
+
+def mark_binomo_trade_error(trade_id: int, error_message: str) -> bool:
+    try:
+        with session_scope() as session:
+            if session is None:
+                return False
+
+            row = session.query(BinomoTrade).filter(BinomoTrade.id == trade_id).first()
+            if row is None:
+                return False
+
+            row.result = "error"
+            row.error_message = (error_message or "")[:255]
+            row.resolved_at = _utcnow()
+            return True
+    except SQLAlchemyError:
+        logger.exception("Error marking binomo trade as error id=%s", trade_id)
+        return False
+
+
+def count_binomo_trades_today(account_mode: str) -> int:
+    day_start = _utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+
+    try:
+        with get_db() as session:
+            if session is None:
+                return 0
+            return (
+                session.query(BinomoTrade)
+                .filter(BinomoTrade.account_mode == (account_mode or "demo").lower())
+                .filter(BinomoTrade.entry_ts >= day_start)
+                .count()
+            )
+    except SQLAlchemyError:
+        logger.exception("Error counting today's binomo trades")
+        return 0
+
+
+def get_consecutive_binomo_losses(account_mode: str, limit: int = 50) -> int:
+    """Counts losses in the most recent resolved trades, stopping at the
+    first non-loss (win) result. Used for the MAX_CONSECUTIVE_LOSSES kill
+    switch - 'error' results don't count as losses or reset the streak,
+    they're skipped (a broken selector isn't a trading loss)."""
+    try:
+        with get_db() as session:
+            if session is None:
+                return 0
+
+            rows = (
+                session.query(BinomoTrade)
+                .filter(BinomoTrade.account_mode == (account_mode or "demo").lower())
+                .filter(BinomoTrade.result.in_(("win", "loss")))
+                .order_by(BinomoTrade.resolved_at.desc())
+                .limit(max(1, min(int(limit or 50), 200)))
+                .all()
+            )
+    except SQLAlchemyError:
+        logger.exception("Error computing consecutive binomo losses")
+        return 0
+
+    streak = 0
+    for row in rows:
+        if row.result == "loss":
+            streak += 1
+        else:
+            break
+    return streak
+
+
+def get_daily_binomo_pnl(account_mode: str) -> float:
+    day_start = _utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+
+    try:
+        with get_db() as session:
+            if session is None:
+                return 0.0
+
+            rows = (
+                session.query(BinomoTrade)
+                .filter(BinomoTrade.account_mode == (account_mode or "demo").lower())
+                .filter(BinomoTrade.resolved_at.isnot(None))
+                .filter(BinomoTrade.resolved_at >= day_start)
+                .filter(BinomoTrade.payout_amount.isnot(None))
+                .all()
+            )
+            return sum(row.payout_amount for row in rows)
+    except SQLAlchemyError:
+        logger.exception("Error computing daily binomo pnl")
+        return 0.0
+
+
+# ----------------------------------------------------------------------
+# Binomo executor runtime state (shared DB flags — the executor runs as a
+# separate LOCAL process, so /binomo_on /binomo_off /binomo_status in
+# Telegram (cloud process) can't touch any in-memory flag directly; both
+# sides read/write these AppRuntimeSetting rows instead, reusing the same
+# key-value table already used to persist cTrader tokens.)
+# ----------------------------------------------------------------------
+
+_BINOMO_ENABLED_KEY = "binomo_runtime_enabled"
+_BINOMO_KILL_SWITCH_KEY = "binomo_kill_switch_tripped"
+_BINOMO_KILL_SWITCH_REASON_KEY = "binomo_kill_switch_reason"
+
+
+def get_binomo_runtime_state() -> dict:
+    try:
+        with get_db() as session:
+            if session is None:
+                return {"runtime_enabled": True, "kill_switch_tripped": False, "kill_switch_reason": None}
+
+            enabled_raw = _get_runtime_setting(session, _BINOMO_ENABLED_KEY)
+            tripped_raw = _get_runtime_setting(session, _BINOMO_KILL_SWITCH_KEY)
+            reason = _get_runtime_setting(session, _BINOMO_KILL_SWITCH_REASON_KEY)
+
+            return {
+                "runtime_enabled": enabled_raw != "false",  # unset -> enabled by default
+                "kill_switch_tripped": tripped_raw == "true",
+                "kill_switch_reason": reason,
+            }
+    except SQLAlchemyError:
+        logger.exception("Error loading binomo runtime state")
+        return {"runtime_enabled": True, "kill_switch_tripped": False, "kill_switch_reason": None}
+
+
+def set_binomo_runtime_enabled(enabled: bool) -> bool:
+    try:
+        with session_scope() as session:
+            if session is None:
+                return False
+            _set_runtime_setting(session, _BINOMO_ENABLED_KEY, "true" if enabled else "false")
+            return True
+    except SQLAlchemyError:
+        logger.exception("Error setting binomo runtime enabled=%s", enabled)
+        return False
+
+
+def trip_binomo_kill_switch(reason: str) -> bool:
+    try:
+        with session_scope() as session:
+            if session is None:
+                return False
+            _set_runtime_setting(session, _BINOMO_KILL_SWITCH_KEY, "true")
+            _set_runtime_setting(session, _BINOMO_KILL_SWITCH_REASON_KEY, (reason or "")[:255])
+            return True
+    except SQLAlchemyError:
+        logger.exception("Error tripping binomo kill switch")
+        return False
+
+
+def clear_binomo_kill_switch() -> bool:
+    try:
+        with session_scope() as session:
+            if session is None:
+                return False
+            _set_runtime_setting(session, _BINOMO_KILL_SWITCH_KEY, "false")
+            _set_runtime_setting(session, _BINOMO_KILL_SWITCH_REASON_KEY, None)
+            return True
+    except SQLAlchemyError:
+        logger.exception("Error clearing binomo kill switch")
+        return False
 
 
 initialize_database()

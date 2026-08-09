@@ -109,9 +109,9 @@ const APP_I18N = {
         winrateTotal: "Signals",
         winrateResolved: "closed",
         winratePending: "pending",
-        winrateWins: "TP",
-        winrateLosses: "SL",
-        winrateTimeouts: "Timeout",
+        winrateWins: "Up",
+        winrateLosses: "Down",
+        winrateTimeouts: "Flat",
         winrateByPair: "Top pairs (30d)",
         winrateEmpty: "Not enough resolved signals yet to show win-rate.",
         winrateLoading: "⏳ Loading...",
@@ -164,9 +164,9 @@ const APP_I18N = {
         winrateTotal: "Сигналів",
         winrateResolved: "закрито",
         winratePending: "очікує",
-        winrateWins: "TP",
-        winrateLosses: "SL",
-        winrateTimeouts: "Timeout",
+        winrateWins: "Вгору",
+        winrateLosses: "Вниз",
+        winrateTimeouts: "Флет",
         winrateByPair: "Топ пар (30д)",
         winrateEmpty: "Ще недостатньо закритих сигналів для статистики.",
         winrateLoading: "⏳ Завантаження...",
@@ -219,9 +219,9 @@ const APP_I18N = {
         winrateTotal: "Señales",
         winrateResolved: "cerradas",
         winratePending: "pendientes",
-        winrateWins: "TP",
-        winrateLosses: "SL",
-        winrateTimeouts: "Timeout",
+        winrateWins: "Sube",
+        winrateLosses: "Baja",
+        winrateTimeouts: "Plano",
         winrateByPair: "Top pares (30d)",
         winrateEmpty: "Aún no hay suficientes señales cerradas para mostrar el win-rate.",
         winrateLoading: "⏳ Cargando...",
@@ -274,9 +274,9 @@ const APP_I18N = {
         winrateTotal: "Signale",
         winrateResolved: "geschlossen",
         winratePending: "offen",
-        winrateWins: "TP",
-        winrateLosses: "SL",
-        winrateTimeouts: "Timeout",
+        winrateWins: "Auf",
+        winrateLosses: "Ab",
+        winrateTimeouts: "Flach",
         winrateByPair: "Top-Paare (30T)",
         winrateEmpty: "Noch nicht genug geschlossene Signale für eine Trefferquote.",
         winrateLoading: "⏳ Wird geladen...",
@@ -329,9 +329,9 @@ const APP_I18N = {
         winrateTotal: "Сигналов",
         winrateResolved: "закрыто",
         winratePending: "ожидает",
-        winrateWins: "TP",
-        winrateLosses: "SL",
-        winrateTimeouts: "Timeout",
+        winrateWins: "Вверх",
+        winrateLosses: "Вниз",
+        winrateTimeouts: "Флэт",
         winrateByPair: "Топ пар (30д)",
         winrateEmpty: "Пока недостаточно закрытых сигналов для статистики.",
         winrateLoading: "⏳ Загрузка...",
@@ -1112,7 +1112,7 @@ function renderWinratePeriodSummary(label, stats) {
                     (${stats.resolved ?? 0} ${escapeHtml(tr("winrateResolved"))}, ${stats.pending ?? 0} ${escapeHtml(tr("winratePending"))})<br>
                     ${escapeHtml(tr("winrateWins"))}: ${stats.wins ?? 0} ·
                     ${escapeHtml(tr("winrateLosses"))}: ${stats.losses ?? 0} ·
-                    ${escapeHtml(tr("winrateTimeouts"))}: ${stats.timeouts ?? 0}
+                    ${escapeHtml(tr("winrateTimeouts"))}: ${stats.flats ?? 0}
                 </span>
             </div>
         </div>

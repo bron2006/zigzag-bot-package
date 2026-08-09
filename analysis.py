@@ -21,6 +21,8 @@ from config import (
     MARKET_DATA_CACHE_TTL_SECONDS,
     MARKET_DATA_MAX_CONCURRENT_REQUESTS,
     MARKET_DATA_REQUEST_INTERVAL_MS,
+    ML_BUY_SCORE_THRESHOLD,
+    ML_SELL_SCORE_THRESHOLD,
     broker_symbol_key,
 )
 from ctrader_open_api.messages.OpenApiMessages_pb2 import (
@@ -225,7 +227,7 @@ def _run_technical_analysis(df: pd.DataFrame) -> Tuple[int, str, str]:
         scaled = ml_models.SCALER.transform(features)
         prob = ml_models.LGBM_MODEL.predict_proba(scaled)[0][1]
         score = int(prob * 100)
-        verdict = "BUY" if score > 75 else "SELL" if score < 25 else "NEUTRAL"
+        verdict = "BUY" if score > ML_BUY_SCORE_THRESHOLD else "SELL" if score < ML_SELL_SCORE_THRESHOLD else "NEUTRAL"
         return score, verdict, ""
     except Exception:
         logger.exception("ML prediction failed")

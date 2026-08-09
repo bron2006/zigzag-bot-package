@@ -19,7 +19,18 @@ import autotrader
 import db
 import crypto_pay
 from analysis import get_api_detailed_signal_data
-from config import COMMODITIES, CRYPTO_PAIRS, FOREX_SESSIONS, STOCK_TICKERS
+from config import (
+    BINOMO_ACCOUNT_MODE,
+    BINOMO_EXECUTOR_ENABLED,
+    BINOMO_MAX_CONSECUTIVE_LOSSES,
+    BINOMO_MAX_DAILY_LOSS_PERCENT,
+    BINOMO_MAX_TRADES_PER_DAY,
+    BINOMO_STAKE_PERCENT,
+    COMMODITIES,
+    CRYPTO_PAIRS,
+    FOREX_SESSIONS,
+    STOCK_TICKERS,
+)
 from locales import (
     LANGUAGE_NAMES,
     SUPPORTED_LANGS,
@@ -452,7 +463,7 @@ def _format_winrate_period(label: str, stats: dict) -> list[str]:
         f"<b>{label}</b>",
         f"Сигналів: {stats.get('total', 0)} "
         f"(закрито: {stats.get('resolved', 0)}, в очікуванні: {stats.get('pending', 0)})",
-        f"TP: {stats.get('wins', 0)} · SL: {stats.get('losses', 0)} · Timeout: {stats.get('timeouts', 0)}",
+        f"Вгору: {stats.get('wins', 0)} · Вниз: {stats.get('losses', 0)} · Флет: {stats.get('flats', 0)}",
         f"Win-rate: {win_rate_str}",
         "",
     ]
@@ -553,6 +564,80 @@ def autotrade_off_command(update, context):
 
     _, message = autotrader.disable()
     update.message.reply_text(f"{message}\n\n{_format_autotrade_status(autotrader.get_status())}", parse_mode="HTML")
+
+
+def _format_binomo_status() -> str:
+    """binomo_executor.py runs as a separate local process, so this reads
+    the shared DB-backed flags (db.get_binomo_runtime_state) rather than
+    any in-memory state — this process never imports binomo_executor.py
+    (it needs Playwright, which isn't installed here on purpose)."""
+    state = db.get_binomo_runtime_state()
+    active = BINOMO_EXECUTOR_ENABLED and state["runtime_enabled"] and not state["kill_switch_tripped"]
+    active_label = "✅ активний" if active else "⛔ неактивний"
+    kill_switch = f"🛑 СПРАЦЮВАВ ({state['kill_switch_reason']})" if state["kill_switch_tripped"] else "гаразд"
+
+    trades_today = db.count_binomo_trades_today(BINOMO_ACCOUNT_MODE)
+    losses = db.get_consecutive_binomo_losses(BINOMO_ACCOUNT_MODE)
+    daily_pnl = db.get_daily_binomo_pnl(BINOMO_ACCOUNT_MODE)
+
+    return "\n".join(
+        [
+            "🎯 <b>Binomo executor</b>",
+            f"Статус: {active_label}",
+            f"BINOMO_EXECUTOR_ENABLED (конфіг локального процесу): {BINOMO_EXECUTOR_ENABLED}",
+            f"Runtime увімкнено (спільний прапорець у БД): {state['runtime_enabled']}",
+            f"Kill switch: {kill_switch}",
+            f"Режим рахунку: <b>{BINOMO_ACCOUNT_MODE}</b>",
+            f"Угод сьогодні: {trades_today} / {BINOMO_MAX_TRADES_PER_DAY}",
+            f"Збитків поспіль: {losses} / {BINOMO_MAX_CONSECUTIVE_LOSSES}",
+            f"Ставка на угоду: {BINOMO_STAKE_PERCENT}% від балансу",
+            f"Ліміт денного збитку: {BINOMO_MAX_DAILY_LOSS_PERCENT}%",
+            f"Денний payout: {daily_pnl:.2f}",
+            "",
+            "<i>Примітка: BINOMO_EXECUTOR_ENABLED вмикається лише локально в .env "
+            "виконавця — цю команду видно, але вона не може ввімкнути виконавець, "
+            "якщо BINOMO_EXECUTOR_ENABLED=false на самому ноуті.</i>",
+        ]
+    )
+
+
+def binomo_status_command(update, context):
+    lang = _lang(update)
+    user_id = _get_user_id(update)
+
+    if not db.is_admin_user(user_id):
+        update.message.reply_text(t("unauthorized", lang))
+        return
+
+    update.message.reply_text(_format_binomo_status(), parse_mode="HTML", reply_markup=get_reply_keyboard(lang))
+
+
+def binomo_on_command(update, context):
+    lang = _lang(update)
+    user_id = _get_user_id(update)
+
+    if not db.is_admin_user(user_id):
+        update.message.reply_text(t("unauthorized", lang))
+        return
+
+    db.set_binomo_runtime_enabled(True)
+    db.clear_binomo_kill_switch()
+    update.message.reply_text(
+        f"Runtime-прапорець увімкнено, kill switch скинуто.\n\n{_format_binomo_status()}",
+        parse_mode="HTML",
+    )
+
+
+def binomo_off_command(update, context):
+    lang = _lang(update)
+    user_id = _get_user_id(update)
+
+    if not db.is_admin_user(user_id):
+        update.message.reply_text(t("unauthorized", lang))
+        return
+
+    db.set_binomo_runtime_enabled(False)
+    update.message.reply_text(f"Runtime-прапорець вимкнено.\n\n{_format_binomo_status()}", parse_mode="HTML")
 
 
 def live_command(update, context):

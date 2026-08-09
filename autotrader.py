@@ -27,7 +27,6 @@ from twisted.internet.threads import blockingCallFromThread, deferToThreadPool
 
 import ctrader
 import db
-import signal_tracking
 from config import (
     AUTOTRADE_ACCOUNT_MODE,
     AUTOTRADE_BALANCE_CACHE_SECONDS,
@@ -35,6 +34,8 @@ from config import (
     MAX_DAILY_LOSS_PERCENT,
     MAX_OPEN_POSITIONS,
     MAX_RISK_PERCENT_PER_TRADE,
+    SIGNAL_SL_ATR_MULTIPLIER,
+    SIGNAL_TP_ATR_MULTIPLIER,
 )
 from ctrader_open_api.messages.OpenApiMessages_pb2 import (
     ProtoOAErrorRes,
@@ -192,6 +193,26 @@ def _get_account_balance() -> float | None:
 # ----------------------------------------------------------------------
 
 
+def _compute_tp_sl(verdict: str, entry_price: float, atr: float) -> tuple[float, float] | None:
+    """Sizes TP/SL for a real cTrader order from ATR. Deliberately
+    self-contained (not shared with signal_tracking.py, which tracks
+    horizon-based binary-option-style outcomes and has no notion of
+    TP/SL) — this executor and the signal layer stay decoupled."""
+    if not isinstance(entry_price, (int, float)) or not isinstance(atr, (int, float)):
+        return None
+    if entry_price <= 0 or atr <= 0:
+        return None
+
+    tp_distance = atr * SIGNAL_TP_ATR_MULTIPLIER
+    sl_distance = atr * SIGNAL_SL_ATR_MULTIPLIER
+
+    if verdict == "BUY":
+        return entry_price + tp_distance, entry_price - sl_distance
+    if verdict == "SELL":
+        return entry_price - tp_distance, entry_price + sl_distance
+    return None
+
+
 def _normalize_volume(pair: str, raw_units: float) -> int | None:
     symbol = ctrader._resolve_broker_symbol(pair)
     if symbol is None or raw_units <= 0:
@@ -234,7 +255,7 @@ def _prepare_and_check_risk(pair: str, verdict: str, entry_price: float, atr: fl
         logger.info("Autotrader: MAX_OPEN_POSITIONS (%s) reached, skipping %s", MAX_OPEN_POSITIONS, pair)
         return None
 
-    levels = signal_tracking.compute_tp_sl(verdict, entry_price, atr)
+    levels = _compute_tp_sl(verdict, entry_price, atr)
     if levels is None:
         return None
     tp_price, sl_price = levels

@@ -1,0 +1,15 @@
+# Dependencies for the LOCAL Binomo executor only (binomo_executor.py).
+# Deliberately kept out of requirements.txt: this is meant to run on your
+# own machine (see the module docstring for why), not get bundled into the
+# Fly.io image that serves signals/the Web App/the Telegram bot.
+#
+# Install with:
+#   pip install -r requirements.txt -r requirements-executor.txt
+#   playwright install chromium
+
+playwright==1.47.0
+
+# sseclient-py lets binomo_executor.py consume the existing
+# /api/signal-stream SSE endpoint (the same channel the Web App uses) as a
+# plain Python client, without pulling in a browser or JS runtime.
+sseclient-py==1.8.0

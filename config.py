@@ -73,6 +73,14 @@ if APP_MODE not in {"full", "light"}:
 ANALYSIS_CONFIG = {"min_bars_for_analysis": 50}
 
 IDEAL_ENTRY_THRESHOLD = _env_int("IDEAL_ENTRY_THRESHOLD", 78)
+
+# ML model BUY/SELL/NEUTRAL split (analysis.py _run_technical_analysis).
+# score > ML_BUY_SCORE_THRESHOLD -> BUY, score < ML_SELL_SCORE_THRESHOLD ->
+# SELL, otherwise NEUTRAL. This sits below IDEAL_ENTRY_THRESHOLD, which is
+# the separate, higher bar the scanner uses to decide whether to actually
+# fire a signal.
+ML_BUY_SCORE_THRESHOLD = _env_int("ML_BUY_SCORE_THRESHOLD", 75) or 75
+ML_SELL_SCORE_THRESHOLD = _env_int("ML_SELL_SCORE_THRESHOLD", 25) or 25
 SCANNER_TIMEFRAME = _env_str("SCANNER_TIMEFRAME", "1m") or "1m"
 SCANNER_COOLDOWN_SECONDS = _env_int("SCANNER_COOLDOWN_SECONDS", 300)
 SCANNER_BATCH_SIZE = _env_int("SCANNER_BATCH_SIZE", 8) or 8
@@ -84,13 +92,18 @@ MARKET_DATA_REQUEST_INTERVAL_MS = _env_int("MARKET_DATA_REQUEST_INTERVAL_MS", 40
 MARKET_DATA_MAX_CONCURRENT_REQUESTS = _env_int("MARKET_DATA_MAX_CONCURRENT_REQUESTS", 1) or 1
 MIN_ATR_PERCENTAGE = _env_float("MIN_ATR_PERCENTAGE", 0.05)
 
-# Signal outcome tracking (Part 1): TP/SL distance as ATR multiples, how long
-# a pending signal is tracked before being closed as "timeout", and how
-# often the resolver loop checks pending signals against live prices.
+# Signal outcome tracking (Part 1, legacy TP/SL fields — kept only so old
+# rows/paths don't break; no longer used to size new tracking).
 SIGNAL_TP_ATR_MULTIPLIER = _env_float("SIGNAL_TP_ATR_MULTIPLIER", 1.5)
 SIGNAL_SL_ATR_MULTIPLIER = _env_float("SIGNAL_SL_ATR_MULTIPLIER", 1.0)
 SIGNAL_OUTCOME_TIMEOUT_HOURS = _env_float("SIGNAL_OUTCOME_TIMEOUT_HOURS", 4.0)
-SIGNAL_OUTCOME_CHECK_INTERVAL_MINUTES = _env_float("SIGNAL_OUTCOME_CHECK_INTERVAL_MINUTES", 5.0)
+
+# Signal outcome tracking (binary-option style): how often the resolver
+# loop checks pending signals whose horizon has elapsed, and how big a
+# price move (as % of entry price) counts as noise ("flat") rather than a
+# real up/down move.
+SIGNAL_OUTCOME_CHECK_INTERVAL_MINUTES = _env_float("SIGNAL_OUTCOME_CHECK_INTERVAL_MINUTES", 1.0)
+SIGNAL_OUTCOME_FLAT_THRESHOLD_PERCENT = _env_float("SIGNAL_OUTCOME_FLAT_THRESHOLD_PERCENT", 0.02)
 
 # Part 2: adaptive threshold recommendations. This ONLY produces a
 # notify_admin suggestion once a day — it never changes IDEAL_ENTRY_THRESHOLD
@@ -122,6 +135,42 @@ MAX_RISK_PERCENT_PER_TRADE = _env_float("MAX_RISK_PERCENT_PER_TRADE", 1.0)
 MAX_OPEN_POSITIONS = _env_int("MAX_OPEN_POSITIONS", 3) or 3
 MAX_DAILY_LOSS_PERCENT = _env_float("MAX_DAILY_LOSS_PERCENT", 5.0)
 AUTOTRADE_BALANCE_CACHE_SECONDS = _env_float("AUTOTRADE_BALANCE_CACHE_SECONDS", 30.0)
+
+# Part 3: Binomo binary-option executor (browser automation, Playwright).
+# Disabled by default. Meant to run LOCALLY (see binomo_executor.py docstring
+# and README) — not on Fly.io. BINOMO_ACCOUNT_MODE has no runtime toggle
+# anywhere in this codebase; switching to 'live' is a manual env edit only.
+BINOMO_EXECUTOR_ENABLED = _env_bool("BINOMO_EXECUTOR_ENABLED", False)
+BINOMO_ACCOUNT_MODE = (_env_str("BINOMO_ACCOUNT_MODE", "demo") or "demo").strip().lower()
+if BINOMO_ACCOUNT_MODE not in {"demo", "live"}:
+    logger.warning("Unsupported BINOMO_ACCOUNT_MODE=%r. Falling back to 'demo'.", BINOMO_ACCOUNT_MODE)
+    BINOMO_ACCOUNT_MODE = "demo"
+
+if BINOMO_EXECUTOR_ENABLED and BINOMO_ACCOUNT_MODE == "live":
+    logger.critical(
+        "BINOMO_EXECUTOR_ENABLED=true with BINOMO_ACCOUNT_MODE=live — the "
+        "executor will place REAL binary-option trades with REAL money on Binomo."
+    )
+elif BINOMO_EXECUTOR_ENABLED:
+    logger.warning("BINOMO_EXECUTOR_ENABLED=true (mode=demo) — executor will place demo-account trades.")
+
+# Fixed stake as % of account balance — no martingale/progression, ever.
+BINOMO_STAKE_PERCENT = _env_float("BINOMO_STAKE_PERCENT", 1.0)
+BINOMO_MAX_TRADES_PER_DAY = _env_int("BINOMO_MAX_TRADES_PER_DAY", 10) or 10
+# Kill switch: stop and require /binomo_on after this many losses in a row.
+BINOMO_MAX_CONSECUTIVE_LOSSES = _env_int("BINOMO_MAX_CONSECUTIVE_LOSSES", 4) or 4
+BINOMO_MAX_DAILY_LOSS_PERCENT = _env_float("BINOMO_MAX_DAILY_LOSS_PERCENT", 5.0)
+
+# Playwright session/login. Credentials are only used to (re)create
+# storage_state.json via the one-time manual login helper — never hardcoded,
+# never sent anywhere but binomo.com's own login form.
+BINOMO_EMAIL = _env_str("BINOMO_EMAIL")
+BINOMO_PASSWORD = _env_str("BINOMO_PASSWORD")
+BINOMO_STORAGE_STATE_PATH = _env_str("BINOMO_STORAGE_STATE_PATH", "storage_state.json") or "storage_state.json"
+# Headful by default: headless browsers are more readily fingerprinted by
+# anti-automation checks, and this is meant to run on a local machine anyway.
+BINOMO_HEADLESS = _env_bool("BINOMO_HEADLESS", False)
+BINOMO_ASSET_MAP_PATH = _env_str("BINOMO_ASSET_MAP_PATH", "data/binomo_asset_map.json") or "data/binomo_asset_map.json"
 
 
 def get_database_url() -> str | None:
