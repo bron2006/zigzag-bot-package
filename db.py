@@ -126,6 +126,25 @@ class AutoTrade(Base):
     error_message = Column(String(255), nullable=True)
 
 
+class BinomoTrade(Base):
+    __tablename__ = "binomo_trades"
+
+    id = Column(Integer, primary_key=True, index=True)
+    asset = Column(String, nullable=False, index=True)  # Binomo asset name (data/binomo_asset_map.json)
+    pair = Column(String, nullable=True, index=True)  # originating cTrader pair, if any
+    direction = Column(String(8), nullable=False)  # up | down
+    amount = Column(Float, nullable=False)  # stake, account currency
+    expiry_seconds = Column(Integer, nullable=False)
+    entry_ts = Column(DateTime, server_default=func.now(), nullable=False, index=True)
+    account_mode = Column(String(8), nullable=False, index=True)  # demo | live
+    # pending -> win | loss | error
+    result = Column(String(16), nullable=False, default="pending", index=True)
+    payout_amount = Column(Float, nullable=True)  # net profit/loss once resolved
+    resolved_at = Column(DateTime, nullable=True)
+    signal_outcome_id = Column(Integer, nullable=True, index=True)
+    error_message = Column(String(255), nullable=True)
+
+
 def _normalize_language(lang: str | None) -> str:
     value = (lang or "").split(",", 1)[0].split("-")[0].split("_")[0].lower()
     return value if value in {"en", "uk", "es", "de", "ru"} else "en"
@@ -1769,6 +1788,206 @@ def get_daily_auto_trade_pnl(account_mode: str) -> float:
             return sum(row.pnl_amount for row in rows)
     except SQLAlchemyError:
         logger.exception("Error computing daily auto trade pnl")
+        return 0.0
+
+
+# ----------------------------------------------------------------------
+# Binomo executor (Part 3)
+# ----------------------------------------------------------------------
+
+
+def _binomo_trade_to_dict(row: "BinomoTrade") -> dict:
+    return {
+        "id": row.id,
+        "asset": row.asset,
+        "pair": row.pair,
+        "direction": row.direction,
+        "amount": row.amount,
+        "expiry_seconds": row.expiry_seconds,
+        "entry_ts": row.entry_ts,
+        "account_mode": row.account_mode,
+        "result": row.result,
+        "payout_amount": row.payout_amount,
+        "resolved_at": row.resolved_at,
+        "signal_outcome_id": row.signal_outcome_id,
+        "error_message": row.error_message,
+    }
+
+
+def create_binomo_trade(
+    *,
+    asset: str,
+    pair: str | None,
+    direction: str,
+    amount: float,
+    expiry_seconds: int,
+    account_mode: str,
+    signal_outcome_id: int | None = None,
+) -> int | None:
+    try:
+        with session_scope() as session:
+            if session is None:
+                logger.warning("Binomo trade skipped: no database engine")
+                return None
+
+            row = BinomoTrade(
+                asset=(asset or "").strip(),
+                pair=(pair or "").strip().upper() or None,
+                direction=(direction or "").strip().lower(),
+                amount=float(amount),
+                expiry_seconds=int(expiry_seconds),
+                account_mode=(account_mode or "demo").strip().lower(),
+                result="pending",
+                signal_outcome_id=signal_outcome_id,
+            )
+            session.add(row)
+            session.flush()
+            return row.id
+    except SQLAlchemyError:
+        logger.exception("Error creating binomo trade for asset=%s", asset)
+        return None
+
+
+def get_binomo_trade(trade_id: int) -> dict | None:
+    try:
+        with get_db() as session:
+            if session is None:
+                return None
+            row = session.query(BinomoTrade).filter(BinomoTrade.id == trade_id).first()
+            return _binomo_trade_to_dict(row) if row else None
+    except SQLAlchemyError:
+        logger.exception("Error loading binomo trade id=%s", trade_id)
+        return None
+
+
+def get_pending_binomo_trades(account_mode: str, limit: int = 200) -> list[dict]:
+    limit = max(1, min(int(limit or 200), 1000))
+
+    try:
+        with get_db() as session:
+            if session is None:
+                return []
+
+            rows = (
+                session.query(BinomoTrade)
+                .filter(BinomoTrade.account_mode == (account_mode or "demo").lower())
+                .filter(BinomoTrade.result == "pending")
+                .order_by(BinomoTrade.entry_ts.asc())
+                .limit(limit)
+                .all()
+            )
+            return [_binomo_trade_to_dict(row) for row in rows]
+    except SQLAlchemyError:
+        logger.exception("Error loading pending binomo trades")
+        return []
+
+
+def resolve_binomo_trade(trade_id: int, *, result: str, payout_amount: float | None) -> bool:
+    try:
+        with session_scope() as session:
+            if session is None:
+                return False
+
+            row = session.query(BinomoTrade).filter(BinomoTrade.id == trade_id).first()
+            if row is None or row.result != "pending":
+                return False
+
+            row.result = result
+            row.payout_amount = payout_amount
+            row.resolved_at = _utcnow()
+            return True
+    except SQLAlchemyError:
+        logger.exception("Error resolving binomo trade id=%s", trade_id)
+        return False
+
+
+def mark_binomo_trade_error(trade_id: int, error_message: str) -> bool:
+    try:
+        with session_scope() as session:
+            if session is None:
+                return False
+
+            row = session.query(BinomoTrade).filter(BinomoTrade.id == trade_id).first()
+            if row is None:
+                return False
+
+            row.result = "error"
+            row.error_message = (error_message or "")[:255]
+            row.resolved_at = _utcnow()
+            return True
+    except SQLAlchemyError:
+        logger.exception("Error marking binomo trade as error id=%s", trade_id)
+        return False
+
+
+def count_binomo_trades_today(account_mode: str) -> int:
+    day_start = _utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+
+    try:
+        with get_db() as session:
+            if session is None:
+                return 0
+            return (
+                session.query(BinomoTrade)
+                .filter(BinomoTrade.account_mode == (account_mode or "demo").lower())
+                .filter(BinomoTrade.entry_ts >= day_start)
+                .count()
+            )
+    except SQLAlchemyError:
+        logger.exception("Error counting today's binomo trades")
+        return 0
+
+
+def get_consecutive_binomo_losses(account_mode: str, limit: int = 50) -> int:
+    """Counts losses in the most recent resolved trades, stopping at the
+    first non-loss (win) result. Used for the MAX_CONSECUTIVE_LOSSES kill
+    switch - 'error' results don't count as losses or reset the streak,
+    they're skipped (a broken selector isn't a trading loss)."""
+    try:
+        with get_db() as session:
+            if session is None:
+                return 0
+
+            rows = (
+                session.query(BinomoTrade)
+                .filter(BinomoTrade.account_mode == (account_mode or "demo").lower())
+                .filter(BinomoTrade.result.in_(("win", "loss")))
+                .order_by(BinomoTrade.resolved_at.desc())
+                .limit(max(1, min(int(limit or 50), 200)))
+                .all()
+            )
+    except SQLAlchemyError:
+        logger.exception("Error computing consecutive binomo losses")
+        return 0
+
+    streak = 0
+    for row in rows:
+        if row.result == "loss":
+            streak += 1
+        else:
+            break
+    return streak
+
+
+def get_daily_binomo_pnl(account_mode: str) -> float:
+    day_start = _utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+
+    try:
+        with get_db() as session:
+            if session is None:
+                return 0.0
+
+            rows = (
+                session.query(BinomoTrade)
+                .filter(BinomoTrade.account_mode == (account_mode or "demo").lower())
+                .filter(BinomoTrade.resolved_at.isnot(None))
+                .filter(BinomoTrade.resolved_at >= day_start)
+                .filter(BinomoTrade.payout_amount.isnot(None))
+                .all()
+            )
+            return sum(row.payout_amount for row in rows)
+    except SQLAlchemyError:
+        logger.exception("Error computing daily binomo pnl")
         return 0.0
 
 

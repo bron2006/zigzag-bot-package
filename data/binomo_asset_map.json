@@ -1,0 +1,20 @@
+{
+  "_meta": {
+    "description": "Maps cTrader pair keys (as used elsewhere in this project, e.g. config.broker_symbol_key output) to the exact asset name shown on the Binomo trading terminal. binomo_executor.py only trades pairs present in BOTH this map and the live cTrader symbol list - anything missing here is silently skipped, never guessed.",
+    "verified": false,
+    "verified_at": null,
+    "how_to_verify": "Log into the Binomo terminal yourself, open each asset, and copy its exact displayed name (and data-testid/aria-label from the DOM if available) into this file. Do this BEFORE running --correlation-check, since a wrong name here means the executor searches for an asset that doesn't exist and safely does nothing (see binomo_executor.py's 'don't guess a selector' rule) - better to fail closed, but you won't get any data until the names are right.",
+    "otc_warning": "Binomo often trades the same underlying pair under an OTC name on weekends/off-hours (e.g. 'EUR/USD OTC') on its own synthetic feed - this is a DIFFERENT price series from cTrader's. otc_name is tracked separately so correlation-check can flag OTC sessions instead of silently comparing two unrelated feeds."
+  },
+  "assets": {
+    "EURUSD": {"binomo_name": "EUR/USD", "otc_name": "EUR/USD OTC"},
+    "GBPUSD": {"binomo_name": "GBP/USD", "otc_name": "GBP/USD OTC"},
+    "USDJPY": {"binomo_name": "USD/JPY", "otc_name": "USD/JPY OTC"},
+    "AUDUSD": {"binomo_name": "AUD/USD", "otc_name": "AUD/USD OTC"},
+    "USDCAD": {"binomo_name": "USD/CAD", "otc_name": "USD/CAD OTC"},
+    "USDCHF": {"binomo_name": "USD/CHF", "otc_name": "USD/CHF OTC"},
+    "EURJPY": {"binomo_name": "EUR/JPY", "otc_name": "EUR/JPY OTC"},
+    "BTCUSD": {"binomo_name": "Bitcoin", "otc_name": null},
+    "ETHUSD": {"binomo_name": "Ethereum", "otc_name": null}
+  }
+}
