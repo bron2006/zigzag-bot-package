@@ -18,6 +18,7 @@ import ctrader
 import db
 import ml_models
 import scanner
+import signal_tracking
 from errors import ConfigError
 from notifier import notify_bot_failed
 from state import app_state
@@ -93,6 +94,12 @@ def _start_background_services() -> None:
     _start_loop(120.0, db.refresh_cached_user_statuses, now=False, name="user_status_cache")
     _start_loop(0.2, api.drain_sse_events, now=False, name="sse_drain")
     _start_loop(20.0, _publish_sse_ping, now=False, name="sse_ping")
+    _start_loop(
+        max(30.0, config.SIGNAL_OUTCOME_CHECK_INTERVAL_MINUTES * 60.0),
+        signal_tracking.resolve_pending_signals,
+        now=False,
+        name="signal_outcome_resolver",
+    )
 
 
 def _shutdown() -> None:

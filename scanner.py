@@ -10,6 +10,7 @@ from twisted.internet.threads import deferToThreadPool
 
 import analysis as analysis_module
 import db
+import signal_tracking
 import telegram_ui
 from config import (
     ANALYSIS_CACHE_TTL_SECONDS,
@@ -226,6 +227,12 @@ def _handle_analysis_result(pair_norm: str, result: dict):
 
     app_state.publish_signal_sse(result)
     app_state.scanner_cooldown_cache[pair_norm] = now
+
+    deferToThreadPool(reactor, _blocking_pool(), signal_tracking.maybe_record_signal, result).addErrback(
+        lambda failure: logger.error(
+            "SCANNER: не вдалося записати SignalOutcome для %s: %s", pair_norm, failure.getErrorMessage()
+        )
+    )
 
     chat_id = get_chat_id()
     if not chat_id:

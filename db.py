@@ -81,6 +81,24 @@ class AppRuntimeSetting(Base):
     updated_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
 
+class SignalOutcome(Base):
+    __tablename__ = "signal_outcomes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    pair = Column(String, nullable=False, index=True)
+    timeframe = Column(String(8), nullable=False, default="")
+    verdict = Column(String(8), nullable=False)
+    score = Column(Integer, nullable=True)
+    entry_price = Column(Float, nullable=False)
+    entry_ts = Column(DateTime, server_default=func.now(), nullable=False, index=True)
+    tp_price = Column(Float, nullable=True)
+    sl_price = Column(Float, nullable=True)
+    resolved_at = Column(DateTime, nullable=True)
+    # 'pending' | 'tp' | 'sl' | 'timeout'
+    outcome = Column(String(16), nullable=False, default="pending", index=True)
+    pnl_pips = Column(Float, nullable=True)
+
+
 def _normalize_language(lang: str | None) -> str:
     value = (lang or "").split(",", 1)[0].split("-")[0].split("_")[0].lower()
     return value if value in {"en", "uk", "es", "de", "ru"} else "en"
@@ -1280,6 +1298,198 @@ def toggle_watchlist(user_id: int, pair: str) -> bool:
     except SQLAlchemyError:
         logger.exception("Error toggling watchlist")
         return False
+
+
+# ----------------------------------------------------------------------
+# Signal outcome tracking
+# ----------------------------------------------------------------------
+
+
+def create_signal_outcome(
+    *,
+    pair: str,
+    timeframe: str,
+    verdict: str,
+    score: int | float | None,
+    entry_price: float,
+    tp_price: float | None,
+    sl_price: float | None,
+) -> int | None:
+    try:
+        with session_scope() as session:
+            if session is None:
+                logger.debug("Signal outcome tracking skipped: no database engine")
+                return None
+
+            row = SignalOutcome(
+                pair=(pair or "").strip().upper(),
+                timeframe=(timeframe or "").strip(),
+                verdict=(verdict or "").strip().upper(),
+                score=int(score) if isinstance(score, (int, float)) else None,
+                entry_price=float(entry_price),
+                tp_price=float(tp_price) if tp_price is not None else None,
+                sl_price=float(sl_price) if sl_price is not None else None,
+                outcome="pending",
+            )
+            session.add(row)
+            session.flush()
+            return row.id
+    except SQLAlchemyError:
+        logger.exception("Error creating signal outcome for pair=%s", pair)
+        return None
+
+
+def get_pending_signal_outcomes(limit: int = 500) -> list[dict]:
+    limit = max(1, min(int(limit or 500), 2000))
+
+    try:
+        with get_db() as session:
+            if session is None:
+                return []
+
+            rows = (
+                session.query(SignalOutcome)
+                .filter(SignalOutcome.outcome == "pending")
+                .order_by(SignalOutcome.entry_ts.asc())
+                .limit(limit)
+                .all()
+            )
+            return [
+                {
+                    "id": row.id,
+                    "pair": row.pair,
+                    "timeframe": row.timeframe,
+                    "verdict": row.verdict,
+                    "entry_price": row.entry_price,
+                    "tp_price": row.tp_price,
+                    "sl_price": row.sl_price,
+                    "entry_ts": row.entry_ts,
+                }
+                for row in rows
+            ]
+    except SQLAlchemyError:
+        logger.exception("Error loading pending signal outcomes")
+        return []
+
+
+def resolve_signal_outcome(outcome_id: int, *, outcome: str, pnl_pips: float | None) -> bool:
+    try:
+        with session_scope() as session:
+            if session is None:
+                return False
+
+            row = session.query(SignalOutcome).filter(SignalOutcome.id == outcome_id).first()
+            if row is None or row.outcome != "pending":
+                return False
+
+            row.outcome = outcome
+            row.pnl_pips = pnl_pips
+            row.resolved_at = _utcnow()
+            return True
+    except SQLAlchemyError:
+        logger.exception("Error resolving signal outcome id=%s", outcome_id)
+        return False
+
+
+def _aggregate_signal_outcomes(rows: list) -> dict:
+    wins = sum(1 for r in rows if r.outcome == "tp")
+    losses = sum(1 for r in rows if r.outcome == "sl")
+    timeouts = sum(1 for r in rows if r.outcome == "timeout")
+    resolved = wins + losses + timeouts
+    decided = wins + losses
+    return {
+        "total": len(rows),
+        "resolved": resolved,
+        "pending": len(rows) - resolved,
+        "wins": wins,
+        "losses": losses,
+        "timeouts": timeouts,
+        "win_rate": round(100.0 * wins / decided, 1) if decided else None,
+    }
+
+
+def get_signal_outcome_stats(days: int = 7) -> dict:
+    days = max(1, min(int(days or 7), 365))
+    since = _utcnow() - timedelta(days=days)
+    empty = {"ok": False, "days": days, "by_pair": [], "by_timeframe": [], **_aggregate_signal_outcomes([])}
+
+    try:
+        with get_db() as session:
+            if session is None:
+                return empty
+
+            rows = session.query(SignalOutcome).filter(SignalOutcome.entry_ts >= since).all()
+    except SQLAlchemyError:
+        logger.exception("Error loading signal outcome stats")
+        return empty
+
+    by_pair_map: dict[str, list] = {}
+    by_tf_map: dict[str, list] = {}
+    for row in rows:
+        by_pair_map.setdefault(row.pair, []).append(row)
+        by_tf_map.setdefault(row.timeframe or "?", []).append(row)
+
+    by_pair = [
+        {"pair": pair, **_aggregate_signal_outcomes(items)}
+        for pair, items in sorted(by_pair_map.items(), key=lambda kv: -len(kv[1]))
+    ]
+    by_timeframe = [
+        {"timeframe": tf, **_aggregate_signal_outcomes(items)}
+        for tf, items in sorted(by_tf_map.items())
+    ]
+
+    return {
+        "ok": True,
+        "days": days,
+        **_aggregate_signal_outcomes(rows),
+        "by_pair": by_pair,
+        "by_timeframe": by_timeframe,
+    }
+
+
+def get_signal_outcome_score_breakdown(days: int = 30, bucket_size: int = 5) -> list[dict]:
+    """Win-rate per score bucket (e.g. 75-80, 80-85, ...), used to evaluate
+    whether the BUY/SELL threshold in config is well calibrated. BUY signals
+    use score directly and SELL signals use (100 - score) so both directions
+    land on the same "distance from 50 = confidence" scale."""
+    days = max(1, min(int(days or 30), 365))
+    bucket_size = max(1, min(int(bucket_size or 5), 25))
+    since = _utcnow() - timedelta(days=days)
+
+    try:
+        with get_db() as session:
+            if session is None:
+                return []
+
+            rows = (
+                session.query(SignalOutcome)
+                .filter(SignalOutcome.entry_ts >= since)
+                .filter(SignalOutcome.outcome.in_(("tp", "sl")))
+                .filter(SignalOutcome.score.isnot(None))
+                .all()
+            )
+    except SQLAlchemyError:
+        logger.exception("Error loading signal outcome score breakdown")
+        return []
+
+    buckets: dict[int, list] = {}
+    for row in rows:
+        normalized_score = row.score if row.verdict == "BUY" else (100 - row.score)
+        bucket_start = (normalized_score // bucket_size) * bucket_size
+        buckets.setdefault(bucket_start, []).append(row)
+
+    result = []
+    for bucket_start in sorted(buckets):
+        items = buckets[bucket_start]
+        agg = _aggregate_signal_outcomes(items)
+        result.append(
+            {
+                "score_range": f"{bucket_start}-{bucket_start + bucket_size}",
+                **agg,
+            }
+        )
+
+    return result
 
 
 initialize_database()

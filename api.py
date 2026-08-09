@@ -23,6 +23,7 @@ import crypto_pay
 import db
 import ml_models
 import news_filter
+import signal_tracking
 from auth import get_user_id_from_init_data, is_valid_init_data
 from config import (
     COMMODITIES,
@@ -500,6 +501,23 @@ def register_routes(app):
                 item["label"] = localize_reason(item["label"], lang)
         return jsonify(payload)
 
+    @app.route("/api/stats/signals")
+    @_protected_route
+    def stats_signals():
+        lang = _request_lang()
+        uid = get_user_id_from_init_data(_request_init_data())
+        if not db.is_admin_user(uid):
+            return jsonify({"success": False, "error": t("unauthorized", lang)}), 403
+
+        days = request.args.get("days", "7")
+        try:
+            days = int(days)
+        except ValueError:
+            days = 7
+
+        stats = db.get_signal_outcome_stats(days)
+        return jsonify({"success": True, **stats})
+
     @app.route("/api/get_pairs")
     @_protected_route
     def get_pairs():
@@ -782,6 +800,11 @@ def register_routes(app):
             if trial_started:
                 result["trial_started"] = True
                 result["user"] = access
+
+            try:
+                signal_tracking.maybe_record_signal(result)
+            except Exception:
+                logger.exception("Failed to record signal outcome for pair=%s", pair)
 
             return jsonify(localize_signal_payload(result, lang))
 
