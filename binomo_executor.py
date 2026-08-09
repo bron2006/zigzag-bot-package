@@ -36,14 +36,23 @@ SAFETY MODEL (see config.py):
     BINOMO_MAX_DAILY_LOSS_PERCENT. Any of these trips a DB-persisted flag
     that stops new trades until an admin explicitly runs /binomo_on.
 
-SELECTORS — READ THIS: every Binomo DOM selector below is a labeled
-PLACEHOLDER (search for "VERIFY-SELECTOR"). I cannot log into your Binomo
-account, so I cannot confirm the actual data-testid/aria-label/DOM
-structure of the live trading terminal. Before running anything beyond
-`--login`, log in yourself and replace each placeholder with the real
-selector (prefer data-testid/aria-label over structural CSS, per the task's
-own stability requirement). Nothing here guesses or falls back to a
-structural selector if the intended one is missing — see _safe_find().
+SELECTORS — verified 2026-08-09 against the live Binomo trading terminal
+(Angular app) via a logged-in session, read-only DOM inspection only (no
+amount/direction/confirm clicks were ever made during verification). Most
+selectors use Binomo's own stable `id="qa_*"` QA hooks. Two known gaps
+remain, both documented at their point of use instead of being guessed:
+  - `asset_price_display` does not exist — Binomo renders the live price
+    only inside a `<canvas>` chart, with no DOM/SVG/aria text node anywhere
+    on the page. `_read_binomo_price()` always returns None until this is
+    solved a different way (e.g. intercepting Binomo's price WebSocket).
+  - `login_email_input`/`login_password_input`/`login_submit_button` are
+    still unverified best-effort guesses (the login page 404s/redirects
+    while already logged in, so it couldn't be inspected without logging
+    the account out). This only affects the optional autofill convenience
+    in `--login`; on failure it already logs a warning and lets you fill
+    the form yourself, so it fails safe either way.
+Nothing here guesses or falls back to a structural selector if the intended
+one is missing — see _safe_find().
 """
 import argparse
 import csv
@@ -77,30 +86,37 @@ CORRELATION_LOG_FIELDS = [
 ]
 
 # ----------------------------------------------------------------------
-# VERIFY-SELECTOR: placeholders. Replace with real selectors from the live
-# Binomo terminal DOM before trusting this against real trades.
+# Verified 2026-08-09 against the live terminal. See module docstring for
+# the two known gaps (asset_price_display, login_* autofill).
 # ----------------------------------------------------------------------
 SELECTORS = {
-    "login_email_input": "input[name='email']",
-    "login_password_input": "input[name='password']",
-    "login_submit_button": "button[type='submit']",
-    "login_indicator": "[data-testid='balance-amount']",  # presence == logged in
-    "balance_amount": "[data-testid='balance-amount']",
-    "account_mode_switch": "[data-testid='account-mode-switch']",
-    "asset_search_input": "[data-testid='asset-search-input']",
-    "asset_option": "[data-testid='asset-option']",  # filter by text=asset name
-    "asset_price_display": "[data-testid='asset-current-price']",  # used only by --correlation-check
-    "amount_input": "[data-testid='trade-amount-input']",
-    "expiry_selector": "[data-testid='trade-expiry-selector']",
-    "expiry_option": "[data-testid='expiry-option']",  # filter by text/seconds
-    "up_button": "[data-testid='trade-up-button']",
-    "down_button": "[data-testid='trade-down-button']",
-    "trade_confirmation_toast": "[data-testid='trade-confirmation-toast']",
-    "trade_history_tab": "[data-testid='trade-history-tab']",
-    "trade_history_row": "[data-testid='trade-history-row']",
+    "login_email_input": "input[name='email']",  # unverified, see docstring
+    "login_password_input": "input[name='password']",  # unverified, see docstring
+    "login_submit_button": "button[type='submit']",  # unverified, see docstring
+    "login_indicator": "#qa_trading_balance",  # presence == logged in
+    "balance_amount": "#qa_trading_balance",
+    "asset_picker_open_button": "#assets-list",
+    "asset_search_input": "way-input-search input[type='text']",
+    "asset_row": "div.asset-row",  # exact-match the name inside .name-text p — see place_binary_trade
+    "asset_row_name": ".name-text p",
+    "asset_price_display": None,  # does not exist — canvas-rendered, see module docstring
+    "amount_control": "way-input-controls[type='currency']",
+    "amount_input": "way-input-controls[type='currency'] input",
+    "time_control": "#qa_trading_dealTimeInput",
+    "time_input": "#qa_trading_dealTimeInput input",
+    "time_plus_button": "#qa_trading_dealTimeInput button:has(use[href='/assets/sprite/plus-l1.svg#plus-l1'])",
+    "time_minus_button": "#qa_trading_dealTimeInput button:has(use[href='/assets/sprite/minus-l1.svg#minus-l1'])",
+    "up_button": "#qa_trading_dealUpButton",
+    "down_button": "#qa_trading_dealDownButton",
+    "trade_confirmation_toast": "way-toast, .toast",  # best-effort; absence is not treated as failure, see place_binary_trade
+    "trade_history_tab": "#qa_historyButton",
+    "trade_history_standard_tab_button": "#qa_trading_tradeHistoryStandardButton",
+    "trade_history_list": "#qa_trading_tradeHistoryStandardTab",
+    "trade_history_row": "#qa_trading_tradeHistoryStandardTab div",  # row-level markup unverified — no trade existed yet to inspect; scoped :has-text() fallback, see read_trade_result
 }
 
 _DEFAULT_FIND_TIMEOUT_MS = 8000
+_MAX_TIME_STEPPER_CLICKS = 60
 
 
 # ----------------------------------------------------------------------
@@ -158,6 +174,19 @@ def load_asset_map() -> dict[str, dict]:
             path,
         )
     return assets
+
+
+def _resolve_binomo_asset_name(entry: dict) -> Optional[str]:
+    """Binomo lists most forex pairs under a plain name on weekdays and
+    switches to a separate '(OTC)' name (a different, synthetic price feed —
+    see the correlation-check warning in this module's docstring) on
+    weekends. Crypto pairs only ever exist under their OTC name. Picks by
+    UTC weekday rather than guessing from whichever name happens to be
+    present, since both names can be non-null at once."""
+    is_weekend = datetime.now(timezone.utc).weekday() >= 5
+    if is_weekend:
+        return entry.get("otc_name") or entry.get("binomo_name")
+    return entry.get("binomo_name") or entry.get("otc_name")
 
 
 # ----------------------------------------------------------------------
@@ -299,6 +328,54 @@ def get_account_balance(page) -> Optional[float]:
 # ----------------------------------------------------------------------
 
 
+def _parse_hhmm(text: str) -> Optional[int]:
+    try:
+        h, m = text.strip().split(":")
+        return int(h) * 60 + int(m)
+    except Exception:
+        return None
+
+
+def _set_expiry_time(page, expiry_seconds: int) -> bool:
+    """Binomo's expiry control (#qa_trading_dealTimeInput) is a readonly
+    absolute clock-time field advanced only via +/- stepper buttons, not a
+    duration dropdown. Reads the baseline value, then clicks '+' until the
+    elapsed time — measured relative to that baseline, both read from
+    Binomo's own displayed clock, so no wall-clock/timezone sync is needed —
+    reaches the requested horizon. Self-correcting rather than assuming a
+    fixed per-click step, since that step size was never confirmed live
+    (verification stayed read-only and never clicked this control)."""
+    time_input = _safe_find(page, SELECTORS["time_input"], description="time_input")
+    if time_input is None:
+        return False
+
+    baseline_minutes = _parse_hhmm(time_input.input_value())
+    if baseline_minutes is None:
+        logger.error("Binomo executor: could not parse deal time '%s'", time_input.input_value())
+        return False
+
+    target_minutes_elapsed = max(1, round(expiry_seconds / 60))
+
+    plus_button = _safe_find(page, SELECTORS["time_plus_button"], description="time_plus_button")
+    if plus_button is None:
+        return False
+
+    for _ in range(_MAX_TIME_STEPPER_CLICKS):
+        current_minutes = _parse_hhmm(time_input.input_value())
+        if current_minutes is None:
+            break
+        elapsed = (current_minutes - baseline_minutes) % (24 * 60)
+        if elapsed >= target_minutes_elapsed:
+            return True
+        plus_button.click()
+
+    logger.error(
+        "Binomo executor: could not reach target expiry (%ss) after %d stepper clicks — "
+        "not guessing further, stopping.", expiry_seconds, _MAX_TIME_STEPPER_CLICKS,
+    )
+    return False
+
+
 def place_binary_trade(page, asset: str, direction: str, amount: float, expiry_seconds: int) -> dict:
     """direction: 'up' | 'down'. Returns {"success": bool, "error": str|None}.
     Every real click on amount/direction is preceded by an audit screenshot,
@@ -306,27 +383,21 @@ def place_binary_trade(page, asset: str, direction: str, amount: float, expiry_s
     if direction not in ("up", "down"):
         return {"success": False, "error": f"invalid direction: {direction}"}
 
+    picker_button = _safe_find(page, SELECTORS["asset_picker_open_button"], description="asset_picker_open_button")
+    if picker_button is None:
+        return {"success": False, "error": "asset_picker_open_button not found"}
+    picker_button.click()
+
     search_input = _safe_find(page, SELECTORS["asset_search_input"], description="asset_search_input")
     if search_input is None:
         return {"success": False, "error": "asset_search_input not found"}
     search_input.fill(asset)
 
-    asset_option = _safe_find(page, f"{SELECTORS['asset_option']}:has-text('{asset}')", description="asset_option")
-    if asset_option is None:
-        return {"success": False, "error": f"asset option not found for {asset!r}"}
-    asset_option.click()
-
-    expiry_dropdown = _safe_find(page, SELECTORS["expiry_selector"], description="expiry_selector")
-    if expiry_dropdown is None:
-        return {"success": False, "error": "expiry_selector not found"}
-    expiry_dropdown.click()
-
-    expiry_option = _safe_find(
-        page, f"{SELECTORS['expiry_option']}:has-text('{expiry_seconds}')", description="expiry_option"
-    )
-    if expiry_option is None:
-        return {"success": False, "error": f"expiry option not found for {expiry_seconds}s"}
-    expiry_option.click()
+    row_selector = f"{SELECTORS['asset_row']}:has({SELECTORS['asset_row_name']}:text-is('{asset}'))"
+    asset_row = _safe_find(page, row_selector, description="asset_row")
+    if asset_row is None:
+        return {"success": False, "error": f"asset row not found for {asset!r}"}
+    asset_row.click()
 
     amount_input = _safe_find(page, SELECTORS["amount_input"], description="amount_input")
     if amount_input is None:
@@ -334,6 +405,9 @@ def place_binary_trade(page, asset: str, direction: str, amount: float, expiry_s
 
     _screenshot(page, f"before_amount_{asset}_{direction}")
     amount_input.fill(f"{amount:.2f}")
+
+    if not _set_expiry_time(page, expiry_seconds):
+        return {"success": False, "error": "could not set expiry time"}
 
     direction_selector = SELECTORS["up_button"] if direction == "up" else SELECTORS["down_button"]
     direction_button = _safe_find(page, direction_selector, description=f"{direction}_button")
@@ -362,6 +436,11 @@ def read_trade_result(page, asset: str, entered_after: datetime) -> dict:
     if history_tab is None:
         return {"result": "unknown", "payout_amount": None}
     history_tab.click()
+
+    try:
+        page.click(SELECTORS["trade_history_standard_tab_button"], timeout=3000)
+    except Exception:
+        pass  # may already be the selected sub-tab
 
     row = _safe_find(page, f"{SELECTORS['trade_history_row']}:has-text('{asset}')", description="trade_history_row")
     if row is None:
@@ -474,8 +553,9 @@ def _handle_signal(page, asset_map: dict, signal: dict) -> None:
 
     pair = str(signal.get("pair") or "").upper()
     entry = asset_map.get(pair)
-    if not entry or not entry.get("binomo_name"):
-        logger.debug("Binomo executor: %s not in asset map, skipping", pair)
+    asset_name = entry and _resolve_binomo_asset_name(entry)
+    if not asset_name:
+        logger.debug("Binomo executor: %s not tradable on Binomo right now, skipping", pair)
         return
 
     balance = get_account_balance(page)
@@ -491,7 +571,6 @@ def _handle_signal(page, asset_map: dict, signal: dict) -> None:
     direction = "up" if verdict == "BUY" else "down"
     expiry_seconds = signal_tracking.compute_horizon_seconds(signal.get("timeframe"))
     amount = round(balance * (config.BINOMO_STAKE_PERCENT / 100.0), 2)
-    asset_name = entry["binomo_name"]
 
     trade_id = db.create_binomo_trade(
         asset=asset_name,
@@ -630,7 +709,25 @@ def _fetch_ctrader_price(pair: str) -> Optional[float]:
         return None
 
 
+_price_display_warning_logged = False
+
+
 def _read_binomo_price(page, asset_name: str) -> Optional[float]:
+    if SELECTORS["asset_price_display"] is None:
+        global _price_display_warning_logged
+        if not _price_display_warning_logged:
+            logger.warning(
+                "Binomo executor: asset_price_display has no selector — Binomo renders "
+                "its live price only inside a <canvas> chart, with no accessible DOM/SVG "
+                "text anywhere on the page (confirmed 2026-08-09 via live DOM inspection). "
+                "--correlation-check cannot read Binomo-side prices until this is solved "
+                "a different way (e.g. intercepting Binomo's price WebSocket in Playwright). "
+                "Binomo-side entries will log as 'unknown' until then — eyeball the chart "
+                "yourself during early correlation-check runs."
+            )
+            _price_display_warning_logged = True
+        return None
+
     el = _safe_find(page, SELECTORS["asset_price_display"], description="asset_price_display")
     if el is None:
         return None
@@ -666,19 +763,20 @@ def _start_correlation_entry(page, asset_map: dict, signal: dict, pending: list,
 
     pair = str(signal.get("pair") or "").upper()
     entry = asset_map.get(pair)
-    if not entry or not entry.get("binomo_name"):
+    asset_name = entry and _resolve_binomo_asset_name(entry)
+    if not asset_name:
         return
 
     ctrader_entry_price = signal.get("price")
     if not isinstance(ctrader_entry_price, (int, float)):
         return
 
-    binomo_entry_price = _read_binomo_price(page, entry["binomo_name"])
+    binomo_entry_price = _read_binomo_price(page, asset_name)
     horizon_seconds = signal_tracking.compute_horizon_seconds(signal.get("timeframe"))
 
     record = {
         "pair": pair,
-        "binomo_asset": entry["binomo_name"],
+        "binomo_asset": asset_name,
         "verdict": verdict,
         "horizon_seconds": horizon_seconds,
         "ctrader_entry_price": ctrader_entry_price,

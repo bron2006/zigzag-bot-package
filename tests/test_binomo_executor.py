@@ -1,4 +1,5 @@
 import unittest
+from datetime import datetime, timezone
 from unittest.mock import patch
 
 import binomo_executor
@@ -9,6 +10,39 @@ class LoadAssetMapTest(unittest.TestCase):
         asset_map = binomo_executor.load_asset_map()
         self.assertIn("EURUSD", asset_map)
         self.assertEqual(asset_map["EURUSD"]["binomo_name"], "EUR/USD")
+
+
+class ResolveBinomoAssetNameTest(unittest.TestCase):
+    _WEEKDAY = datetime(2026, 8, 10, 12, 0, tzinfo=timezone.utc)  # Monday
+    _WEEKEND = datetime(2026, 8, 8, 12, 0, tzinfo=timezone.utc)  # Saturday
+
+    def _patched_now(self, when):
+        class _FixedDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return when
+
+        return patch.object(binomo_executor, "datetime", _FixedDatetime)
+
+    def test_weekday_prefers_plain_name(self):
+        entry = {"binomo_name": "EUR/USD", "otc_name": "EUR/USD (OTC)"}
+        with self._patched_now(self._WEEKDAY):
+            self.assertEqual(binomo_executor._resolve_binomo_asset_name(entry), "EUR/USD")
+
+    def test_weekend_prefers_otc_name(self):
+        entry = {"binomo_name": "EUR/USD", "otc_name": "EUR/USD (OTC)"}
+        with self._patched_now(self._WEEKEND):
+            self.assertEqual(binomo_executor._resolve_binomo_asset_name(entry), "EUR/USD (OTC)")
+
+    def test_weekend_falls_back_to_plain_name_when_no_otc(self):
+        entry = {"binomo_name": "USD/CHF", "otc_name": None}
+        with self._patched_now(self._WEEKEND):
+            self.assertEqual(binomo_executor._resolve_binomo_asset_name(entry), "USD/CHF")
+
+    def test_crypto_has_no_plain_name_any_day(self):
+        entry = {"binomo_name": None, "otc_name": "Bitcoin (OTC)"}
+        with self._patched_now(self._WEEKDAY):
+            self.assertEqual(binomo_executor._resolve_binomo_asset_name(entry), "Bitcoin (OTC)")
 
 
 class IsActiveTest(unittest.TestCase):

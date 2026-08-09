@@ -1,20 +1,20 @@
 {
   "_meta": {
     "description": "Maps cTrader pair keys (as used elsewhere in this project, e.g. config.broker_symbol_key output) to the exact asset name shown on the Binomo trading terminal. binomo_executor.py only trades pairs present in BOTH this map and the live cTrader symbol list - anything missing here is silently skipped, never guessed.",
-    "verified": false,
-    "verified_at": null,
-    "how_to_verify": "Log into the Binomo terminal yourself, open each asset, and copy its exact displayed name (and data-testid/aria-label from the DOM if available) into this file. Do this BEFORE running --correlation-check, since a wrong name here means the executor searches for an asset that doesn't exist and safely does nothing (see binomo_executor.py's 'don't guess a selector' rule) - better to fail closed, but you won't get any data until the names are right.",
-    "otc_warning": "Binomo often trades the same underlying pair under an OTC name on weekends/off-hours (e.g. 'EUR/USD OTC') on its own synthetic feed - this is a DIFFERENT price series from cTrader's. otc_name is tracked separately so correlation-check can flag OTC sessions instead of silently comparing two unrelated feeds."
+    "verified": true,
+    "verified_at": "2026-08-09",
+    "how_to_verify": "Names below were read directly from the live Binomo asset picker (search box + Currencies/Crypto filters) via a logged-in session on 2026-08-09. Re-verify periodically - Binomo can rename or delist assets without notice. Log into the terminal, open the '+' asset picker, search each base currency, and compare against the names here.",
+    "otc_warning": "Binomo trades most forex pairs under a separate '(OTC)' name on weekends/off-hours (e.g. 'EUR/USD (OTC)') on its own synthetic feed - this is a DIFFERENT price series from cTrader's live feed. binomo_executor._resolve_binomo_asset_name() picks binomo_name on weekdays (UTC) and otc_name on weekends; a null otc_name means that pair is simply not tradable on Binomo on weekends (confirmed for USDCHF/EURJPY as of verification date - no OTC listing was found for either). Crypto (BTCUSD/ETHUSD) has no plain-name listing at all on Binomo - only the '(OTC)' name exists, so binomo_name is null and otc_name is used every day."
   },
   "assets": {
-    "EURUSD": {"binomo_name": "EUR/USD", "otc_name": "EUR/USD OTC"},
-    "GBPUSD": {"binomo_name": "GBP/USD", "otc_name": "GBP/USD OTC"},
-    "USDJPY": {"binomo_name": "USD/JPY", "otc_name": "USD/JPY OTC"},
-    "AUDUSD": {"binomo_name": "AUD/USD", "otc_name": "AUD/USD OTC"},
-    "USDCAD": {"binomo_name": "USD/CAD", "otc_name": "USD/CAD OTC"},
-    "USDCHF": {"binomo_name": "USD/CHF", "otc_name": "USD/CHF OTC"},
-    "EURJPY": {"binomo_name": "EUR/JPY", "otc_name": "EUR/JPY OTC"},
-    "BTCUSD": {"binomo_name": "Bitcoin", "otc_name": null},
-    "ETHUSD": {"binomo_name": "Ethereum", "otc_name": null}
+    "EURUSD": {"binomo_name": "EUR/USD", "otc_name": "EUR/USD (OTC)"},
+    "GBPUSD": {"binomo_name": "GBP/USD", "otc_name": "GBP/USD (OTC)"},
+    "USDJPY": {"binomo_name": "USD/JPY", "otc_name": "USD/JPY (OTC)"},
+    "AUDUSD": {"binomo_name": "AUD/USD", "otc_name": "AUD/USD (OTC)"},
+    "USDCAD": {"binomo_name": "USD/CAD", "otc_name": "USD/CAD (OTC)"},
+    "USDCHF": {"binomo_name": "USD/CHF", "otc_name": null},
+    "EURJPY": {"binomo_name": "EUR/JPY", "otc_name": null},
+    "BTCUSD": {"binomo_name": null, "otc_name": "Bitcoin (OTC)"},
+    "ETHUSD": {"binomo_name": null, "otc_name": "Ethereum (OTC)"}
   }
 }
