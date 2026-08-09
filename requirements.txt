@@ -3,6 +3,10 @@ Flask-Cors==4.0.0
 
 python-telegram-bot==13.15
 python-dotenv==1.0.1
+# python-telegram-bot 13.x pulls in APScheduler, which still imports the
+# legacy pkg_resources API at module load time. Newer setuptools releases
+# dropped pkg_resources entirely, breaking `import bot` on a fresh install.
+setuptools<81
 
 twisted==24.3.0
 service-identity==24.1.0
