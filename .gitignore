@@ -25,3 +25,8 @@ Untitled*.ipynb
 
 # Навчені ML-моделі (регенеруються ноутбуком, не мають бути в git-історії)
 *.pkl
+
+# Binomo executor: збережена сесія Playwright (фактично токен доступу до
+# твого акаунту) і локальні логи/скріншоти/correlation-check CSV.
+storage_state.json
+logs/

@@ -171,9 +171,12 @@ def _storage_state_path() -> Path:
 
 
 def login_and_save_session() -> None:
-    """One-time (or as-needed) manual login helper: opens a VISIBLE browser,
-    lets you log in yourself (including any CAPTCHA/2FA), then saves the
-    session to BINOMO_STORAGE_STATE_PATH. Run with:
+    """One-time (or as-needed) login helper: opens a VISIBLE browser and, if
+    BINOMO_EMAIL/BINOMO_PASSWORD are set, pre-fills the login form as a
+    convenience — it never clicks submit and never touches a CAPTCHA/2FA
+    field; you always complete and confirm the login yourself. Saves the
+    session to BINOMO_STORAGE_STATE_PATH once you confirm you're in. Run
+    with:
         python binomo_executor.py --login
     """
     from playwright.sync_api import sync_playwright
@@ -184,11 +187,24 @@ def login_and_save_session() -> None:
         page = context.new_page()
         page.goto(BINOMO_BASE_URL)
 
+        if config.BINOMO_EMAIL and config.BINOMO_PASSWORD:
+            try:
+                page.wait_for_selector(SELECTORS["login_email_input"], timeout=_DEFAULT_FIND_TIMEOUT_MS)
+                page.fill(SELECTORS["login_email_input"], config.BINOMO_EMAIL)
+                page.fill(SELECTORS["login_password_input"], config.BINOMO_PASSWORD)
+                print("Pre-filled email/password from .env — review, solve any CAPTCHA, then submit yourself.")
+            except Exception:
+                logger.warning(
+                    "Could not pre-fill the login form (selector may need updating) — fill it in manually.",
+                    exc_info=True,
+                )
+
         print(
             "\nA browser window has opened. Log into your Binomo account "
-            "manually (solve any CAPTCHA/2FA yourself — this tool never "
-            "attempts that). Once you're logged in and can see your "
-            "balance, come back here and press Enter.\n"
+            "yourself (solve any CAPTCHA/2FA yourself — this tool never "
+            "attempts that, and never clicks the submit button for you). "
+            "Once you're logged in and can see your balance, come back "
+            "here and press Enter.\n"
         )
         input("Press Enter once logged in... ")
 
