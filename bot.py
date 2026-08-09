@@ -29,6 +29,7 @@ def _register_handlers(updater: Updater) -> None:
     dp.add_handler(CommandHandler("start", telegram_ui.start))
     dp.add_handler(CommandHandler("symbols", telegram_ui.symbols_command))
     dp.add_handler(CommandHandler("stats", telegram_ui.stats_command))
+    dp.add_handler(CommandHandler("winrate", telegram_ui.winrate_command))
     dp.add_handler(CommandHandler("live", telegram_ui.live_command))
     dp.add_handler(CommandHandler("language", telegram_ui.language_command))
     dp.add_handler(CommandHandler("lang", telegram_ui.language_command))
@@ -73,7 +74,7 @@ def start_telegram_bot():
             app_state.updater = updater
             _start_polling_thread(updater)
 
-            logger.info("Telegram bot запущено. Команди: /start /symbols /stats /live")
+            logger.info("Telegram bot запущено. Команди: /start /symbols /stats /winrate /live")
             return updater
 
         except ConfigError:

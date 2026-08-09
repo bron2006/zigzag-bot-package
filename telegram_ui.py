@@ -444,6 +444,52 @@ def stats_command(update, context):
     )
 
 
+def _format_winrate_period(label: str, stats: dict) -> list[str]:
+    win_rate = stats.get("win_rate")
+    win_rate_str = f"{win_rate}%" if win_rate is not None else "n/a"
+    return [
+        f"<b>{label}</b>",
+        f"Сигналів: {stats.get('total', 0)} "
+        f"(закрито: {stats.get('resolved', 0)}, в очікуванні: {stats.get('pending', 0)})",
+        f"TP: {stats.get('wins', 0)} · SL: {stats.get('losses', 0)} · Timeout: {stats.get('timeouts', 0)}",
+        f"Win-rate: {win_rate_str}",
+        "",
+    ]
+
+
+def winrate_command(update, context):
+    lang = _lang(update)
+    user_id = _get_user_id(update)
+
+    if not db.is_admin_user(user_id):
+        update.message.reply_text(t("unauthorized", lang))
+        return
+
+    week = db.get_signal_outcome_stats(7)
+    month = db.get_signal_outcome_stats(30)
+
+    lines = ["📊 <b>Win-rate сигналів</b>", ""]
+    lines.extend(_format_winrate_period("Тиждень (7д)", week))
+    lines.extend(_format_winrate_period("Місяць (30д)", month))
+
+    top_pairs = sorted(
+        (p for p in month.get("by_pair", []) if p.get("resolved")),
+        key=lambda p: -(p.get("resolved") or 0),
+    )[:5]
+    if top_pairs:
+        lines.append("<b>Топ пар за 30д:</b>")
+        for item in top_pairs:
+            wr = item.get("win_rate")
+            wr_str = f"{wr}%" if wr is not None else "n/a"
+            lines.append(f"• {_safe_html(item.get('pair', '?'))}: {item.get('resolved', 0)} угод, {wr_str}")
+
+    update.message.reply_text(
+        "\n".join(lines),
+        parse_mode="HTML",
+        reply_markup=get_reply_keyboard(lang),
+    )
+
+
 def live_command(update, context):
     lang = _lang(update)
     lines = [t("prices", lang)]
