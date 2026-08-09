@@ -1991,4 +1991,75 @@ def get_daily_binomo_pnl(account_mode: str) -> float:
         return 0.0
 
 
+# ----------------------------------------------------------------------
+# Binomo executor runtime state (shared DB flags — the executor runs as a
+# separate LOCAL process, so /binomo_on /binomo_off /binomo_status in
+# Telegram (cloud process) can't touch any in-memory flag directly; both
+# sides read/write these AppRuntimeSetting rows instead, reusing the same
+# key-value table already used to persist cTrader tokens.)
+# ----------------------------------------------------------------------
+
+_BINOMO_ENABLED_KEY = "binomo_runtime_enabled"
+_BINOMO_KILL_SWITCH_KEY = "binomo_kill_switch_tripped"
+_BINOMO_KILL_SWITCH_REASON_KEY = "binomo_kill_switch_reason"
+
+
+def get_binomo_runtime_state() -> dict:
+    try:
+        with get_db() as session:
+            if session is None:
+                return {"runtime_enabled": True, "kill_switch_tripped": False, "kill_switch_reason": None}
+
+            enabled_raw = _get_runtime_setting(session, _BINOMO_ENABLED_KEY)
+            tripped_raw = _get_runtime_setting(session, _BINOMO_KILL_SWITCH_KEY)
+            reason = _get_runtime_setting(session, _BINOMO_KILL_SWITCH_REASON_KEY)
+
+            return {
+                "runtime_enabled": enabled_raw != "false",  # unset -> enabled by default
+                "kill_switch_tripped": tripped_raw == "true",
+                "kill_switch_reason": reason,
+            }
+    except SQLAlchemyError:
+        logger.exception("Error loading binomo runtime state")
+        return {"runtime_enabled": True, "kill_switch_tripped": False, "kill_switch_reason": None}
+
+
+def set_binomo_runtime_enabled(enabled: bool) -> bool:
+    try:
+        with session_scope() as session:
+            if session is None:
+                return False
+            _set_runtime_setting(session, _BINOMO_ENABLED_KEY, "true" if enabled else "false")
+            return True
+    except SQLAlchemyError:
+        logger.exception("Error setting binomo runtime enabled=%s", enabled)
+        return False
+
+
+def trip_binomo_kill_switch(reason: str) -> bool:
+    try:
+        with session_scope() as session:
+            if session is None:
+                return False
+            _set_runtime_setting(session, _BINOMO_KILL_SWITCH_KEY, "true")
+            _set_runtime_setting(session, _BINOMO_KILL_SWITCH_REASON_KEY, (reason or "")[:255])
+            return True
+    except SQLAlchemyError:
+        logger.exception("Error tripping binomo kill switch")
+        return False
+
+
+def clear_binomo_kill_switch() -> bool:
+    try:
+        with session_scope() as session:
+            if session is None:
+                return False
+            _set_runtime_setting(session, _BINOMO_KILL_SWITCH_KEY, "false")
+            _set_runtime_setting(session, _BINOMO_KILL_SWITCH_REASON_KEY, None)
+            return True
+    except SQLAlchemyError:
+        logger.exception("Error clearing binomo kill switch")
+        return False
+
+
 initialize_database()
