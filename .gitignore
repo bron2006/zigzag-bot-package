@@ -21,3 +21,6 @@ venv.bak/
 .ipynb_checkpoints/
 .tmp.driveupload/
 Untitled*.ipynb
+
+# Навчені ML-моделі (регенеруються ноутбуком, не мають бути в git-історії)
+*.pkl
