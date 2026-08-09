@@ -227,7 +227,23 @@ def _run_technical_analysis(df: pd.DataFrame) -> Tuple[int, str, str]:
         scaled = ml_models.SCALER.transform(features)
         prob = ml_models.LGBM_MODEL.predict_proba(scaled)[0][1]
         score = int(prob * 100)
-        verdict = "BUY" if score > ML_BUY_SCORE_THRESHOLD else "SELL" if score < ML_SELL_SCORE_THRESHOLD else "NEUTRAL"
+        # TEMPORARY HOTFIX (2026-08-09) - BUY/SELL swapped relative to the
+        # "obvious" mapping (score high -> BUY). Investigated a 12.5% win
+        # rate (48 SignalOutcome rows) per user request: model.classes_ is
+        # [0, 1] (standard) and predict_proba indexing/feature order are
+        # both correct, so the inversion isn't in this file's plumbing -
+        # most likely lgbm_model.pkl was trained with class 1 meaning
+        # "price went down" rather than "up" (training notebook isn't in
+        # this repo, so unverifiable directly). Empirical test: flipping
+        # verdict on the same 48 rows gives 42 wins (87.5%) instead of 6
+        # (12.5%) - swapping here is a symptom-level fix pending that
+        # confirmation, not a fix of the model itself.
+        # TODO(~2026-08-23): once new SignalOutcome rows have accumulated
+        # under this swapped mapping, check /api/stats/signals - win_rate
+        # should land near ~87% (mirroring today's 12.5%) if the inverted-
+        # class theory is right. Any other number means the real cause is
+        # still unidentified and this swap should be reconsidered.
+        verdict = "SELL" if score > ML_BUY_SCORE_THRESHOLD else "BUY" if score < ML_SELL_SCORE_THRESHOLD else "NEUTRAL"
         return score, verdict, ""
     except Exception:
         logger.exception("ML prediction failed")
