@@ -39,18 +39,25 @@ SAFETY MODEL (see config.py):
 SELECTORS — verified 2026-08-09 against the live Binomo trading terminal
 (Angular app) via a logged-in session, read-only DOM inspection only (no
 amount/direction/confirm clicks were ever made during verification). Most
-selectors use Binomo's own stable `id="qa_*"` QA hooks. Two known gaps
-remain, both documented at their point of use instead of being guessed:
-  - `asset_price_display` does not exist — Binomo renders the live price
-    only inside a `<canvas>` chart, with no DOM/SVG/aria text node anywhere
-    on the page. `_read_binomo_price()` always returns None until this is
-    solved a different way (e.g. intercepting Binomo's price WebSocket).
-  - `login_email_input`/`login_password_input`/`login_submit_button` are
-    still unverified best-effort guesses (the login page 404s/redirects
-    while already logged in, so it couldn't be inspected without logging
-    the account out). This only affects the optional autofill convenience
-    in `--login`; on failure it already logs a warning and lets you fill
-    the form yourself, so it fails safe either way.
+selectors use Binomo's own stable `id="qa_*"` QA hooks.
+
+PRICE FEED (2026-08-10): Binomo's live price has no DOM/SVG/aria text node
+anywhere on the page — it's drawn entirely inside a `<canvas>` chart. There
+is no selector for it and there never will be one. Instead,
+_install_price_feed_listener() taps Binomo's own WebSocket
+(wss://as.binomo.com/, confirmed live via Playwright's page.on("websocket"))
+and caches the latest price tick; _read_binomo_price() reads from that
+cache, not the DOM. The cache is cleared on every _select_asset() call so a
+stale price from the previously-viewed asset can never be mistaken for the
+new one.
+
+One remaining known gap: `login_email_input`/`login_password_input`/
+`login_submit_button` are still unverified best-effort guesses (the login
+page 404s/redirects while already logged in, so it couldn't be inspected
+without logging the account out). This only affects the optional autofill
+convenience in `--login`; on failure it already logs a warning and lets you
+fill the form yourself, so it fails safe either way.
+
 Nothing here guesses or falls back to a structural selector if the intended
 one is missing — see _safe_find().
 """
@@ -77,6 +84,18 @@ logger = logging.getLogger("binomo_executor")
 BINOMO_BASE_URL = "https://binomo.com"
 BINOMO_TRADE_URL = "https://binomo.com/trading"
 
+# Live price feed via WebSocket (2026-08-10 finding, replacing the earlier
+# canvas-DOM dead end - see _install_price_feed_listener/_read_binomo_price
+# below). Binomo streams price ticks over wss://as.binomo.com/ as frames
+# shaped {"data":[{"assets":[{"rate": <float>, "ric": <str>, ...}]}]},
+# confirmed live via Playwright's page.on("websocket") against the real
+# site. Cache is invalidated on every asset switch so a stale price from
+# the PREVIOUS asset can never be mistaken for the new one.
+_PRICE_FEED_WS_HOST = "as.binomo.com"
+_PRICE_FEED_STALE_SECONDS = 5.0
+_price_feed_lock = threading.Lock()
+_price_feed_state = {"rate": None, "ric": None, "received_at": None}
+
 SCREENSHOT_DIR = Path("logs") / "binomo_screenshots"
 CORRELATION_LOG_PATH = Path("logs") / "binomo_correlation_check.csv"
 CORRELATION_LOG_FIELDS = [
@@ -87,7 +106,8 @@ CORRELATION_LOG_FIELDS = [
 
 # ----------------------------------------------------------------------
 # Verified 2026-08-09 against the live terminal. See module docstring for
-# the two known gaps (asset_price_display, login_* autofill).
+# the remaining known gap (login_* autofill) and the price feed (no DOM
+# selector - read via WebSocket instead, see _read_binomo_price).
 # ----------------------------------------------------------------------
 SELECTORS = {
     "login_email_input": "input[name='email']",  # unverified, see docstring
@@ -99,7 +119,6 @@ SELECTORS = {
     "asset_search_input": "way-input-search input[type='text']",
     "asset_row": "div.asset-row",  # exact-match the name inside .name-text p — see place_binary_trade
     "asset_row_name": ".name-text p",
-    "asset_price_display": None,  # does not exist — canvas-rendered, see module docstring
     "amount_control": "way-input-controls[type='currency']",
     "amount_input": "way-input-controls[type='currency'] input",
     "time_control": "#qa_trading_dealTimeInput",
@@ -248,6 +267,40 @@ def login_and_save_session() -> None:
         browser.close()
 
 
+def _install_price_feed_listener(page) -> None:
+    def _on_websocket(ws):
+        if _PRICE_FEED_WS_HOST not in ws.url:
+            return
+
+        def _on_frame_received(payload):
+            if not isinstance(payload, str):
+                return
+            try:
+                msg = json.loads(payload)
+            except ValueError:
+                return
+            for item in msg.get("data") or []:
+                for asset in item.get("assets") or []:
+                    rate = asset.get("rate")
+                    if not isinstance(rate, (int, float)):
+                        continue
+                    with _price_feed_lock:
+                        _price_feed_state["rate"] = float(rate)
+                        _price_feed_state["ric"] = asset.get("ric")
+                        _price_feed_state["received_at"] = time.monotonic()
+
+        ws.on("framereceived", _on_frame_received)
+
+    page.on("websocket", _on_websocket)
+
+
+def _clear_price_feed_cache() -> None:
+    with _price_feed_lock:
+        _price_feed_state["rate"] = None
+        _price_feed_state["ric"] = None
+        _price_feed_state["received_at"] = None
+
+
 def _launch_session(playwright, *, headless: bool):
     state_path = _storage_state_path()
     if not state_path.exists():
@@ -259,6 +312,7 @@ def _launch_session(playwright, *, headless: bool):
     browser = playwright.chromium.launch(headless=headless)
     context = browser.new_context(storage_state=str(state_path))
     page = context.new_page()
+    _install_price_feed_listener(page)
     page.goto(BINOMO_TRADE_URL)
     return browser, context, page
 
@@ -431,6 +485,34 @@ def _fill_amount(page, amount: float) -> bool:
     return True
 
 
+def _select_asset(page, asset: str) -> Optional[str]:
+    """Opens the asset picker, searches, and clicks the exact-matching row
+    (exact-match matters: the weekday name, e.g. "EUR/USD", is a text
+    substring of the weekend one, "EUR/USD (OTC)"). Returns None on
+    success, or an error string. Shared by place_binary_trade and the
+    correlation-check price-reading flow - neither means anything until
+    the chart is actually showing the requested asset. Clears the
+    WebSocket price cache on success so a stale price from whatever was
+    previously selected can never be mistaken for the new asset's."""
+    picker_button = _safe_find(page, SELECTORS["asset_picker_open_button"], description="asset_picker_open_button")
+    if picker_button is None:
+        return "asset_picker_open_button not found"
+    picker_button.click()
+
+    search_input = _safe_find(page, SELECTORS["asset_search_input"], description="asset_search_input")
+    if search_input is None:
+        return "asset_search_input not found"
+    search_input.fill(asset)
+
+    row_selector = f"{SELECTORS['asset_row']}:has({SELECTORS['asset_row_name']}:text-is('{asset}'))"
+    asset_row = _safe_find(page, row_selector, description="asset_row")
+    if asset_row is None:
+        return f"asset row not found for {asset!r}"
+    asset_row.click()
+    _clear_price_feed_cache()
+    return None
+
+
 def place_binary_trade(page, asset: str, direction: str, amount: float, expiry_seconds: int) -> dict:
     """direction: 'up' | 'down'. Returns {"success": bool, "error": str|None}.
     Every real click on amount/direction is preceded by an audit screenshot,
@@ -438,21 +520,9 @@ def place_binary_trade(page, asset: str, direction: str, amount: float, expiry_s
     if direction not in ("up", "down"):
         return {"success": False, "error": f"invalid direction: {direction}"}
 
-    picker_button = _safe_find(page, SELECTORS["asset_picker_open_button"], description="asset_picker_open_button")
-    if picker_button is None:
-        return {"success": False, "error": "asset_picker_open_button not found"}
-    picker_button.click()
-
-    search_input = _safe_find(page, SELECTORS["asset_search_input"], description="asset_search_input")
-    if search_input is None:
-        return {"success": False, "error": "asset_search_input not found"}
-    search_input.fill(asset)
-
-    row_selector = f"{SELECTORS['asset_row']}:has({SELECTORS['asset_row_name']}:text-is('{asset}'))"
-    asset_row = _safe_find(page, row_selector, description="asset_row")
-    if asset_row is None:
-        return {"success": False, "error": f"asset row not found for {asset!r}"}
-    asset_row.click()
+    select_error = _select_asset(page, asset)
+    if select_error:
+        return {"success": False, "error": select_error}
 
     if not _fill_amount(page, amount):
         return {"success": False, "error": "could not set amount"}
@@ -797,33 +867,29 @@ def _fetch_ctrader_price(pair: str) -> Optional[float]:
         return None
 
 
-_price_display_warning_logged = False
+def _read_binomo_price(page, asset_name: str, *, timeout_seconds: float = 8.0) -> Optional[float]:
+    """Reads from the WebSocket price cache (see _install_price_feed_listener),
+    not the DOM — Binomo's price is canvas-rendered with no accessible DOM/
+    SVG text anywhere (confirmed live 2026-08-09 and re-confirmed 2026-08-10),
+    but ticks arrive continuously over wss://as.binomo.com/. Polls briefly
+    for a FRESH tick rather than trusting whatever's cached, since
+    _select_asset() clears the cache on every switch and the new asset's
+    subscription needs a moment to start streaming."""
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        with _price_feed_lock:
+            rate = _price_feed_state["rate"]
+            received_at = _price_feed_state["received_at"]
+        if rate is not None and received_at is not None:
+            if time.monotonic() - received_at <= _PRICE_FEED_STALE_SECONDS:
+                return rate
+        page.wait_for_timeout(200)
 
-
-def _read_binomo_price(page, asset_name: str) -> Optional[float]:
-    if SELECTORS["asset_price_display"] is None:
-        global _price_display_warning_logged
-        if not _price_display_warning_logged:
-            logger.warning(
-                "Binomo executor: asset_price_display has no selector — Binomo renders "
-                "its live price only inside a <canvas> chart, with no accessible DOM/SVG "
-                "text anywhere on the page (confirmed 2026-08-09 via live DOM inspection). "
-                "--correlation-check cannot read Binomo-side prices until this is solved "
-                "a different way (e.g. intercepting Binomo's price WebSocket in Playwright). "
-                "Binomo-side entries will log as 'unknown' until then — eyeball the chart "
-                "yourself during early correlation-check runs."
-            )
-            _price_display_warning_logged = True
-        return None
-
-    el = _safe_find(page, SELECTORS["asset_price_display"], description="asset_price_display")
-    if el is None:
-        return None
-    try:
-        return _parse_numeric_text(el.inner_text().strip())
-    except Exception:
-        logger.exception("Could not parse Binomo price text for %s", asset_name)
-        return None
+    logger.warning(
+        "Binomo executor: no fresh price tick for %s within %ss (WebSocket feed silent?)",
+        asset_name, timeout_seconds,
+    )
+    return None
 
 
 def _classify_or_unknown(entry: Optional[float], exit_: Optional[float]) -> str:
@@ -857,6 +923,11 @@ def _start_correlation_entry(page, asset_map: dict, signal: dict, pending: list,
     if not isinstance(ctrader_entry_price, (int, float)):
         return
 
+    select_error = _select_asset(page, asset_name)
+    if select_error:
+        logger.warning("Correlation-check: could not select %s (%s), skipping this signal", asset_name, select_error)
+        return
+
     binomo_entry_price = _read_binomo_price(page, asset_name)
     horizon_seconds = signal_tracking.compute_horizon_seconds(signal.get("timeframe"))
 
@@ -887,7 +958,16 @@ def _resolve_due_correlation_entries(page, pending: list, lock: threading.Lock) 
 
     for record in due:
         ctrader_exit_price = _fetch_ctrader_price(record["pair"])
-        binomo_exit_price = _read_binomo_price(page, record["binomo_asset"])
+
+        binomo_exit_price = None
+        select_error = _select_asset(page, record["binomo_asset"])
+        if select_error:
+            logger.warning(
+                "Correlation-check: could not re-select %s for exit price (%s)",
+                record["binomo_asset"], select_error,
+            )
+        else:
+            binomo_exit_price = _read_binomo_price(page, record["binomo_asset"])
 
         ctrader_direction = _classify_or_unknown(record["ctrader_entry_price"], ctrader_exit_price)
         binomo_direction = _classify_or_unknown(record["binomo_entry_price"], binomo_exit_price)
