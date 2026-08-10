@@ -92,7 +92,7 @@ def _start_background_services() -> None:
     except ConfigError as e:
         logger.critical(f"Конфіг помилка при запуску cTrader: {e}")
         notify_bot_failed(str(e))
-    except Exception as e:
+    except Exception:
         logger.exception("Не вдалося запустити cTrader client")
 
     _start_loop(60.0, scanner.scan_markets_once, now=False, name="scanner")

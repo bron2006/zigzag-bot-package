@@ -8,7 +8,7 @@ from typing import Dict, Optional
 
 import requests
 from twisted.internet import reactor
-from twisted.internet.defer import Deferred, succeed
+from twisted.internet.defer import succeed
 from twisted.internet.threads import deferToThreadPool
 
 from locales import localize_reason, normalize_lang

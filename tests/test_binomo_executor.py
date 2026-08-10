@@ -5,6 +5,97 @@ from unittest.mock import patch
 import binomo_executor
 
 
+class _FakePage:
+    """Stands in for a Playwright Page in price-feed tests: _read_binomo_price
+    only ever calls wait_for_timeout on it. Each call advances the fake clock,
+    so polling loops terminate without real sleeping."""
+
+    def __init__(self, clock):
+        self._clock = clock
+
+    def wait_for_timeout(self, ms):
+        self._clock.advance(ms / 1000.0)
+
+
+class _FakeClock:
+    def __init__(self):
+        self.now = 1000.0
+
+    def advance(self, seconds):
+        self.now += seconds
+
+    def __call__(self):
+        return self.now
+
+
+class ReadBinomoPriceTest(unittest.TestCase):
+    """Covers the guard that stops a tick from the previously-viewed asset
+    being recorded as the newly-selected one's price - the failure mode that
+    would silently corrupt correlation-check data."""
+
+    def setUp(self):
+        self.clock = _FakeClock()
+        self.page = _FakePage(self.clock)
+        self._orig_map = dict(binomo_executor._asset_ric_map)
+        binomo_executor._asset_ric_map.clear()
+        # _price_feed_state is module-global; without resetting it a tick
+        # left by an earlier test leaks into this one.
+        binomo_executor._clear_price_feed_cache()
+        self._time_patch = patch.object(binomo_executor.time, "monotonic", self.clock)
+        self._time_patch.start()
+
+    def tearDown(self):
+        self._time_patch.stop()
+        binomo_executor._clear_price_feed_cache()
+        binomo_executor._asset_ric_map.clear()
+        binomo_executor._asset_ric_map.update(self._orig_map)
+
+    def _set_tick(self, rate, ric):
+        with binomo_executor._price_feed_lock:
+            binomo_executor._price_feed_state["rate"] = rate
+            binomo_executor._price_feed_state["ric"] = ric
+            binomo_executor._price_feed_state["received_at"] = self.clock.now
+
+    def test_returns_price_once_ric_settles(self):
+        self._set_tick(93000.5, "BTCUSD-OTC")
+        price = binomo_executor._read_binomo_price(self.page, "Bitcoin (OTC)")
+        self.assertEqual(price, 93000.5)
+        self.assertEqual(binomo_executor._asset_ric_map["Bitcoin (OTC)"], "BTCUSD-OTC")
+
+    def test_rejects_price_belonging_to_another_asset(self):
+        binomo_executor._asset_ric_map["Ethereum (OTC)"] = "ETHUSD-OTC"
+        self._set_tick(93000.5, "BTCUSD-OTC")  # lingering tick from Bitcoin
+        price = binomo_executor._read_binomo_price(self.page, "Ethereum (OTC)")
+        self.assertIsNone(price)
+
+    def test_returns_none_when_feed_is_silent(self):
+        price = binomo_executor._read_binomo_price(self.page, "Bitcoin (OTC)", timeout_seconds=2.0)
+        self.assertIsNone(price)
+
+    def test_ignores_stale_tick(self):
+        self._set_tick(93000.5, "BTCUSD-OTC")
+        self.clock.advance(binomo_executor._PRICE_FEED_STALE_SECONDS + 1)
+        price = binomo_executor._read_binomo_price(self.page, "Bitcoin (OTC)", timeout_seconds=2.0)
+        self.assertIsNone(price)
+
+
+class ClearPriceFeedCacheTest(unittest.TestCase):
+    def test_clears_tick_but_keeps_learned_ric_map(self):
+        with binomo_executor._price_feed_lock:
+            binomo_executor._price_feed_state["rate"] = 1.0
+            binomo_executor._price_feed_state["ric"] = "X"
+            binomo_executor._price_feed_state["received_at"] = 5.0
+        binomo_executor._asset_ric_map["Some Asset"] = "X"
+        try:
+            binomo_executor._clear_price_feed_cache()
+            with binomo_executor._price_feed_lock:
+                self.assertIsNone(binomo_executor._price_feed_state["rate"])
+                self.assertIsNone(binomo_executor._price_feed_state["ric"])
+            self.assertEqual(binomo_executor._asset_ric_map.get("Some Asset"), "X")
+        finally:
+            binomo_executor._asset_ric_map.pop("Some Asset", None)
+
+
 class LoadAssetMapTest(unittest.TestCase):
     def test_loads_expected_pairs(self):
         asset_map = binomo_executor.load_asset_map()

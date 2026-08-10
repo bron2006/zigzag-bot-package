@@ -4,7 +4,20 @@ import threading
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import Boolean, Column, DateTime, Float, Integer, String, create_engine, event, func, inspect, text
+from sqlalchemy import (
+    Boolean,
+    Column,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    create_engine,
+    event,
+    func,
+    inspect,
+    text,
+)
 from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from sqlalchemy.orm import declarative_base, scoped_session, sessionmaker
 
@@ -149,7 +162,15 @@ class BinomoTrade(Base):
     result = Column(String(16), nullable=False, default="pending", index=True)
     payout_amount = Column(Float, nullable=True)  # net profit/loss once resolved
     resolved_at = Column(DateTime, nullable=True)
-    signal_outcome_id = Column(Integer, nullable=True, index=True)
+    # Real FK (added 2026-08-10): this was a bare Integer, so after the
+    # signal_outcomes archival restarted IDs at 1, old rows here would have
+    # silently pointed at completely different, newer signals. ON DELETE SET
+    # NULL rather than CASCADE - a trade actually happened and must not
+    # disappear from the record just because its originating signal row was
+    # archived away.
+    signal_outcome_id = Column(
+        Integer, ForeignKey("signal_outcomes.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     error_message = Column(String(255), nullable=True)
 
 
@@ -367,6 +388,7 @@ def initialize_database():
         Base.metadata.create_all(bind=engine)
         _ensure_user_columns()
         _ensure_signal_outcome_columns()
+        _ensure_binomo_trade_fk()
         logger.info("Database initialization complete.")
     except Exception as e:
         logger.error(f"Error initializing database: {e}", exc_info=True)
@@ -427,6 +449,48 @@ def _ensure_signal_outcome_columns() -> None:
         logger.info("Database signal_outcomes table migrated: %s", ", ".join(statements))
     except Exception:
         logger.exception("Could not ensure signal_outcomes table columns")
+
+
+_BINOMO_SIGNAL_OUTCOME_FK = "fk_binomo_trades_signal_outcome_id"
+
+
+def _ensure_binomo_trade_fk() -> None:
+    """Adds the binomo_trades.signal_outcome_id -> signal_outcomes.id foreign
+    key to tables created before it existed. create_all() only creates whole
+    tables, so an existing binomo_trades keeps its bare Integer column
+    otherwise. Any row whose signal_outcome_id no longer resolves (e.g. rows
+    predating the 2026-08-10 archival, when IDs restarted at 1) is cleared to
+    NULL first - the constraint can't be added while they're dangling, and a
+    NULL "unknown origin" is strictly better than a confident pointer to an
+    unrelated newer signal."""
+    try:
+        inspector = inspect(engine)
+        if "binomo_trades" not in inspector.get_table_names():
+            return
+        if "signal_outcomes" not in inspector.get_table_names():
+            return
+
+        existing = {fk.get("name") for fk in inspector.get_foreign_keys("binomo_trades")}
+        if _BINOMO_SIGNAL_OUTCOME_FK in existing:
+            return
+
+        with engine.begin() as conn:
+            orphans = conn.execute(text(
+                "UPDATE binomo_trades SET signal_outcome_id = NULL "
+                "WHERE signal_outcome_id IS NOT NULL AND signal_outcome_id NOT IN "
+                "(SELECT id FROM signal_outcomes)"
+            )).rowcount
+            conn.execute(text(
+                f"ALTER TABLE binomo_trades ADD CONSTRAINT {_BINOMO_SIGNAL_OUTCOME_FK} "
+                "FOREIGN KEY (signal_outcome_id) REFERENCES signal_outcomes(id) ON DELETE SET NULL"
+            ))
+
+        logger.info(
+            "Database binomo_trades migrated: added %s (cleared %s dangling reference(s))",
+            _BINOMO_SIGNAL_OUTCOME_FK, orphans,
+        )
+    except Exception:
+        logger.exception("Could not ensure binomo_trades foreign key")
 
 
 def _set_runtime_setting(session, key: str, value: str | None) -> None:

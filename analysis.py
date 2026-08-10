@@ -9,10 +9,12 @@ from copy import deepcopy
 from typing import Optional, Tuple
 
 import pandas as pd
-import pandas_ta as ta
+# noqa: F401 - `ta` is never referenced by name, but importing pandas_ta is
+# what registers the `.ta` DataFrame accessor used below (df.ta.rsi/adx/atr/
+# ema). Linters flag it as unused; removing it breaks all analysis at runtime.
+import pandas_ta as ta  # noqa: F401
 from twisted.internet import defer, reactor
 from twisted.internet.defer import Deferred, DeferredList, succeed
-from twisted.internet.threads import deferToThreadPool
 
 import ml_models
 import news_filter

@@ -47,9 +47,17 @@ is no selector for it and there never will be one. Instead,
 _install_price_feed_listener() taps Binomo's own WebSocket
 (wss://as.binomo.com/, confirmed live via Playwright's page.on("websocket"))
 and caches the latest price tick; _read_binomo_price() reads from that
-cache, not the DOM. The cache is cleared on every _select_asset() call so a
-stale price from the previously-viewed asset can never be mistaken for the
-new one.
+cache, not the DOM.
+
+Each tick carries a `ric` (Binomo's internal asset id, e.g. "BTCUSD-OTC"),
+and that's what makes the reading trustworthy: after an asset switch, ticks
+for the PREVIOUS asset can still arrive briefly, so _read_binomo_price waits
+for the RIC to stay unchanged for _PRICE_FEED_SETTLE_SECONDS before
+accepting a price, and cross-checks it against the RIC previously observed
+for that asset name (_asset_ric_map, learned at runtime — Binomo publishes
+no name->RIC mapping). A missing price is harmless for correlation-check
+(logs as 'unknown'); one belonging to the wrong asset would silently corrupt
+the very comparison the mode exists to produce.
 
 One remaining known gap: `login_email_input`/`login_password_input`/
 `login_submit_button` are still unverified best-effort guesses (the login
@@ -93,8 +101,23 @@ BINOMO_TRADE_URL = "https://binomo.com/trading"
 # the PREVIOUS asset can never be mistaken for the new one.
 _PRICE_FEED_WS_HOST = "as.binomo.com"
 _PRICE_FEED_STALE_SECONDS = 5.0
+# How often to re-verify the Binomo session during a long run (see
+# _session_still_valid). Sessions last days, so hourly is plenty and costs
+# one selector check.
+_SESSION_RECHECK_INTERVAL_SECONDS = 3600.0
+# How often to log process memory during long runs (see _log_resource_usage).
+_RESOURCE_LOG_INTERVAL_SECONDS = 3600.0
+# Screenshot retention (see _prune_screenshots): failures write one PNG each,
+# so an unattended multi-day run with a broken page would otherwise grow the
+# logs/ directory without bound.
+_SCREENSHOT_RETENTION_DAYS = 7
+_SCREENSHOT_MAX_FILES = 500
 _price_feed_lock = threading.Lock()
 _price_feed_state = {"rate": None, "ric": None, "received_at": None}
+# After switching assets, ticks for the PREVIOUS asset can still arrive for
+# a moment. A tick is only trusted once its RIC has stayed unchanged for
+# this long, i.e. the feed has settled onto the newly-selected asset.
+_PRICE_FEED_SETTLE_SECONDS = 1.5
 
 SCREENSHOT_DIR = Path("logs") / "binomo_screenshots"
 CORRELATION_LOG_PATH = Path("logs") / "binomo_correlation_check.csv"
@@ -268,6 +291,12 @@ def login_and_save_session() -> None:
 
 
 def _install_price_feed_listener(page) -> None:
+    """Taps Binomo's price WebSocket, caching the latest tick as
+    {rate, ric, received_at}. Ticks look like
+    {"data":[{"assets":[{"rate":...,"ric":"BTCUSD-OTC"}]}]} - the RIC is
+    Binomo's internal asset id, which is what makes it possible to tell
+    whose price a tick actually is (verified live: switching the chart
+    between assets changes the incoming RIC accordingly)."""
     def _on_websocket(ws):
         if _PRICE_FEED_WS_HOST not in ws.url:
             return
@@ -294,7 +323,18 @@ def _install_price_feed_listener(page) -> None:
     page.on("websocket", _on_websocket)
 
 
+# Display name ("Bitcoin (OTC)") -> RIC ("BTCUSD-OTC"), learned at runtime.
+# Binomo publishes no mapping and the two name spaces don't derive from each
+# other ("Crypto IDX" is "Z-CRY/IDX"), so it's observed once per asset and
+# then used to detect a tick belonging to the wrong asset.
+_asset_ric_map: dict[str, str] = {}
+
+
 def _clear_price_feed_cache() -> None:
+    """Drops the cached tick so a price from the previously-viewed asset
+    can't be read as the new one's. The learned name->RIC map is kept: it
+    doesn't go stale on asset switches and is what lets _read_binomo_price
+    verify the tick it eventually accepts."""
     with _price_feed_lock:
         _price_feed_state["rate"] = None
         _price_feed_state["ric"] = None
@@ -325,11 +365,74 @@ def _is_logged_in(page) -> bool:
         return False
 
 
+_session_last_checked_at: Optional[float] = None
+
+
+def _session_still_valid(page) -> bool:
+    """Re-checks the Binomo session periodically, not just at startup. A
+    storage_state.json session expires after some days; before this, an
+    expired session meant every subsequent action failed while the run kept
+    going - correlation-check would quietly log hours of 'unknown' rows,
+    and only reading the CSV would reveal it. Returns False once the
+    session is gone so callers can stop instead of collecting garbage."""
+    global _session_last_checked_at
+
+    now = time.monotonic()
+    if _session_last_checked_at is not None and now - _session_last_checked_at < _SESSION_RECHECK_INTERVAL_SECONDS:
+        return True
+
+    _session_last_checked_at = now
+    if _is_logged_in(page):
+        return True
+
+    shot = _screenshot(page, "session_expired")
+    logger.critical("Binomo executor: session no longer valid (expired storage_state?). Screenshot: %s", shot)
+    notify_admin(
+        "🛑 Binomo executor: сесія Binomo більше не дійсна (схоже, протермінувалась). "
+        "Процес зупинено, щоб не збирати сміття. Запусти "
+        "`python binomo_executor.py --login` ще раз.",
+        alert_key="binomo_session_expired",
+    )
+    return False
+
+
 # ----------------------------------------------------------------------
 # Safe DOM interaction — never guesses an alternate selector. On timeout:
 # screenshot, log, return None. Callers must treat None as "stop, don't
 # trade", per the task's own explicit rule.
 # ----------------------------------------------------------------------
+
+
+def _prune_screenshots() -> None:
+    """Keeps logs/binomo_screenshots/ bounded. Audit screenshots are written
+    on every failed lookup, so a multi-day run against a broken page would
+    otherwise fill the disk. Deletes anything older than the retention
+    window, then trims oldest-first if still over the file cap."""
+    try:
+        files = sorted(
+            (p for p in SCREENSHOT_DIR.glob("*.png") if p.is_file()),
+            key=lambda p: p.stat().st_mtime,
+        )
+    except Exception:
+        logger.debug("Could not list screenshot directory for pruning", exc_info=True)
+        return
+
+    cutoff = time.time() - (_SCREENSHOT_RETENTION_DAYS * 86400)
+    survivors = []
+    for path in files:
+        try:
+            if path.stat().st_mtime < cutoff:
+                path.unlink()
+            else:
+                survivors.append(path)
+        except Exception:
+            logger.debug("Could not prune screenshot %s", path, exc_info=True)
+
+    for path in survivors[: max(0, len(survivors) - _SCREENSHOT_MAX_FILES)]:
+        try:
+            path.unlink()
+        except Exception:
+            logger.debug("Could not prune screenshot %s", path, exc_info=True)
 
 
 def _screenshot(page, tag: str) -> Optional[str]:
@@ -338,6 +441,7 @@ def _screenshot(page, tag: str) -> Optional[str]:
         ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
         path = SCREENSHOT_DIR / f"{ts}_{tag}.png"
         page.screenshot(path=str(path))
+        _prune_screenshots()
         return str(path)
     except Exception:
         logger.exception("Could not save audit screenshot for %s", tag)
@@ -354,10 +458,14 @@ def _safe_find(page, selector: str, *, description: str, timeout_ms: int = _DEFA
             "Not guessing an alternative — stopping this action. Screenshot: %s",
             description, selector, shot,
         )
+        # alert_key scoped per element: a broken page fails on the same
+        # element for every signal, which without a cooldown meant hundreds
+        # of identical Telegram messages over an unattended multi-day run.
         notify_admin(
             f"⚠️ Binomo executor: елемент \"{description}\" не знайдено на сторінці. "
             "Потрібна ручна перевірка (можливо, змінився дизайн сайту). "
             f"Скріншот: {shot or 'не вдалося зберегти'}",
+            alert_key=f"binomo_missing_element_{description}",
         )
         return None
 
@@ -823,6 +931,9 @@ def run(*, headless: bool = None) -> None:
 
         try:
             while True:
+                if not _session_still_valid(page):
+                    break
+
                 try:
                     signal = signal_queue.get(timeout=2.0)
                     _handle_signal(page, asset_map, signal)
@@ -874,22 +985,94 @@ def _read_binomo_price(page, asset_name: str, *, timeout_seconds: float = 8.0) -
     but ticks arrive continuously over wss://as.binomo.com/. Polls briefly
     for a FRESH tick rather than trusting whatever's cached, since
     _select_asset() clears the cache on every switch and the new asset's
-    subscription needs a moment to start streaming."""
+    subscription needs a moment to start streaming.
+
+    Waits for the feed to SETTLE on one RIC before trusting a tick: right
+    after an asset switch, ticks for the previously-viewed asset can still
+    arrive, and recording one of those as the new asset's price would
+    silently corrupt exactly the comparison correlation-check exists to
+    produce. Also cross-checks against the RIC previously observed for this
+    asset name, so a wrong-asset price is refused rather than logged. A
+    missing price is harmless here (logs as 'unknown'); a wrong one is not."""
     deadline = time.monotonic() + timeout_seconds
+    stable_ric = None
+    stable_since = None
+    last_seen_ric = None
+
     while time.monotonic() < deadline:
         with _price_feed_lock:
             rate = _price_feed_state["rate"]
             received_at = _price_feed_state["received_at"]
-        if rate is not None and received_at is not None:
-            if time.monotonic() - received_at <= _PRICE_FEED_STALE_SECONDS:
+            ric = _price_feed_state["ric"]
+
+        now = time.monotonic()
+        fresh = (
+            rate is not None
+            and received_at is not None
+            and now - received_at <= _PRICE_FEED_STALE_SECONDS
+        )
+
+        if fresh:
+            last_seen_ric = ric
+            if ric != stable_ric:
+                stable_ric, stable_since = ric, now
+            elif now - stable_since >= _PRICE_FEED_SETTLE_SECONDS:
+                known_ric = _asset_ric_map.get(asset_name)
+                if known_ric is not None and known_ric != ric:
+                    logger.error(
+                        "Binomo executor: price feed is on RIC %r but %r was previously %r — "
+                        "refusing this tick rather than recording another asset's price",
+                        ric, asset_name, known_ric,
+                    )
+                    return None
+                if known_ric is None and ric is not None:
+                    _asset_ric_map[asset_name] = ric
+                    logger.info("Binomo executor: learned RIC for %s -> %s", asset_name, ric)
                 return rate
+
         page.wait_for_timeout(200)
 
     logger.warning(
-        "Binomo executor: no fresh price tick for %s within %ss (WebSocket feed silent?)",
-        asset_name, timeout_seconds,
+        "Binomo executor: no settled price tick for %s within %ss (last_ric=%s) — "
+        "feed silent or still switching assets",
+        asset_name, timeout_seconds, last_seen_ric,
     )
     return None
+
+
+_resource_last_logged_at: Optional[float] = None
+
+
+def _log_resource_usage(pending: list) -> None:
+    """Logs this process's memory once an hour during long correlation-check
+    runs. Deliberately measurement, not mitigation: whether a multi-day run
+    actually leaks (the Binomo SPA is never reloaded, and Playwright holds
+    an object per WebSocket) is unknown, and guessing at a fix for an
+    unmeasured problem would be worse than collecting the numbers first.
+    psutil is optional - absent, this logs the queue depth only rather than
+    becoming a hard dependency of the executor."""
+    global _resource_last_logged_at
+
+    now = time.monotonic()
+    if _resource_last_logged_at is not None and now - _resource_last_logged_at < _RESOURCE_LOG_INTERVAL_SECONDS:
+        return
+    _resource_last_logged_at = now
+
+    try:
+        import psutil
+
+        rss_mb = psutil.Process().memory_info().rss / (1024 * 1024)
+        logger.info(
+            "Correlation-check resources: RSS=%.1f MB, pending_entries=%d",
+            rss_mb, len(pending),
+        )
+    except ImportError:
+        logger.info(
+            "Correlation-check resources: pending_entries=%d (psutil not installed — "
+            "`pip install psutil` to also log memory)", len(pending),
+        )
+    except Exception:
+        logger.debug("Could not sample resource usage", exc_info=True)
 
 
 def _classify_or_unknown(entry: Optional[float], exit_: Optional[float]) -> str:
@@ -1031,6 +1214,10 @@ def run_correlation_check(*, headless: bool = None) -> None:
 
         try:
             while True:
+                if not _session_still_valid(page):
+                    break
+                _log_resource_usage(pending)
+
                 try:
                     signal = signal_queue.get(timeout=2.0)
                     _start_correlation_entry(page, asset_map, signal, pending, lock)
