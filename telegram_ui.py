@@ -357,7 +357,14 @@ def _format_signal_message(result: dict, expiration: str, lang: str = "en") -> s
     sentiment = _safe_html(_label_sentiment(result.get("sentiment", "GO"), lang))
     trade_allowed = t("trade_allowed", lang) if result.get("is_trade_allowed") else t("trade_not_recommended", lang)
     score = int(float(result.get("score", 50) or 50))
-    bear_score = max(0, min(100, 100 - score))
+    # HOTFIX FOLLOW-UP (2026-08-10): high score now means SELL/bearish, not
+    # BUY/bullish (analysis.py's swap) - bull% is the inverse of the raw
+    # score now, not the score itself. Same bug already found/fixed in
+    # webapp/script.js's power-balance gauge; this Telegram-message render
+    # path was missed in that pass since it doesn't share code with the
+    # Web App.
+    bull_score = max(0, min(100, 100 - score))
+    bear_score = score
 
     arrow = "↔️"
     if raw_verdict == "BUY":
@@ -378,7 +385,7 @@ def _format_signal_message(result: dict, expiration: str, lang: str = "en") -> s
         f"💵 <code>{price_str}</code>",
         f"✅ <b>{t('news', lang)}:</b> {sentiment}",
         "",
-        f"🐂 <b>{t('bulls', lang)}:</b> {score}%    🐃 <b>{t('bears', lang)}:</b> {bear_score}%",
+        f"🐂 <b>{t('bulls', lang)}:</b> {bull_score}%    🐃 <b>{t('bears', lang)}:</b> {bear_score}%",
         "",
     ]
 
