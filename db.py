@@ -82,6 +82,14 @@ class AppRuntimeSetting(Base):
 
 
 class SignalOutcome(Base):
+    # 2026-08-10: archived all pre-existing rows (112, a mix of data from
+    # before and during the BUY/SELL-swap incident - see scanner.py's
+    # HOTFIX FOLLOW-UP comment) to the "signal_outcomes_legacy_20260810"
+    # table (CSV snapshot in data/) and started this table fresh, so
+    # /api/stats/signals and /winrate report win-rate computed only from
+    # signals generated after every part of that fix was live. No code
+    # change was needed here - both already just query this model, which
+    # now resolves to the new table.
     __tablename__ = "signal_outcomes"
 
     id = Column(Integer, primary_key=True, index=True)
