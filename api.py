@@ -557,7 +557,12 @@ def register_routes(app):
         except ValueError:
             days = 7
 
-        stats = db.get_signal_outcome_stats(days)
+        # Binomo-oriented (no flat/push) is the default view since that's
+        # what actually gets traded; ?style=forex is a debug escape hatch
+        # to the old noise-threshold-aware view, e.g. for eyeballing
+        # adaptive-threshold calibration data the same way it's used there.
+        binomo_style = request.args.get("style", "binomo").strip().lower() != "forex"
+        stats = db.get_signal_outcome_stats(days, binomo_style=binomo_style)
         return jsonify({"success": True, **stats})
 
     @app.route("/api/get_pairs")

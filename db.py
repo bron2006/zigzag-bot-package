@@ -1551,12 +1551,20 @@ def _row_is_wrong_direction(row) -> bool:
 
 
 def _aggregate_signal_outcomes(rows: list) -> dict:
-    """Binary-option-style aggregation: a 'win' is price moving in the
-    signal's predicted direction over its horizon, a 'loss' is the
-    opposite, 'flat' means the move was inside the noise threshold
-    (excluded from win_rate, like a push). Legacy tp/sl/timeout rows from
-    the previous tracking generation are counted as resolved-but-excluded
-    so they don't skew win_rate."""
+    """Forex-oriented aggregation (unchanged 2026-08-11): a 'win' is price
+    moving in the signal's predicted direction over its horizon, a 'loss' is
+    the opposite, 'flat' means the move was inside the noise threshold
+    (SIGNAL_OUTCOME_FLAT_THRESHOLD_PERCENT, applied once at resolve time by
+    signal_tracking._classify_move - excluded from win_rate, like a push).
+    Legacy tp/sl/timeout rows from the previous tracking generation are
+    counted as resolved-but-excluded so they don't skew win_rate.
+
+    Kept exactly as-is for callers that need it: get_signal_outcome_score_
+    breakdown/threshold_advisor.py (forex threshold calibration) and the
+    debug ?style=forex view of /api/stats/signals. For the Binomo-oriented
+    default view, see _aggregate_signal_outcomes_binomo_style below - Binomo
+    binary options have no 'push', so that noise threshold doesn't apply
+    there even though it's still meaningful here."""
     wins = sum(1 for r in rows if _row_is_correct_direction(r))
     losses = sum(1 for r in rows if _row_is_wrong_direction(r))
     flats = sum(1 for r in rows if r.outcome == "flat")
@@ -1574,10 +1582,64 @@ def _aggregate_signal_outcomes(rows: list) -> dict:
     }
 
 
-def get_signal_outcome_stats(days: int = 7) -> dict:
+def _binomo_style_direction(row) -> bool | None:
+    """True/False = win/loss judged by raw price movement only, ignoring
+    the noise threshold entirely - Binomo settles a binary option as a win
+    or loss on ANY price difference, however small, there is no 'push'.
+    Returns None for rows with nothing comparable to judge (still pending,
+    or a legacy tp/sl/timeout row from the previous tracking generation)."""
+    if row.outcome == "pending" or row.outcome in ("tp", "sl", "timeout"):
+        return None
+    if row.exit_price is None or row.entry_price is None:
+        return None
+    if row.verdict == "BUY":
+        return row.exit_price > row.entry_price
+    if row.verdict == "SELL":
+        return row.exit_price < row.entry_price
+    return None
+
+
+def _aggregate_signal_outcomes_binomo_style(rows: list) -> dict:
+    """Same shape as _aggregate_signal_outcomes, but recomputes win/loss
+    directly from entry_price/exit_price rather than trusting the stored
+    'outcome' column - a row the forex classification calls 'flat' (moved,
+    just not past the noise threshold) still counts as a definite Binomo
+    win or loss here, since Binomo has no equivalent of a push. 'flats' is
+    always 0; kept in the return shape so callers built for the forex
+    aggregation's dict shape don't need special-casing."""
+    wins = losses = 0
+    for r in rows:
+        won = _binomo_style_direction(r)
+        if won is True:
+            wins += 1
+        elif won is False:
+            losses += 1
+    legacy = sum(1 for r in rows if r.outcome in ("tp", "sl", "timeout"))
+    resolved = wins + losses + legacy
+    decided = wins + losses
+    return {
+        "total": len(rows),
+        "resolved": resolved,
+        "pending": len(rows) - resolved,
+        "wins": wins,
+        "losses": losses,
+        "flats": 0,
+        "win_rate": round(100.0 * wins / decided, 1) if decided else None,
+    }
+
+
+def get_signal_outcome_stats(days: int = 7, *, binomo_style: bool = True) -> dict:
+    """Defaults to the Binomo-oriented view (no flat/push - see
+    _aggregate_signal_outcomes_binomo_style) since that's what actually gets
+    traded. Pass binomo_style=False for the forex-oriented view with the
+    noise-threshold 'flat' outcome (debug use - see api.py's ?style=forex)."""
     days = max(1, min(int(days or 7), 365))
     since = _utcnow() - timedelta(days=days)
-    empty = {"ok": False, "days": days, "by_pair": [], "by_timeframe": [], **_aggregate_signal_outcomes([])}
+    aggregate = _aggregate_signal_outcomes_binomo_style if binomo_style else _aggregate_signal_outcomes
+    empty = {
+        "ok": False, "days": days, "binomo_style": binomo_style,
+        "by_pair": [], "by_timeframe": [], **aggregate([]),
+    }
 
     try:
         with get_db() as session:
@@ -1596,18 +1658,19 @@ def get_signal_outcome_stats(days: int = 7) -> dict:
         by_tf_map.setdefault(row.timeframe or "?", []).append(row)
 
     by_pair = [
-        {"pair": pair, **_aggregate_signal_outcomes(items)}
+        {"pair": pair, **aggregate(items)}
         for pair, items in sorted(by_pair_map.items(), key=lambda kv: -len(kv[1]))
     ]
     by_timeframe = [
-        {"timeframe": tf, **_aggregate_signal_outcomes(items)}
+        {"timeframe": tf, **aggregate(items)}
         for tf, items in sorted(by_tf_map.items())
     ]
 
     return {
         "ok": True,
         "days": days,
-        **_aggregate_signal_outcomes(rows),
+        "binomo_style": binomo_style,
+        **aggregate(rows),
         "by_pair": by_pair,
         "by_timeframe": by_timeframe,
     }

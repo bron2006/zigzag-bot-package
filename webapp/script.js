@@ -158,7 +158,7 @@ const APP_I18N = {
         subscribe: "💳 Оформити підписку",
         paymentError: "Не вдалося створити інвойс. Спробуйте ще раз трохи пізніше.",
         winrateButton: "📊 Win-rate",
-        winrateModalTitle: "📊 Win-rate сигналів",
+        winrateModalTitle: "📊 Win-rate сигналів (як для Binomo, без флету)",
         winrateWeek: "Тиждень (7д)",
         winrateMonth: "Місяць (30д)",
         winrateTotal: "Сигналів",
@@ -1102,6 +1102,11 @@ function renderWinratePeriodSummary(label, stats) {
     }
 
     const rateClass = winrateRateClass(stats.win_rate);
+    // flats is always 0 in the default Binomo-oriented view (no push there)
+    // - only shown when non-zero, i.e. when looking at ?style=forex data.
+    const flatsPart = stats.flats
+        ? ` · ${escapeHtml(tr("winrateTimeouts"))}: ${stats.flats}`
+        : "";
     return `
         <div class="winrate-section">
             <div class="winrate-section-title">${escapeHtml(label)}</div>
@@ -1111,8 +1116,7 @@ function renderWinratePeriodSummary(label, stats) {
                     ${escapeHtml(tr("winrateTotal"))}: ${stats.total ?? 0}
                     (${stats.resolved ?? 0} ${escapeHtml(tr("winrateResolved"))}, ${stats.pending ?? 0} ${escapeHtml(tr("winratePending"))})<br>
                     ${escapeHtml(tr("winrateWins"))}: ${stats.wins ?? 0} ·
-                    ${escapeHtml(tr("winrateLosses"))}: ${stats.losses ?? 0} ·
-                    ${escapeHtml(tr("winrateTimeouts"))}: ${stats.flats ?? 0}
+                    ${escapeHtml(tr("winrateLosses"))}: ${stats.losses ?? 0}${flatsPart}
                 </span>
             </div>
         </div>

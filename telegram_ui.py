@@ -470,7 +470,7 @@ def _format_winrate_period(label: str, stats: dict) -> list[str]:
         f"<b>{label}</b>",
         f"Сигналів: {stats.get('total', 0)} "
         f"(закрито: {stats.get('resolved', 0)}, в очікуванні: {stats.get('pending', 0)})",
-        f"Виграші: {stats.get('wins', 0)} · Програші: {stats.get('losses', 0)} · Флет: {stats.get('flats', 0)}",
+        f"Виграші: {stats.get('wins', 0)} · Програші: {stats.get('losses', 0)}",
         f"Win-rate: {win_rate_str}",
         "",
     ]
@@ -484,10 +484,15 @@ def winrate_command(update, context):
         update.message.reply_text(t("unauthorized", lang))
         return
 
+    # Binomo-oriented by default (db.get_signal_outcome_stats(binomo_style=
+    # True)) - no flat/push, since Binomo settles any price difference as a
+    # win or loss. The old forex-oriented view (with the noise-threshold
+    # 'flat' outcome) is still available, just not on this command - see
+    # /api/stats/signals?style=forex.
     week = db.get_signal_outcome_stats(7)
     month = db.get_signal_outcome_stats(30)
 
-    lines = ["📊 <b>Win-rate сигналів</b>", ""]
+    lines = ["📊 <b>Win-rate сигналів (як для Binomo, без флету)</b>", ""]
     lines.extend(_format_winrate_period("Тиждень (7д)", week))
     lines.extend(_format_winrate_period("Місяць (30д)", month))
 
