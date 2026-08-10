@@ -1652,6 +1652,12 @@ function formatSignalAsHtml(signalData, exp) {
                 ${escapeHtml(tr("entryNotRecommended"))}
            </div>`;
 
+    // HOTFIX FOLLOW-UP (2026-08-10): analysis.py's BUY/SELL verdict is now
+    // swapped relative to score (high score = SELL/bearish, low = BUY/
+    // bullish - see analysis.py's TEMPORARY HOTFIX comment). The bull/bear
+    // power-balance gauge below used to assume the opposite (high score =
+    // bullish), which would show it backwards post-swap; the 🐂/🐃 split
+    // is flipped here to match.
     return `
         <div class="signal-header" style="text-align:center; font-size:1em; margin-bottom:6px;">
             <strong>${pair}</strong> <span style="color:#64748b; font-size:0.74em;">(${escapeHtml(tr("expiration"))}: ${escapeHtml(labelTimeframe(exp))})</span>
@@ -1672,8 +1678,8 @@ function formatSignalAsHtml(signalData, exp) {
                 : ""
         }
         <div class="power-balance" style="display:flex; justify-content:space-around; margin:7px 0; font-weight:bold; text-align:center; font-size:13px;">
-            <span style="color:#26a69a;">🐂 ${score}%</span>
-            <span style="color:#ef5350;">🐃 ${100 - score}%</span>
+            <span style="color:#26a69a;">🐂 ${100 - score}%</span>
+            <span style="color:#ef5350;">🐃 ${score}%</span>
         </div>
         ${renderTimeframeDetails(signalData)}
         ${renderDataStatus(signalData)}

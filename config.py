@@ -75,10 +75,16 @@ ANALYSIS_CONFIG = {"min_bars_for_analysis": 50}
 IDEAL_ENTRY_THRESHOLD = _env_int("IDEAL_ENTRY_THRESHOLD", 78)
 
 # ML model BUY/SELL/NEUTRAL split (analysis.py _run_technical_analysis).
-# score > ML_BUY_SCORE_THRESHOLD -> BUY, score < ML_SELL_SCORE_THRESHOLD ->
-# SELL, otherwise NEUTRAL. This sits below IDEAL_ENTRY_THRESHOLD, which is
-# the separate, higher bar the scanner uses to decide whether to actually
-# fire a signal.
+# These thresholds are still named for the score direction they compare
+# against - HOTFIX (2026-08-10): the verdict assigned to each side is
+# swapped (score > ML_BUY_SCORE_THRESHOLD -> SELL, score <
+# ML_SELL_SCORE_THRESHOLD -> BUY, otherwise NEUTRAL) pending a fix to the
+# underlying model - see the TEMPORARY HOTFIX comment in analysis.py. This
+# sits below IDEAL_ENTRY_THRESHOLD, which is the separate, higher bar
+# scanner.py uses to decide whether to actually fire a signal - keep both
+# in sync if the verdict mapping changes again (see scanner.py's own
+# HOTFIX FOLLOW-UP comment - missing that sync once already caused ~13h
+# with zero signals in production).
 ML_BUY_SCORE_THRESHOLD = _env_int("ML_BUY_SCORE_THRESHOLD", 75) or 75
 ML_SELL_SCORE_THRESHOLD = _env_int("ML_SELL_SCORE_THRESHOLD", 25) or 25
 SCANNER_TIMEFRAME = _env_str("SCANNER_TIMEFRAME", "1m") or "1m"
