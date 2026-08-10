@@ -142,6 +142,17 @@ SELECTORS = {
     "asset_search_input": "way-input-search input[type='text']",
     "asset_row": "div.asset-row",  # exact-match the name inside .name-text p — see place_binary_trade
     "asset_row_name": ".name-text p",
+    # Scopes to the picker's currently-open list only: an unscoped
+    # "div.asset-row" search also matches other trade-mode tabs' (5ST/DRT/
+    # CFD) rows, which are already present in the DOM but hidden - confirmed
+    # live 2026-08-10 (111 unscoped rows vs. 84 scoped, for a list showing
+    # "Активно: 85"). get_available_binomo_assets() must use this, not the
+    # bare "asset_row" selector, to avoid reading a different tab's payout.
+    "asset_list_scope": ".asset-body .asset",
+    # First ".yield" in a row is the "Прибуток" (payout) column; a second
+    # one right after it is "Для VIP" - confirmed live 2026-08-10 against
+    # the picker's own column headers. Deliberately reads only the first.
+    "asset_row_payout": ".yield",
     "amount_control": "way-input-controls[type='currency']",
     "amount_input": "way-input-controls[type='currency'] input",
     "time_control": "#qa_trading_dealTimeInput",
@@ -470,6 +481,34 @@ def _safe_find(page, selector: str, *, description: str, timeout_ms: int = _DEFA
         return None
 
 
+def _safe_click(el, page, *, description: str) -> bool:
+    """Same treatment as _safe_find, but for the click itself. Added after
+    a live crash (2026-08-10): _select_asset's picker_button.click() was a
+    bare Playwright call with nothing catching its TimeoutError (an overlay
+    - e.g. a promo banner or a "session opened elsewhere" notice - blocked
+    the click for 30s of retries) - it propagated all the way out of
+    run_correlation_check's main loop and killed a multi-day unattended run
+    over what should have been a single skipped action. Returns False
+    instead of raising; callers treat that like any other _safe_find miss."""
+    try:
+        el.click()
+        return True
+    except Exception:
+        shot = _screenshot(page, f"click_failed_{description}")
+        logger.error(
+            "Binomo executor: click failed for '%s' (blocked/covered element?). "
+            "Not guessing an alternative — stopping this action. Screenshot: %s",
+            description, shot,
+        )
+        notify_admin(
+            f"⚠️ Binomo executor: клік по \"{description}\" не спрацював (можливо, "
+            "щось перекрило елемент — банер, спливне вікно). Потрібна ручна перевірка. "
+            f"Скріншот: {shot or 'не вдалося зберегти'}",
+            alert_key=f"binomo_click_failed_{description}",
+        )
+        return False
+
+
 # ----------------------------------------------------------------------
 # Balance
 # ----------------------------------------------------------------------
@@ -605,7 +644,8 @@ def _select_asset(page, asset: str) -> Optional[str]:
     picker_button = _safe_find(page, SELECTORS["asset_picker_open_button"], description="asset_picker_open_button")
     if picker_button is None:
         return "asset_picker_open_button not found"
-    picker_button.click()
+    if not _safe_click(picker_button, page, description="asset_picker_open_button"):
+        return "could not click asset_picker_open_button"
 
     search_input = _safe_find(page, SELECTORS["asset_search_input"], description="asset_search_input")
     if search_input is None:
@@ -616,9 +656,101 @@ def _select_asset(page, asset: str) -> Optional[str]:
     asset_row = _safe_find(page, row_selector, description="asset_row")
     if asset_row is None:
         return f"asset row not found for {asset!r}"
-    asset_row.click()
+    if not _safe_click(asset_row, page, description="asset_row"):
+        return f"could not click asset row for {asset!r}"
     _clear_price_feed_cache()
     return None
+
+
+def _parse_payout_percent(text: str) -> Optional[float]:
+    try:
+        return float(text.strip().rstrip("%").strip())
+    except (ValueError, AttributeError):
+        return None
+
+
+def get_available_binomo_assets(page) -> list[dict]:
+    """Returns [{"name": str, "payout_percent": float}, ...] for every asset
+    currently open for trading on Binomo (weekends/off-hours already
+    accounted for by Binomo itself). payout_percent is the standard
+    "Прибуток" payout, not the second "Для VIP" figure shown next to it.
+
+    Reads the same '#assets-list' picker _select_asset() uses, with no
+    search filter applied — confirmed live 2026-08-10 that the picker only
+    renders currently-open assets (DOM row count matched the picker's own
+    "Активно: N" counter exactly), scoped via asset_list_scope so other
+    trade-mode tabs' hidden rows aren't accidentally included (see that
+    selector's comment). The price WebSocket (wss://as.binomo.com) was also
+    checked live and carries no such list — it only streams ticks for
+    whatever's already subscribed, so this can't be read from there.
+
+    Leaves the picker closed on the way out (toggles the same open button)
+    so callers - notably _select_asset(), used right after this in the
+    correlation-check loop - find it in the state they expect."""
+    picker_button = _safe_find(page, SELECTORS["asset_picker_open_button"], description="asset_picker_open_button")
+    if picker_button is None:
+        return []
+    if not _safe_click(picker_button, page, description="asset_picker_open_button"):
+        return []
+
+    row_selector = f"{SELECTORS['asset_list_scope']} {SELECTORS['asset_row']}"
+    try:
+        page.wait_for_selector(row_selector, timeout=_DEFAULT_FIND_TIMEOUT_MS)
+    except Exception:
+        shot = _screenshot(page, "missing_asset_list_rows")
+        logger.error(
+            "Binomo executor: asset list rows not found (selector=%r). Not "
+            "guessing an alternative. Screenshot: %s", row_selector, shot,
+        )
+        notify_admin(
+            f"⚠️ Binomo executor: список активів не завантажився. "
+            f"Скріншот: {shot or 'не вдалося зберегти'}",
+            alert_key="binomo_missing_element_asset_list_rows",
+        )
+        return []
+
+    result = []
+    for row in page.query_selector_all(row_selector):
+        name_el = row.query_selector(SELECTORS["asset_row_name"])
+        payout_el = row.query_selector(SELECTORS["asset_row_payout"])
+        if name_el is None or payout_el is None:
+            continue
+        name = name_el.inner_text().strip()
+        payout = _parse_payout_percent(payout_el.inner_text())
+        if name and payout is not None:
+            result.append({"name": name, "payout_percent": payout})
+
+    # Best-effort close — a failed close here shouldn't fail the whole read,
+    # but IS worth a log line since it can break the next _select_asset call.
+    reopened_button = _safe_find(page, SELECTORS["asset_picker_open_button"], description="asset_picker_open_button")
+    if reopened_button is not None:
+        if not _safe_click(reopened_button, page, description="asset_picker_close_button"):
+            logger.warning("Binomo executor: could not close asset picker after reading it — next asset switch may misbehave.")
+
+    return result
+
+
+def list_available_assets() -> None:
+    """Prints the currently-tradeable Binomo assets and their payout, and
+    exits. Read-only — opens a session, reads the picker, closes. Run with:
+        python binomo_executor.py --list-assets
+    """
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as p:
+        browser, context, page = _launch_session(p, headless=config.BINOMO_HEADLESS)
+
+        if not _is_logged_in(page):
+            logger.critical("--list-assets: not logged in. Run `python binomo_executor.py --login` first.")
+            browser.close()
+            return
+
+        assets = get_available_binomo_assets(page)
+        browser.close()
+
+    print(f"Активних активів: {len(assets)}")
+    for item in assets:
+        print(f"  {item['name']} — {item['payout_percent']:.0f}%")
 
 
 def place_binary_trade(page, asset: str, direction: str, amount: float, expiry_seconds: int) -> dict:
@@ -935,12 +1067,18 @@ def run(*, headless: bool = None) -> None:
                     break
 
                 try:
-                    signal = signal_queue.get(timeout=2.0)
-                    _handle_signal(page, asset_map, signal)
-                except queue.Empty:
-                    pass
+                    _maybe_refresh_watchlist(page, asset_map)
 
-                _resolve_due_trades(page)
+                    try:
+                        signal = signal_queue.get(timeout=2.0)
+                        _handle_signal(page, asset_map, signal)
+                    except queue.Empty:
+                        pass
+
+                    _resolve_due_trades(page)
+                except Exception:
+                    _log_unexpected_loop_error("run")
+                    time.sleep(5)
         except KeyboardInterrupt:
             logger.info("Binomo executor stopping (KeyboardInterrupt).")
         finally:
@@ -1073,6 +1211,95 @@ def _log_resource_usage(pending: list) -> None:
         )
     except Exception:
         logger.debug("Could not sample resource usage", exc_info=True)
+
+
+def _log_unexpected_loop_error(loop_name: str) -> None:
+    """Called from the per-iteration except Exception in run()/
+    run_correlation_check() - see the crash this guards against in
+    _safe_click's docstring. Logs with a traceback and pages the admin once
+    (alert_key cooldown) rather than letting an unexpected error kill a
+    multi-day unattended run over what should be a single skipped signal."""
+    logger.exception("Binomo executor: unexpected error in %s loop iteration — continuing.", loop_name)
+    notify_admin(
+        f"⚠️ Binomo executor: неочікувана помилка в циклі {loop_name} (див. логи локально). "
+        "Процес НЕ зупинено, продовжує роботу.",
+        alert_key=f"binomo_loop_error_{loop_name}",
+    )
+
+
+_watchlist_last_refreshed_at: Optional[float] = None
+_WATCHLIST_REFRESH_INTERVAL_SECONDS = 3600.0
+
+
+def refresh_watchlist_by_payout(page, asset_map: dict) -> None:
+    """Keeps the scanner watchlist limited to pairs Binomo is currently
+    paying config.BINOMO_MIN_PAYOUT_PERCENT or more for. Payout drifts
+    through the day/week (notably for weekend OTC assets — confirmed live
+    2026-08-10: GBP/USD sat at 70% and Gold at 60% in the same snapshot
+    where 34 other cTrader-tracked pairs sat at >=80%), so this only ever
+    manages pairs already present in asset_map (the cTrader x Binomo
+    intersection) — it adds/removes exactly those, leaving any other
+    watchlist entries the user added by hand untouched.
+
+    Reuses the caller's already-open `page` rather than opening its own
+    session: a second concurrent Binomo session was confirmed live
+    2026-08-10 to trigger an overlay that blocked clicks in the FIRST
+    session (see _safe_click's docstring for the crash that caused) — this
+    must only ever run from inside run()'s/run_correlation_check()'s own
+    loop, on their own page."""
+    user_id = config.get_chat_id()
+    if not user_id:
+        logger.warning("refresh_watchlist_by_payout: no chat id configured, skipping.")
+        return
+
+    live_assets = get_available_binomo_assets(page)
+    if not live_assets:
+        logger.warning("refresh_watchlist_by_payout: got no assets back from Binomo, skipping this round.")
+        return
+
+    payout_by_name = {item["name"]: item["payout_percent"] for item in live_assets}
+    current_watchlist = set(db.get_watchlist(user_id))
+
+    added, removed = [], []
+    for pair_key, entry in asset_map.items():
+        # Checks BOTH known names, not just _resolve_binomo_asset_name's
+        # weekday/weekend guess: that guess is for picking ONE name to click
+        # when placing a trade, but Binomo can list a pair under its "(OTC)"
+        # name on an ordinary weekday too (confirmed live 2026-08-10:
+        # USD/CAD showed as "USD/CAD (OTC)" on a Monday) - either name being
+        # live right now is equally good evidence of the current payout.
+        payout = None
+        for candidate_name in (entry.get("binomo_name"), entry.get("otc_name")):
+            if candidate_name and candidate_name in payout_by_name:
+                payout = payout_by_name[candidate_name]
+                break
+        qualifies = payout is not None and payout >= config.BINOMO_MIN_PAYOUT_PERCENT
+        already_present = pair_key in current_watchlist
+
+        if qualifies and not already_present:
+            if db.add_to_watchlist(user_id, pair_key):
+                added.append(f"{pair_key} ({payout:.0f}%)")
+        elif not qualifies and already_present:
+            if db.remove_from_watchlist(user_id, pair_key):
+                removed.append(f"{pair_key} ({payout:.0f}%)" if payout is not None else f"{pair_key} (n/a)")
+
+    if added or removed:
+        logger.info(
+            "Watchlist payout refresh (>=%.0f%%): +%d %s, -%d %s",
+            config.BINOMO_MIN_PAYOUT_PERCENT, len(added), added, len(removed), removed,
+        )
+    else:
+        logger.debug("Watchlist payout refresh: no changes (%d pairs tracked).", len(asset_map))
+
+
+def _maybe_refresh_watchlist(page, asset_map: dict) -> None:
+    global _watchlist_last_refreshed_at
+
+    now = time.monotonic()
+    if _watchlist_last_refreshed_at is not None and now - _watchlist_last_refreshed_at < _WATCHLIST_REFRESH_INTERVAL_SECONDS:
+        return
+    _watchlist_last_refreshed_at = now
+    refresh_watchlist_by_payout(page, asset_map)
 
 
 def _classify_or_unknown(entry: Optional[float], exit_: Optional[float]) -> str:
@@ -1216,15 +1443,21 @@ def run_correlation_check(*, headless: bool = None) -> None:
             while True:
                 if not _session_still_valid(page):
                     break
-                _log_resource_usage(pending)
 
                 try:
-                    signal = signal_queue.get(timeout=2.0)
-                    _start_correlation_entry(page, asset_map, signal, pending, lock)
-                except queue.Empty:
-                    pass
+                    _log_resource_usage(pending)
+                    _maybe_refresh_watchlist(page, asset_map)
 
-                _resolve_due_correlation_entries(page, pending, lock)
+                    try:
+                        signal = signal_queue.get(timeout=2.0)
+                        _start_correlation_entry(page, asset_map, signal, pending, lock)
+                    except queue.Empty:
+                        pass
+
+                    _resolve_due_correlation_entries(page, pending, lock)
+                except Exception:
+                    _log_unexpected_loop_error("correlation-check")
+                    time.sleep(5)
         except KeyboardInterrupt:
             logger.info("Correlation-check stopping (KeyboardInterrupt).")
         finally:
@@ -1243,10 +1476,16 @@ def main() -> None:
         help="Log cTrader-vs-Binomo directional agreement only — places NO trades. Run this first.",
     )
     parser.add_argument("--headless", action="store_true", help="Force headless mode for --run/--correlation-check.")
+    parser.add_argument(
+        "--list-assets", action="store_true",
+        help="Print the currently-tradeable Binomo assets and exit. Read-only.",
+    )
     args = parser.parse_args()
 
     if args.login:
         login_and_save_session()
+    elif args.list_assets:
+        list_available_assets()
     elif args.correlation_check:
         run_correlation_check(headless=True if args.headless else None)
     elif args.run:

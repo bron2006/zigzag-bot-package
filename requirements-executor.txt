@@ -13,3 +13,8 @@ playwright==1.47.0
 # /api/signal-stream SSE endpoint (the same channel the Web App uses) as a
 # plain Python client, without pulling in a browser or JS runtime.
 sseclient-py==1.8.0
+
+# Used by _log_resource_usage() to log correlation-check's real RSS once an
+# hour during multi-day unattended runs. Without it, that log line falls
+# back to just the pending-entries count - no memory number at all.
+psutil==6.1.0

@@ -178,6 +178,12 @@ BINOMO_STORAGE_STATE_PATH = _env_str("BINOMO_STORAGE_STATE_PATH", "storage_state
 BINOMO_HEADLESS = _env_bool("BINOMO_HEADLESS", False)
 BINOMO_ASSET_MAP_PATH = _env_str("BINOMO_ASSET_MAP_PATH", "data/binomo_asset_map.json") or "data/binomo_asset_map.json"
 
+# Minimum current Binomo payout (%) for a pair to stay in the auto-managed
+# watchlist — see binomo_executor.refresh_watchlist_by_payout(). Payout
+# drifts through the day/week (notably for weekend OTC assets), so this is
+# re-checked periodically rather than applied once.
+BINOMO_MIN_PAYOUT_PERCENT = _env_float("BINOMO_MIN_PAYOUT_PERCENT", 80.0)
+
 
 def get_database_url() -> str | None:
     return _env_str("DATABASE_URL")

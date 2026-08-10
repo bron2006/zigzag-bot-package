@@ -2,19 +2,158 @@
   "_meta": {
     "description": "Maps cTrader pair keys (as used elsewhere in this project, e.g. config.broker_symbol_key output) to the exact asset name shown on the Binomo trading terminal. binomo_executor.py only trades pairs present in BOTH this map and the live cTrader symbol list - anything missing here is silently skipped, never guessed.",
     "verified": true,
-    "verified_at": "2026-08-09",
-    "how_to_verify": "Names below were read directly from the live Binomo asset picker (search box + Currencies/Crypto filters) via a logged-in session on 2026-08-09. Re-verify periodically - Binomo can rename or delist assets without notice. Log into the terminal, open the '+' asset picker, search each base currency, and compare against the names here.",
+    "verified_at": "2026-08-10",
+    "how_to_verify": "Names below were read directly from the live Binomo asset picker (search box + Currencies/Crypto filters) via a logged-in session on 2026-08-09. Re-verify periodically - Binomo can rename or delist assets without notice. Log into the terminal, open the '+' asset picker, search each base currency, and compare against the names here. Extended 2026-08-10 via binomo_executor.get_available_binomo_assets() (reads the '#assets-list' picker with no search filter - it renders only currently-open assets) cross-referenced against assets.json's cTrader pairs. Entries added that day captured only ONE side (whichever name - plain or OTC - was live at the time, a Monday during forex hours); a null otc_name/binomo_name on those may just mean 'not observed yet', not 'confirmed absent' - re-verify on a weekend before relying on it.",
     "otc_warning": "Binomo trades most forex pairs under a separate '(OTC)' name on weekends/off-hours (e.g. 'EUR/USD (OTC)') on its own synthetic feed - this is a DIFFERENT price series from cTrader's live feed. binomo_executor._resolve_binomo_asset_name() picks binomo_name on weekdays (UTC) and otc_name on weekends; a null otc_name means that pair is simply not tradable on Binomo on weekends (confirmed for USDCHF/EURJPY as of verification date - no OTC listing was found for either). Crypto (BTCUSD/ETHUSD) has no plain-name listing at all on Binomo - only the '(OTC)' name exists, so binomo_name is null and otc_name is used every day."
   },
   "assets": {
-    "EURUSD": {"binomo_name": "EUR/USD", "otc_name": "EUR/USD (OTC)"},
-    "GBPUSD": {"binomo_name": "GBP/USD", "otc_name": "GBP/USD (OTC)"},
-    "USDJPY": {"binomo_name": "USD/JPY", "otc_name": "USD/JPY (OTC)"},
-    "AUDUSD": {"binomo_name": "AUD/USD", "otc_name": "AUD/USD (OTC)"},
-    "USDCAD": {"binomo_name": "USD/CAD", "otc_name": "USD/CAD (OTC)"},
-    "USDCHF": {"binomo_name": "USD/CHF", "otc_name": null},
-    "EURJPY": {"binomo_name": "EUR/JPY", "otc_name": null},
-    "BTCUSD": {"binomo_name": null, "otc_name": "Bitcoin (OTC)"},
-    "ETHUSD": {"binomo_name": null, "otc_name": "Ethereum (OTC)"}
+    "AAVEUSD": {
+      "binomo_name": null,
+      "otc_name": "Aave (OTC)"
+    },
+    "ADAUSD": {
+      "binomo_name": null,
+      "otc_name": "Cardano (OTC)"
+    },
+    "AUDCAD": {
+      "binomo_name": "AUD/CAD",
+      "otc_name": null
+    },
+    "AUDCHF": {
+      "binomo_name": "AUD/CHF",
+      "otc_name": null
+    },
+    "AUDJPY": {
+      "binomo_name": "AUD/JPY",
+      "otc_name": null
+    },
+    "AUDSGD": {
+      "binomo_name": "AUD/SGD",
+      "otc_name": null
+    },
+    "AUDUSD": {
+      "binomo_name": "AUD/USD",
+      "otc_name": "AUD/USD (OTC)"
+    },
+    "BCHUSD": {
+      "binomo_name": null,
+      "otc_name": "Bitcoin Cash (OTC)"
+    },
+    "BTCUSD": {
+      "binomo_name": null,
+      "otc_name": "Bitcoin (OTC)"
+    },
+    "CADJPY": {
+      "binomo_name": "CAD/JPY",
+      "otc_name": null
+    },
+    "CHFJPY": {
+      "binomo_name": "CHF/JPY",
+      "otc_name": null
+    },
+    "ETHUSD": {
+      "binomo_name": null,
+      "otc_name": "Ethereum (OTC)"
+    },
+    "EURGBP": {
+      "binomo_name": null,
+      "otc_name": "EUR/GBP (OTC)"
+    },
+    "EURJPY": {
+      "binomo_name": "EUR/JPY",
+      "otc_name": null
+    },
+    "EURNZD": {
+      "binomo_name": "EUR/NZD",
+      "otc_name": null
+    },
+    "EURSGD": {
+      "binomo_name": "EUR/SGD",
+      "otc_name": null
+    },
+    "EURUSD": {
+      "binomo_name": "EUR/USD",
+      "otc_name": "EUR/USD (OTC)"
+    },
+    "GBPCAD": {
+      "binomo_name": "GBP/CAD",
+      "otc_name": null
+    },
+    "GBPCHF": {
+      "binomo_name": null,
+      "otc_name": "GBP/CHF (OTC)"
+    },
+    "GBPJPY": {
+      "binomo_name": null,
+      "otc_name": "GBP/JPY (OTC)"
+    },
+    "GBPNZD": {
+      "binomo_name": null,
+      "otc_name": "GBP/NZD (OTC)"
+    },
+    "GBPSGD": {
+      "binomo_name": "GBP/SGD",
+      "otc_name": null
+    },
+    "GBPUSD": {
+      "binomo_name": "GBP/USD",
+      "otc_name": "GBP/USD (OTC)"
+    },
+    "LINKUSD": {
+      "binomo_name": null,
+      "otc_name": "Chainlink (OTC)"
+    },
+    "NZDCAD": {
+      "binomo_name": "NZD/CAD",
+      "otc_name": null
+    },
+    "NZDCHF": {
+      "binomo_name": "NZD/CHF",
+      "otc_name": null
+    },
+    "NZDJPY": {
+      "binomo_name": "NZD/JPY",
+      "otc_name": null
+    },
+    "NZDSGD": {
+      "binomo_name": "NZD/SGD",
+      "otc_name": null
+    },
+    "NZDUSD": {
+      "binomo_name": "NZD/USD",
+      "otc_name": null
+    },
+    "SGDJPY": {
+      "binomo_name": "SGD/JPY",
+      "otc_name": null
+    },
+    "SOLUSD": {
+      "binomo_name": null,
+      "otc_name": "Solana (OTC)"
+    },
+    "UNIUSD": {
+      "binomo_name": null,
+      "otc_name": "Uniswap (OTC)"
+    },
+    "USDCAD": {
+      "binomo_name": "USD/CAD",
+      "otc_name": "USD/CAD (OTC)"
+    },
+    "USDCHF": {
+      "binomo_name": "USD/CHF",
+      "otc_name": null
+    },
+    "USDJPY": {
+      "binomo_name": "USD/JPY",
+      "otc_name": "USD/JPY (OTC)"
+    },
+    "USDMXN": {
+      "binomo_name": "USD/MXN",
+      "otc_name": null
+    },
+    "XAUUSD": {
+      "binomo_name": "Gold",
+      "otc_name": null
+    }
   }
 }

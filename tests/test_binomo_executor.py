@@ -257,5 +257,98 @@ class CorrelationLogTest(unittest.TestCase):
             self.assertEqual(lines[0].split(",")[0], "logged_at")
 
 
+class ParsePayoutPercentTest(unittest.TestCase):
+    def test_parses_plain_percent(self):
+        self.assertEqual(binomo_executor._parse_payout_percent("80%"), 80.0)
+
+    def test_strips_surrounding_whitespace(self):
+        self.assertEqual(binomo_executor._parse_payout_percent(" 83% "), 83.0)
+
+    def test_unparseable_returns_none(self):
+        self.assertIsNone(binomo_executor._parse_payout_percent("n/a"))
+
+
+class RefreshWatchlistByPayoutTest(unittest.TestCase):
+    """Covers the add/remove decision logic only - get_available_binomo_assets
+    itself is mocked out here since it needs a real DOM, and is exercised by
+    hand against the live site (see the module docstring's payout section)."""
+
+    def setUp(self):
+        self.asset_map = {
+            "EURUSD": {"binomo_name": "EUR/USD", "otc_name": "EUR/USD (OTC)"},
+            "GBPUSD": {"binomo_name": "GBP/USD", "otc_name": "GBP/USD (OTC)"},
+            "XAUUSD": {"binomo_name": "Gold", "otc_name": None},
+        }
+        self.added = []
+        self.removed = []
+
+    def _run(self, *, live_assets, current_watchlist, min_payout=80.0):
+        with patch.object(binomo_executor.config, "get_chat_id", return_value=42), \
+             patch.object(binomo_executor.config, "BINOMO_MIN_PAYOUT_PERCENT", min_payout), \
+             patch.object(binomo_executor, "get_available_binomo_assets", return_value=live_assets), \
+             patch.object(binomo_executor.db, "get_watchlist", return_value=list(current_watchlist)), \
+             patch.object(binomo_executor.db, "add_to_watchlist", side_effect=lambda uid, p: self.added.append(p) or True), \
+             patch.object(binomo_executor.db, "remove_from_watchlist", side_effect=lambda uid, p: self.removed.append(p) or True):
+            binomo_executor.refresh_watchlist_by_payout(page=object(), asset_map=self.asset_map)
+
+    def test_adds_pair_that_newly_qualifies(self):
+        self._run(
+            live_assets=[{"name": "EUR/USD", "payout_percent": 82.0}],
+            current_watchlist=[],
+        )
+        self.assertEqual(self.added, ["EURUSD"])
+
+    def test_checks_otc_name_when_plain_name_is_not_currently_listed(self):
+        # Matches a live finding (2026-08-10): Binomo listed USD/CAD only
+        # under its "(OTC)" name on an ordinary Monday. The weekday/weekend
+        # guess in _resolve_binomo_asset_name would have picked the plain
+        # name and missed this pair entirely - must not repeat that here.
+        self.asset_map = {"USDCAD": {"binomo_name": "USD/CAD", "otc_name": "USD/CAD (OTC)"}}
+        self._run(
+            live_assets=[{"name": "USD/CAD (OTC)", "payout_percent": 80.0}],
+            current_watchlist=[],
+        )
+        self.assertEqual(self.added, ["USDCAD"])
+        self.assertEqual(self.removed, [])
+
+    def test_removes_pair_that_dropped_below_threshold(self):
+        # Matches the live snapshot that motivated this feature: GBP/USD and
+        # Gold sitting at 70%/60% while everything else nearby was >=80%.
+        self._run(
+            live_assets=[{"name": "GBP/USD", "payout_percent": 70.0}],
+            current_watchlist=["GBPUSD"],
+        )
+        self.assertEqual(self.removed, ["GBPUSD"])
+        self.assertEqual(self.added, [])
+
+    def test_leaves_qualifying_pair_already_present_untouched(self):
+        self._run(
+            live_assets=[{"name": "EUR/USD", "payout_percent": 82.0}],
+            current_watchlist=["EURUSD"],
+        )
+        self.assertEqual(self.added, [])
+        self.assertEqual(self.removed, [])
+
+    def test_pair_missing_from_live_snapshot_is_removed_not_guessed(self):
+        # XAUUSD isn't in live_assets at all (e.g. currently untradeable) -
+        # must be treated as not qualifying, not left alone or added.
+        self._run(
+            live_assets=[{"name": "EUR/USD", "payout_percent": 82.0}],
+            current_watchlist=["XAUUSD"],
+        )
+        self.assertEqual(self.removed, ["XAUUSD"])
+
+    def test_does_not_touch_pairs_outside_asset_map(self):
+        # A hand-added watchlist entry for a pair this map doesn't manage
+        # must survive a refresh untouched, even though EUR/USD (which IS
+        # managed and newly qualifies) is correctly added alongside it.
+        self._run(
+            live_assets=[{"name": "EUR/USD", "payout_percent": 82.0}],
+            current_watchlist=["SOMEOTHERPAIR"],
+        )
+        self.assertNotIn("SOMEOTHERPAIR", self.removed)
+        self.assertEqual(self.added, ["EURUSD"])
+
+
 if __name__ == "__main__":
     unittest.main()
