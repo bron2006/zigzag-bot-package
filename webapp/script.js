@@ -1170,6 +1170,19 @@ function renderWinrateStats(weekStats, monthStats) {
         renderWinrateByPair(monthStats);
 }
 
+// Single source of truth for "how strongly does the model agree with the
+// shown verdict" as a percentage - analysis.py's score is BUY=low/SELL=high
+// (see the HOTFIX comment in formatSignalAsHtml), so BUY's raw score reads
+// as a weak number even for a strong signal unless inverted. Added
+// 2026-08 after the compact live-signal card (below) was found still
+// showing the raw, uninverted score while the expanded card already showed
+// the correct 100-score - same value, two call sites, only one fixed. Both
+// now call this instead of repeating the inversion inline.
+function signalStrengthPercent(verdictText, score) {
+    const numericScore = Number.isFinite(Number(score)) ? Number(score) : 50;
+    return verdictText === "BUY" ? 100 - numericScore : numericScore;
+}
+
 function displayLiveSignal(signalData) {
     if (!liveSignalsContainer) return;
 
@@ -1183,9 +1196,11 @@ function displayLiveSignal(signalData) {
                 ? "sell"
                 : "neutral";
 
+    const strength = signalStrengthPercent(signalData.verdict_text, signalData.score);
+
     const html = `
         <div class="live-signal-content" style="text-align:center; font-size:13px;">
-            <strong>${escapeHtml(signalData.pair)}</strong>: ${escapeHtml(labelVerdict(signalData.verdict_text))} (${Number(signalData.score) || 0}%)
+            <strong>${escapeHtml(signalData.pair)}</strong>: ${escapeHtml(labelVerdict(signalData.verdict_text))} (${strength}%)
         </div>
         <div class="live-signal-timer"></div>
     `;
@@ -1658,10 +1673,15 @@ function formatSignalAsHtml(signalData, exp) {
 
     // HOTFIX FOLLOW-UP (2026-08-10): analysis.py's BUY/SELL verdict is now
     // swapped relative to score (high score = SELL/bearish, low = BUY/
-    // bullish - see analysis.py's TEMPORARY HOTFIX comment). The bull/bear
-    // power-balance gauge below used to assume the opposite (high score =
-    // bullish), which would show it backwards post-swap; the 🐂/🐃 split
-    // is flipped here to match.
+    // bullish - see analysis.py's TEMPORARY HOTFIX comment). Bull% and
+    // bear% are just signalStrengthPercent evaluated as if the verdict
+    // were BUY / SELL respectively (100-score / score) - going through the
+    // shared helper instead of repeating "100 - score" here keeps this in
+    // sync with the compact live-signal card, which used to show the raw,
+    // uninverted score while this gauge already showed the correct number.
+    const bullPercent = signalStrengthPercent("BUY", score);
+    const bearPercent = signalStrengthPercent("SELL", score);
+
     return `
         <div class="signal-header" style="text-align:center; font-size:1em; margin-bottom:6px;">
             <strong>${pair}</strong> <span style="color:#64748b; font-size:0.74em;">(${escapeHtml(tr("expiration"))}: ${escapeHtml(labelTimeframe(exp))})</span>
@@ -1682,8 +1702,8 @@ function formatSignalAsHtml(signalData, exp) {
                 : ""
         }
         <div class="power-balance" style="display:flex; justify-content:space-around; margin:7px 0; font-weight:bold; text-align:center; font-size:13px;">
-            <span style="color:#26a69a;">🐂 ${100 - score}%</span>
-            <span style="color:#ef5350;">🐃 ${score}%</span>
+            <span style="color:#26a69a;">🐂 ${bullPercent}%</span>
+            <span style="color:#ef5350;">🐃 ${bearPercent}%</span>
         </div>
         ${renderTimeframeDetails(signalData)}
         ${renderDataStatus(signalData)}
