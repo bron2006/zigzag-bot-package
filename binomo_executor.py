@@ -566,11 +566,29 @@ def _signal_stream_url() -> str:
     return f"{base}/api/signal-stream?admin_token={token}"
 
 
+_STREAM_RECONNECT_BASE_SECONDS = 5
+_STREAM_RECONNECT_MAX_SECONDS = 60
+
+
 def _stream_signals(out_queue: "queue.Queue[dict]", stop_event: threading.Event) -> None:
+    """SSE connections drop regularly (ChunkedEncodingError, idle proxy
+    timeouts, etc.) - that's normal, not a bug, as long as this reconnects.
+    Exponential backoff (capped) so a sustained cloud-side outage doesn't
+    hammer it every few seconds; backoff resets once an event actually
+    arrives, so a brief blip doesn't leave a stale long delay in place.
+    Treats the generator ending WITHOUT an exception the same as a
+    disconnect and still backs off before retrying - some sseclient-py
+    versions can end the loop silently on a dropped connection instead of
+    raising, and a stream that's supposed to be infinite ending "cleanly"
+    is itself a disconnect, not a normal completion."""
     import sseclient
 
     url = _signal_stream_url()
+    backoff = _STREAM_RECONNECT_BASE_SECONDS
+
     while not stop_event.is_set():
+        connected_at = time.monotonic()
+        response = None
         try:
             response = requests.get(url, stream=True, timeout=(10, None))
             client = sseclient.SSEClient(response)
@@ -586,9 +604,26 @@ def _stream_signals(out_queue: "queue.Queue[dict]", stop_event: threading.Event)
                 if payload.get("_ping"):
                     continue
                 out_queue.put(payload)
+                backoff = _STREAM_RECONNECT_BASE_SECONDS
         except Exception:
-            logger.warning("Binomo executor: signal stream disconnected, retrying in 10s", exc_info=True)
-            time.sleep(10)
+            logger.warning(
+                "Binomo executor: signal stream disconnected after %.0fs",
+                time.monotonic() - connected_at, exc_info=True,
+            )
+        finally:
+            if response is not None:
+                try:
+                    response.close()
+                except Exception:
+                    pass
+
+        if stop_event.is_set():
+            break
+
+        logger.info("Binomo executor: signal stream reconnecting in %ss", backoff)
+        if stop_event.wait(backoff):
+            break
+        backoff = min(backoff * 2, _STREAM_RECONNECT_MAX_SECONDS)
 
 
 # ----------------------------------------------------------------------
