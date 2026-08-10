@@ -192,11 +192,19 @@ def _handle_analysis_result(pair_norm: str, result: dict):
     threshold = app_state.IDEAL_ENTRY_THRESHOLD
     lower_bound = 100 - threshold
 
+    # HOTFIX FOLLOW-UP (2026-08-10): analysis.py's BUY/SELL verdict was
+    # swapped relative to score (see the TEMPORARY HOTFIX comment in
+    # _run_technical_analysis) - BUY now means a LOW score, SELL a HIGH
+    # one. This threshold check still assumed the old mapping (BUY=high,
+    # SELL=low), so trade_allowed could be True while is_signal stayed
+    # permanently False for every pair - no exception, no log error, just
+    # silently zero signals for ~13h until this was traced from "why has
+    # nothing fired since the hotfix deployed". Flipped to match.
     is_signal = False
     if trade_allowed and sentiment != "BLOCK":
-        if verdict == "BUY" and score >= threshold:
+        if verdict == "BUY" and score <= lower_bound:
             is_signal = True
-        elif verdict == "SELL" and score <= lower_bound:
+        elif verdict == "SELL" and score >= threshold:
             is_signal = True
 
     logger.info(

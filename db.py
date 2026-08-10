@@ -1568,7 +1568,14 @@ def get_signal_outcome_score_breakdown(days: int = 30, bucket_size: int = 5) -> 
 
     buckets: dict[int, list] = {}
     for row in rows:
-        normalized_score = row.score if row.verdict == "BUY" else (100 - row.score)
+        # HOTFIX FOLLOW-UP (2026-08-10): analysis.py's BUY/SELL verdict was
+        # swapped relative to score (BUY is now a LOW raw score, SELL a
+        # HIGH one - see analysis.py's TEMPORARY HOTFIX comment). This
+        # normalization used to assume the opposite (BUY=high, SELL=low)
+        # to fold both directions onto one "higher = more confident" scale
+        # for threshold_advisor.py. Flipped which branch inverts to match,
+        # otherwise every bucket here would rank confidence backwards.
+        normalized_score = (100 - row.score) if row.verdict == "BUY" else row.score
         bucket_start = (normalized_score // bucket_size) * bucket_size
         buckets.setdefault(bucket_start, []).append(row)
 
