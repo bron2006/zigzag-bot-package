@@ -1,11 +1,9 @@
 # news_filter.py
 import logging
 import os
-import re
 import threading
 import time
-from datetime import datetime, timezone
-from html import unescape
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Optional
 
 import requests
@@ -34,9 +32,18 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+# 2026-08-10: tool.forex replaced its server-rendered <div class="event-row">
+# markup with an Astro/client-hydrated page that fetches a JSON API
+# (`/api/calendar?from=YYYY-MM-DD&to=YYYY-MM-DD`) and renders `<li aria-
+# label="...">` client-side. The old regex-based HTML parser silently
+# returned 0 events for 10+ hours because none of its expected class names
+# exist anymore - and thanks to fail-open, that looked identical to "no
+# relevant news" rather than "the filter is broken". Switched to calling
+# the JSON API directly instead of scraping rendered HTML - see
+# _parse_calendar_events().
 _CALENDAR_URL = (
     os.environ.get("NEWS_CALENDAR_URL")
-    or "https://tool.forex/economic-calendar"
+    or "https://tool.forex/api/calendar"
 ).strip()
 _NEWS_BLOCK_BEFORE_MINUTES = _env_int("NEWS_BLOCK_BEFORE_MINUTES", 15)
 _NEWS_BLOCK_AFTER_MINUTES = _env_int("NEWS_BLOCK_AFTER_MINUTES", 30)
@@ -46,12 +53,27 @@ _NEWS_BLOCK_IMPACTS = {
     if item.strip()
 }
 
+# tool.forex's `importance` field is documented (in its own frontend JS) as
+# a 0-3 scale ("", "★", "★★", "★★★"), but live-checked against a 90-day
+# window (2026-08-10) every single event - including Non-Farm Payrolls and
+# FOMC Minutes - came back importance=1; 2 and 3 never appeared. Mapping
+# only 2/3 to HIGH would make _NEWS_BLOCK_IMPACTS={"HIGH"} match nothing
+# against real data, silently reproducing the same "filter does nothing"
+# failure this fix addresses. Until tool.forex is observed actually
+# varying this field, treat any returned event (importance>=1) as HIGH.
+_CALENDAR_IMPORTANCE_TO_IMPACT = {0: "LOW", 1: "HIGH", 2: "HIGH", 3: "HIGH"}
+
 _calendar_cache: dict = {"ts": 0.0, "events": [], "error": None}
 
 # If the calendar keeps returning zero parsed events for this long despite
 # successful HTTP fetches, that's more likely a broken scraper (site markup
 # changed) than a genuinely quiet calendar, so alert an admin.
 _CALENDAR_ZERO_EVENT_ALERT_SECONDS = _env_int("NEWS_CALENDAR_ZERO_EVENT_ALERT_SECONDS", 6 * 3600)
+# Separate, much shorter threshold for flipping the filter itself to
+# fail-CLOSED (blocking trades) rather than just alerting an admin - a
+# missed good signal for half an hour is a far smaller cost than trading
+# blind next to news for hours because nobody's read the alert yet.
+_CALENDAR_ZERO_EVENT_FAILCLOSED_SECONDS = _env_int("NEWS_CALENDAR_ZERO_EVENT_FAILCLOSED_SECONDS", 30 * 60)
 _calendar_zero_event_streak_since: Optional[float] = None
 
 
@@ -110,22 +132,6 @@ def _safe_int(value: str, default: int) -> int:
         return default
 
 
-def _strip_tags(value: str) -> str:
-    text = re.sub(r"<[^>]+>", " ", value or "")
-    text = unescape(text)
-    return re.sub(r"\s+", " ", text).strip()
-
-
-def _extract_attr(tag: str, name: str) -> str:
-    match = re.search(rf'{re.escape(name)}="([^"]*)"', tag or "")
-    return unescape(match.group(1)).strip() if match else ""
-
-
-def _extract_first(pattern: str, text: str) -> str:
-    match = re.search(pattern, text or "", re.IGNORECASE | re.DOTALL)
-    return _strip_tags(match.group(1)) if match else ""
-
-
 def _parse_calendar_time(value: str):
     if not value:
         return None
@@ -159,43 +165,44 @@ def _pair_currencies(pair: str) -> set[str]:
     return mapping.get(norm, set())
 
 
-def _parse_calendar_events(html: str) -> list[dict]:
+def _parse_calendar_events(raw_events: list) -> list[dict]:
+    """Transforms tool.forex's /api/calendar JSON `events` array into this
+    module's internal event shape. Kept as a separate function (rather than
+    inlined into _load_calendar_events) specifically so the live canary
+    test in tests/test_news_filter.py can call it directly against a real
+    API response."""
     events = []
-    matches = list(re.finditer(r'<div class="event-row"([^>]*)>', html or "", re.IGNORECASE))
 
-    for index, match in enumerate(matches):
-        start = match.start()
-        end = matches[index + 1].start() if index + 1 < len(matches) else len(html)
-        row = html[start:end]
-        attrs = match.group(1)
+    for item in raw_events or []:
+        if not isinstance(item, dict):
+            continue
 
-        currency = _extract_first(
-            r'<span class="currency-code"[^>]*>(.*?)</span>',
-            row,
-        )
-        name = _extract_first(
-            r'<div class="event-name"[^>]*>.*?<span class="name-text"[^>]*>(.*?)</span>',
-            row,
-        )
-        impact = _extract_attr(attrs, "data-impact").upper()
-        event_time = _parse_calendar_time(_extract_attr(attrs, "data-date-utc"))
-        all_day = _extract_attr(attrs, "data-all-day").lower() == "true"
+        currency = str(item.get("currency") or "").strip().upper()
+        name = str(item.get("title") or "").strip()
+        event_time = _parse_calendar_time(item.get("date"))
+        impact = _CALENDAR_IMPORTANCE_TO_IMPACT.get(item.get("importance"), "LOW")
 
-        if not currency or not name or not impact or event_time is None:
+        if not currency or not name or event_time is None:
             continue
 
         events.append(
             {
-                "currency": currency.upper(),
+                "currency": currency,
                 "impact": impact,
                 "name": name,
                 "time_utc": event_time,
-                "all_day": all_day,
+                "all_day": False,
                 "source": "tool.forex",
             }
         )
 
     return events
+
+
+def _calendar_api_url(now: datetime) -> str:
+    frm = (now - timedelta(days=1)).date().isoformat()
+    to = (now + timedelta(days=2)).date().isoformat()
+    return f"{_CALENDAR_URL}?from={frm}&to={to}"
 
 
 def _load_calendar_events() -> tuple[list[dict], Optional[str]]:
@@ -209,12 +216,14 @@ def _load_calendar_events() -> tuple[list[dict], Optional[str]]:
 
     try:
         response = requests.get(
-            _CALENDAR_URL,
+            _calendar_api_url(datetime.now(timezone.utc)),
             headers={"User-Agent": "Mozilla/5.0 ZigZagBot/1.0"},
             timeout=(5, 20),
         )
         response.raise_for_status()
-        events = _parse_calendar_events(response.text)
+        payload = response.json()
+        raw_events = (payload or {}).get("events") or []
+        events = _parse_calendar_events(raw_events)
 
         if events:
             error = None
@@ -240,6 +249,20 @@ def _load_calendar_events() -> tuple[list[dict], Optional[str]]:
     return list(events), error
 
 
+def _zero_event_streak_seconds(now: float) -> float:
+    with _cache_lock:
+        since = _calendar_zero_event_streak_since
+    return (now - since) if since is not None else 0.0
+
+
+def _is_calendar_parser_suspected_broken(now: float) -> bool:
+    """True once the zero-events-despite-successful-fetch streak crosses
+    the (short) fail-closed threshold - see _CALENDAR_ZERO_EVENT_FAILCLOSED_
+    SECONDS. Used by _calendar_verdict to block trades rather than trade
+    blind, well before the separate (longer) admin-alert threshold fires."""
+    return _zero_event_streak_seconds(now) >= _CALENDAR_ZERO_EVENT_FAILCLOSED_SECONDS
+
+
 def _note_zero_event_fetch(now: float) -> None:
     """Track successful-but-empty calendar fetches and alert if the streak
     looks like a broken parser rather than a genuinely quiet calendar."""
@@ -260,8 +283,9 @@ def _note_zero_event_fetch(now: float) -> None:
             "⚠️ Календар новин: успішні запити повертають 0 подій "
             f"вже {int(streak_seconds // 3600)}г. Схоже, парсер зламався "
             "(сайт міг змінити розмітку), а не що подій справді немає. "
-            "Фільтр новин продовжує пропускати угоди (fail-open) — перевірте "
-            f"{_CALENDAR_URL}.",
+            "Фільтр новин зараз блокує угоди (fail-closed, спрацювало "
+            f"раніше за {_CALENDAR_ZERO_EVENT_FAILCLOSED_SECONDS // 60} хв "
+            f"стріку) — перевірте {_CALENDAR_URL}.",
             alert_key="news_calendar_parser_suspected_broken",
         )
     except Exception:
@@ -285,6 +309,21 @@ def _calendar_verdict(pair: str) -> dict:
 
     events, error = _load_calendar_events()
     if error and not events:
+        if _is_calendar_parser_suspected_broken(_now()):
+            # Fail-CLOSED: a sustained streak of successful-but-empty
+            # fetches looks like a broken parser (site markup/API changed
+            # under us again), not a genuinely quiet calendar - see
+            # _note_zero_event_fetch. Blocking trades near-blind is safer
+            # than trusting a filter that can no longer see anything.
+            return {
+                "verdict": "BLOCK",
+                "reason": "фільтр новин недоступний (підозра на несправність парсера)",
+                "available": False,
+                "source": "calendar_unavailable_failclosed",
+                "model": None,
+                "http_status": None,
+                "raw": error[:200],
+            }
         return _fallback(error, source="calendar_unavailable", model=None)
 
     now = datetime.now(timezone.utc)
