@@ -1,5 +1,4 @@
 import unittest
-from datetime import datetime, timezone
 from unittest.mock import patch
 
 import binomo_executor
@@ -121,36 +120,28 @@ class ParseNumericTextTest(unittest.TestCase):
 
 
 class ResolveBinomoAssetNameTest(unittest.TestCase):
-    _WEEKDAY = datetime(2026, 8, 10, 12, 0, tzinfo=timezone.utc)  # Monday
-    _WEEKEND = datetime(2026, 8, 8, 12, 0, tzinfo=timezone.utc)  # Saturday
+    """POLICY (2026-08-11): a Binomo '(OTC)' listing is Binomo's own
+    synthetic/generated price series, not a real market feed - never
+    select/trade/track a pair under that name. otc_name is therefore never
+    used here, regardless of weekday/weekend or whether binomo_name is
+    present at all."""
 
-    def _patched_now(self, when):
-        class _FixedDatetime(datetime):
-            @classmethod
-            def now(cls, tz=None):
-                return when
-
-        return patch.object(binomo_executor, "datetime", _FixedDatetime)
-
-    def test_weekday_prefers_plain_name(self):
+    def test_returns_the_real_market_name_when_present(self):
         entry = {"binomo_name": "EUR/USD", "otc_name": "EUR/USD (OTC)"}
-        with self._patched_now(self._WEEKDAY):
-            self.assertEqual(binomo_executor._resolve_binomo_asset_name(entry), "EUR/USD")
+        self.assertEqual(binomo_executor._resolve_binomo_asset_name(entry), "EUR/USD")
 
-    def test_weekend_prefers_otc_name(self):
-        entry = {"binomo_name": "EUR/USD", "otc_name": "EUR/USD (OTC)"}
-        with self._patched_now(self._WEEKEND):
-            self.assertEqual(binomo_executor._resolve_binomo_asset_name(entry), "EUR/USD (OTC)")
+    def test_never_falls_back_to_otc_name(self):
+        # Matches a live finding (2026-08-10/11): Binomo can list a pair
+        # only under its OTC name on an ordinary weekday (USD/CAD, GBP/USD)
+        # - must return None, not silently trade the synthetic feed.
+        entry = {"binomo_name": None, "otc_name": "USD/CAD (OTC)"}
+        self.assertIsNone(binomo_executor._resolve_binomo_asset_name(entry))
 
-    def test_weekend_falls_back_to_plain_name_when_no_otc(self):
-        entry = {"binomo_name": "USD/CHF", "otc_name": None}
-        with self._patched_now(self._WEEKEND):
-            self.assertEqual(binomo_executor._resolve_binomo_asset_name(entry), "USD/CHF")
-
-    def test_crypto_has_no_plain_name_any_day(self):
+    def test_crypto_is_permanently_excluded(self):
+        # Crypto has no non-OTC listing on Binomo at all, ever - this must
+        # always return None for it, not just situationally.
         entry = {"binomo_name": None, "otc_name": "Bitcoin (OTC)"}
-        with self._patched_now(self._WEEKDAY):
-            self.assertEqual(binomo_executor._resolve_binomo_asset_name(entry), "Bitcoin (OTC)")
+        self.assertIsNone(binomo_executor._resolve_binomo_asset_name(entry))
 
 
 class IsActiveTest(unittest.TestCase):
@@ -298,17 +289,29 @@ class RefreshWatchlistByPayoutTest(unittest.TestCase):
         )
         self.assertEqual(self.added, ["EURUSD"])
 
-    def test_checks_otc_name_when_plain_name_is_not_currently_listed(self):
-        # Matches a live finding (2026-08-10): Binomo listed USD/CAD only
-        # under its "(OTC)" name on an ordinary Monday. The weekday/weekend
-        # guess in _resolve_binomo_asset_name would have picked the plain
-        # name and missed this pair entirely - must not repeat that here.
+    def test_otc_only_listing_never_qualifies(self):
+        # POLICY (2026-08-11): a Binomo OTC listing is Binomo's own
+        # synthetic price series, not a real market feed - never counts
+        # toward watchlist qualification, no matter how good its payout.
+        # Matches a live finding (2026-08-10/11): USD/CAD and GBP/USD were
+        # only listed under "(OTC)" on an ordinary weekday night.
         self.asset_map = {"USDCAD": {"binomo_name": "USD/CAD", "otc_name": "USD/CAD (OTC)"}}
         self._run(
-            live_assets=[{"name": "USD/CAD (OTC)", "payout_percent": 80.0}],
+            live_assets=[{"name": "USD/CAD (OTC)", "payout_percent": 90.0}],
+            current_watchlist=["USDCAD"],
+        )
+        self.assertEqual(self.added, [])
+        self.assertEqual(self.removed, ["USDCAD"])
+
+    def test_otc_only_pair_never_added(self):
+        # Crypto has no non-OTC listing on Binomo at all - must never
+        # qualify, regardless of payout or how the pair is currently listed.
+        self.asset_map = {"BTCUSD": {"binomo_name": None, "otc_name": "Bitcoin (OTC)"}}
+        self._run(
+            live_assets=[{"name": "Bitcoin (OTC)", "payout_percent": 95.0}],
             current_watchlist=[],
         )
-        self.assertEqual(self.added, ["USDCAD"])
+        self.assertEqual(self.added, [])
         self.assertEqual(self.removed, [])
 
     def test_removes_pair_that_dropped_below_threshold(self):

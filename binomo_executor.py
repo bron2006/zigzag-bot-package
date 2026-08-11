@@ -234,16 +234,23 @@ def load_asset_map() -> dict[str, dict]:
 
 
 def _resolve_binomo_asset_name(entry: dict) -> Optional[str]:
-    """Binomo lists most forex pairs under a plain name on weekdays and
-    switches to a separate '(OTC)' name (a different, synthetic price feed —
-    see the correlation-check warning in this module's docstring) on
-    weekends. Crypto pairs only ever exist under their OTC name. Picks by
-    UTC weekday rather than guessing from whichever name happens to be
-    present, since both names can be non-null at once."""
-    is_weekend = datetime.now(timezone.utc).weekday() >= 5
-    if is_weekend:
-        return entry.get("otc_name") or entry.get("binomo_name")
-    return entry.get("binomo_name") or entry.get("otc_name")
+    """Returns the pair's real-market name, or None if Binomo only lists it
+    under its '(OTC)' name right now. POLICY (user decision, 2026-08-11):
+    a Binomo '(OTC)' listing is Binomo's own synthetic/generated price
+    series, not a real market feed - never select, track, or trade a pair
+    under that name, full stop. This used to fall back to otc_name (picked
+    by UTC weekday, or whenever binomo_name was absent) so weekend/off-hours
+    signals still traded against Binomo's own chart; that fallback is
+    deliberately gone. Concrete effect: crypto (BTCUSD/ETHUSD/etc.) has no
+    non-OTC listing on Binomo at all, so this always returns None for
+    crypto - it's permanently excluded from real trading/correlation-check,
+    not just during some windows. A forex pair with a real binomo_name can
+    still return None transiently when Binomo happens to be showing it
+    under OTC at that moment (e.g. off-hours on an otherwise-ordinary
+    weekday, confirmed live 2026-08-10/11 for USD/CAD and GBP/USD) -
+    callers already treat None as "skip this one, not tradable right now",
+    so nothing further is needed there."""
+    return entry.get("binomo_name")
 
 
 # ----------------------------------------------------------------------
@@ -1232,13 +1239,22 @@ _WATCHLIST_REFRESH_INTERVAL_SECONDS = 3600.0
 
 
 def refresh_watchlist_by_payout(page, asset_map: dict) -> None:
-    """Keeps the scanner watchlist limited to pairs Binomo is currently
-    paying config.BINOMO_MIN_PAYOUT_PERCENT or more for. Payout drifts
-    through the day/week (notably for weekend OTC assets — confirmed live
-    2026-08-10: GBP/USD sat at 70% and Gold at 60% in the same snapshot
-    where 34 other cTrader-tracked pairs sat at >=80%), so this only ever
-    manages pairs already present in asset_map (the cTrader x Binomo
-    intersection) — it adds/removes exactly those, leaving any other
+    """Keeps the scanner watchlist limited to pairs Binomo is CURRENTLY
+    quoting under a real (non-OTC) name at config.BINOMO_MIN_PAYOUT_PERCENT
+    or more. Binomo's '(OTC)' listings are its own synthetic/generated price
+    series, not a real market feed - POLICY (user decision, 2026-08-11):
+    never trade or track a pair under that name, so a pair only reachable
+    via otc_name never qualifies here, full stop (this used to also check
+    otc_name; that fallback is gone - see _resolve_binomo_asset_name's
+    docstring for the same policy applied to trade placement). Concrete
+    effect: crypto (only ever listed OTC on Binomo) never qualifies, and a
+    forex pair with a real binomo_name drops out for as long as Binomo
+    happens to be showing it under OTC (confirmed live 2026-08-10/11 for
+    USD/CAD and GBP/USD on ordinary weekday nights) - it comes back on its
+    own once Binomo returns it to the real listing, no manual fix needed.
+
+    Only ever manages pairs already present in asset_map (the cTrader x
+    Binomo intersection) - it adds/removes exactly those, leaving any other
     watchlist entries the user added by hand untouched.
 
     Reuses the caller's already-open `page` rather than opening its own
@@ -1262,17 +1278,8 @@ def refresh_watchlist_by_payout(page, asset_map: dict) -> None:
 
     added, removed = [], []
     for pair_key, entry in asset_map.items():
-        # Checks BOTH known names, not just _resolve_binomo_asset_name's
-        # weekday/weekend guess: that guess is for picking ONE name to click
-        # when placing a trade, but Binomo can list a pair under its "(OTC)"
-        # name on an ordinary weekday too (confirmed live 2026-08-10:
-        # USD/CAD showed as "USD/CAD (OTC)" on a Monday) - either name being
-        # live right now is equally good evidence of the current payout.
-        payout = None
-        for candidate_name in (entry.get("binomo_name"), entry.get("otc_name")):
-            if candidate_name and candidate_name in payout_by_name:
-                payout = payout_by_name[candidate_name]
-                break
+        binomo_name = entry.get("binomo_name")
+        payout = payout_by_name.get(binomo_name) if binomo_name else None
         qualifies = payout is not None and payout >= config.BINOMO_MIN_PAYOUT_PERCENT
         already_present = pair_key in current_watchlist
 
