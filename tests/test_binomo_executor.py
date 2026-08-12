@@ -353,5 +353,32 @@ class RefreshWatchlistByPayoutTest(unittest.TestCase):
         self.assertEqual(self.added, ["EURUSD"])
 
 
+class DismissBlockingOverlayTest(unittest.TestCase):
+    """Escape was confirmed live (2026-08-12) to close this app's Angular
+    overlays generically, including the picker itself - used here instead
+    of hardcoding a close-button selector for whatever promo modal
+    (confirmed: a "Стати VIP-трейдером" popup) happens to be showing."""
+
+    class _FakePage:
+        def __init__(self, raise_on_press=False):
+            self.pressed = []
+            self._raise = raise_on_press
+            self.keyboard = self
+
+        def press(self, key):
+            if self._raise:
+                raise RuntimeError("boom")
+            self.pressed.append(key)
+
+    def test_presses_escape(self):
+        page = self._FakePage()
+        binomo_executor._dismiss_blocking_overlay(page)
+        self.assertEqual(page.pressed, ["Escape"])
+
+    def test_does_not_raise_when_press_fails(self):
+        page = self._FakePage(raise_on_press=True)
+        binomo_executor._dismiss_blocking_overlay(page)  # must not raise
+
+
 if __name__ == "__main__":
     unittest.main()

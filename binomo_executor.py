@@ -639,6 +639,26 @@ def _fill_amount(page, amount: float) -> bool:
     return True
 
 
+def _dismiss_blocking_overlay(page) -> None:
+    """Best-effort dismissal of whatever Angular overlay/dialog Binomo
+    happens to be showing (confirmed live 2026-08-11/12: a "Стати
+    VIP-трейдером" promo modal repeatedly intercepted the picker-open
+    click - see _safe_click's docstring for the crash that class of
+    failure caused before that guard existed). Rather than hunting down
+    and hardcoding that one promo's close button - which only guesses at
+    what the NEXT such popup will look like - this sends Escape, confirmed
+    live to close this app's Angular overlays generically (verified
+    2026-08-12 against the asset picker itself). A no-op when nothing is
+    open, so it's cheap to call unconditionally before every picker
+    interaction. Also cleans up the "search_input not found on the very
+    next action" cascade failures seen after a blocked click - those look
+    like the picker was left half-open by the interrupted attempt."""
+    try:
+        page.keyboard.press("Escape")
+    except Exception:
+        logger.debug("Binomo executor: overlay-dismiss Escape press failed", exc_info=True)
+
+
 def _select_asset(page, asset: str) -> Optional[str]:
     """Opens the asset picker, searches, and clicks the exact-matching row
     (exact-match matters: the weekday name, e.g. "EUR/USD", is a text
@@ -648,6 +668,7 @@ def _select_asset(page, asset: str) -> Optional[str]:
     the chart is actually showing the requested asset. Clears the
     WebSocket price cache on success so a stale price from whatever was
     previously selected can never be mistaken for the new asset's."""
+    _dismiss_blocking_overlay(page)
     picker_button = _safe_find(page, SELECTORS["asset_picker_open_button"], description="asset_picker_open_button")
     if picker_button is None:
         return "asset_picker_open_button not found"
@@ -694,6 +715,7 @@ def get_available_binomo_assets(page) -> list[dict]:
     Leaves the picker closed on the way out (toggles the same open button)
     so callers - notably _select_asset(), used right after this in the
     correlation-check loop - find it in the state they expect."""
+    _dismiss_blocking_overlay(page)
     picker_button = _safe_find(page, SELECTORS["asset_picker_open_button"], description="asset_picker_open_button")
     if picker_button is None:
         return []
