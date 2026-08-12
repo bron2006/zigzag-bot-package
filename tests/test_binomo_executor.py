@@ -1,4 +1,5 @@
 import unittest
+from datetime import datetime
 from unittest.mock import patch
 
 import binomo_executor
@@ -208,6 +209,147 @@ class CheckRiskLimitsTest(unittest.TestCase):
         self.assertIsNone(reason)
 
 
+class KillSwitchEndToEndTest(unittest.TestCase):
+    """CheckRiskLimitsTest above mocks get_consecutive_binomo_losses
+    directly, which only proves the logic is correct GIVEN a loss count -
+    it never proves a real loss actually produces that count. That gap is
+    exactly what let read_trade_result reach production completely unable
+    to ever report "loss" (see ReadTradeResultTest) while this exact test
+    class would have passed the whole time. This one runs the real
+    pipeline: read_trade_result (now fixed) parses an actual loss-row
+    string, db.resolve_binomo_trade persists it, db.get_consecutive_
+    binomo_losses counts it back out, _check_risk_limits trips the real
+    (DB-persisted, process-shared) kill switch, and a subsequent
+    _handle_signal call is confirmed to stop before ever touching the
+    browser. Only the Playwright page/DOM layer is faked.
+
+    The kill-switch flag itself is a single global row shared with the
+    real system (not scoped per account_mode, unlike the trade-count
+    queries below) - setUp/tearDown save and restore whatever was there
+    before, so this test can never leave real demo trading unable to
+    place trades because a test run tripped the switch and didn't clean
+    up after itself."""
+
+    # account_mode is VARCHAR(8) in the real schema (only "demo"/"live"
+    # are ever written in production) - kept short and clearly-fake so it
+    # both fits the column and can never collide with real trade history.
+    ACCOUNT_MODE = "e2etest"
+
+    class _FakeRow:
+        def __init__(self, text):
+            self._text = text
+
+        def inner_text(self):
+            return self._text
+
+    class _FakePage:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def click(self, *args, **kwargs):
+            pass
+
+        def query_selector_all(self, selector):
+            return self._rows
+
+    def setUp(self):
+        state = binomo_executor.db.get_binomo_runtime_state()
+        self._was_tripped = state["kill_switch_tripped"]
+        binomo_executor.db.clear_binomo_kill_switch()
+        self._trade_ids = []
+        self._purge_synthetic_trades()
+
+    def tearDown(self):
+        self._purge_synthetic_trades()
+        binomo_executor.db.clear_binomo_kill_switch()
+        if self._was_tripped:
+            binomo_executor.db.trip_binomo_kill_switch("restored after KillSwitchEndToEndTest")
+
+    def _purge_synthetic_trades(self):
+        # Defensive, not just "delete what this run created": if an
+        # earlier run of this test crashed before tearDown, leftover rows
+        # under this account_mode would silently inflate the next run's
+        # loss streak. Scoped to ACCOUNT_MODE, so this can't touch real
+        # demo trade history.
+        with binomo_executor.db.get_db() as session:
+            if session is None:
+                return
+            rows = session.query(binomo_executor.db.BinomoTrade).filter(
+                binomo_executor.db.BinomoTrade.account_mode == self.ACCOUNT_MODE
+            ).all()
+            for row in rows:
+                session.delete(row)
+            session.commit()
+
+    def _place_and_lose(self, pair: str, asset: str) -> None:
+        trade_id = binomo_executor.db.create_binomo_trade(
+            asset=asset, pair=pair, direction="up", amount=100.0,
+            expiry_seconds=300, account_mode=self.ACCOUNT_MODE,
+        )
+        self.assertIsNotNone(trade_id)
+        self._trade_ids.append(trade_id)
+
+        # Real settled-loss row text confirmed live 2026-08-12
+        # ("AUD/JPY80%+ 0,00 ₴ 16:00:00 · 12 сер 1 396,00 ₴") - goes
+        # through the actual fixed parser, not a hand-built result dict.
+        # 16:00:00 GMT+3 on 12 сер = 13:00:00 UTC, so entered_after must
+        # match that for the (now entered_after-aware) row-matching to
+        # accept this row as the one to resolve.
+        row_text = f"{asset}80%+ 0,00 ₴ 16:00:00 · 12 сер 100,00 ₴"
+        page = self._FakePage([self._FakeRow(row_text)])
+        with patch.object(binomo_executor, "_safe_find", side_effect=[object(), object()]), \
+             patch.object(binomo_executor, "_safe_click", return_value=True):
+            outcome = binomo_executor.read_trade_result(page, asset, datetime(2026, 8, 12, 13, 0, 0))
+        self.assertEqual(outcome["result"], "loss")
+
+        resolved = binomo_executor.db.resolve_binomo_trade(
+            trade_id, result=outcome["result"], payout_amount=outcome["payout_amount"]
+        )
+        self.assertTrue(resolved)
+
+    def test_consecutive_losses_trip_kill_switch_and_block_next_trade(self):
+        with patch.object(binomo_executor.config, "BINOMO_ACCOUNT_MODE", self.ACCOUNT_MODE), \
+             patch.object(binomo_executor.config, "BINOMO_MAX_CONSECUTIVE_LOSSES", 3), \
+             patch.object(binomo_executor.config, "BINOMO_MAX_TRADES_PER_DAY", 1000), \
+             patch.object(binomo_executor.config, "BINOMO_MAX_DAILY_LOSS_PERCENT", 1000.0), \
+             patch.object(binomo_executor.config, "BINOMO_EXECUTOR_ENABLED", True):
+
+            self.assertTrue(binomo_executor.is_active(), "must start clean, not already tripped")
+
+            self._place_and_lose("EURUSD", "EUR/USD")
+            self._place_and_lose("EURUSD", "EUR/USD")
+            self.assertTrue(
+                binomo_executor.is_active(),
+                "2 losses with a limit of 3 must not trip the switch yet",
+            )
+
+            self._place_and_lose("EURUSD", "EUR/USD")
+
+            # Mirrors production: the switch trips when the NEXT signal is
+            # evaluated, not the instant the 3rd losing trade resolves.
+            reason = binomo_executor._check_risk_limits(balance=10000.0)
+            self.assertIsNotNone(reason)
+            self.assertIn("MAX_CONSECUTIVE_LOSSES", reason)
+
+            # Prove it's a real, persisted flag - read it back fresh rather
+            # than trusting _check_risk_limits' own return value.
+            state = binomo_executor.db.get_binomo_runtime_state()
+            self.assertTrue(state["kill_switch_tripped"])
+            self.assertFalse(binomo_executor.is_active())
+
+            # And prove the actual consequence: a brand new signal on this
+            # pair is refused before it ever touches the browser.
+            with patch.object(binomo_executor, "get_account_balance") as mock_balance, \
+                 patch.object(binomo_executor, "place_binary_trade") as mock_place:
+                binomo_executor._handle_signal(
+                    page=object(),
+                    asset_map={"EURUSD": {"binomo_name": "EUR/USD", "otc_name": None}},
+                    signal={"pair": "EURUSD", "verdict_text": "BUY", "price": 1.1, "timeframe": "5m"},
+                )
+                mock_balance.assert_not_called()
+                mock_place.assert_not_called()
+
+
 class StakeWeightForPairTest(unittest.TestCase):
     """Not martingale: weight is chosen from a fresh 30-day win-rate
     snapshot every time, never from this pair's own preceding win/loss -
@@ -283,6 +425,164 @@ class CorrelationLogTest(unittest.TestCase):
             lines = [line for line in content.splitlines() if line]
             self.assertEqual(len(lines), 3)  # header + 2 rows
             self.assertEqual(lines[0].split(",")[0], "logged_at")
+
+
+class ReadTradeResultTest(unittest.TestCase):
+    """Live-observed deal rows (2026-08-12) have no "win"/"lose"/"виграш"/
+    "програш" word anywhere - a settled win looks like "Bitcoin (OTC)80%+
+    72,00 ₴ 09:15:00 · 10 сер 40,00 ₴" and a settled loss like "AUD/JPY80%+
+    0,00 ₴ 16:00:00 · 12 сер 1 396,00 ₴". The old text-search parser always
+    fell through to "unknown", so every real trade would have retried
+    forever. Distinguishing signals confirmed live: a settled row has an
+    absolute timestamp ("HH:MM:SS · DD мон"), an open one a countdown
+    ("00гXXхвYYс"); and per no push/flat on Binomo, a settled credited
+    amount of exactly 0 is a loss, anything positive is a win.
+
+    Binomo's timestamp is GMT+3 with no year - "09:15:00 · 10 сер" is
+    2026-08-10 09:15:00 local = 2026-08-10 06:15:00 UTC, which is what
+    entered_after is expressed in (matching how entry_ts is stored)."""
+
+    class _FakeRow:
+        def __init__(self, text):
+            self._text = text
+
+        def inner_text(self):
+            return self._text
+
+    class _FakePage:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def click(self, *args, **kwargs):
+            pass
+
+        def query_selector_all(self, selector):
+            return self._rows
+
+    def _read(self, row_texts, entered_after):
+        rows = [self._FakeRow(t) for t in row_texts]
+        page = self._FakePage(rows)
+        # Two _safe_find calls in the real flow: trade_history_tab, then
+        # the existence-check on row_selector before the real per-row scan.
+        with patch.object(binomo_executor, "_safe_find", side_effect=[object(), object()]), \
+             patch.object(binomo_executor, "_safe_click", return_value=True):
+            return binomo_executor.read_trade_result(page, "irrelevant", entered_after)
+
+    def test_settled_win_row(self):
+        result = self._read(
+            ["Bitcoin (OTC)80%+ 72,00 ₴ 09:15:00 · 10 сер 40,00 ₴"],
+            entered_after=datetime(2026, 8, 10, 6, 15, 0),
+        )
+        self.assertEqual(result["result"], "win")
+        self.assertEqual(result["payout_amount"], 72.0)
+
+    def test_settled_loss_row(self):
+        result = self._read(
+            ["AUD/JPY80%+ 0,00 ₴ 16:00:00 · 12 сер 1 396,00 ₴"],
+            entered_after=datetime(2026, 8, 12, 13, 0, 0),
+        )
+        self.assertEqual(result["result"], "loss")
+        self.assertEqual(result["payout_amount"], 0.0)
+
+    def test_still_open_row_is_unknown_not_misparsed_as_loss(self):
+        # This is the exact shape that used to reach the parser and get
+        # silently mis-marked "unknown" for the wrong reason (no win/loss
+        # word) rather than the right one (not settled yet).
+        result = self._read(
+            ["EUR/SGD80%+ 0,00 ₴ 00г11хв01с1 754,00 ₴"],
+            entered_after=datetime(2026, 8, 12, 9, 44, 15),
+        )
+        self.assertEqual(result["result"], "unknown")
+        self.assertIsNone(result["payout_amount"])
+
+    def test_picks_the_row_matching_entered_after_not_the_first_one(self):
+        # The exact collision confirmed live 2026-08-12: two EUR/SGD trades
+        # pending at once. Both rows settled here; entered_after belongs to
+        # the SECOND one (a loss) - the old code would have returned
+        # whichever row Playwright listed first (the win) for both trades.
+        result = self._read(
+            [
+                "EUR/SGD80%+ 1 754,00 ₴ 09:44:15 · 12 сер 1 000,00 ₴",  # win, trade #1
+                "EUR/SGD80%+ 0,00 ₴ 09:50:10 · 12 сер 1 000,00 ₴",       # loss, trade #3
+            ],
+            entered_after=datetime(2026, 8, 12, 6, 50, 10),  # matches the SECOND row (09:50:10 GMT+3)
+        )
+        self.assertEqual(result["result"], "loss")
+
+    def test_still_open_row_for_a_different_trade_on_same_asset_is_skipped(self):
+        # One trade on this asset has settled (and matches entered_after);
+        # another is still open. The open one must never be mistaken for a
+        # match just because it shares the asset name.
+        result = self._read(
+            [
+                "EUR/SGD80%+ 0,00 ₴ 00г11хв01с1 754,00 ₴",              # still open, different trade
+                "EUR/SGD80%+ 1 754,00 ₴ 09:44:15 · 12 сер 1 000,00 ₴",  # settled win, our trade
+            ],
+            entered_after=datetime(2026, 8, 12, 6, 44, 15),
+        )
+        self.assertEqual(result["result"], "win")
+
+    def test_settled_row_far_outside_tolerance_is_not_matched(self):
+        # A settled row for this asset exists, but from a different day
+        # entirely - must not be guessed as "close enough".
+        result = self._read(
+            ["EUR/SGD80%+ 1 754,00 ₴ 09:44:15 · 10 сер 1 000,00 ₴"],
+            entered_after=datetime(2026, 8, 12, 6, 44, 15),  # 2 days later
+        )
+        self.assertEqual(result["result"], "unknown")
+
+
+class ScreenshotTest(unittest.TestCase):
+    """Bug found live 2026-08-12: an unsanitized "/" in the tag (e.g. from
+    a forex asset name like "EUR/SGD") made Playwright create a
+    "..._EUR" directory containing "SGD_up.png" instead of one flat file -
+    invisible to _prune_screenshots' non-recursive glob, so it would
+    accumulate forever on a live-trading run."""
+
+    class _FakePage:
+        def __init__(self):
+            self.screenshot_paths = []
+
+        def screenshot(self, path):
+            self.screenshot_paths.append(path)
+            # A real Playwright screenshot() creates any missing parent
+            # directories, which is exactly what turned the bug into a
+            # silently-created directory instead of a loud failure.
+            from pathlib import Path
+            p = Path(path)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(b"")
+
+    def setUp(self):
+        import tempfile
+        from pathlib import Path
+
+        self._tmp = tempfile.TemporaryDirectory()
+        self._dir_patch = patch.object(binomo_executor, "SCREENSHOT_DIR", Path(self._tmp.name))
+        self._dir_patch.start()
+
+    def tearDown(self):
+        self._dir_patch.stop()
+        self._tmp.cleanup()
+
+    def test_slash_in_tag_does_not_create_a_subdirectory(self):
+        page = self._FakePage()
+        result = binomo_executor._screenshot(page, "before_amount_EUR/SGD_up")
+        self.assertIsNotNone(result)
+
+        from pathlib import Path
+        saved = Path(result)
+        self.assertTrue(saved.is_file())
+        self.assertEqual(saved.parent, binomo_executor.SCREENSHOT_DIR)
+
+    def test_other_path_separators_are_also_sanitized(self):
+        page = self._FakePage()
+        result = binomo_executor._screenshot(page, r'weird:name<>with|bad*chars?"here')
+        self.assertIsNotNone(result)
+
+        from pathlib import Path
+        self.assertTrue(Path(result).is_file())
+        self.assertEqual(Path(result).parent, binomo_executor.SCREENSHOT_DIR)
 
 
 class ParsePayoutPercentTest(unittest.TestCase):

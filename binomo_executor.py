@@ -74,9 +74,10 @@ import csv
 import json
 import logging
 import queue
+import re
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -453,11 +454,25 @@ def _prune_screenshots() -> None:
             logger.debug("Could not prune screenshot %s", path, exc_info=True)
 
 
+_UNSAFE_FILENAME_CHARS = re.compile(r'[\\/:*?"<>|]')
+
+
 def _screenshot(page, tag: str) -> Optional[str]:
+    """Bug found live 2026-08-12 on the very first real trade: tag often
+    embeds the Binomo asset name (e.g. "before_amount_EUR/SGD_up"), and a
+    forex pair's name always contains "/" - passed straight into a path,
+    that split the screenshot into a spuriously-created "...EUR" directory
+    containing "SGD_up.png", not a single flat file. Two problems beyond
+    just being messy: _prune_screenshots() only globs *.png directly in
+    SCREENSHOT_DIR, so those nested files were invisible to retention and
+    would accumulate forever; and the images were still real, valid
+    screenshots, just impossible to find by the name you'd expect. Sanitize
+    away every character Windows treats specially in a path component."""
     try:
         SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
         ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-        path = SCREENSHOT_DIR / f"{ts}_{tag}.png"
+        safe_tag = _UNSAFE_FILENAME_CHARS.sub("-", tag)
+        path = SCREENSHOT_DIR / f"{ts}_{safe_tag}.png"
         page.screenshot(path=str(path))
         _prune_screenshots()
         return str(path)
@@ -587,13 +602,34 @@ def _set_expiry_time(page, expiry_seconds: int) -> bool:
         return False
 
     for _ in range(_MAX_TIME_STEPPER_CLICKS):
-        current_minutes = _parse_hhmm(time_input.input_value())
+        current_value = time_input.input_value()
+        current_minutes = _parse_hhmm(current_value)
         if current_minutes is None:
             break
         elapsed = (current_minutes - baseline_minutes) % (24 * 60)
         if elapsed >= target_minutes_elapsed:
             return True
-        plus_button.click()
+
+        if not _safe_click(plus_button, page, description="time_plus_button"):
+            return False
+        # BUG found live 2026-08-12: a request for expiry_seconds=300 (5min)
+        # ended up ~30 minutes on Binomo. Root cause - reading input_value()
+        # again immediately after click() races Angular's re-render: the
+        # click event fires synchronously, but the field's displayed value
+        # updates asynchronously, so several loop iterations in a row can
+        # see the SAME stale value and each queue another click before the
+        # first one's effect is even visible - by the time the display
+        # catches up, far more clicks have landed than the loop thought it
+        # was sending. Waiting for the field to actually change before the
+        # next read closes that race.
+        try:
+            page.wait_for_function(
+                "([sel, prev]) => document.querySelector(sel)?.value !== prev",
+                arg=[SELECTORS["time_input"], current_value],
+                timeout=2000,
+            )
+        except Exception:
+            logger.debug("Binomo executor: expiry field didn't visibly change after a stepper click", exc_info=True)
 
     logger.error(
         "Binomo executor: could not reach target expiry (%ss) after %d stepper clicks — "
@@ -617,7 +653,8 @@ def _fill_amount(page, amount: float) -> bool:
         return False
 
     target = int(round(amount))
-    amount_input.click()
+    if not _safe_click(amount_input, page, description="amount_input"):
+        return False
     amount_input.press("Control+A")
     amount_input.press("Backspace")
     amount_input.type(str(target))
@@ -807,7 +844,8 @@ def place_binary_trade(page, asset: str, direction: str, amount: float, expiry_s
         return {"success": False, "error": f"{direction}_button not found"}
 
     _screenshot(page, f"before_click_{asset}_{direction}")
-    direction_button.click()
+    if not _safe_click(direction_button, page, description=f"{direction}_button"):
+        return {"success": False, "error": f"could not click {direction}_button"}
 
     confirmation = _safe_find(
         page, SELECTORS["trade_confirmation_toast"], description="trade_confirmation_toast", timeout_ms=5000
@@ -820,36 +858,139 @@ def place_binary_trade(page, asset: str, direction: str, amount: float, expiry_s
     return {"success": True, "error": None}
 
 
+_SETTLED_TIMESTAMP_RE = re.compile(r"\d{2}:\d{2}:\d{2}\s*·")
+_CURRENCY_AMOUNT_RE = re.compile(r"[+-]?\s*[\d\s]+,\d{2}\s*₴")
+_SETTLED_ROW_TIME_RE = re.compile(r"(\d{2}):(\d{2}):(\d{2})\s*·\s*(\d{1,2})\s*([а-яіїєґА-ЯІЇЄҐ]+)")
+# Standard 3-letter Ukrainian month abbreviations, as shown in Binomo's own
+# settled-row timestamps (e.g. "10 сер" = 10 серпня = August 10 - confirmed
+# live 2026-08-12, matching that day's real date).
+_UK_MONTH_ABBR = {
+    "січ": 1, "лют": 2, "бер": 3, "кві": 4, "тра": 5, "чер": 6,
+    "лип": 7, "сер": 8, "вер": 9, "жов": 10, "лис": 11, "гру": 12,
+}
+# How close a settled row's displayed entry time must be to our own
+# entry_ts to count as the SAME trade. Wide enough to absorb a little
+# clock skew / display rounding, narrow enough that two of our own trades
+# on the same asset (which in practice land minutes apart - our closest
+# same-day pair, 2026-08-12, were ~6 minutes apart) can never be confused.
+_TRADE_HISTORY_MATCH_TOLERANCE_SECONDS = 60
+
+
+def _parse_settled_row_timestamp(text: str, *, reference: datetime) -> Optional[datetime]:
+    """Parses a settled deal row's "HH:MM:SS · D мон" into a naive UTC
+    datetime comparable to our own entry_ts. Binomo displays in GMT+3
+    (confirmed live via the page's own clock label) and never shows a
+    year, so `reference` (the trade's own entry_ts) supplies it, handling
+    the one edge case where that's ambiguous: a trade that entered in
+    December being read back in January, or vice versa."""
+    m = _SETTLED_ROW_TIME_RE.search(text)
+    if not m:
+        return None
+    hour, minute, second, day, month_abbr = m.groups()
+    month = _UK_MONTH_ABBR.get(month_abbr.lower()[:3])
+    if month is None:
+        return None
+    year = reference.year
+    if month == 12 and reference.month == 1:
+        year -= 1
+    elif month == 1 and reference.month == 12:
+        year += 1
+    try:
+        local_dt = datetime(year, month, int(day), int(hour), int(minute), int(second))
+    except ValueError:
+        return None
+    return local_dt - timedelta(hours=3)  # Binomo's GMT+3 display -> UTC
+
+
 def read_trade_result(page, asset: str, entered_after: datetime) -> dict:
-    """Reads the most recent resolved trade for `asset` opened at/after
-    `entered_after` from Binomo's trade history. Returns
-    {"result": "win"|"loss"|"unknown", "payout_amount": float|None}."""
+    """Reads the settled trade for `asset` that was opened at `entered_after`
+    from Binomo's deals list. Returns
+    {"result": "win"|"loss"|"unknown", "payout_amount": float|None}.
+
+    BUG found live 2026-08-12, once real trades finally reached this code
+    path: the row has no "win"/"loss"/"виграш"/"програш" text anywhere -
+    confirmed live rows look like "Bitcoin (OTC)80%+ 72,00 ₴ 09:15:00 · 10
+    сер 40,00 ₴" (a win) vs "AUD/JPY80%+ 0,00 ₴ 16:00:00 · 12 сер 1 396,00 ₴"
+    (a loss) - so the old text search always fell through to "unknown" and
+    every trade would have retried forever. Two things distinguish a
+    resolved row from a still-open one instead: an open position shows a
+    live countdown ("00г11хв01с"), a settled one an absolute timestamp
+    ("16:00:00 · 12 сер"); and per the user's own confirmation Binomo has
+    no push/flat outcome, so a settled row's credited amount is either the
+    stake back plus payout (a win) or exactly 0 (a loss) - never a partial
+    refund.
+
+    SECOND BUG found the same day: `entered_after` was accepted but never
+    used, so with two trades open on the same asset at once (confirmed
+    live: two pending EUR/SGD trades from one buggy run) this matched
+    whichever row Playwright's :has-text() happened to return first and
+    could silently attribute one trade's result to the other. Now scans
+    every settled row for this asset and picks the one whose own displayed
+    entry time is closest to `entered_after`, within
+    _TRADE_HISTORY_MATCH_TOLERANCE_SECONDS - still-open rows for the same
+    asset are correctly ignored rather than mismatched, since they don't
+    have a settled timestamp to compare at all."""
     history_tab = _safe_find(page, SELECTORS["trade_history_tab"], description="trade_history_tab")
     if history_tab is None:
         return {"result": "unknown", "payout_amount": None}
-    history_tab.click()
+    if not _safe_click(history_tab, page, description="trade_history_tab"):
+        return {"result": "unknown", "payout_amount": None}
 
     try:
         page.click(SELECTORS["trade_history_standard_tab_button"], timeout=3000)
     except Exception:
         pass  # may already be the selected sub-tab
 
-    row = _safe_find(page, f"{SELECTORS['trade_history_row']}:has-text('{asset}')", description="trade_history_row")
-    if row is None:
+    row_selector = f"{SELECTORS['trade_history_row']}:has-text('{asset}')"
+    # _safe_find first, purely so a total absence (asset never appears at
+    # all) still gets the usual screenshot+alert treatment - not guessed
+    # at silently. The actual selection below re-queries for every match.
+    if _safe_find(page, row_selector, description="trade_history_row") is None:
         return {"result": "unknown", "payout_amount": None}
 
     try:
-        text = row.inner_text().lower()
-        if "win" in text or "виграш" in text:
-            outcome = "win"
-        elif "loss" in text or "програш" in text:
-            outcome = "loss"
-        else:
-            outcome = "unknown"
+        candidates = page.query_selector_all(row_selector)
+    except Exception:
+        logger.exception("Binomo executor: could not list trade history rows for %s", asset)
+        return {"result": "unknown", "payout_amount": None}
 
-        digits = "".join(ch for ch in text if ch.isdigit() or ch in ".,-").strip()
-        payout = float(digits.replace(",", "")) if digits else None
-        return {"result": outcome, "payout_amount": payout}
+    best_row_text = None
+    best_diff_seconds = None
+    for candidate in candidates:
+        try:
+            candidate_text = candidate.inner_text()
+        except Exception:
+            continue
+        if not _SETTLED_TIMESTAMP_RE.search(candidate_text):
+            continue  # still open - can't be matched by settlement time, and can't be this trade's result yet either
+        row_ts = _parse_settled_row_timestamp(candidate_text, reference=entered_after)
+        if row_ts is None:
+            continue
+        diff_seconds = abs((row_ts - entered_after).total_seconds())
+        if diff_seconds <= _TRADE_HISTORY_MATCH_TOLERANCE_SECONDS and (
+            best_diff_seconds is None or diff_seconds < best_diff_seconds
+        ):
+            best_diff_seconds = diff_seconds
+            best_row_text = candidate_text
+
+    if best_row_text is None:
+        return {"result": "unknown", "payout_amount": None}  # not settled yet, or no row within tolerance - retry later
+
+    try:
+        text = best_row_text
+        amounts = _CURRENCY_AMOUNT_RE.findall(text)
+        credited = _parse_numeric_text(amounts[0]) if amounts else None
+        if credited is None:
+            logger.warning("Binomo executor: settled row for %s had no parseable amount: %r", asset, text)
+            return {"result": "unknown", "payout_amount": None}
+        # _parse_numeric_text strips the sign along with every other
+        # non-digit character, so a hypothetical "-X,XX ₴" would otherwise
+        # come back positive - reapply it from the raw match.
+        if amounts[0].strip().startswith("-"):
+            credited = -credited
+
+        outcome = "win" if credited > 0 else "loss"
+        return {"result": outcome, "payout_amount": credited}
     except Exception:
         logger.exception("Could not parse Binomo trade history row for %s", asset)
         return {"result": "unknown", "payout_amount": None}
