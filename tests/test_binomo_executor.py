@@ -543,6 +543,95 @@ class ReadTradeResultTest(unittest.TestCase):
         )
         self.assertEqual(result["result"], "unknown")
 
+    def test_closes_the_panel_after_a_successful_read(self):
+        # Regression for the fourth live bug (2026-08-12): the panel used
+        # to be left open on every exit from this function, which blocked
+        # the next real trade's amount-input click in production.
+        rows = [self._FakeRow("Bitcoin (OTC)80%+ 72,00 ₴ 09:15:00 · 10 сер 40,00 ₴")]
+        page = self._FakePage(rows)
+        with patch.object(binomo_executor, "_safe_find", side_effect=[object(), object()]), \
+             patch.object(binomo_executor, "_safe_click", return_value=True), \
+             patch.object(binomo_executor, "_close_trade_history_panel") as mock_close:
+            binomo_executor.read_trade_result(page, "irrelevant", datetime(2026, 8, 10, 6, 15, 0))
+        mock_close.assert_called_once_with(page)
+
+    def test_closes_the_panel_even_when_no_row_is_found(self):
+        page = self._FakePage([])
+        with patch.object(binomo_executor, "_safe_find", side_effect=[object(), None]), \
+             patch.object(binomo_executor, "_safe_click", return_value=True), \
+             patch.object(binomo_executor, "_close_trade_history_panel") as mock_close:
+            binomo_executor.read_trade_result(page, "irrelevant", datetime(2026, 8, 10, 6, 15, 0))
+        mock_close.assert_called_once_with(page)
+
+
+class CloseTradeHistoryPanelTest(unittest.TestCase):
+    """Regression test for the fourth live bug found 2026-08-12, discovered
+    immediately after fixing the third one: once _open_trade_history_panel
+    made the panel reliably OPEN, nothing ever closed it again, and
+    Binomo's invisible full-page backdrop behind it silently blocked the
+    very next trade's amount-input click - two real trades (#25, #26)
+    failed this way in production. Confirmed live (separate, already
+    logged-in session) that only the panel's own [X] close button
+    dismisses the backdrop, and that the dismissal itself takes a few
+    seconds via Angular's own close transition - checking immediately
+    after the click still showed the backdrop present; checking again a
+    few seconds later showed it gone. _close_trade_history_panel must wait
+    for that, not assume the click alone was enough."""
+
+    class _FakePage:
+        def __init__(self, *, closes_after_waits):
+            self.click_calls = 0
+            self.wait_calls = 0
+            self._closes_after_waits = closes_after_waits
+
+        def screenshot(self, path):
+            from pathlib import Path
+
+            Path(path).write_bytes(b"")
+
+        def wait_for_selector(self, selector, timeout=None, state=None):
+            self.wait_calls += 1
+            if state == "detached" and self.wait_calls < self._closes_after_waits:
+                raise TimeoutError("still attached")
+            return object()
+
+    def setUp(self):
+        import tempfile
+        from pathlib import Path
+
+        self._tmp = tempfile.TemporaryDirectory()
+        self._dir_patch = patch.object(binomo_executor, "SCREENSHOT_DIR", Path(self._tmp.name))
+        self._dir_patch.start()
+
+    def tearDown(self):
+        self._dir_patch.stop()
+        self._tmp.cleanup()
+
+    @staticmethod
+    def _counting_click(page):
+        def _click(page_arg, selector, *, description):
+            page.click_calls += 1
+            return True
+        return _click
+
+    def test_closes_and_waits_for_the_backdrop_to_clear(self):
+        page = self._FakePage(closes_after_waits=1)
+        with patch.object(binomo_executor, "_safe_click", side_effect=self._counting_click(page)):
+            binomo_executor._close_trade_history_panel(page)
+        self.assertEqual(page.click_calls, 1)
+        self.assertEqual(page.wait_calls, 1)
+
+    def test_logs_a_warning_but_does_not_raise_if_it_never_clears(self):
+        page = self._FakePage(closes_after_waits=99)
+        with patch.object(binomo_executor, "_safe_click", side_effect=self._counting_click(page)):
+            binomo_executor._close_trade_history_panel(page)  # must not raise
+
+    def test_does_nothing_further_if_the_close_click_itself_fails(self):
+        page = self._FakePage(closes_after_waits=1)
+        with patch.object(binomo_executor, "_safe_click", return_value=False):
+            binomo_executor._close_trade_history_panel(page)
+        self.assertEqual(page.wait_calls, 0)
+
 
 class ScreenshotTest(unittest.TestCase):
     """Bug found live 2026-08-12: an unsanitized "/" in the tag (e.g. from
