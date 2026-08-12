@@ -511,7 +511,9 @@ def _safe_find(page, selector: str, *, description: str, timeout_ms: int = _DEFA
         return None
 
 
-def _safe_click(page, selector: str, *, description: str, timeout_ms: int = _DEFAULT_FIND_TIMEOUT_MS) -> bool:
+def _safe_click(
+    page, selector: str, *, description: str, timeout_ms: int = _DEFAULT_FIND_TIMEOUT_MS, first: bool = False
+) -> bool:
     """Same treatment as _safe_find, but for the click itself. Added after
     a live crash (2026-08-10): _select_asset's picker_button.click() was a
     bare Playwright call with nothing catching its TimeoutError (an overlay
@@ -538,9 +540,21 @@ def _safe_click(page, selector: str, *, description: str, timeout_ms: int = _DEF
     click instead of reusing a handle captured earlier, which removes this
     class of bug entirely. See _open_trade_history_panel for the other half
     of this fix (verifying the click's effect, not just that it didn't
-    raise)."""
+    raise).
+
+    first=True clicks the first match instead of requiring exactly one
+    (Playwright's default "strict mode", which otherwise raises if a
+    selector resolves to more than one element). Needed for
+    trade_history_close_button: confirmed live 2026-08-12 that more than
+    one .dashboard-aside.revealed instance can exist in the DOM at once
+    (see that selector's own comment) - a real, reported-to-the-user
+    Telegram alert every time this class hit strict mode was traced back
+    to exactly this, not a missing/blocked element at all."""
     try:
-        page.locator(selector).click(timeout=timeout_ms)
+        locator = page.locator(selector)
+        if first:
+            locator = locator.first
+        locator.click(timeout=timeout_ms)
         return True
     except Exception:
         shot = _screenshot(page, f"click_failed_{description}")
@@ -1047,7 +1061,9 @@ def _close_trade_history_panel(page) -> None:
     panel and block this exact close click (same modal _select_asset
     already guards against before the asset picker)."""
     _dismiss_blocking_overlay(page)
-    if not _safe_click(page, SELECTORS["trade_history_close_button"], description="trade_history_close_button"):
+    if not _safe_click(
+        page, SELECTORS["trade_history_close_button"], description="trade_history_close_button", first=True
+    ):
         return
     try:
         page.wait_for_selector(

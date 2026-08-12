@@ -718,7 +718,7 @@ class CloseTradeHistoryPanelTest(unittest.TestCase):
 
     @staticmethod
     def _counting_click(page):
-        def _click(page_arg, selector, *, description):
+        def _click(page_arg, selector, *, description, **kwargs):
             page.click_calls += 1
             return True
         return _click
@@ -940,6 +940,11 @@ class SafeClickTest(unittest.TestCase):
             self._page = page
             self._selector = selector
 
+        @property
+        def first(self):
+            self._page.first_used.append(self._selector)
+            return self
+
         def click(self, timeout=None):
             self._page.click_calls.append(self._selector)
             if self._page.raise_on_click:
@@ -948,6 +953,7 @@ class SafeClickTest(unittest.TestCase):
     class _FakePage:
         def __init__(self, raise_on_click=False):
             self.click_calls = []
+            self.first_used = []
             self.raise_on_click = raise_on_click
 
         def locator(self, selector):
@@ -975,6 +981,7 @@ class SafeClickTest(unittest.TestCase):
         result = binomo_executor._safe_click(page, "#foo", description="foo")
         self.assertTrue(result)
         self.assertEqual(page.click_calls, ["#foo"])
+        self.assertEqual(page.first_used, [])
 
     def test_click_failure_screenshots_logs_and_alerts_without_raising(self):
         page = self._FakePage(raise_on_click=True)
@@ -982,6 +989,18 @@ class SafeClickTest(unittest.TestCase):
             result = binomo_executor._safe_click(page, "#foo", description="foo")
         self.assertFalse(result)
         mock_notify.assert_called_once()
+
+    def test_first_true_clicks_the_first_match_instead_of_requiring_exactly_one(self):
+        # Regression for a real Telegram alert traced back to Playwright's
+        # strict mode: trade_history_close_button's selector can legitimately
+        # match more than one .dashboard-aside.revealed instance at once
+        # (confirmed live 2026-08-12) - first=True picks one instead of
+        # erroring, since "not found or blocked" was never actually true.
+        page = self._FakePage()
+        result = binomo_executor._safe_click(page, "#foo", description="foo", first=True)
+        self.assertTrue(result)
+        self.assertEqual(page.first_used, ["#foo"])
+        self.assertEqual(page.click_calls, ["#foo"])
 
 
 class OpenTradeHistoryPanelTest(unittest.TestCase):
