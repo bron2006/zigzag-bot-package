@@ -970,6 +970,29 @@ def _stream_signals(out_queue: "queue.Queue[dict]", stop_event: threading.Event)
 # ----------------------------------------------------------------------
 
 
+def _stake_weight_for_pair(pair: str) -> float:
+    """Multiplier on BINOMO_STAKE_PERCENT for this pair, chosen by ITS OWN
+    trailing 30-day Binomo-style win rate (see config.py's
+    BINOMO_STAKE_WEIGHT_* for the tiers/thresholds and, importantly, why
+    this is not martingale). A pair with fewer than
+    BINOMO_STAKE_WEIGHT_MIN_TRADES resolved signals gets
+    BINOMO_STAKE_WEIGHT_DEFAULT - not full size, since there isn't enough
+    history to trust yet, but not zero either."""
+    stats = db.get_pair_signal_outcome_stats(pair, days=30)
+    resolved = stats.get("resolved") or 0
+    win_rate = stats.get("win_rate")
+
+    if resolved < config.BINOMO_STAKE_WEIGHT_MIN_TRADES or win_rate is None:
+        return config.BINOMO_STAKE_WEIGHT_DEFAULT
+    if win_rate >= config.BINOMO_STAKE_WEIGHT_TIER_HIGH_WINRATE:
+        return config.BINOMO_STAKE_WEIGHT_TIER_HIGH
+    if win_rate >= config.BINOMO_STAKE_WEIGHT_TIER_MID_WINRATE:
+        return config.BINOMO_STAKE_WEIGHT_TIER_MID
+    if win_rate >= config.BINOMO_STAKE_WEIGHT_TIER_BREAKEVEN_WINRATE:
+        return config.BINOMO_STAKE_WEIGHT_TIER_BREAKEVEN
+    return config.BINOMO_STAKE_WEIGHT_TIER_LOW
+
+
 def _handle_signal(page, asset_map: dict, signal: dict) -> None:
     if not is_active():
         return
@@ -985,6 +1008,14 @@ def _handle_signal(page, asset_map: dict, signal: dict) -> None:
         logger.debug("Binomo executor: %s not tradable on Binomo right now, skipping", pair)
         return
 
+    weight = _stake_weight_for_pair(pair)
+    if weight <= 0:
+        logger.info(
+            "Binomo executor: %s stake weight is 0 (30d Binomo-style win rate below breakeven) - skipping trade",
+            pair,
+        )
+        return
+
     balance = get_account_balance(page)
     if not balance or balance <= 0:
         logger.warning("Binomo executor: could not read balance, skipping %s", pair)
@@ -997,7 +1028,13 @@ def _handle_signal(page, asset_map: dict, signal: dict) -> None:
 
     direction = "up" if verdict == "BUY" else "down"
     expiry_seconds = signal_tracking.compute_horizon_seconds(signal.get("timeframe"))
-    amount = round(balance * (config.BINOMO_STAKE_PERCENT / 100.0), 2)
+    amount = round(balance * (config.BINOMO_STAKE_PERCENT / 100.0) * weight, 2)
+    if int(round(amount)) < 1:
+        logger.warning(
+            "Binomo executor: computed stake for %s rounds to 0 (balance=%.2f weight=%.2f) - skipping trade",
+            pair, balance, weight,
+        )
+        return
 
     trade_id = db.create_binomo_trade(
         asset=asset_name,
@@ -1012,8 +1049,8 @@ def _handle_signal(page, asset_map: dict, signal: dict) -> None:
         return
 
     logger.info(
-        "BINOMO: placing #%s %s %s amount=%.2f expiry=%ss (mode=%s)",
-        trade_id, asset_name, direction, amount, expiry_seconds, config.BINOMO_ACCOUNT_MODE,
+        "BINOMO: placing #%s %s %s amount=%.2f (weight=%.2f) expiry=%ss (mode=%s)",
+        trade_id, asset_name, direction, amount, weight, expiry_seconds, config.BINOMO_ACCOUNT_MODE,
     )
     result = place_binary_trade(page, asset_name, direction, amount, expiry_seconds)
 

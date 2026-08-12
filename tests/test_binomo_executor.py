@@ -208,6 +208,43 @@ class CheckRiskLimitsTest(unittest.TestCase):
         self.assertIsNone(reason)
 
 
+class StakeWeightForPairTest(unittest.TestCase):
+    """Not martingale: weight is chosen from a fresh 30-day win-rate
+    snapshot every time, never from this pair's own preceding win/loss -
+    see config.py's BINOMO_STAKE_WEIGHT_* comment for why that distinction
+    matters here."""
+
+    def _weight_for(self, *, resolved, win_rate):
+        with patch.object(
+            binomo_executor.db, "get_pair_signal_outcome_stats",
+            return_value={"resolved": resolved, "win_rate": win_rate},
+        ):
+            return binomo_executor._stake_weight_for_pair("EURUSD")
+
+    def test_high_winrate_gets_full_weight(self):
+        self.assertEqual(self._weight_for(resolved=50, win_rate=85.0), 1.0)
+
+    def test_mid_winrate_gets_reduced_weight(self):
+        self.assertEqual(self._weight_for(resolved=50, win_rate=70.0), 0.7)
+
+    def test_breakeven_band_gets_small_weight(self):
+        self.assertEqual(self._weight_for(resolved=50, win_rate=60.0), 0.4)
+
+    def test_below_breakeven_gets_zero_weight(self):
+        self.assertEqual(self._weight_for(resolved=50, win_rate=45.0), 0.0)
+
+    def test_boundary_values_use_the_higher_tier(self):
+        self.assertEqual(self._weight_for(resolved=50, win_rate=80.0), 1.0)
+        self.assertEqual(self._weight_for(resolved=50, win_rate=65.0), 0.7)
+        self.assertEqual(self._weight_for(resolved=50, win_rate=55.6), 0.4)
+
+    def test_too_few_trades_gets_default_weight_even_with_great_winrate(self):
+        self.assertEqual(self._weight_for(resolved=5, win_rate=100.0), 0.5)
+
+    def test_no_data_gets_default_weight(self):
+        self.assertEqual(self._weight_for(resolved=0, win_rate=None), 0.5)
+
+
 class SignalStreamUrlTest(unittest.TestCase):
     def test_raises_without_admin_token(self):
         with patch.object(binomo_executor.config, "get_admin_access_token", return_value=None):

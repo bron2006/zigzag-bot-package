@@ -162,6 +162,30 @@ elif BINOMO_EXECUTOR_ENABLED:
 
 # Fixed stake as % of account balance — no martingale/progression, ever.
 BINOMO_STAKE_PERCENT = _env_float("BINOMO_STAKE_PERCENT", 1.0)
+
+# Per-pair stake weighting (POLICY, 2026-08-12) - binomo_executor multiplies
+# BINOMO_STAKE_PERCENT by one of these, chosen by the PAIR'S OWN trailing
+# 30-day Binomo-style (no flat) win rate, recomputed fresh before every
+# trade from independent historical data. This is NOT martingale: martingale
+# reacts to THIS pair's own immediately-preceding win/loss and increases
+# stake to chase a recovery - explicitly forbidden in this project (see
+# CLAUDE.md). This never increases stake after a loss and never looks at
+# trade sequence at all, only at a rolling win-rate snapshot; a losing
+# streak lowers the tier like any other drop in win rate, it doesn't raise
+# it. Replaces a hardcoded pair-exclusion list with a continuous scale, so
+# a pair doesn't need code changes to fall out of (or back into) rotation.
+BINOMO_STAKE_WEIGHT_MIN_TRADES = _env_int("BINOMO_STAKE_WEIGHT_MIN_TRADES", 20) or 20
+BINOMO_STAKE_WEIGHT_DEFAULT = _env_float("BINOMO_STAKE_WEIGHT_DEFAULT", 0.5)
+# Win-rate tier floors (%) and their stake multipliers, checked high to low.
+BINOMO_STAKE_WEIGHT_TIER_HIGH_WINRATE = _env_float("BINOMO_STAKE_WEIGHT_TIER_HIGH_WINRATE", 80.0)
+BINOMO_STAKE_WEIGHT_TIER_HIGH = _env_float("BINOMO_STAKE_WEIGHT_TIER_HIGH", 1.0)
+BINOMO_STAKE_WEIGHT_TIER_MID_WINRATE = _env_float("BINOMO_STAKE_WEIGHT_TIER_MID_WINRATE", 65.0)
+BINOMO_STAKE_WEIGHT_TIER_MID = _env_float("BINOMO_STAKE_WEIGHT_TIER_MID", 0.7)
+# ~100/(100+80): breakeven win rate at an 80%-payout binary option.
+BINOMO_STAKE_WEIGHT_TIER_BREAKEVEN_WINRATE = _env_float("BINOMO_STAKE_WEIGHT_TIER_BREAKEVEN_WINRATE", 55.6)
+BINOMO_STAKE_WEIGHT_TIER_BREAKEVEN = _env_float("BINOMO_STAKE_WEIGHT_TIER_BREAKEVEN", 0.4)
+BINOMO_STAKE_WEIGHT_TIER_LOW = _env_float("BINOMO_STAKE_WEIGHT_TIER_LOW", 0.0)
+
 BINOMO_MAX_TRADES_PER_DAY = _env_int("BINOMO_MAX_TRADES_PER_DAY", 10) or 10
 # Kill switch: stop and require /binomo_on after this many losses in a row.
 BINOMO_MAX_CONSECUTIVE_LOSSES = _env_int("BINOMO_MAX_CONSECUTIVE_LOSSES", 4) or 4

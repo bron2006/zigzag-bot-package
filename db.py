@@ -1676,6 +1676,34 @@ def get_signal_outcome_stats(days: int = 7, *, binomo_style: bool = True) -> dic
     }
 
 
+def get_pair_signal_outcome_stats(pair: str, days: int = 30) -> dict:
+    """Binomo-style (no flat) win-rate for a single pair - see
+    _aggregate_signal_outcomes_binomo_style. Used by binomo_executor's
+    per-pair stake weighting (POLICY, 2026-08-12): scales the stake down
+    for a pair with a weak recent win rate instead of a hardcoded
+    exclusion list. Scoped to one pair rather than filtering
+    get_signal_outcome_stats's by_pair list so a per-signal stake decision
+    doesn't have to pull and aggregate every pair's rows each time."""
+    days = max(1, min(int(days or 30), 365))
+    since = _utcnow() - timedelta(days=days)
+
+    try:
+        with get_db() as session:
+            if session is None:
+                return _aggregate_signal_outcomes_binomo_style([])
+
+            rows = (
+                session.query(SignalOutcome)
+                .filter(SignalOutcome.entry_ts >= since, SignalOutcome.pair == pair)
+                .all()
+            )
+    except SQLAlchemyError:
+        logger.exception("Error loading pair signal outcome stats for %s", pair)
+        return _aggregate_signal_outcomes_binomo_style([])
+
+    return _aggregate_signal_outcomes_binomo_style(rows)
+
+
 def get_signal_outcome_score_breakdown(days: int = 30, bucket_size: int = 5) -> list[dict]:
     """Win-rate per score bucket (e.g. 75-80, 80-85, ...), used to evaluate
     whether the BUY/SELL threshold in config is well calibrated. BUY signals
