@@ -972,8 +972,14 @@ def _open_trade_history_panel(page) -> bool:
     (2) this function waits for trade_history_standard_tab_button to
     actually become visible before considering the panel open, retrying the
     click once if it doesn't — a single click occasionally lands mid-render
-    even with a fresh Locator."""
+    even with a fresh Locator.
+
+    Also dismisses any blocking overlay (e.g. the "Стати VIP-трейдером"
+    promo modal - confirmed live 2026-08-12 to reappear mid-session and
+    block this exact click) before every attempt, same as _select_asset
+    already does before the picker."""
     for attempt in range(1, _TRADE_HISTORY_PANEL_OPEN_ATTEMPTS + 1):
+        _dismiss_blocking_overlay(page)
         if not _safe_click(page, SELECTORS["trade_history_tab"], description="trade_history_tab"):
             return False
         try:
@@ -1034,7 +1040,13 @@ def _close_trade_history_panel(page) -> None:
     Best-effort: failing to close is logged but not treated as fatal here -
     it doesn't invalidate whatever read_trade_result just read, only risks
     the NEXT click, which will surface its own clear error (screenshot +
-    admin alert via _safe_click) if still blocked."""
+    admin alert via _safe_click) if still blocked.
+
+    Also dismisses any blocking overlay first: confirmed live 2026-08-12
+    that the "Стати VIP-трейдером" promo modal can pop up over the open
+    panel and block this exact close click (same modal _select_asset
+    already guards against before the asset picker)."""
+    _dismiss_blocking_overlay(page)
     if not _safe_click(page, SELECTORS["trade_history_close_button"], description="trade_history_close_button"):
         return
     try:
