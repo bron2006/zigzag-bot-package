@@ -2052,6 +2052,42 @@ def get_pending_binomo_trades(account_mode: str, limit: int = 200) -> list[dict]
         return []
 
 
+def update_binomo_trade_entry_ts(trade_id: int, entry_ts) -> bool:
+    """Corrects entry_ts to the moment the trade actually started on
+    Binomo's side, rather than the DB row's own creation time.
+
+    BUG found live 2026-08-12: create_binomo_trade's entry_ts (server_default
+    now()) is stamped when _handle_signal creates the row - BEFORE
+    place_binary_trade runs the real click sequence (asset select, amount,
+    expiry stepper, direction click). On a normal day that's a few seconds
+    off, harmless. But confirmed live: not one single real trade resolved
+    successfully all day despite settled winning rows sitting plainly
+    visible in the UI, because placement kept getting slowed down by other
+    issues fixed earlier the same day (blocking promo modal, retried
+    clicks) - one real trade's placement took ~9m45s from row-creation to
+    the direction click actually landing, while read_trade_result's
+    _TRADE_HISTORY_MATCH_TOLERANCE_SECONDS is a deliberately tight 60s (so
+    two trades on the same asset minutes apart are never confused with
+    each other - see that constant's own comment). The stored entry_ts was
+    simply the wrong reference point to compare against. Called right
+    after place_binary_trade confirms success, so entry_ts reflects
+    whatever placement actually took, however long that was."""
+    try:
+        with session_scope() as session:
+            if session is None:
+                return False
+
+            row = session.query(BinomoTrade).filter(BinomoTrade.id == trade_id).first()
+            if row is None or row.result != "pending":
+                return False
+
+            row.entry_ts = entry_ts
+            return True
+    except SQLAlchemyError:
+        logger.exception("Error updating binomo trade entry_ts id=%s", trade_id)
+        return False
+
+
 def resolve_binomo_trade(trade_id: int, *, result: str, payout_amount: float | None) -> bool:
     try:
         with session_scope() as session:

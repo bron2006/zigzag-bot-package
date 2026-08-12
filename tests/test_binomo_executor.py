@@ -356,6 +356,115 @@ class KillSwitchEndToEndTest(unittest.TestCase):
                 mock_place.assert_not_called()
 
 
+class UpdateBinomoTradeEntryTsTest(unittest.TestCase):
+    """Regression test for the live incident found 2026-08-12: not one real
+    trade resolved successfully all day despite settled winning rows
+    plainly visible in the UI, because entry_ts (stamped by
+    create_binomo_trade when the DB row is first created, BEFORE
+    place_binary_trade's real click sequence even runs) could be minutes
+    off from when the trade actually started on Binomo's side whenever
+    placement itself was slow - confirmed live via a real trade whose
+    placement took ~9m45s end to end, while read_trade_result's own
+    matching tolerance is a deliberately tight 60s. Runs against the real
+    DB (only the Playwright/DOM layer would be faked, and this function
+    doesn't touch that layer at all) - same account_mode-scoping pattern
+    as KillSwitchEndToEndTest so it can never affect real demo trade
+    history."""
+
+    ACCOUNT_MODE = "e2etest2"
+
+    def setUp(self):
+        self._purge()
+
+    def tearDown(self):
+        self._purge()
+
+    def _purge(self):
+        with binomo_executor.db.get_db() as session:
+            if session is None:
+                return
+            rows = session.query(binomo_executor.db.BinomoTrade).filter(
+                binomo_executor.db.BinomoTrade.account_mode == self.ACCOUNT_MODE
+            ).all()
+            for row in rows:
+                session.delete(row)
+            session.commit()
+
+    def test_updates_entry_ts_on_a_pending_trade(self):
+        trade_id = binomo_executor.db.create_binomo_trade(
+            asset="EUR/USD", pair="EURUSD", direction="up", amount=100.0,
+            expiry_seconds=300, account_mode=self.ACCOUNT_MODE,
+        )
+        self.assertIsNotNone(trade_id)
+
+        corrected = datetime(2026, 8, 12, 14, 45, 0)
+        self.assertTrue(binomo_executor.db.update_binomo_trade_entry_ts(trade_id, corrected))
+
+        trade = binomo_executor.db.get_binomo_trade(trade_id)
+        self.assertEqual(trade["entry_ts"], corrected)
+
+    def test_does_nothing_to_an_already_resolved_trade(self):
+        # A resolved/errored trade's entry_ts is no longer load-bearing for
+        # anything - refusing to touch it (same guard resolve_binomo_trade
+        # itself uses) avoids a confusing late write racing a concurrent
+        # resolution.
+        trade_id = binomo_executor.db.create_binomo_trade(
+            asset="EUR/USD", pair="EURUSD", direction="up", amount=100.0,
+            expiry_seconds=300, account_mode=self.ACCOUNT_MODE,
+        )
+        self.assertIsNotNone(trade_id)
+        binomo_executor.db.resolve_binomo_trade(trade_id, result="win", payout_amount=80.0)
+        original = binomo_executor.db.get_binomo_trade(trade_id)["entry_ts"]
+
+        self.assertFalse(
+            binomo_executor.db.update_binomo_trade_entry_ts(trade_id, datetime(2020, 1, 1))
+        )
+        trade = binomo_executor.db.get_binomo_trade(trade_id)
+        self.assertEqual(trade["entry_ts"], original)
+
+
+class HandleSignalEntryTsTest(unittest.TestCase):
+    """Covers _handle_signal's use of the entry_ts fix above with the
+    DB/Playwright layers mocked out - UpdateBinomoTradeEntryTsTest above
+    covers the DB function itself against the real database."""
+
+    def _asset_map(self):
+        return {"EURUSD": {"binomo_name": "EUR/USD", "otc_name": None}}
+
+    def _signal(self):
+        return {"pair": "EURUSD", "verdict_text": "BUY", "price": 1.1, "timeframe": "5m"}
+
+    def test_corrects_entry_ts_after_a_successful_placement(self):
+        with patch.object(binomo_executor, "is_active", return_value=True), \
+             patch.object(binomo_executor, "_stake_weight_for_pair", return_value=1.0), \
+             patch.object(binomo_executor, "get_account_balance", return_value=10000.0), \
+             patch.object(binomo_executor, "_check_risk_limits", return_value=None), \
+             patch.object(binomo_executor.db, "create_binomo_trade", return_value=42), \
+             patch.object(binomo_executor, "place_binary_trade", return_value={"success": True, "error": None}), \
+             patch.object(binomo_executor.db, "update_binomo_trade_entry_ts") as mock_update, \
+             patch.object(binomo_executor, "notify_admin"):
+            binomo_executor._handle_signal(page=object(), asset_map=self._asset_map(), signal=self._signal())
+
+        mock_update.assert_called_once()
+        called_trade_id = mock_update.call_args.args[0]
+        self.assertEqual(called_trade_id, 42)
+
+    def test_does_not_touch_entry_ts_when_placement_fails(self):
+        with patch.object(binomo_executor, "is_active", return_value=True), \
+             patch.object(binomo_executor, "_stake_weight_for_pair", return_value=1.0), \
+             patch.object(binomo_executor, "get_account_balance", return_value=10000.0), \
+             patch.object(binomo_executor, "_check_risk_limits", return_value=None), \
+             patch.object(binomo_executor.db, "create_binomo_trade", return_value=42), \
+             patch.object(binomo_executor, "place_binary_trade", return_value={"success": False, "error": "boom"}), \
+             patch.object(binomo_executor.db, "mark_binomo_trade_error") as mock_error, \
+             patch.object(binomo_executor.db, "update_binomo_trade_entry_ts") as mock_update, \
+             patch.object(binomo_executor, "notify_admin"):
+            binomo_executor._handle_signal(page=object(), asset_map=self._asset_map(), signal=self._signal())
+
+        mock_update.assert_not_called()
+        mock_error.assert_called_once()
+
+
 class StakeWeightForPairTest(unittest.TestCase):
     """Not martingale: weight is chosen from a fresh 30-day win-rate
     snapshot every time, never from this pair's own preceding win/loss -

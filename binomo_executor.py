@@ -1371,6 +1371,16 @@ def _handle_signal(page, asset_map: dict, signal: dict) -> None:
         notify_admin(f"❌ Binomo #{trade_id} {asset_name} {direction}: {result['error']}")
         return
 
+    # BUG found live 2026-08-12: entry_ts (stamped by create_binomo_trade,
+    # above, BEFORE place_binary_trade's real click sequence even starts)
+    # was the wrong reference point for read_trade_result's entered_after
+    # comparison whenever placement itself took a while - see
+    # db.update_binomo_trade_entry_ts's docstring for the live incident
+    # this caused (not one real trade resolved successfully all day).
+    # Corrected here, right after placement is confirmed to have actually
+    # succeeded, to whatever placement really took - however long that was.
+    db.update_binomo_trade_entry_ts(trade_id, datetime.now(timezone.utc).replace(tzinfo=None))
+
     notify_admin(
         f"📥 Binomo #{trade_id} {asset_name} {direction.upper()}\n"
         f"Сума: {amount:.2f} · Експірація: {expiry_seconds}с · Режим: {config.BINOMO_ACCOUNT_MODE}"
