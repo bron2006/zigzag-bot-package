@@ -249,6 +249,12 @@ class KillSwitchEndToEndTest(unittest.TestCase):
         def click(self, *args, **kwargs):
             pass
 
+        def wait_for_selector(self, selector, timeout=None, state=None):
+            # These tests are about row-matching, not panel-opening
+            # kinetics (see OpenTradeHistoryPanelTest for that) - always
+            # report the panel as already open.
+            return object()
+
         def query_selector_all(self, selector):
             return self._rows
 
@@ -455,6 +461,12 @@ class ReadTradeResultTest(unittest.TestCase):
 
         def click(self, *args, **kwargs):
             pass
+
+        def wait_for_selector(self, selector, timeout=None, state=None):
+            # These tests are about row-matching, not panel-opening
+            # kinetics (see OpenTradeHistoryPanelTest for that) - always
+            # report the panel as already open.
+            return object()
 
         def query_selector_all(self, selector):
             return self._rows
@@ -715,6 +727,139 @@ class DismissBlockingOverlayTest(unittest.TestCase):
     def test_does_not_raise_when_press_fails(self):
         page = self._FakePage(raise_on_press=True)
         binomo_executor._dismiss_blocking_overlay(page)  # must not raise
+
+
+class SafeClickTest(unittest.TestCase):
+    """_safe_click was rewritten 2026-08-12 to click via a fresh
+    page.locator(selector) instead of an ElementHandle a caller found
+    earlier (typically via _safe_find's page.wait_for_selector). See
+    OpenTradeHistoryPanelTest / _open_trade_history_panel's docstring for
+    the live bug this eliminates: an ElementHandle click that reports
+    success but silently lands on a node Angular has already replaced."""
+
+    class _FakeLocator:
+        def __init__(self, page, selector):
+            self._page = page
+            self._selector = selector
+
+        def click(self, timeout=None):
+            self._page.click_calls.append(self._selector)
+            if self._page.raise_on_click:
+                raise TimeoutError("element not found or not clickable")
+
+    class _FakePage:
+        def __init__(self, raise_on_click=False):
+            self.click_calls = []
+            self.raise_on_click = raise_on_click
+
+        def locator(self, selector):
+            return SafeClickTest._FakeLocator(self, selector)
+
+        def screenshot(self, path):
+            from pathlib import Path
+
+            Path(path).write_bytes(b"")
+
+    def setUp(self):
+        import tempfile
+        from pathlib import Path
+
+        self._tmp = tempfile.TemporaryDirectory()
+        self._dir_patch = patch.object(binomo_executor, "SCREENSHOT_DIR", Path(self._tmp.name))
+        self._dir_patch.start()
+
+    def tearDown(self):
+        self._dir_patch.stop()
+        self._tmp.cleanup()
+
+    def test_clicks_via_a_fresh_locator_for_the_given_selector(self):
+        page = self._FakePage()
+        result = binomo_executor._safe_click(page, "#foo", description="foo")
+        self.assertTrue(result)
+        self.assertEqual(page.click_calls, ["#foo"])
+
+    def test_click_failure_screenshots_logs_and_alerts_without_raising(self):
+        page = self._FakePage(raise_on_click=True)
+        with patch.object(binomo_executor, "notify_admin") as mock_notify:
+            result = binomo_executor._safe_click(page, "#foo", description="foo")
+        self.assertFalse(result)
+        mock_notify.assert_called_once()
+
+
+class OpenTradeHistoryPanelTest(unittest.TestCase):
+    """Regression test for the exact class of bug found live 2026-08-12: a
+    click that reports success (no exception) but whose effect isn't
+    actually visible yet, because Angular hadn't finished re-rendering
+    (real symptom: 15+ consecutive "successful" clicks on #qa_historyButton
+    that never opened the panel). This can't replay a real DOM re-render
+    without a browser, so it simulates the observable shape of the bug
+    instead: the click always "succeeds", but the post-click visibility
+    probe (page.wait_for_selector(..., state="visible")) only starts
+    succeeding after a controlled number of clicks - proving the retry
+    logic recovers from a late-arriving effect, and that it fails safe
+    (screenshot + alert, no infinite loop) when the effect never arrives
+    within the retry budget."""
+
+    class _FakePage:
+        def __init__(self, *, opens_after_clicks):
+            self.click_calls = 0
+            self._opens_after_clicks = opens_after_clicks
+
+        def screenshot(self, path):
+            from pathlib import Path
+
+            Path(path).write_bytes(b"")
+
+        def wait_for_selector(self, selector, timeout=None, state=None):
+            if self.click_calls < self._opens_after_clicks:
+                raise TimeoutError("panel not visible yet")
+            return object()
+
+    def setUp(self):
+        import tempfile
+        from pathlib import Path
+
+        self._tmp = tempfile.TemporaryDirectory()
+        self._dir_patch = patch.object(binomo_executor, "SCREENSHOT_DIR", Path(self._tmp.name))
+        self._dir_patch.start()
+
+    def tearDown(self):
+        self._dir_patch.stop()
+        self._tmp.cleanup()
+
+    @staticmethod
+    def _counting_click(page):
+        def _click(page_arg, selector, *, description):
+            page.click_calls += 1
+            return True
+        return _click
+
+    def test_opens_on_the_first_click_when_the_panel_opens_immediately(self):
+        page = self._FakePage(opens_after_clicks=1)
+        with patch.object(binomo_executor, "_safe_click", side_effect=self._counting_click(page)):
+            self.assertTrue(binomo_executor._open_trade_history_panel(page))
+        self.assertEqual(page.click_calls, 1)
+
+    def test_retries_once_when_the_first_click_lands_on_a_stale_render(self):
+        # Models the live symptom: the click itself never raises, but the
+        # panel doesn't become visible until a second click.
+        page = self._FakePage(opens_after_clicks=2)
+        with patch.object(binomo_executor, "_safe_click", side_effect=self._counting_click(page)):
+            self.assertTrue(binomo_executor._open_trade_history_panel(page))
+        self.assertEqual(page.click_calls, 2)
+
+    def test_gives_up_and_alerts_after_exhausting_the_retry_budget(self):
+        page = self._FakePage(opens_after_clicks=99)  # never opens within budget
+        with patch.object(binomo_executor, "_safe_click", side_effect=self._counting_click(page)), \
+             patch.object(binomo_executor, "notify_admin") as mock_notify:
+            self.assertFalse(binomo_executor._open_trade_history_panel(page))
+        mock_notify.assert_called_once()
+        self.assertEqual(page.click_calls, binomo_executor._TRADE_HISTORY_PANEL_OPEN_ATTEMPTS)
+
+    def test_returns_false_immediately_if_the_click_itself_fails(self):
+        page = self._FakePage(opens_after_clicks=1)
+        with patch.object(binomo_executor, "_safe_click", return_value=False):
+            self.assertFalse(binomo_executor._open_trade_history_panel(page))
 
 
 if __name__ == "__main__":

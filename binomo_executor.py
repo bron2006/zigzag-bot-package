@@ -503,7 +503,7 @@ def _safe_find(page, selector: str, *, description: str, timeout_ms: int = _DEFA
         return None
 
 
-def _safe_click(el, page, *, description: str) -> bool:
+def _safe_click(page, selector: str, *, description: str, timeout_ms: int = _DEFAULT_FIND_TIMEOUT_MS) -> bool:
     """Same treatment as _safe_find, but for the click itself. Added after
     a live crash (2026-08-10): _select_asset's picker_button.click() was a
     bare Playwright call with nothing catching its TimeoutError (an overlay
@@ -511,20 +511,39 @@ def _safe_click(el, page, *, description: str) -> bool:
     the click for 30s of retries) - it propagated all the way out of
     run_correlation_check's main loop and killed a multi-day unattended run
     over what should have been a single skipped action. Returns False
-    instead of raising; callers treat that like any other _safe_find miss."""
+    instead of raising; callers treat that like any other _safe_find miss.
+
+    REWRITTEN 2026-08-12 to take a selector and click through a fresh
+    page.locator(selector) instead of an ElementHandle the caller found
+    earlier (typically via _safe_find's page.wait_for_selector). That
+    ElementHandle-based version had a real, live bug: clicking
+    #qa_historyButton this way reported success - no exception - on every
+    one of 15+ consecutive attempts during a real --run session, yet the
+    trade-history panel never visibly opened (confirmed via screenshots
+    taken immediately after each "successful" click). A manual, real mouse
+    click on the exact same selector opened it instantly every time.
+    Root cause: Angular's fine-grained re-rendering can swap the DOM node
+    for an equivalent replacement between the find and the click; the
+    captured handle stays technically "attached" so Playwright's click
+    doesn't error, but it lands on an orphaned node with no live event
+    listener. A Locator re-resolves the live node at the moment of the
+    click instead of reusing a handle captured earlier, which removes this
+    class of bug entirely. See _open_trade_history_panel for the other half
+    of this fix (verifying the click's effect, not just that it didn't
+    raise)."""
     try:
-        el.click()
+        page.locator(selector).click(timeout=timeout_ms)
         return True
     except Exception:
         shot = _screenshot(page, f"click_failed_{description}")
         logger.error(
-            "Binomo executor: click failed for '%s' (blocked/covered element?). "
+            "Binomo executor: click failed for '%s' (selector=%r, not found or blocked). "
             "Not guessing an alternative — stopping this action. Screenshot: %s",
-            description, shot,
+            description, selector, shot,
         )
         notify_admin(
-            f"⚠️ Binomo executor: клік по \"{description}\" не спрацював (можливо, "
-            "щось перекрило елемент — банер, спливне вікно). Потрібна ручна перевірка. "
+            f"⚠️ Binomo executor: клік по \"{description}\" не спрацював (елемент не знайдено "
+            "або щось перекрило — банер, спливне вікно). Потрібна ручна перевірка. "
             f"Скріншот: {shot or 'не вдалося зберегти'}",
             alert_key=f"binomo_click_failed_{description}",
         )
@@ -585,10 +604,17 @@ def _set_expiry_time(page, expiry_seconds: int) -> bool:
     Binomo's own displayed clock, so no wall-clock/timezone sync is needed —
     reaches the requested horizon. Self-correcting rather than assuming a
     fixed per-click step, since that step size was never confirmed live
-    (verification stayed read-only and never clicked this control)."""
-    time_input = _safe_find(page, SELECTORS["time_input"], description="time_input")
-    if time_input is None:
+    (verification stayed read-only and never clicked this control).
+
+    Reads via a Locator (page.locator(...).input_value()), not a captured
+    ElementHandle - same reasoning as _safe_click's 2026-08-12 rewrite: our
+    own stepper clicks can make Angular swap this very node, and a read on
+    a stale handle can raise instead of returning the current value. A
+    Locator re-resolves the live node on every call."""
+    time_input_probe = _safe_find(page, SELECTORS["time_input"], description="time_input")
+    if time_input_probe is None:
         return False
+    time_input = page.locator(SELECTORS["time_input"])
 
     baseline_minutes = _parse_hhmm(time_input.input_value())
     if baseline_minutes is None:
@@ -597,8 +623,8 @@ def _set_expiry_time(page, expiry_seconds: int) -> bool:
 
     target_minutes_elapsed = max(1, round(expiry_seconds / 60))
 
-    plus_button = _safe_find(page, SELECTORS["time_plus_button"], description="time_plus_button")
-    if plus_button is None:
+    plus_button_probe = _safe_find(page, SELECTORS["time_plus_button"], description="time_plus_button")
+    if plus_button_probe is None:
         return False
 
     for _ in range(_MAX_TIME_STEPPER_CLICKS):
@@ -610,7 +636,7 @@ def _set_expiry_time(page, expiry_seconds: int) -> bool:
         if elapsed >= target_minutes_elapsed:
             return True
 
-        if not _safe_click(plus_button, page, description="time_plus_button"):
+        if not _safe_click(page, SELECTORS["time_plus_button"], description="time_plus_button"):
             return False
         # BUG found live 2026-08-12: a request for expiry_seconds=300 (5min)
         # ended up ~30 minutes on Binomo. Root cause - reading input_value()
@@ -647,13 +673,19 @@ def _fill_amount(page, amount: float) -> bool:
     "40.00" -> field showed "₴4000"), confirmed 2026-08-09 on this UAH demo
     account. Rounds to the nearest whole currency unit and types digits
     only, then reads the field back and refuses to proceed on any mismatch
-    rather than trusting the input silently worked."""
-    amount_input = _safe_find(page, SELECTORS["amount_input"], description="amount_input")
-    if amount_input is None:
+    rather than trusting the input silently worked.
+
+    Interacts via a Locator (page.locator(...)), not a captured
+    ElementHandle - see _safe_click's 2026-08-12 rewrite docstring for the
+    live bug (a click that reports success but never visibly lands) this
+    avoids for every action here, not just the click."""
+    amount_input_probe = _safe_find(page, SELECTORS["amount_input"], description="amount_input")
+    if amount_input_probe is None:
         return False
+    amount_input = page.locator(SELECTORS["amount_input"])
 
     target = int(round(amount))
-    if not _safe_click(amount_input, page, description="amount_input"):
+    if not _safe_click(page, SELECTORS["amount_input"], description="amount_input"):
         return False
     amount_input.press("Control+A")
     amount_input.press("Backspace")
@@ -706,10 +738,10 @@ def _select_asset(page, asset: str) -> Optional[str]:
     WebSocket price cache on success so a stale price from whatever was
     previously selected can never be mistaken for the new asset's."""
     _dismiss_blocking_overlay(page)
-    picker_button = _safe_find(page, SELECTORS["asset_picker_open_button"], description="asset_picker_open_button")
-    if picker_button is None:
+    picker_button_probe = _safe_find(page, SELECTORS["asset_picker_open_button"], description="asset_picker_open_button")
+    if picker_button_probe is None:
         return "asset_picker_open_button not found"
-    if not _safe_click(picker_button, page, description="asset_picker_open_button"):
+    if not _safe_click(page, SELECTORS["asset_picker_open_button"], description="asset_picker_open_button"):
         return "could not click asset_picker_open_button"
 
     search_input = _safe_find(page, SELECTORS["asset_search_input"], description="asset_search_input")
@@ -718,10 +750,10 @@ def _select_asset(page, asset: str) -> Optional[str]:
     search_input.fill(asset)
 
     row_selector = f"{SELECTORS['asset_row']}:has({SELECTORS['asset_row_name']}:text-is('{asset}'))"
-    asset_row = _safe_find(page, row_selector, description="asset_row")
-    if asset_row is None:
+    asset_row_probe = _safe_find(page, row_selector, description="asset_row")
+    if asset_row_probe is None:
         return f"asset row not found for {asset!r}"
-    if not _safe_click(asset_row, page, description="asset_row"):
+    if not _safe_click(page, row_selector, description="asset_row"):
         return f"could not click asset row for {asset!r}"
     _clear_price_feed_cache()
     return None
@@ -753,10 +785,10 @@ def get_available_binomo_assets(page) -> list[dict]:
     so callers - notably _select_asset(), used right after this in the
     correlation-check loop - find it in the state they expect."""
     _dismiss_blocking_overlay(page)
-    picker_button = _safe_find(page, SELECTORS["asset_picker_open_button"], description="asset_picker_open_button")
-    if picker_button is None:
+    picker_button_probe = _safe_find(page, SELECTORS["asset_picker_open_button"], description="asset_picker_open_button")
+    if picker_button_probe is None:
         return []
-    if not _safe_click(picker_button, page, description="asset_picker_open_button"):
+    if not _safe_click(page, SELECTORS["asset_picker_open_button"], description="asset_picker_open_button"):
         return []
 
     row_selector = f"{SELECTORS['asset_list_scope']} {SELECTORS['asset_row']}"
@@ -788,9 +820,9 @@ def get_available_binomo_assets(page) -> list[dict]:
 
     # Best-effort close — a failed close here shouldn't fail the whole read,
     # but IS worth a log line since it can break the next _select_asset call.
-    reopened_button = _safe_find(page, SELECTORS["asset_picker_open_button"], description="asset_picker_open_button")
-    if reopened_button is not None:
-        if not _safe_click(reopened_button, page, description="asset_picker_close_button"):
+    reopened_button_probe = _safe_find(page, SELECTORS["asset_picker_open_button"], description="asset_picker_open_button")
+    if reopened_button_probe is not None:
+        if not _safe_click(page, SELECTORS["asset_picker_open_button"], description="asset_picker_close_button"):
             logger.warning("Binomo executor: could not close asset picker after reading it — next asset switch may misbehave.")
 
     return result
@@ -839,12 +871,12 @@ def place_binary_trade(page, asset: str, direction: str, amount: float, expiry_s
         return {"success": False, "error": "could not set expiry time"}
 
     direction_selector = SELECTORS["up_button"] if direction == "up" else SELECTORS["down_button"]
-    direction_button = _safe_find(page, direction_selector, description=f"{direction}_button")
-    if direction_button is None:
+    direction_button_probe = _safe_find(page, direction_selector, description=f"{direction}_button")
+    if direction_button_probe is None:
         return {"success": False, "error": f"{direction}_button not found"}
 
     _screenshot(page, f"before_click_{asset}_{direction}")
-    if not _safe_click(direction_button, page, description=f"{direction}_button"):
+    if not _safe_click(page, direction_selector, description=f"{direction}_button"):
         return {"success": False, "error": f"could not click {direction}_button"}
 
     confirmation = _safe_find(
@@ -902,6 +934,66 @@ def _parse_settled_row_timestamp(text: str, *, reference: datetime) -> Optional[
     return local_dt - timedelta(hours=3)  # Binomo's GMT+3 display -> UTC
 
 
+_TRADE_HISTORY_PANEL_OPEN_ATTEMPTS = 2  # one click + one retry — see _open_trade_history_panel
+
+
+def _open_trade_history_panel(page) -> bool:
+    """Opens the trade-history side panel and confirms it actually became
+    visible before returning — does not trust a non-raising click to mean
+    the panel opened.
+
+    BUG found live 2026-08-12: the previous version (_safe_find via
+    page.wait_for_selector() to get an ElementHandle, then el.click() on
+    that handle) reported success — no exception — on every one of 15+
+    consecutive attempts during a real --run session, yet the panel never
+    visibly opened; screenshots taken immediately after each "successful"
+    click still showed the plain trading chart, never the "Угоди" panel.
+    Manually clicking the exact same selector (#qa_historyButton) via a
+    separate, already-logged-in session on the same account opened it
+    instantly, 2 for 2. Root cause: Angular's fine-grained re-rendering can
+    swap the DOM node out for an equivalent replacement between the find
+    and the click; the captured ElementHandle stays technically "attached"
+    so Playwright's click doesn't error, but it lands on an orphaned node
+    with no live event listener.
+
+    Fixed the same way _set_expiry_time's stepper-click bug was fixed —
+    verify a real effect, don't trust that a non-raising call means the UI
+    actually changed: (1) _safe_click now clicks by selector through a
+    fresh Locator, which re-resolves the live DOM node at the moment of the
+    click instead of reusing a handle captured earlier (see its docstring);
+    (2) this function waits for trade_history_standard_tab_button to
+    actually become visible before considering the panel open, retrying the
+    click once if it doesn't — a single click occasionally lands mid-render
+    even with a fresh Locator."""
+    for attempt in range(1, _TRADE_HISTORY_PANEL_OPEN_ATTEMPTS + 1):
+        if not _safe_click(page, SELECTORS["trade_history_tab"], description="trade_history_tab"):
+            return False
+        try:
+            page.wait_for_selector(
+                SELECTORS["trade_history_standard_tab_button"], timeout=3000, state="visible"
+            )
+            return True
+        except Exception:
+            logger.debug(
+                "Binomo executor: trade history panel not visibly open after click (attempt %d/%d)",
+                attempt, _TRADE_HISTORY_PANEL_OPEN_ATTEMPTS, exc_info=True,
+            )
+
+    shot = _screenshot(page, "history_panel_did_not_open")
+    logger.error(
+        "Binomo executor: trade history panel did not open after %d click attempt(s) — "
+        "not guessing further. Screenshot: %s",
+        _TRADE_HISTORY_PANEL_OPEN_ATTEMPTS, shot,
+    )
+    notify_admin(
+        "⚠️ Binomo executor: панель \"Угоди\" не відкрилась після кліку (кілька спроб). "
+        "Потрібна ручна перевірка. "
+        f"Скріншот: {shot or 'не вдалося зберегти'}",
+        alert_key="binomo_history_panel_did_not_open",
+    )
+    return False
+
+
 def read_trade_result(page, asset: str, entered_after: datetime) -> dict:
     """Reads the settled trade for `asset` that was opened at `entered_after`
     from Binomo's deals list. Returns
@@ -929,11 +1021,12 @@ def read_trade_result(page, asset: str, entered_after: datetime) -> dict:
     entry time is closest to `entered_after`, within
     _TRADE_HISTORY_MATCH_TOLERANCE_SECONDS - still-open rows for the same
     asset are correctly ignored rather than mismatched, since they don't
-    have a settled timestamp to compare at all."""
-    history_tab = _safe_find(page, SELECTORS["trade_history_tab"], description="trade_history_tab")
-    if history_tab is None:
-        return {"result": "unknown", "payout_amount": None}
-    if not _safe_click(history_tab, page, description="trade_history_tab"):
+    have a settled timestamp to compare at all.
+
+    THIRD BUG found the same day, in a second --run after the first two
+    fixes: the panel this function reads from wasn't opening at all — see
+    _open_trade_history_panel's docstring."""
+    if not _open_trade_history_panel(page):
         return {"result": "unknown", "payout_amount": None}
 
     try:
