@@ -74,6 +74,7 @@ import csv
 import json
 import logging
 import queue
+import random
 import re
 import threading
 import time
@@ -102,10 +103,6 @@ BINOMO_TRADE_URL = "https://binomo.com/trading"
 # the PREVIOUS asset can never be mistaken for the new one.
 _PRICE_FEED_WS_HOST = "as.binomo.com"
 _PRICE_FEED_STALE_SECONDS = 5.0
-# How often to re-verify the Binomo session during a long run (see
-# _session_still_valid). Sessions last days, so hourly is plenty and costs
-# one selector check.
-_SESSION_RECHECK_INTERVAL_SECONDS = 3600.0
 # How often to log process memory during long runs (see _log_resource_usage).
 _RESOURCE_LOG_INTERVAL_SECONDS = 3600.0
 # Screenshot retention (see _prune_screenshots): failures write one PNG each,
@@ -183,6 +180,53 @@ SELECTORS = {
 
 _DEFAULT_FIND_TIMEOUT_MS = 8000
 _MAX_TIME_STEPPER_CLICKS = 60
+
+
+class _RandomizedInterval:
+    """Tracks whether a periodic action (one the executor runs on its own,
+    not in direct response to an incoming signal) is due to fire again -
+    using a random delay redrawn fresh every time it actually fires,
+    rather than a fixed period.
+
+    POLICY (2026-08-13, user decision): a fixed interval is a regular,
+    detectable automation signature. Confirmed live the day this was
+    added: the trade-history panel was visibly opening on every single
+    main-loop pass (~every 2s) because _resolve_due_trades had no interval
+    gating of its own at all - it only skipped opening the panel once a
+    check found nothing due, not the check itself, so the *checking*
+    happened as fast as the loop could spin. Every firing here draws a NEW
+    random delay for next time from [min_seconds, max_seconds) - not a
+    single jitter fixed at process startup - so the sequence of gaps
+    across a long run looks like irregular polling rather than a
+    metronome, while the average cadence stays roughly where min/max
+    puts it. See config.py's BINOMO_*_MIN/MAX_INTERVAL_SECONDS for the
+    three places this is used (resolve-due-trades check, watchlist/payout
+    refresh, session re-validation)."""
+
+    def __init__(self, min_seconds: float, max_seconds: float):
+        self._min_seconds = min_seconds
+        self._max_seconds = max_seconds
+        self._last_fired_at: Optional[float] = None
+        self._next_delay_seconds = random.uniform(min_seconds, max_seconds)
+
+    def is_due(self) -> bool:
+        now = time.monotonic()
+        return self._last_fired_at is None or now - self._last_fired_at >= self._next_delay_seconds
+
+    def mark_fired(self) -> None:
+        self._last_fired_at = time.monotonic()
+        self._next_delay_seconds = random.uniform(self._min_seconds, self._max_seconds)
+
+
+_resolve_check_interval = _RandomizedInterval(
+    config.BINOMO_RESOLVE_CHECK_MIN_INTERVAL_SECONDS, config.BINOMO_RESOLVE_CHECK_MAX_INTERVAL_SECONDS
+)
+_watchlist_refresh_interval = _RandomizedInterval(
+    config.BINOMO_WATCHLIST_REFRESH_MIN_INTERVAL_SECONDS, config.BINOMO_WATCHLIST_REFRESH_MAX_INTERVAL_SECONDS
+)
+_session_recheck_interval = _RandomizedInterval(
+    config.BINOMO_SESSION_RECHECK_MIN_INTERVAL_SECONDS, config.BINOMO_SESSION_RECHECK_MAX_INTERVAL_SECONDS
+)
 
 
 # ----------------------------------------------------------------------
@@ -392,23 +436,20 @@ def _is_logged_in(page) -> bool:
         return False
 
 
-_session_last_checked_at: Optional[float] = None
-
-
 def _session_still_valid(page) -> bool:
     """Re-checks the Binomo session periodically, not just at startup. A
     storage_state.json session expires after some days; before this, an
     expired session meant every subsequent action failed while the run kept
     going - correlation-check would quietly log hours of 'unknown' rows,
     and only reading the CSV would reveal it. Returns False once the
-    session is gone so callers can stop instead of collecting garbage."""
-    global _session_last_checked_at
+    session is gone so callers can stop instead of collecting garbage.
 
-    now = time.monotonic()
-    if _session_last_checked_at is not None and now - _session_last_checked_at < _SESSION_RECHECK_INTERVAL_SECONDS:
+    Gated by _session_recheck_interval (a randomized delay, not a fixed
+    one) - see that class's docstring."""
+    if not _session_recheck_interval.is_due():
         return True
+    _session_recheck_interval.mark_fired()
 
-    _session_last_checked_at = now
     if _is_logged_in(page):
         return True
 
@@ -1499,7 +1540,21 @@ def _resolve_due_trades(page) -> None:
     multiplies the exposure. Now opens the panel once, selects the FTT
     sub-tab once, scans every due trade against that same open panel via
     _read_settled_result, then closes once - and skips opening it at all
-    when nothing is actually due."""
+    when nothing is actually due.
+
+    ALSO gated by _resolve_check_interval (2026-08-13, user decision): the
+    "skip if nothing due" guard above only ever prevented opening the
+    panel - it never stopped the DB query + due-check itself from running
+    on every single main-loop pass, ~every 2s, which in practice was
+    happening constantly since there's almost always at least one pending
+    trade somewhere in its window. That's still a fixed, regular polling
+    rate even with nothing to show for it. Now the whole function is a
+    no-op unless the randomized interval says it's due - see
+    _RandomizedInterval's docstring for why random, not fixed."""
+    if not _resolve_check_interval.is_due():
+        return
+    _resolve_check_interval.mark_fired()
+
     now = datetime.now(timezone.utc).replace(tzinfo=None)
 
     due_trades = []
@@ -1741,10 +1796,6 @@ def _log_unexpected_loop_error(loop_name: str) -> None:
     )
 
 
-_watchlist_last_refreshed_at: Optional[float] = None
-_WATCHLIST_REFRESH_INTERVAL_SECONDS = 3600.0
-
-
 def refresh_watchlist_by_payout(page, asset_map: dict) -> None:
     """Keeps the scanner watchlist limited to pairs Binomo is CURRENTLY
     quoting under a real (non-OTC) name at config.BINOMO_MIN_PAYOUT_PERCENT
@@ -1807,12 +1858,11 @@ def refresh_watchlist_by_payout(page, asset_map: dict) -> None:
 
 
 def _maybe_refresh_watchlist(page, asset_map: dict) -> None:
-    global _watchlist_last_refreshed_at
-
-    now = time.monotonic()
-    if _watchlist_last_refreshed_at is not None and now - _watchlist_last_refreshed_at < _WATCHLIST_REFRESH_INTERVAL_SECONDS:
+    """Gated by _watchlist_refresh_interval (a randomized delay, not a
+    fixed one) - see that class's docstring."""
+    if not _watchlist_refresh_interval.is_due():
         return
-    _watchlist_last_refreshed_at = now
+    _watchlist_refresh_interval.mark_fired()
     refresh_watchlist_by_payout(page, asset_map)
 
 

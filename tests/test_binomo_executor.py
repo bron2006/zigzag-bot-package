@@ -1263,6 +1263,63 @@ class OpenTradeHistoryPanelTest(unittest.TestCase):
             self.assertFalse(binomo_executor._open_trade_history_panel(page))
 
 
+class RandomizedIntervalTest(unittest.TestCase):
+    """POLICY (2026-08-13, user decision): periodic checks the executor
+    runs on its own must use a random delay redrawn fresh on every firing,
+    not a fixed period - a fixed interval is a regular, detectable
+    automation signature. See _RandomizedInterval's own docstring for the
+    live incident (the trade-history panel opening on every ~2s main-loop
+    pass) this exists to fix."""
+
+    def setUp(self):
+        self._clock = _FakeClock()
+        self._time_patch = patch.object(binomo_executor.time, "monotonic", self._clock)
+        self._time_patch.start()
+
+    def tearDown(self):
+        self._time_patch.stop()
+
+    def test_is_due_before_ever_firing(self):
+        interval = binomo_executor._RandomizedInterval(45.0, 90.0)
+        self.assertTrue(interval.is_due())
+
+    def test_not_due_immediately_after_firing(self):
+        interval = binomo_executor._RandomizedInterval(45.0, 90.0)
+        interval.mark_fired()
+        self.assertFalse(interval.is_due())
+
+    def test_due_again_once_the_drawn_delay_elapses(self):
+        with patch.object(binomo_executor.random, "uniform", return_value=60.0):
+            interval = binomo_executor._RandomizedInterval(45.0, 90.0)
+            interval.mark_fired()
+            self._clock.advance(59.9)
+            self.assertFalse(interval.is_due())
+            self._clock.advance(0.2)
+            self.assertTrue(interval.is_due())
+
+    def test_draws_a_fresh_random_delay_within_bounds_on_every_firing(self):
+        # Not a single jitter fixed once at construction - the whole
+        # sequence of gaps must vary run to run, which is the entire
+        # point (a fixed post-construction jitter is still a metronome,
+        # just phase-shifted).
+        drawn = iter([45.0, 90.0, 67.5])
+        with patch.object(binomo_executor.random, "uniform", side_effect=lambda lo, hi: next(drawn)):
+            interval = binomo_executor._RandomizedInterval(45.0, 90.0)  # consumes the first draw (45.0)
+            interval.mark_fired()  # consumes the second draw (90.0)
+            self._clock.advance(89.9)
+            self.assertFalse(interval.is_due())
+            self._clock.advance(0.2)
+            self.assertTrue(interval.is_due())
+            interval.mark_fired()  # consumes the third draw (67.5)
+            self._clock.advance(67.6)
+            self.assertTrue(interval.is_due())
+
+    def test_min_and_max_are_always_passed_to_random_uniform(self):
+        with patch.object(binomo_executor.random, "uniform", return_value=50.0) as mock_uniform:
+            binomo_executor._RandomizedInterval(45.0, 90.0)
+        mock_uniform.assert_called_once_with(45.0, 90.0)
+
+
 class ResolveDueTradesTest(unittest.TestCase):
     """Regression test for the live incident found 2026-08-13: the user
     watched the real Binomo browser and caught the "Угоди" panel opening
@@ -1275,6 +1332,22 @@ class ResolveDueTradesTest(unittest.TestCase):
 
     _PAST = datetime(2020, 1, 1)  # always "due" regardless of when the test runs
     _FUTURE = datetime(2099, 1, 1)  # never "due"
+
+    def setUp(self):
+        # _resolve_due_trades is now also gated by the module-level
+        # _resolve_check_interval singleton (2026-08-13, randomized
+        # interval) - without resetting it, whichever test runs first
+        # "fires" it and every later test in the same process sees
+        # is_due() == False for the next 45-90s, silently no-op'ing. A
+        # fresh 0/0 interval is always immediately due, isolating each
+        # test from whatever earlier tests in this run already did.
+        self._interval_patch = patch.object(
+            binomo_executor, "_resolve_check_interval", binomo_executor._RandomizedInterval(0, 0)
+        )
+        self._interval_patch.start()
+
+    def tearDown(self):
+        self._interval_patch.stop()
 
     def _trade(self, id_, asset, entry_ts, expiry_seconds=300):
         return {
@@ -1313,6 +1386,21 @@ class ResolveDueTradesTest(unittest.TestCase):
             binomo_executor._resolve_due_trades(page=object())
 
         mock_open.assert_not_called()
+
+    def test_does_not_even_query_pending_trades_when_the_interval_is_not_due(self):
+        # Regression for the second half of the live incident: the
+        # "skip opening if nothing's due" guard above only ever stopped
+        # the PANEL from opening - the DB query + due-check itself used
+        # to run on every single main-loop pass (~every 2s) regardless.
+        # A not-yet-due interval must short-circuit before even that.
+        self._interval_patch.stop()  # replace this test's own always-due 0/0 interval
+        not_due_interval = binomo_executor._RandomizedInterval(9999, 9999)
+        not_due_interval.mark_fired()  # so is_due() has a recent firing to measure against
+        self._interval_patch = patch.object(binomo_executor, "_resolve_check_interval", not_due_interval)
+        self._interval_patch.start()
+        with patch.object(binomo_executor.db, "get_pending_binomo_trades") as mock_get_pending:
+            binomo_executor._resolve_due_trades(page=object())
+        mock_get_pending.assert_not_called()
 
     def test_closes_the_panel_even_if_resolving_one_trade_raises(self):
         trades = [

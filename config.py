@@ -191,6 +191,22 @@ BINOMO_MAX_TRADES_PER_DAY = _env_int("BINOMO_MAX_TRADES_PER_DAY", 10) or 10
 BINOMO_MAX_CONSECUTIVE_LOSSES = _env_int("BINOMO_MAX_CONSECUTIVE_LOSSES", 4) or 4
 BINOMO_MAX_DAILY_LOSS_PERCENT = _env_float("BINOMO_MAX_DAILY_LOSS_PERCENT", 5.0)
 
+# POLICY (2026-08-13, user decision): every periodic check the executor
+# runs on its own (not in direct response to a signal) must wait a FRESH
+# random delay each time, drawn between a min/max bound, rather than a
+# fixed interval - a fixed period is a regular, detectable automation
+# signature; a range is not. Applies to: checking pending trades for a
+# settled result (_resolve_due_trades - was running on every single main
+# loop pass, ~every 2s, regardless of whether anything was even due),
+# refreshing the watchlist by live payout, and re-verifying the login
+# session is still valid. See binomo_executor._RandomizedInterval.
+BINOMO_RESOLVE_CHECK_MIN_INTERVAL_SECONDS = _env_float("BINOMO_RESOLVE_CHECK_MIN_INTERVAL_SECONDS", 45.0)
+BINOMO_RESOLVE_CHECK_MAX_INTERVAL_SECONDS = _env_float("BINOMO_RESOLVE_CHECK_MAX_INTERVAL_SECONDS", 90.0)
+BINOMO_WATCHLIST_REFRESH_MIN_INTERVAL_SECONDS = _env_float("BINOMO_WATCHLIST_REFRESH_MIN_INTERVAL_SECONDS", 3000.0)
+BINOMO_WATCHLIST_REFRESH_MAX_INTERVAL_SECONDS = _env_float("BINOMO_WATCHLIST_REFRESH_MAX_INTERVAL_SECONDS", 4200.0)
+BINOMO_SESSION_RECHECK_MIN_INTERVAL_SECONDS = _env_float("BINOMO_SESSION_RECHECK_MIN_INTERVAL_SECONDS", 3000.0)
+BINOMO_SESSION_RECHECK_MAX_INTERVAL_SECONDS = _env_float("BINOMO_SESSION_RECHECK_MAX_INTERVAL_SECONDS", 4200.0)
+
 # Playwright session/login. Credentials are only used to (re)create
 # storage_state.json via the one-time manual login helper — never hardcoded,
 # never sent anywhere but binomo.com's own login form.
