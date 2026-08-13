@@ -566,26 +566,40 @@ class HandleSignalEntryTsTest(unittest.TestCase):
 
 
 class SetExpiryTimeTest(unittest.TestCase):
-    """_set_expiry_time now returns the actual elapsed seconds reached (or
-    None on failure), not a bool - see its docstring for the live incident
-    (2026-08-13, unpredictable per-click step size on Binomo's expiry
-    stepper) this exists to surface honestly rather than hide behind a
-    boolean "it worked"."""
+    """_set_expiry_time picks an exact time from Binomo's expiry time-picker
+    popover (opened by clicking the time input) rather than blind stepper
+    clicks - see its docstring for the 2026-08-13 live incident (unpredictable
+    per-click step size on the old stepper approach) and the live DOM
+    verification (div.option.analytics-time, nested inside
+    #qa_trading_dealTimeInput) that replaced it. Still returns the actual
+    elapsed seconds reached (or None on failure), not a bool - the picker's
+    granularity means the smallest available option can overshoot the
+    target."""
 
     class _FakeLocator:
         def __init__(self, page):
             self._page = page
 
         def input_value(self, timeout=None):
-            return self._page.values[self._page.index]
+            return self._page.time_input_value
+
+    class _FakeOption:
+        def __init__(self, text):
+            self._text = text
+
+        def inner_text(self):
+            return self._text
 
     class _FakePage:
-        def __init__(self, values):
-            self.values = values  # displayed "HH:MM" at index 0 (baseline), then after each click
-            self.index = 0
+        def __init__(self, baseline, option_texts):
+            self.time_input_value = baseline
+            self.option_texts = option_texts
 
         def locator(self, selector):
             return SetExpiryTimeTest._FakeLocator(self)
+
+        def query_selector_all(self, selector):
+            return [SetExpiryTimeTest._FakeOption(text) for text in self.option_texts]
 
         def wait_for_function(self, *args, **kwargs):
             pass
@@ -607,36 +621,52 @@ class SetExpiryTimeTest(unittest.TestCase):
         self._dir_patch.stop()
         self._tmp.cleanup()
 
-    def _run(self, values, expiry_seconds):
-        page = self._FakePage(values)
+    def _run(self, baseline, option_texts, expiry_seconds, *, picker_opens=True, time_input_found=True):
+        page = self._FakePage(baseline, option_texts)
 
         def _find(page_arg, selector, *, description, **kwargs):
+            if description == "time_input":
+                return object() if time_input_found else None
+            if description == "time_picker_option":
+                return object() if (picker_opens and option_texts) else None
             return object()
 
         def _click(page_arg, selector, *, description, **kwargs):
-            page.index += 1
+            if description == "time_picker_option":
+                import re
+
+                m = re.search(r":text-is\('(.+)'\)$", selector)
+                if m:
+                    page.time_input_value = m.group(1)
             return True
 
         with patch.object(binomo_executor, "_safe_find", side_effect=_find), \
-             patch.object(binomo_executor, "_safe_click", side_effect=_click):
+             patch.object(binomo_executor, "_safe_click", side_effect=_click), \
+             patch.object(binomo_executor, "notify_admin"):
             return binomo_executor._set_expiry_time(page, expiry_seconds)
 
-    def test_lands_exactly_on_target_when_steps_add_up_cleanly(self):
-        result = self._run(["17:13", "17:14", "17:15", "17:16", "17:17", "17:18"], expiry_seconds=300)
-        self.assertEqual(result, 5 * 60)
+    def test_picks_the_smallest_option_that_reaches_the_target_exactly(self):
+        result = self._run("17:13", ["17:14", "17:15", "17:16", "17:17"], expiry_seconds=180)
+        self.assertEqual(result, 3 * 60)
 
-    def test_returns_the_actual_overshoot_not_the_requested_duration(self):
-        # Regression for the live incident (2026-08-13): unpredictable
-        # per-click step size (a real +2min then +6min sequence, matching
-        # the live "no discoverable pattern" finding) overshoots a 5-min
-        # (300s) request to 9 minutes - the function must report 540, not
-        # pretend 300 was achieved.
-        result = self._run(["17:13", "17:16", "17:22"], expiry_seconds=300)
-        self.assertEqual(result, 9 * 60)
+    def test_returns_the_actual_elapsed_when_only_a_coarser_option_is_available(self):
+        # Regression for the live incident (2026-08-13): the picker jumps
+        # from 1-minute to 15-minute marks further out, so a 20-minute
+        # (1200s) request can only be satisfied by the 32-minute mark - the
+        # function must report 1920, not pretend 1200 was achieved.
+        result = self._run("17:13", ["17:14", "17:15", "17:30", "17:45"], expiry_seconds=1200)
+        self.assertEqual(result, 32 * 60)
 
-    def test_returns_none_when_the_target_is_never_reached(self):
-        # Field stuck at baseline for the whole click budget.
-        result = self._run(["17:13"] * (binomo_executor._MAX_TIME_STEPPER_CLICKS + 1), expiry_seconds=300)
+    def test_returns_none_when_no_option_reaches_the_target(self):
+        result = self._run("23:50", ["23:51", "23:52"], expiry_seconds=3600)
+        self.assertIsNone(result)
+
+    def test_returns_none_when_the_time_input_is_not_found(self):
+        result = self._run("17:13", ["17:14"], expiry_seconds=60, time_input_found=False)
+        self.assertIsNone(result)
+
+    def test_returns_none_when_the_picker_never_opens(self):
+        result = self._run("17:13", [], expiry_seconds=60, picker_opens=False)
         self.assertIsNone(result)
 
 

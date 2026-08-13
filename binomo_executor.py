@@ -155,12 +155,13 @@ SELECTORS = {
     "amount_input": "way-input-controls[type='currency'] input",
     "time_control": "#qa_trading_dealTimeInput",
     "time_input": "#qa_trading_dealTimeInput input",
-    # DOM order confirmed live (minus at smaller x, plus at larger x); the
-    # earlier icon-href :has() selector didn't match live (see git history)
-    # so this uses position instead — still not a guess, just a different
-    # empirically-confirmed anchor.
-    "time_minus_button": "#qa_trading_dealTimeInput button >> nth=0",
-    "time_plus_button": "#qa_trading_dealTimeInput button >> nth=1",
+    # Clicking time_input opens a <vui-popover> listing exact selectable
+    # HH:MM options - confirmed live 2026-08-13 (read-only inspection, no
+    # trade placed) per the user's own manual-trading tip. Replaced the
+    # old +/- stepper approach (see git history) once this was confirmed:
+    # the stepper's per-click step size was unpredictable/accelerating,
+    # while the picker lets us select an exact target directly.
+    "time_picker_option": "#qa_trading_dealTimeInput div.option.analytics-time",
     "up_button": "#qa_trading_dealUpButton",
     "down_button": "#qa_trading_dealDownButton",
     "trade_confirmation_toast": "way-toast, .toast",  # best-effort; absence is not treated as failure, see place_binary_trade
@@ -179,7 +180,6 @@ SELECTORS = {
 }
 
 _DEFAULT_FIND_TIMEOUT_MS = 8000
-_MAX_TIME_STEPPER_CLICKS = 60
 
 
 class _RandomizedInterval:
@@ -661,92 +661,124 @@ def _parse_hhmm(text: str) -> Optional[int]:
 
 def _set_expiry_time(page, expiry_seconds: int) -> Optional[int]:
     """Binomo's expiry control (#qa_trading_dealTimeInput) is a readonly
-    absolute clock-time field advanced only via +/- stepper buttons, not a
-    duration dropdown. Reads the baseline value, then clicks '+' until the
-    elapsed time — measured relative to that baseline, both read from
-    Binomo's own displayed clock, so no wall-clock/timezone sync is needed —
-    reaches the requested horizon. Self-correcting rather than assuming a
-    fixed per-click step, since that step size was never confirmed live
-    (verification stayed read-only and never clicked this control).
+    absolute clock-time field. An earlier version of this function (see git
+    history) advanced it via the +/- stepper buttons — abandoned 2026-08-13
+    after a live incident: the stepper's per-click step size turned out to
+    be unpredictable/accelerating (confirmed live: consecutive clicks from
+    the same baseline advanced the field by 2 minutes, then 1, with no
+    discoverable pattern), so a request for 300s (5min) landed real trades
+    anywhere from ~5 to ~30 minutes actual duration in production.
+
+    REPLACED with the mechanism the user pointed out from their own manual
+    trading experience (2026-08-13) and confirmed live here via read-only
+    DOM inspection before writing this: clicking the time INPUT (not the
+    stepper) opens a <vui-popover>, nested inside #qa_trading_dealTimeInput
+    itself (confirmed: not portaled elsewhere in the DOM), listing exact
+    selectable "HH:MM" options (div.option.analytics-time — confirmed live,
+    9 options: 1-minute granularity for the next ~5 minutes, then a jump to
+    :00/:15/:30/:45 marks further out). This selects the smallest option
+    that reaches or exceeds the target directly, in one click, instead of
+    guessing how many stepper clicks are needed. Also confirmed live:
+    selecting an option does NOT auto-close the popover, but the popover
+    staying open does not block clicks elsewhere on the page (checked via
+    elementFromPoint at the amount input while the popover was still open)
+    — so no explicit dismiss step is needed here; the next real click
+    elsewhere in place_binary_trade's flow closes it as a side effect.
 
     Reads via a Locator (page.locator(...).input_value()), not a captured
     ElementHandle - same reasoning as _safe_click's 2026-08-12 rewrite: our
-    own stepper clicks can make Angular swap this very node, and a read on
-    a stale handle can raise instead of returning the current value. A
-    Locator re-resolves the live node on every call.
+    own click can make Angular swap this very node, and a read on a stale
+    handle can raise instead of returning the current value.
 
-    Returns the ACTUAL elapsed seconds reached (which the loop can only
-    ever reach or overshoot, never land on exactly), or None on failure -
-    NOT a bool. BUG found live 2026-08-13: the per-click step size isn't a
-    fixed 1 minute as this function's own logic implicitly assumed by
-    stopping the instant elapsed >= target - confirmed live (a separate,
-    read-only test session, no trades placed) that consecutive clicks from
-    the same baseline advanced the field by 2 minutes, then 1 minute, with
-    no discoverable pattern. A request for 300s (5min) landed real trades
-    at anywhere from ~5 to ~17 minutes actual duration in production the
-    same day. Since the step size can't be predicted or corrected for
-    (stepping back down risks its own overshoot the other way), the
-    achievable fix is honesty: report what was actually reached so the
-    caller can persist the TRUE duration instead of the requested one -
-    see _handle_signal's use of db.update_binomo_trade_expiry_seconds."""
+    Still returns the ACTUAL elapsed seconds reached, not the requested
+    value - NOT a bool. The picker's granularity means the smallest
+    available option can be > target when the target itself isn't one of
+    the offered marks (e.g. a 20-minute request when only :15/:30 marks are
+    listed). The caller persists this TRUE duration, not the requested one
+    - see _handle_signal's use of db.update_binomo_trade_expiry_seconds."""
     time_input_probe = _safe_find(page, SELECTORS["time_input"], description="time_input")
     if time_input_probe is None:
         return None
     time_input = page.locator(SELECTORS["time_input"])
 
-    baseline_minutes = _parse_hhmm(time_input.input_value())
+    baseline_value = time_input.input_value()
+    baseline_minutes = _parse_hhmm(baseline_value)
     if baseline_minutes is None:
-        logger.error("Binomo executor: could not parse deal time '%s'", time_input.input_value())
+        logger.error("Binomo executor: could not parse deal time '%s'", baseline_value)
         return None
 
     target_minutes_elapsed = max(1, round(expiry_seconds / 60))
 
-    plus_button_probe = _safe_find(page, SELECTORS["time_plus_button"], description="time_plus_button")
-    if plus_button_probe is None:
+    if not _safe_click(page, SELECTORS["time_input"], description="time_input"):
         return None
 
-    for _ in range(_MAX_TIME_STEPPER_CLICKS):
-        current_value = time_input.input_value()
-        current_minutes = _parse_hhmm(current_value)
-        if current_minutes is None:
-            break
-        elapsed = (current_minutes - baseline_minutes) % (24 * 60)
-        if elapsed >= target_minutes_elapsed:
-            if elapsed * 60 != expiry_seconds:
-                logger.warning(
-                    "Binomo executor: expiry stepper overshot - requested %ss, actually reached %ss "
-                    "(unpredictable per-click step size, see _set_expiry_time's docstring). "
-                    "Recording the real duration, not the requested one.",
-                    expiry_seconds, elapsed * 60,
-                )
-            return elapsed * 60
+    if _safe_find(page, SELECTORS["time_picker_option"], description="time_picker_option") is None:
+        return None
 
-        if not _safe_click(page, SELECTORS["time_plus_button"], description="time_plus_button"):
-            return None
-        # BUG found live 2026-08-12: a request for expiry_seconds=300 (5min)
-        # ended up ~30 minutes on Binomo. Root cause - reading input_value()
-        # again immediately after click() races Angular's re-render: the
-        # click event fires synchronously, but the field's displayed value
-        # updates asynchronously, so several loop iterations in a row can
-        # see the SAME stale value and each queue another click before the
-        # first one's effect is even visible - by the time the display
-        # catches up, far more clicks have landed than the loop thought it
-        # was sending. Waiting for the field to actually change before the
-        # next read closes that race.
+    try:
+        option_elements = page.query_selector_all(SELECTORS["time_picker_option"])
+    except Exception:
+        logger.exception("Binomo executor: could not list expiry time picker options")
+        return None
+
+    best_text: Optional[str] = None
+    best_elapsed: Optional[int] = None
+    for el in option_elements:
         try:
-            page.wait_for_function(
-                "([sel, prev]) => document.querySelector(sel)?.value !== prev",
-                arg=[SELECTORS["time_input"], current_value],
-                timeout=2000,
-            )
+            text = el.inner_text().strip()
         except Exception:
-            logger.debug("Binomo executor: expiry field didn't visibly change after a stepper click", exc_info=True)
+            continue
+        minutes = _parse_hhmm(text)
+        if minutes is None:
+            continue
+        elapsed = (minutes - baseline_minutes) % (24 * 60)
+        if elapsed >= target_minutes_elapsed and (best_elapsed is None or elapsed < best_elapsed):
+            best_elapsed = elapsed
+            best_text = text
 
-    logger.error(
-        "Binomo executor: could not reach target expiry (%ss) after %d stepper clicks — "
-        "not guessing further, stopping.", expiry_seconds, _MAX_TIME_STEPPER_CLICKS,
-    )
-    return None
+    if best_text is None:
+        shot = _screenshot(page, "no_expiry_option_reaches_target")
+        logger.error(
+            "Binomo executor: none of the %d visible expiry picker options reach the target "
+            "(%ss) — not guessing further. Screenshot: %s",
+            len(option_elements), expiry_seconds, shot,
+        )
+        notify_admin(
+            "⚠️ Binomo executor: жодна опція часу експірації в пікері не покриває запитану "
+            f"тривалість ({expiry_seconds}с). Потрібна ручна перевірка. "
+            f"Скріншот: {shot or 'не вдалося зберегти'}",
+            alert_key="binomo_no_expiry_option_reaches_target",
+        )
+        return None
+
+    option_selector = f"{SELECTORS['time_picker_option']}:text-is('{best_text}')"
+    if not _safe_click(page, option_selector, description="time_picker_option"):
+        return None
+
+    try:
+        page.wait_for_function(
+            "([sel, prev]) => document.querySelector(sel)?.value !== prev",
+            arg=[SELECTORS["time_input"], baseline_value],
+            timeout=2000,
+        )
+    except Exception:
+        logger.debug(
+            "Binomo executor: expiry field didn't visibly change after picking a time option", exc_info=True
+        )
+
+    final_value = time_input.input_value()
+    final_minutes = _parse_hhmm(final_value)
+    if final_minutes is None:
+        logger.error("Binomo executor: could not parse deal time after picking an expiry option: %r", final_value)
+        return None
+
+    elapsed_seconds = ((final_minutes - baseline_minutes) % (24 * 60)) * 60
+    if elapsed_seconds != expiry_seconds:
+        logger.info(
+            "Binomo executor: expiry set via picker to the nearest available option - "
+            "requested %ss, got %ss.", expiry_seconds, elapsed_seconds,
+        )
+    return elapsed_seconds
 
 
 def _fill_amount(page, amount: float) -> bool:
