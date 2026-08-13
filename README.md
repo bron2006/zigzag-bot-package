@@ -52,6 +52,12 @@ python binomo_executor.py --correlation-check
 
 # 3. Тільки після кількох днів перевірки й свого явного рішення:
 python binomo_executor.py --run
+
+# Локальна альтернатива Telegram-команді /binomo_on, якщо Telegram не під
+# рукою: знімає спрацьований kill switch (MAX_CONSECUTIVE_LOSSES /
+# MAX_DAILY_LOSS_PERCENT). Виконується лише вручну самим власником — ніколи
+# не викликається автоматично зсередини --run.
+python binomo_executor.py --clear-kill-switch
 ```
 
 `data/binomo_asset_map.json` та `SELECTORS` (`binomo_executor.py`) звірені
