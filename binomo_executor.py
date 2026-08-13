@@ -2088,6 +2088,28 @@ def run_correlation_check(*, headless: bool = None) -> None:
             browser.close()
 
 
+def clear_kill_switch_cli() -> None:
+    """Local, explicit alternative to Telegram's /binomo_on, added
+    2026-08-13 because the owner didn't have Telegram at hand right when
+    the kill switch tripped. Does exactly what binomo_on_command does in
+    telegram_ui.py (db.set_binomo_runtime_enabled(True) +
+    db.clear_binomo_kill_switch()) - same recovery action, different door.
+
+    Deliberately a standalone CLI command that only runs when the owner
+    types it themselves - never call this from anywhere in the run loop
+    (_check_risk_limits, _resolve_due_trades, etc.). CLAUDE.md's kill-switch
+    rule requires an explicit admin action to resume after
+    MAX_CONSECUTIVE_LOSSES/MAX_DAILY_LOSS_PERCENT trips specifically so a
+    losing streak can't silently keep going - automating this call from
+    inside the executor would defeat that."""
+    before = db.get_binomo_runtime_state()
+    print(f"До: {before}")
+    db.set_binomo_runtime_enabled(True)
+    db.clear_binomo_kill_switch()
+    after = db.get_binomo_runtime_state()
+    print(f"Після: {after}")
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
@@ -2103,12 +2125,20 @@ def main() -> None:
         "--list-assets", action="store_true",
         help="Print the currently-tradeable Binomo assets and exit. Read-only.",
     )
+    parser.add_argument(
+        "--clear-kill-switch", action="store_true",
+        help="Local alternative to Telegram's /binomo_on when Telegram isn't at hand: "
+        "re-enables the runtime flag and clears a tripped kill switch. Explicit, manual only — "
+        "never called automatically by the run loop.",
+    )
     args = parser.parse_args()
 
     if args.login:
         login_and_save_session()
     elif args.list_assets:
         list_available_assets()
+    elif args.clear_kill_switch:
+        clear_kill_switch_cli()
     elif args.correlation_check:
         run_correlation_check(headless=True if args.headless else None)
     elif args.run:
