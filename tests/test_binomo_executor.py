@@ -314,11 +314,21 @@ class KillSwitchEndToEndTest(unittest.TestCase):
         self.assertTrue(resolved)
 
     def test_consecutive_losses_trip_kill_switch_and_block_next_trade(self):
+        # BUG found live 2026-08-13: this test calls the real
+        # _check_risk_limits below, which on tripping calls the real
+        # _trip_kill_switch - and that sends a genuine Telegram alert via
+        # notify_admin. The DB flag it sets is correctly scoped/restored by
+        # setUp/tearDown, but notify_admin has no such test-mode guard, so
+        # every run of this test was paging the user's real phone with a
+        # false "BINOMO KILL SWITCH" alarm (confirmed live: two duplicate
+        # alerts from two separate test runs during today's session).
+        # notify_admin must stay mocked for this whole test.
         with patch.object(binomo_executor.config, "BINOMO_ACCOUNT_MODE", self.ACCOUNT_MODE), \
              patch.object(binomo_executor.config, "BINOMO_MAX_CONSECUTIVE_LOSSES", 3), \
              patch.object(binomo_executor.config, "BINOMO_MAX_TRADES_PER_DAY", 1000), \
              patch.object(binomo_executor.config, "BINOMO_MAX_DAILY_LOSS_PERCENT", 1000.0), \
-             patch.object(binomo_executor.config, "BINOMO_EXECUTOR_ENABLED", True):
+             patch.object(binomo_executor.config, "BINOMO_EXECUTOR_ENABLED", True), \
+             patch.object(binomo_executor, "notify_admin") as mock_notify:
 
             self.assertTrue(binomo_executor.is_active(), "must start clean, not already tripped")
 
@@ -342,6 +352,10 @@ class KillSwitchEndToEndTest(unittest.TestCase):
             state = binomo_executor.db.get_binomo_runtime_state()
             self.assertTrue(state["kill_switch_tripped"])
             self.assertFalse(binomo_executor.is_active())
+
+            # The alert still fires (proving _trip_kill_switch's own logic
+            # runs) - just mocked, so it never reaches the user's real phone.
+            mock_notify.assert_called_once()
 
             # And prove the actual consequence: a brand new signal on this
             # pair is refused before it ever touches the browser.
