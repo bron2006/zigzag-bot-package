@@ -571,17 +571,23 @@ class SetExpiryTimeTest(unittest.TestCase):
     clicks - see its docstring for the 2026-08-13 live incident (unpredictable
     per-click step size on the old stepper approach) and the live DOM
     verification (div.option.analytics-time, nested inside
-    #qa_trading_dealTimeInput) that replaced it. Still returns the actual
-    elapsed seconds reached (or None on failure), not a bool - the picker's
-    granularity means the smallest available option can overshoot the
-    target."""
+    #qa_trading_dealTimeInput) that replaced it.
+
+    Also regression-covers a SECOND live incident the same day: the first
+    version of this picker-based rewrite used a field value read BEFORE
+    opening the popover as its "elapsed 0" reference - confirmed live to be
+    unreliable (the popover's own first/soonest option is sometimes that
+    same value +0, sometimes +1, depending on exactly when within the
+    current minute the click lands), which could make a 5-minute request
+    jump to an unrelated quarter-hour mark (confirmed live: an 18-minute
+    real trade for a 300s request). The fix anchors entirely on the
+    popover's own first option instead - these fakes never expose a
+    separately-read field value to the anchor logic at all, matching that
+    fix."""
 
     class _FakeLocator:
-        def __init__(self, page):
-            self._page = page
-
         def input_value(self, timeout=None):
-            return self._page.time_input_value
+            return "00:00"  # value_before_click - only used to detect change, not for time math
 
     class _FakeOption:
         def __init__(self, text):
@@ -591,12 +597,11 @@ class SetExpiryTimeTest(unittest.TestCase):
             return self._text
 
     class _FakePage:
-        def __init__(self, baseline, option_texts):
-            self.time_input_value = baseline
+        def __init__(self, option_texts):
             self.option_texts = option_texts
 
         def locator(self, selector):
-            return SetExpiryTimeTest._FakeLocator(self)
+            return SetExpiryTimeTest._FakeLocator()
 
         def query_selector_all(self, selector):
             return [SetExpiryTimeTest._FakeOption(text) for text in self.option_texts]
@@ -621,8 +626,8 @@ class SetExpiryTimeTest(unittest.TestCase):
         self._dir_patch.stop()
         self._tmp.cleanup()
 
-    def _run(self, baseline, option_texts, expiry_seconds, *, picker_opens=True, time_input_found=True):
-        page = self._FakePage(baseline, option_texts)
+    def _run(self, option_texts, expiry_seconds, *, picker_opens=True, time_input_found=True):
+        page = self._FakePage(option_texts)
 
         def _find(page_arg, selector, *, description, **kwargs):
             if description == "time_input":
@@ -632,12 +637,6 @@ class SetExpiryTimeTest(unittest.TestCase):
             return object()
 
         def _click(page_arg, selector, *, description, **kwargs):
-            if description == "time_picker_option":
-                import re
-
-                m = re.search(r":text-is\('(.+)'\)$", selector)
-                if m:
-                    page.time_input_value = m.group(1)
             return True
 
         with patch.object(binomo_executor, "_safe_find", side_effect=_find), \
@@ -645,28 +644,37 @@ class SetExpiryTimeTest(unittest.TestCase):
              patch.object(binomo_executor, "notify_admin"):
             return binomo_executor._set_expiry_time(page, expiry_seconds)
 
-    def test_picks_the_smallest_option_that_reaches_the_target_exactly(self):
-        result = self._run("17:13", ["17:14", "17:15", "17:16", "17:17"], expiry_seconds=180)
-        self.assertEqual(result, 3 * 60)
+    def test_picks_the_in_block_option_when_the_anchor_is_a_minute_ahead_of_now(self):
+        # Anchor (options[0]) = "20:52" - the common case where the popover's
+        # own soonest offer is ~1 minute from now (see class docstring).
+        result = self._run(["20:52", "20:53", "20:54", "20:55", "20:56", "21:00", "21:15"], expiry_seconds=300)
+        self.assertEqual(result, 300)
 
-    def test_returns_the_actual_elapsed_when_only_a_coarser_option_is_available(self):
-        # Regression for the live incident (2026-08-13): the picker jumps
-        # from 1-minute to 15-minute marks further out, so a 20-minute
-        # (1200s) request can only be satisfied by the 32-minute mark - the
-        # function must report 1920, not pretend 1200 was achieved.
-        result = self._run("17:13", ["17:14", "17:15", "17:30", "17:45"], expiry_seconds=1200)
-        self.assertEqual(result, 32 * 60)
+    def test_regression_anchor_being_now_itself_no_longer_overshoots_to_a_quarter_hour_mark(self):
+        # Regression for the live incident (2026-08-13): when options[0] IS
+        # "now" (elapsed 0, not +1), the near-term block only spans 0..4 -
+        # the old field-baseline version had to jump all the way to the next
+        # :15 mark for a 5-minute request (an ~18-minute real trade). Must
+        # now land on the closest in-block option (21:04) instead.
+        result = self._run(["21:00", "21:01", "21:02", "21:03", "21:04", "21:15", "21:30"], expiry_seconds=300)
+        self.assertEqual(result, 300)
 
-    def test_returns_none_when_no_option_reaches_the_target(self):
-        result = self._run("23:50", ["23:51", "23:52"], expiry_seconds=3600)
-        self.assertIsNone(result)
+    def test_falls_through_to_a_coarser_option_when_the_target_exceeds_the_near_term_block(self):
+        # anchor=17:13, target_relative=19; smallest elapsed>=19 among the
+        # available options (0,1,2,17,32) is 32 (17:45).
+        result = self._run(["17:13", "17:14", "17:15", "17:30", "17:45"], expiry_seconds=1200)
+        self.assertEqual(result, 33 * 60)
 
     def test_returns_none_when_the_time_input_is_not_found(self):
-        result = self._run("17:13", ["17:14"], expiry_seconds=60, time_input_found=False)
+        result = self._run(["17:14"], expiry_seconds=60, time_input_found=False)
         self.assertIsNone(result)
 
     def test_returns_none_when_the_picker_never_opens(self):
-        result = self._run("17:13", [], expiry_seconds=60, picker_opens=False)
+        result = self._run([], expiry_seconds=60, picker_opens=False)
+        self.assertIsNone(result)
+
+    def test_returns_none_when_no_option_is_parseable(self):
+        result = self._run(["garbage", "??"], expiry_seconds=60)
         self.assertIsNone(result)
 
 

@@ -695,19 +695,40 @@ def _set_expiry_time(page, expiry_seconds: int) -> Optional[int]:
     available option can be > target when the target itself isn't one of
     the offered marks (e.g. a 20-minute request when only :15/:30 marks are
     listed). The caller persists this TRUE duration, not the requested one
-    - see _handle_signal's use of db.update_binomo_trade_expiry_seconds."""
+    - see _handle_signal's use of db.update_binomo_trade_expiry_seconds.
+
+    BUG found live 2026-08-13, same day as the picker rewrite above: the
+    first version of this function read the field's displayed value BEFORE
+    opening the picker and used that as the "elapsed 0" reference point for
+    every option. Confirmed live that this reference is not reliable: at
+    one live check the field read "20:51" and the popover's own first
+    (soonest) option was "20:52" (i.e. baseline+1) - but at another live
+    check moments later, the field read "21:00" and the popover's first
+    option was ALSO "21:00" (i.e. baseline+0, not +1). Which one you get
+    depends on exactly where "now" falls within the current minute at
+    click time, which Binomo doesn't expose precisely enough to predict.
+    In the baseline+0 case, the near-term 1-minute block (0,1,2,3,4) can
+    never satisfy a 5-minute (300s) target - elapsed>=5 is never true in
+    that block - so the old logic always jumped to the next :00/:15/:30/:45
+    mark instead, which landed a real trade at ~18 minutes instead of 5.
+
+    FIX: never read the field separately before opening the picker at all -
+    that read is exactly the value that turned out to be unreliable. Use
+    the popover's OWN first (soonest) option, read from the same snapshot
+    used for selecting, as the reference point instead - internally
+    consistent by construction, no separate read to go stale. That
+    reference itself represents "about 1 minute from now" in the common
+    case (as observed above), so the target is shifted down by 1 minute to
+    compensate. This does not remove the small (<60s) uncertainty in what
+    the reference instant precisely is - Binomo's own picker is
+    minute-granularity, so this was never resolvable to the second - but it
+    keeps that uncertainty under a minute instead of letting it compound
+    into a jump to a random quarter-hour mark."""
     time_input_probe = _safe_find(page, SELECTORS["time_input"], description="time_input")
     if time_input_probe is None:
         return None
     time_input = page.locator(SELECTORS["time_input"])
-
-    baseline_value = time_input.input_value()
-    baseline_minutes = _parse_hhmm(baseline_value)
-    if baseline_minutes is None:
-        logger.error("Binomo executor: could not parse deal time '%s'", baseline_value)
-        return None
-
-    target_minutes_elapsed = max(1, round(expiry_seconds / 60))
+    value_before_click = time_input.input_value()
 
     if not _safe_click(page, SELECTORS["time_input"], description="time_input"):
         return None
@@ -721,34 +742,46 @@ def _set_expiry_time(page, expiry_seconds: int) -> Optional[int]:
         logger.exception("Binomo executor: could not list expiry time picker options")
         return None
 
-    best_text: Optional[str] = None
-    best_elapsed: Optional[int] = None
+    options: list[tuple[str, int]] = []
     for el in option_elements:
         try:
             text = el.inner_text().strip()
         except Exception:
             continue
         minutes = _parse_hhmm(text)
-        if minutes is None:
-            continue
-        elapsed = (minutes - baseline_minutes) % (24 * 60)
-        if elapsed >= target_minutes_elapsed and (best_elapsed is None or elapsed < best_elapsed):
+        if minutes is not None:
+            options.append((text, minutes))
+
+    if not options:
+        shot = _screenshot(page, "no_expiry_picker_options")
+        logger.error(
+            "Binomo executor: expiry time picker opened but no parseable options were found — "
+            "not guessing further. Screenshot: %s", shot,
+        )
+        notify_admin(
+            "⚠️ Binomo executor: пікер часу експірації відкрився, але жодної опції не вдалося "
+            f"розпізнати. Потрібна ручна перевірка. Скріншот: {shot or 'не вдалося зберегти'}",
+            alert_key="binomo_no_expiry_picker_options",
+        )
+        return None
+
+    # options[0] is the popover's own soonest offer — used as the reference
+    # instant instead of any separately-read field value (see docstring).
+    _, anchor_minutes = options[0]
+    target_relative = max(1, round(expiry_seconds / 60)) - 1
+
+    best_text: Optional[str] = None
+    best_elapsed: Optional[int] = None
+    for text, minutes in options:
+        elapsed = (minutes - anchor_minutes) % (24 * 60)
+        if elapsed >= target_relative and (best_elapsed is None or elapsed < best_elapsed):
             best_elapsed = elapsed
             best_text = text
 
-    if best_text is None:
-        shot = _screenshot(page, "no_expiry_option_reaches_target")
-        logger.error(
-            "Binomo executor: none of the %d visible expiry picker options reach the target "
-            "(%ss) — not guessing further. Screenshot: %s",
-            len(option_elements), expiry_seconds, shot,
-        )
-        notify_admin(
-            "⚠️ Binomo executor: жодна опція часу експірації в пікері не покриває запитану "
-            f"тривалість ({expiry_seconds}с). Потрібна ручна перевірка. "
-            f"Скріншот: {shot or 'не вдалося зберегти'}",
-            alert_key="binomo_no_expiry_option_reaches_target",
-        )
+    # Unreachable in practice: options[0] itself always has elapsed 0, which
+    # satisfies target_relative (always >= 0) - kept as a guard, not a guess.
+    if best_text is None or best_elapsed is None:
+        logger.error("Binomo executor: could not select an expiry picker option (target=%ss)", expiry_seconds)
         return None
 
     option_selector = f"{SELECTORS['time_picker_option']}:text-is('{best_text}')"
@@ -758,7 +791,7 @@ def _set_expiry_time(page, expiry_seconds: int) -> Optional[int]:
     try:
         page.wait_for_function(
             "([sel, prev]) => document.querySelector(sel)?.value !== prev",
-            arg=[SELECTORS["time_input"], baseline_value],
+            arg=[SELECTORS["time_input"], value_before_click],
             timeout=2000,
         )
     except Exception:
@@ -766,13 +799,7 @@ def _set_expiry_time(page, expiry_seconds: int) -> Optional[int]:
             "Binomo executor: expiry field didn't visibly change after picking a time option", exc_info=True
         )
 
-    final_value = time_input.input_value()
-    final_minutes = _parse_hhmm(final_value)
-    if final_minutes is None:
-        logger.error("Binomo executor: could not parse deal time after picking an expiry option: %r", final_value)
-        return None
-
-    elapsed_seconds = ((final_minutes - baseline_minutes) % (24 * 60)) * 60
+    elapsed_seconds = (best_elapsed + 1) * 60
     if elapsed_seconds != expiry_seconds:
         logger.info(
             "Binomo executor: expiry set via picker to the nearest available option - "
