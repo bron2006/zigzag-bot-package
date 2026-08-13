@@ -298,14 +298,15 @@ class KillSwitchEndToEndTest(unittest.TestCase):
         # Real settled-loss row text confirmed live 2026-08-12
         # ("AUD/JPY80%+ 0,00 ₴ 16:00:00 · 12 сер 1 396,00 ₴") - goes
         # through the actual fixed parser, not a hand-built result dict.
-        # 16:00:00 GMT+3 on 12 сер = 13:00:00 UTC, so entered_after must
-        # match that for the (now entered_after-aware) row-matching to
-        # accept this row as the one to resolve.
+        # 16:00:00 GMT+3 on 12 сер = 13:00:00 UTC is the row's SETTLEMENT
+        # time (see _read_settled_result's THIRD BUG) - entered_after must
+        # be the ENTRY time, i.e. settlement minus the 300s expiry used
+        # above: 12:55:00 UTC.
         row_text = f"{asset}80%+ 0,00 ₴ 16:00:00 · 12 сер 100,00 ₴"
         page = self._FakePage([self._FakeRow(row_text)])
         with patch.object(binomo_executor, "_safe_find", side_effect=[object(), object()]), \
              patch.object(binomo_executor, "_safe_click", return_value=True):
-            outcome = binomo_executor.read_trade_result(page, asset, datetime(2026, 8, 12, 13, 0, 0))
+            outcome = binomo_executor.read_trade_result(page, asset, datetime(2026, 8, 12, 12, 55, 0), 300)
         self.assertEqual(outcome["result"], "loss")
 
         resolved = binomo_executor.db.resolve_binomo_trade(
@@ -728,8 +729,11 @@ class ReadTradeResultTest(unittest.TestCase):
     amount of exactly 0 is a loss, anything positive is a win.
 
     Binomo's timestamp is GMT+3 with no year - "09:15:00 · 10 сер" is
-    2026-08-10 09:15:00 local = 2026-08-10 06:15:00 UTC, which is what
-    entered_after is expressed in (matching how entry_ts is stored)."""
+    2026-08-10 09:15:00 local = 2026-08-10 06:15:00 UTC. That's the row's
+    SETTLEMENT time, not entered_after (see _read_settled_result's THIRD
+    BUG) - entered_after in these tests is always that settlement time
+    minus the expiry_seconds passed alongside it, matching how production
+    actually computes the expected settlement to compare against."""
 
     class _FakeRow:
         def __init__(self, text):
@@ -754,27 +758,30 @@ class ReadTradeResultTest(unittest.TestCase):
         def query_selector_all(self, selector):
             return self._rows
 
-    def _read(self, row_texts, entered_after):
+    def _read(self, row_texts, entered_after, expiry_seconds=300):
         rows = [self._FakeRow(t) for t in row_texts]
         page = self._FakePage(rows)
         # Two _safe_find calls in the real flow: trade_history_tab, then
         # the existence-check on row_selector before the real per-row scan.
         with patch.object(binomo_executor, "_safe_find", side_effect=[object(), object()]), \
              patch.object(binomo_executor, "_safe_click", return_value=True):
-            return binomo_executor.read_trade_result(page, "irrelevant", entered_after)
+            return binomo_executor.read_trade_result(page, "irrelevant", entered_after, expiry_seconds)
 
     def test_settled_win_row(self):
+        # Settlement 09:15:00 GMT+3 = 06:15:00 UTC; entered_after is the
+        # ENTRY time, 300s (5min) earlier.
         result = self._read(
             ["Bitcoin (OTC)80%+ 72,00 ₴ 09:15:00 · 10 сер 40,00 ₴"],
-            entered_after=datetime(2026, 8, 10, 6, 15, 0),
+            entered_after=datetime(2026, 8, 10, 6, 10, 0),
         )
         self.assertEqual(result["result"], "win")
         self.assertEqual(result["payout_amount"], 72.0)
 
     def test_settled_loss_row(self):
+        # Settlement 16:00:00 GMT+3 = 13:00:00 UTC; entered_after 5min earlier.
         result = self._read(
             ["AUD/JPY80%+ 0,00 ₴ 16:00:00 · 12 сер 1 396,00 ₴"],
-            entered_after=datetime(2026, 8, 12, 13, 0, 0),
+            entered_after=datetime(2026, 8, 12, 12, 55, 0),
         )
         self.assertEqual(result["result"], "loss")
         self.assertEqual(result["payout_amount"], 0.0)
@@ -792,28 +799,31 @@ class ReadTradeResultTest(unittest.TestCase):
 
     def test_picks_the_row_matching_entered_after_not_the_first_one(self):
         # The exact collision confirmed live 2026-08-12: two EUR/SGD trades
-        # pending at once. Both rows settled here; entered_after belongs to
-        # the SECOND one (a loss) - the old code would have returned
-        # whichever row Playwright listed first (the win) for both trades.
+        # pending at once. Both rows settled here; entered_after (+5min
+        # expiry) belongs to the SECOND one (a loss, settled 09:50:10
+        # GMT+3 = 06:50:10 UTC, so entered 06:45:10) - the old code would
+        # have returned whichever row Playwright listed first (the win)
+        # for both trades.
         result = self._read(
             [
                 "EUR/SGD80%+ 1 754,00 ₴ 09:44:15 · 12 сер 1 000,00 ₴",  # win, trade #1
                 "EUR/SGD80%+ 0,00 ₴ 09:50:10 · 12 сер 1 000,00 ₴",       # loss, trade #3
             ],
-            entered_after=datetime(2026, 8, 12, 6, 50, 10),  # matches the SECOND row (09:50:10 GMT+3)
+            entered_after=datetime(2026, 8, 12, 6, 45, 10),
         )
         self.assertEqual(result["result"], "loss")
 
     def test_still_open_row_for_a_different_trade_on_same_asset_is_skipped(self):
-        # One trade on this asset has settled (and matches entered_after);
-        # another is still open. The open one must never be mistaken for a
-        # match just because it shares the asset name.
+        # One trade on this asset has settled (and matches entered_after +
+        # expiry); another is still open. The open one must never be
+        # mistaken for a match just because it shares the asset name.
+        # Settlement 09:44:15 GMT+3 = 06:44:15 UTC; entered 5min earlier.
         result = self._read(
             [
                 "EUR/SGD80%+ 0,00 ₴ 00г11хв01с1 754,00 ₴",              # still open, different trade
                 "EUR/SGD80%+ 1 754,00 ₴ 09:44:15 · 12 сер 1 000,00 ₴",  # settled win, our trade
             ],
-            entered_after=datetime(2026, 8, 12, 6, 44, 15),
+            entered_after=datetime(2026, 8, 12, 6, 39, 15),
         )
         self.assertEqual(result["result"], "win")
 
@@ -822,7 +832,7 @@ class ReadTradeResultTest(unittest.TestCase):
         # entirely - must not be guessed as "close enough".
         result = self._read(
             ["EUR/SGD80%+ 1 754,00 ₴ 09:44:15 · 10 сер 1 000,00 ₴"],
-            entered_after=datetime(2026, 8, 12, 6, 44, 15),  # 2 days later
+            entered_after=datetime(2026, 8, 12, 6, 44, 15),  # 2 days later even after adding expiry
         )
         self.assertEqual(result["result"], "unknown")
 
@@ -835,7 +845,7 @@ class ReadTradeResultTest(unittest.TestCase):
         with patch.object(binomo_executor, "_safe_find", side_effect=[object(), object()]), \
              patch.object(binomo_executor, "_safe_click", return_value=True), \
              patch.object(binomo_executor, "_close_trade_history_panel") as mock_close:
-            binomo_executor.read_trade_result(page, "irrelevant", datetime(2026, 8, 10, 6, 15, 0))
+            binomo_executor.read_trade_result(page, "irrelevant", datetime(2026, 8, 10, 6, 10, 0), 300)
         mock_close.assert_called_once_with(page)
 
     def test_closes_the_panel_even_when_no_row_is_found(self):
@@ -843,7 +853,7 @@ class ReadTradeResultTest(unittest.TestCase):
         with patch.object(binomo_executor, "_safe_find", side_effect=[object(), None]), \
              patch.object(binomo_executor, "_safe_click", return_value=True), \
              patch.object(binomo_executor, "_close_trade_history_panel") as mock_close:
-            binomo_executor.read_trade_result(page, "irrelevant", datetime(2026, 8, 10, 6, 15, 0))
+            binomo_executor.read_trade_result(page, "irrelevant", datetime(2026, 8, 10, 6, 10, 0), 300)
         mock_close.assert_called_once_with(page)
 
 
@@ -1280,7 +1290,7 @@ class ResolveDueTradesTest(unittest.TestCase):
         ]
         read_calls = []
 
-        def _fake_read(page, asset, entered_after):
+        def _fake_read(page, asset, entered_after, expiry_seconds):
             read_calls.append(asset)
             return {"result": "unknown", "payout_amount": None}
 
@@ -1310,7 +1320,7 @@ class ResolveDueTradesTest(unittest.TestCase):
             self._trade(2, "GBP/USD", self._PAST),
         ]
 
-        def _fake_read(page, asset, entered_after):
+        def _fake_read(page, asset, entered_after, expiry_seconds):
             if asset == "EUR/USD":
                 raise RuntimeError("boom")
             return {"result": "unknown", "payout_amount": None}
@@ -1328,7 +1338,7 @@ class ResolveDueTradesTest(unittest.TestCase):
     def test_resolves_a_due_trade_and_notifies(self):
         trades = [self._trade(7, "EUR/USD", self._PAST)]
 
-        def _fake_read(page, asset, entered_after):
+        def _fake_read(page, asset, entered_after, expiry_seconds):
             return {"result": "win", "payout_amount": 80.0}
 
         with patch.object(binomo_executor.db, "get_pending_binomo_trades", return_value=trades), \

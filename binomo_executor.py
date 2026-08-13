@@ -1103,7 +1103,7 @@ def _close_trade_history_panel(page) -> None:
         )
 
 
-def _read_settled_result(page, asset: str, entered_after: datetime) -> dict:
+def _read_settled_result(page, asset: str, entered_after: datetime, expiry_seconds: int) -> dict:
     """Scans an ALREADY-OPEN trade-history panel (FTT tab already
     selected) for the settled row matching `asset`/`entered_after`.
     Returns {"result": "win"|"loss"|"unknown", "payout_amount": float|None}.
@@ -1131,12 +1131,29 @@ def _read_settled_result(page, asset: str, entered_after: datetime) -> dict:
     used, so with two trades open on the same asset at once (confirmed
     live: two pending EUR/SGD trades from one buggy run) this matched
     whichever row Playwright's :has-text() happened to return first and
-    could silently attribute one trade's result to the other. Now scans
-    every settled row for this asset and picks the one whose own displayed
-    entry time is closest to `entered_after`, within
-    _TRADE_HISTORY_MATCH_TOLERANCE_SECONDS - still-open rows for the same
-    asset are correctly ignored rather than mismatched, since they don't
-    have a settled timestamp to compare at all."""
+    could silently attribute one trade's result to the other. Scans every
+    settled row for this asset and picks the closest match instead - see
+    THIRD BUG below for what it's actually matched against.
+
+    THIRD BUG found live 2026-08-13, the day after the second: this
+    compared a settled row's displayed timestamp directly against
+    `entered_after` (the trade's ENTRY time) within a 60-second tolerance -
+    but that displayed timestamp is the row's SETTLEMENT time, not its
+    entry time. Confirmed live: four real trades entered at 17:13, 17:15,
+    17:17 and 17:22 all showed the exact same settled timestamp, 17:30:00
+    - impossible if it were each trade's own entry time, since none of
+    them could know in advance they'd all resolve at once. Comparing entry
+    time to settlement time within 60 seconds could only ever match if the
+    expiry were under a minute, which it never was - very likely why not
+    one single real trade had resolved successfully across two full days
+    of live testing. Now compares against the EXPECTED settlement time
+    (entered_after + expiry_seconds) instead of entered_after itself -
+    still ignoring still-open rows for the same asset (they have no
+    settled timestamp to compare at all), and still narrow enough
+    (_TRADE_HISTORY_MATCH_TOLERANCE_SECONDS) that two of our own trades on
+    the same asset can't be confused with each other."""
+    expected_settlement = entered_after + timedelta(seconds=expiry_seconds)
+
     row_selector = f"{SELECTORS['trade_history_row']}:has-text('{asset}')"
     # _safe_find first, purely so a total absence (asset never appears
     # at all) still gets the usual screenshot+alert treatment - not
@@ -1160,10 +1177,10 @@ def _read_settled_result(page, asset: str, entered_after: datetime) -> dict:
             continue
         if not _SETTLED_TIMESTAMP_RE.search(candidate_text):
             continue  # still open - can't be matched by settlement time, and can't be this trade's result yet either
-        row_ts = _parse_settled_row_timestamp(candidate_text, reference=entered_after)
+        row_ts = _parse_settled_row_timestamp(candidate_text, reference=expected_settlement)
         if row_ts is None:
             continue
-        diff_seconds = abs((row_ts - entered_after).total_seconds())
+        diff_seconds = abs((row_ts - expected_settlement).total_seconds())
         if diff_seconds <= _TRADE_HISTORY_MATCH_TOLERANCE_SECONDS and (
             best_diff_seconds is None or diff_seconds < best_diff_seconds
         ):
@@ -1200,7 +1217,7 @@ def _select_trade_history_standard_tab(page) -> None:
         pass  # may already be the selected sub-tab
 
 
-def read_trade_result(page, asset: str, entered_after: datetime) -> dict:
+def read_trade_result(page, asset: str, entered_after: datetime, expiry_seconds: int) -> dict:
     """Opens the trade-history panel, reads the settled result for a
     single trade via _read_settled_result, and closes the panel again -
     a convenience wrapper for single-trade use. _resolve_due_trades opens
@@ -1219,13 +1236,18 @@ def read_trade_result(page, asset: str, entered_after: datetime) -> dict:
     too, since nothing ever closed it — see _close_trade_history_panel's
     docstring. Every exit from this function (successful or not) closes
     the panel via a try/finally, so a stray open panel can never be left
-    blocking the next action regardless of which return path is hit."""
+    blocking the next action regardless of which return path is hit.
+
+    expiry_seconds is required (not optional) since _read_settled_result
+    needs it to compute the expected settlement time - see its docstring
+    (THIRD BUG) for why matching against entered_after alone never
+    worked."""
     if not _open_trade_history_panel(page):
         return {"result": "unknown", "payout_amount": None}
 
     try:
         _select_trade_history_standard_tab(page)
-        return _read_settled_result(page, asset, entered_after)
+        return _read_settled_result(page, asset, entered_after, expiry_seconds)
     finally:
         _close_trade_history_panel(page)
 
@@ -1500,7 +1522,7 @@ def _resolve_due_trades(page) -> None:
         _select_trade_history_standard_tab(page)
 
         for trade in due_trades:
-            outcome = _read_settled_result(page, trade["asset"], trade["entry_ts"])
+            outcome = _read_settled_result(page, trade["asset"], trade["entry_ts"], trade["expiry_seconds"])
             if outcome["result"] == "unknown":
                 continue  # try again next pass; don't guess
 
