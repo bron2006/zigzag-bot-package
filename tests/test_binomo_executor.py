@@ -1239,5 +1239,96 @@ class OpenTradeHistoryPanelTest(unittest.TestCase):
             self.assertFalse(binomo_executor._open_trade_history_panel(page))
 
 
+class ResolveDueTradesTest(unittest.TestCase):
+    """Regression test for the live incident found 2026-08-13: the user
+    watched the real Binomo browser and caught the "Угоди" panel opening
+    and closing 4 times within a couple of seconds. Root cause:
+    _resolve_due_trades used to call read_trade_result (its own full
+    open-scan-close cycle) separately for every due pending trade, so N
+    trades due in the same pass meant N full open/close cycles. Fixed by
+    opening the panel once, scanning every due trade against that same
+    open panel via _read_settled_result, and closing once."""
+
+    _PAST = datetime(2020, 1, 1)  # always "due" regardless of when the test runs
+    _FUTURE = datetime(2099, 1, 1)  # never "due"
+
+    def _trade(self, id_, asset, entry_ts, expiry_seconds=300):
+        return {
+            "id": id_, "asset": asset, "pair": asset.replace("/", ""), "direction": "up",
+            "entry_ts": entry_ts, "expiry_seconds": expiry_seconds,
+        }
+
+    def test_opens_and_closes_the_panel_once_for_multiple_due_trades(self):
+        trades = [
+            self._trade(1, "EUR/USD", self._PAST),
+            self._trade(2, "GBP/USD", self._PAST),
+            self._trade(3, "USD/JPY", self._PAST),
+        ]
+        read_calls = []
+
+        def _fake_read(page, asset, entered_after):
+            read_calls.append(asset)
+            return {"result": "unknown", "payout_amount": None}
+
+        with patch.object(binomo_executor.db, "get_pending_binomo_trades", return_value=trades), \
+             patch.object(binomo_executor, "_open_trade_history_panel", return_value=True) as mock_open, \
+             patch.object(binomo_executor, "_select_trade_history_standard_tab") as mock_tab, \
+             patch.object(binomo_executor, "_read_settled_result", side_effect=_fake_read), \
+             patch.object(binomo_executor, "_close_trade_history_panel") as mock_close:
+            binomo_executor._resolve_due_trades(page=object())
+
+        mock_open.assert_called_once()
+        mock_tab.assert_called_once()
+        mock_close.assert_called_once()
+        self.assertEqual(read_calls, ["EUR/USD", "GBP/USD", "USD/JPY"])
+
+    def test_does_not_open_the_panel_at_all_when_nothing_is_due(self):
+        trades = [self._trade(1, "EUR/USD", self._FUTURE)]
+        with patch.object(binomo_executor.db, "get_pending_binomo_trades", return_value=trades), \
+             patch.object(binomo_executor, "_open_trade_history_panel") as mock_open:
+            binomo_executor._resolve_due_trades(page=object())
+
+        mock_open.assert_not_called()
+
+    def test_closes_the_panel_even_if_resolving_one_trade_raises(self):
+        trades = [
+            self._trade(1, "EUR/USD", self._PAST),
+            self._trade(2, "GBP/USD", self._PAST),
+        ]
+
+        def _fake_read(page, asset, entered_after):
+            if asset == "EUR/USD":
+                raise RuntimeError("boom")
+            return {"result": "unknown", "payout_amount": None}
+
+        with patch.object(binomo_executor.db, "get_pending_binomo_trades", return_value=trades), \
+             patch.object(binomo_executor, "_open_trade_history_panel", return_value=True), \
+             patch.object(binomo_executor, "_select_trade_history_standard_tab"), \
+             patch.object(binomo_executor, "_read_settled_result", side_effect=_fake_read), \
+             patch.object(binomo_executor, "_close_trade_history_panel") as mock_close:
+            with self.assertRaises(RuntimeError):
+                binomo_executor._resolve_due_trades(page=object())
+
+        mock_close.assert_called_once()
+
+    def test_resolves_a_due_trade_and_notifies(self):
+        trades = [self._trade(7, "EUR/USD", self._PAST)]
+
+        def _fake_read(page, asset, entered_after):
+            return {"result": "win", "payout_amount": 80.0}
+
+        with patch.object(binomo_executor.db, "get_pending_binomo_trades", return_value=trades), \
+             patch.object(binomo_executor, "_open_trade_history_panel", return_value=True), \
+             patch.object(binomo_executor, "_select_trade_history_standard_tab"), \
+             patch.object(binomo_executor, "_read_settled_result", side_effect=_fake_read), \
+             patch.object(binomo_executor, "_close_trade_history_panel"), \
+             patch.object(binomo_executor.db, "resolve_binomo_trade", return_value=True) as mock_resolve, \
+             patch.object(binomo_executor, "notify_admin") as mock_notify:
+            binomo_executor._resolve_due_trades(page=object())
+
+        mock_resolve.assert_called_once_with(7, result="win", payout_amount=80.0)
+        mock_notify.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()

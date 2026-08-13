@@ -1103,10 +1103,16 @@ def _close_trade_history_panel(page) -> None:
         )
 
 
-def read_trade_result(page, asset: str, entered_after: datetime) -> dict:
-    """Reads the settled trade for `asset` that was opened at `entered_after`
-    from Binomo's deals list. Returns
-    {"result": "win"|"loss"|"unknown", "payout_amount": float|None}.
+def _read_settled_result(page, asset: str, entered_after: datetime) -> dict:
+    """Scans an ALREADY-OPEN trade-history panel (FTT tab already
+    selected) for the settled row matching `asset`/`entered_after`.
+    Returns {"result": "win"|"loss"|"unknown", "payout_amount": float|None}.
+    Split out of read_trade_result on 2026-08-13 so _resolve_due_trades can
+    open the panel ONCE per cycle and scan every due trade against that
+    same open panel - see that function's docstring for the live incident
+    (repeatedly opening/closing the panel once per pending trade, every
+    ~2s loop pass) this fixes. Does not touch the panel's open/closed state
+    itself; callers own that.
 
     BUG found live 2026-08-12, once real trades finally reached this code
     path: the row has no "win"/"loss"/"виграш"/"програш" text anywhere -
@@ -1130,82 +1136,96 @@ def read_trade_result(page, asset: str, entered_after: datetime) -> dict:
     entry time is closest to `entered_after`, within
     _TRADE_HISTORY_MATCH_TOLERANCE_SECONDS - still-open rows for the same
     asset are correctly ignored rather than mismatched, since they don't
-    have a settled timestamp to compare at all.
+    have a settled timestamp to compare at all."""
+    row_selector = f"{SELECTORS['trade_history_row']}:has-text('{asset}')"
+    # _safe_find first, purely so a total absence (asset never appears
+    # at all) still gets the usual screenshot+alert treatment - not
+    # guessed at silently. The actual selection below re-queries for
+    # every match.
+    if _safe_find(page, row_selector, description="trade_history_row") is None:
+        return {"result": "unknown", "payout_amount": None}
 
-    THIRD BUG found the same day, in a second --run after the first two
-    fixes: the panel this function reads from wasn't opening at all — see
-    _open_trade_history_panel's docstring.
+    try:
+        candidates = page.query_selector_all(row_selector)
+    except Exception:
+        logger.exception("Binomo executor: could not list trade history rows for %s", asset)
+        return {"result": "unknown", "payout_amount": None}
+
+    best_row_text = None
+    best_diff_seconds = None
+    for candidate in candidates:
+        try:
+            candidate_text = candidate.inner_text()
+        except Exception:
+            continue
+        if not _SETTLED_TIMESTAMP_RE.search(candidate_text):
+            continue  # still open - can't be matched by settlement time, and can't be this trade's result yet either
+        row_ts = _parse_settled_row_timestamp(candidate_text, reference=entered_after)
+        if row_ts is None:
+            continue
+        diff_seconds = abs((row_ts - entered_after).total_seconds())
+        if diff_seconds <= _TRADE_HISTORY_MATCH_TOLERANCE_SECONDS and (
+            best_diff_seconds is None or diff_seconds < best_diff_seconds
+        ):
+            best_diff_seconds = diff_seconds
+            best_row_text = candidate_text
+
+    if best_row_text is None:
+        return {"result": "unknown", "payout_amount": None}  # not settled yet, or no row within tolerance - retry later
+
+    try:
+        text = best_row_text
+        amounts = _CURRENCY_AMOUNT_RE.findall(text)
+        credited = _parse_numeric_text(amounts[0]) if amounts else None
+        if credited is None:
+            logger.warning("Binomo executor: settled row for %s had no parseable amount: %r", asset, text)
+            return {"result": "unknown", "payout_amount": None}
+        # _parse_numeric_text strips the sign along with every other
+        # non-digit character, so a hypothetical "-X,XX ₴" would
+        # otherwise come back positive - reapply it from the raw match.
+        if amounts[0].strip().startswith("-"):
+            credited = -credited
+
+        outcome = "win" if credited > 0 else "loss"
+        return {"result": outcome, "payout_amount": credited}
+    except Exception:
+        logger.exception("Could not parse Binomo trade history row for %s", asset)
+        return {"result": "unknown", "payout_amount": None}
+
+
+def _select_trade_history_standard_tab(page) -> None:
+    try:
+        page.click(SELECTORS["trade_history_standard_tab_button"], timeout=3000)
+    except Exception:
+        pass  # may already be the selected sub-tab
+
+
+def read_trade_result(page, asset: str, entered_after: datetime) -> dict:
+    """Opens the trade-history panel, reads the settled result for a
+    single trade via _read_settled_result, and closes the panel again -
+    a convenience wrapper for single-trade use. _resolve_due_trades opens
+    the panel once and calls _read_settled_result directly for every due
+    trade in the same batch instead of using this, precisely to avoid
+    what this wrapper does on its own (open+close per call) - see
+    _resolve_due_trades's docstring for the live incident that motivated
+    the split.
+
+    THIRD BUG found 2026-08-12, in a second --run after two earlier
+    read_trade_result fixes: the panel this reads from wasn't opening at
+    all — see _open_trade_history_panel's docstring.
 
     FOURTH BUG found the same day, immediately after fixing the third:
     fixing the panel-open bug meant it now reliably stayed open afterward
     too, since nothing ever closed it — see _close_trade_history_panel's
-    docstring. Every exit from this function (successful or not) now
-    closes the panel via a try/finally, so a stray open panel can never be
-    left blocking the next action regardless of which return path is hit
-    below."""
+    docstring. Every exit from this function (successful or not) closes
+    the panel via a try/finally, so a stray open panel can never be left
+    blocking the next action regardless of which return path is hit."""
     if not _open_trade_history_panel(page):
         return {"result": "unknown", "payout_amount": None}
 
     try:
-        try:
-            page.click(SELECTORS["trade_history_standard_tab_button"], timeout=3000)
-        except Exception:
-            pass  # may already be the selected sub-tab
-
-        row_selector = f"{SELECTORS['trade_history_row']}:has-text('{asset}')"
-        # _safe_find first, purely so a total absence (asset never appears
-        # at all) still gets the usual screenshot+alert treatment - not
-        # guessed at silently. The actual selection below re-queries for
-        # every match.
-        if _safe_find(page, row_selector, description="trade_history_row") is None:
-            return {"result": "unknown", "payout_amount": None}
-
-        try:
-            candidates = page.query_selector_all(row_selector)
-        except Exception:
-            logger.exception("Binomo executor: could not list trade history rows for %s", asset)
-            return {"result": "unknown", "payout_amount": None}
-
-        best_row_text = None
-        best_diff_seconds = None
-        for candidate in candidates:
-            try:
-                candidate_text = candidate.inner_text()
-            except Exception:
-                continue
-            if not _SETTLED_TIMESTAMP_RE.search(candidate_text):
-                continue  # still open - can't be matched by settlement time, and can't be this trade's result yet either
-            row_ts = _parse_settled_row_timestamp(candidate_text, reference=entered_after)
-            if row_ts is None:
-                continue
-            diff_seconds = abs((row_ts - entered_after).total_seconds())
-            if diff_seconds <= _TRADE_HISTORY_MATCH_TOLERANCE_SECONDS and (
-                best_diff_seconds is None or diff_seconds < best_diff_seconds
-            ):
-                best_diff_seconds = diff_seconds
-                best_row_text = candidate_text
-
-        if best_row_text is None:
-            return {"result": "unknown", "payout_amount": None}  # not settled yet, or no row within tolerance - retry later
-
-        try:
-            text = best_row_text
-            amounts = _CURRENCY_AMOUNT_RE.findall(text)
-            credited = _parse_numeric_text(amounts[0]) if amounts else None
-            if credited is None:
-                logger.warning("Binomo executor: settled row for %s had no parseable amount: %r", asset, text)
-                return {"result": "unknown", "payout_amount": None}
-            # _parse_numeric_text strips the sign along with every other
-            # non-digit character, so a hypothetical "-X,XX ₴" would
-            # otherwise come back positive - reapply it from the raw match.
-            if amounts[0].strip().startswith("-"):
-                credited = -credited
-
-            outcome = "win" if credited > 0 else "loss"
-            return {"result": outcome, "payout_amount": credited}
-        except Exception:
-            logger.exception("Could not parse Binomo trade history row for %s", asset)
-            return {"result": "unknown", "payout_amount": None}
+        _select_trade_history_standard_tab(page)
+        return _read_settled_result(page, asset, entered_after)
     finally:
         _close_trade_history_panel(page)
 
@@ -1441,8 +1461,26 @@ def _handle_signal(page, asset_map: dict, signal: dict) -> None:
 
 
 def _resolve_due_trades(page) -> None:
+    """Resolves every currently-due pending trade in ONE open/close of the
+    trade-history panel, not one open/close per trade.
+
+    BUG found live 2026-08-13: the user watched the live browser and
+    caught this directly - the "Угоди" panel was visibly opening and
+    closing 4 times within a couple of seconds. Root cause: this used to
+    call read_trade_result (open panel, scan, close panel) separately for
+    every due trade in the loop below, so N pending trades due in the same
+    pass meant N full open/close cycles back to back. Wasteful, and
+    actively risky given the same day's other findings: every open/close
+    is one more chance to hit the promo-modal or close-transition-timing
+    edge cases already fixed once today (see _open_trade_history_panel /
+    _close_trade_history_panel) - doing it 4x as often as necessary just
+    multiplies the exposure. Now opens the panel once, selects the FTT
+    sub-tab once, scans every due trade against that same open panel via
+    _read_settled_result, then closes once - and skips opening it at all
+    when nothing is actually due."""
     now = datetime.now(timezone.utc).replace(tzinfo=None)
 
+    due_trades = []
     for trade in db.get_pending_binomo_trades(config.BINOMO_ACCOUNT_MODE):
         entry_ts = trade["entry_ts"]
         if not isinstance(entry_ts, datetime):
@@ -1450,22 +1488,35 @@ def _resolve_due_trades(page) -> None:
         due_at = entry_ts.timestamp() + trade["expiry_seconds"]
         if now.timestamp() < due_at:
             continue
+        due_trades.append(trade)
 
-        outcome = read_trade_result(page, trade["asset"], entry_ts)
-        if outcome["result"] == "unknown":
-            continue  # try again next pass; don't guess
+    if not due_trades:
+        return
 
-        if db.resolve_binomo_trade(trade["id"], result=outcome["result"], payout_amount=outcome["payout_amount"]):
-            payout = outcome["payout_amount"]
-            logger.info(
-                "BINOMO: #%s %s %s -> %s (payout=%s)",
-                trade["id"], trade["asset"], trade["direction"], outcome["result"], payout,
-            )
-            notify_admin(
-                f"📤 Binomo #{trade['id']} {trade['asset']} {trade['direction'].upper()} "
-                f"→ {outcome['result'].upper()}"
-                + (f" ({payout:+.2f})" if isinstance(payout, (int, float)) else "")
-            )
+    if not _open_trade_history_panel(page):
+        return
+
+    try:
+        _select_trade_history_standard_tab(page)
+
+        for trade in due_trades:
+            outcome = _read_settled_result(page, trade["asset"], trade["entry_ts"])
+            if outcome["result"] == "unknown":
+                continue  # try again next pass; don't guess
+
+            if db.resolve_binomo_trade(trade["id"], result=outcome["result"], payout_amount=outcome["payout_amount"]):
+                payout = outcome["payout_amount"]
+                logger.info(
+                    "BINOMO: #%s %s %s -> %s (payout=%s)",
+                    trade["id"], trade["asset"], trade["direction"], outcome["result"], payout,
+                )
+                notify_admin(
+                    f"📤 Binomo #{trade['id']} {trade['asset']} {trade['direction'].upper()} "
+                    f"→ {outcome['result'].upper()}"
+                    + (f" ({payout:+.2f})" if isinstance(payout, (int, float)) else "")
+                )
+    finally:
+        _close_trade_history_panel(page)
 
 
 def run(*, headless: bool = None) -> None:
