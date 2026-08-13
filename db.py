@@ -2088,6 +2088,43 @@ def update_binomo_trade_entry_ts(trade_id: int, entry_ts) -> bool:
         return False
 
 
+def update_binomo_trade_expiry_seconds(trade_id: int, expiry_seconds: int) -> bool:
+    """Corrects expiry_seconds to whatever duration the trade actually got
+    on Binomo's side, rather than the duration originally requested.
+
+    BUG found live 2026-08-13: Binomo's expiry stepper (#qa_trading_
+    dealTimeInput, advanced only via +/- click, not a duration dropdown -
+    see binomo_executor._set_expiry_time) has no fixed, predictable
+    per-click step size - confirmed live (read-only test session, no real
+    trades placed) that consecutive clicks from the same baseline advanced
+    the displayed time by 2 minutes, then 1 minute, no discoverable
+    pattern. A request for 300s landed real production trades anywhere
+    from ~5 to ~17 minutes actual duration the same day (the user caught
+    this directly from the live Binomo UI - three open positions all
+    converging on the same settlement clock time despite being placed
+    minutes apart). Since the step size can't be predicted or corrected
+    for without risking overshooting the other way, the achievable fix is
+    honesty: persist the duration actually reached so due_at math in
+    _resolve_due_trades, and any later analysis of "how did a 5-minute
+    signal actually do", both reflect reality instead of the request.
+    Same result != "pending" guard as update_binomo_trade_entry_ts, called
+    alongside it right after place_binary_trade confirms success."""
+    try:
+        with session_scope() as session:
+            if session is None:
+                return False
+
+            row = session.query(BinomoTrade).filter(BinomoTrade.id == trade_id).first()
+            if row is None or row.result != "pending":
+                return False
+
+            row.expiry_seconds = int(expiry_seconds)
+            return True
+    except SQLAlchemyError:
+        logger.exception("Error updating binomo trade expiry_seconds id=%s", trade_id)
+        return False
+
+
 def resolve_binomo_trade(trade_id: int, *, result: str, payout_amount: float | None) -> bool:
     try:
         with session_scope() as session:

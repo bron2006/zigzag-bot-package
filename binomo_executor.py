@@ -618,7 +618,7 @@ def _parse_hhmm(text: str) -> Optional[int]:
         return None
 
 
-def _set_expiry_time(page, expiry_seconds: int) -> bool:
+def _set_expiry_time(page, expiry_seconds: int) -> Optional[int]:
     """Binomo's expiry control (#qa_trading_dealTimeInput) is a readonly
     absolute clock-time field advanced only via +/- stepper buttons, not a
     duration dropdown. Reads the baseline value, then clicks '+' until the
@@ -632,22 +632,37 @@ def _set_expiry_time(page, expiry_seconds: int) -> bool:
     ElementHandle - same reasoning as _safe_click's 2026-08-12 rewrite: our
     own stepper clicks can make Angular swap this very node, and a read on
     a stale handle can raise instead of returning the current value. A
-    Locator re-resolves the live node on every call."""
+    Locator re-resolves the live node on every call.
+
+    Returns the ACTUAL elapsed seconds reached (which the loop can only
+    ever reach or overshoot, never land on exactly), or None on failure -
+    NOT a bool. BUG found live 2026-08-13: the per-click step size isn't a
+    fixed 1 minute as this function's own logic implicitly assumed by
+    stopping the instant elapsed >= target - confirmed live (a separate,
+    read-only test session, no trades placed) that consecutive clicks from
+    the same baseline advanced the field by 2 minutes, then 1 minute, with
+    no discoverable pattern. A request for 300s (5min) landed real trades
+    at anywhere from ~5 to ~17 minutes actual duration in production the
+    same day. Since the step size can't be predicted or corrected for
+    (stepping back down risks its own overshoot the other way), the
+    achievable fix is honesty: report what was actually reached so the
+    caller can persist the TRUE duration instead of the requested one -
+    see _handle_signal's use of db.update_binomo_trade_expiry_seconds."""
     time_input_probe = _safe_find(page, SELECTORS["time_input"], description="time_input")
     if time_input_probe is None:
-        return False
+        return None
     time_input = page.locator(SELECTORS["time_input"])
 
     baseline_minutes = _parse_hhmm(time_input.input_value())
     if baseline_minutes is None:
         logger.error("Binomo executor: could not parse deal time '%s'", time_input.input_value())
-        return False
+        return None
 
     target_minutes_elapsed = max(1, round(expiry_seconds / 60))
 
     plus_button_probe = _safe_find(page, SELECTORS["time_plus_button"], description="time_plus_button")
     if plus_button_probe is None:
-        return False
+        return None
 
     for _ in range(_MAX_TIME_STEPPER_CLICKS):
         current_value = time_input.input_value()
@@ -656,10 +671,17 @@ def _set_expiry_time(page, expiry_seconds: int) -> bool:
             break
         elapsed = (current_minutes - baseline_minutes) % (24 * 60)
         if elapsed >= target_minutes_elapsed:
-            return True
+            if elapsed * 60 != expiry_seconds:
+                logger.warning(
+                    "Binomo executor: expiry stepper overshot - requested %ss, actually reached %ss "
+                    "(unpredictable per-click step size, see _set_expiry_time's docstring). "
+                    "Recording the real duration, not the requested one.",
+                    expiry_seconds, elapsed * 60,
+                )
+            return elapsed * 60
 
         if not _safe_click(page, SELECTORS["time_plus_button"], description="time_plus_button"):
-            return False
+            return None
         # BUG found live 2026-08-12: a request for expiry_seconds=300 (5min)
         # ended up ~30 minutes on Binomo. Root cause - reading input_value()
         # again immediately after click() races Angular's re-render: the
@@ -683,7 +705,7 @@ def _set_expiry_time(page, expiry_seconds: int) -> bool:
         "Binomo executor: could not reach target expiry (%ss) after %d stepper clicks — "
         "not guessing further, stopping.", expiry_seconds, _MAX_TIME_STEPPER_CLICKS,
     )
-    return False
+    return None
 
 
 def _fill_amount(page, amount: float) -> bool:
@@ -874,32 +896,37 @@ def list_available_assets() -> None:
 
 
 def place_binary_trade(page, asset: str, direction: str, amount: float, expiry_seconds: int) -> dict:
-    """direction: 'up' | 'down'. Returns {"success": bool, "error": str|None}.
-    Every real click on amount/direction is preceded by an audit screenshot,
-    per the task's audit-trail requirement."""
+    """direction: 'up' | 'down'. Returns
+    {"success": bool, "error": str|None, "actual_expiry_seconds": int|None}.
+    actual_expiry_seconds is the real duration _set_expiry_time achieved -
+    see its docstring for why this can differ from the requested
+    expiry_seconds and why the caller must persist the real value, not the
+    requested one. Every real click on amount/direction is preceded by an
+    audit screenshot, per the task's audit-trail requirement."""
     if direction not in ("up", "down"):
-        return {"success": False, "error": f"invalid direction: {direction}"}
+        return {"success": False, "error": f"invalid direction: {direction}", "actual_expiry_seconds": None}
 
     select_error = _select_asset(page, asset)
     if select_error:
-        return {"success": False, "error": select_error}
+        return {"success": False, "error": select_error, "actual_expiry_seconds": None}
 
     if not _fill_amount(page, amount):
-        return {"success": False, "error": "could not set amount"}
+        return {"success": False, "error": "could not set amount", "actual_expiry_seconds": None}
 
     _screenshot(page, f"before_amount_{asset}_{direction}")
 
-    if not _set_expiry_time(page, expiry_seconds):
-        return {"success": False, "error": "could not set expiry time"}
+    actual_expiry_seconds = _set_expiry_time(page, expiry_seconds)
+    if actual_expiry_seconds is None:
+        return {"success": False, "error": "could not set expiry time", "actual_expiry_seconds": None}
 
     direction_selector = SELECTORS["up_button"] if direction == "up" else SELECTORS["down_button"]
     direction_button_probe = _safe_find(page, direction_selector, description=f"{direction}_button")
     if direction_button_probe is None:
-        return {"success": False, "error": f"{direction}_button not found"}
+        return {"success": False, "error": f"{direction}_button not found", "actual_expiry_seconds": None}
 
     _screenshot(page, f"before_click_{asset}_{direction}")
     if not _safe_click(page, direction_selector, description=f"{direction}_button"):
-        return {"success": False, "error": f"could not click {direction}_button"}
+        return {"success": False, "error": f"could not click {direction}_button", "actual_expiry_seconds": None}
 
     confirmation = _safe_find(
         page, SELECTORS["trade_confirmation_toast"], description="trade_confirmation_toast", timeout_ms=5000
@@ -909,7 +936,7 @@ def place_binary_trade(page, asset: str, direction: str, amount: float, expiry_s
         # positively confirm the trade went through either. Log loudly.
         logger.warning("Binomo executor: no confirmation toast seen after clicking %s on %s", direction, asset)
 
-    return {"success": True, "error": None}
+    return {"success": True, "error": None, "actual_expiry_seconds": actual_expiry_seconds}
 
 
 _SETTLED_TIMESTAMP_RE = re.compile(r"\d{2}:\d{2}:\d{2}\s*·")
@@ -1397,9 +1424,19 @@ def _handle_signal(page, asset_map: dict, signal: dict) -> None:
     # succeeded, to whatever placement really took - however long that was.
     db.update_binomo_trade_entry_ts(trade_id, datetime.now(timezone.utc).replace(tzinfo=None))
 
+    # BUG found live 2026-08-13: the expiry stepper's per-click step size
+    # isn't fixed/predictable - see db.update_binomo_trade_expiry_seconds's
+    # docstring. actual_expiry_seconds is what place_binary_trade really
+    # achieved; persisted here so due_at math and reporting reflect it
+    # rather than the aspirational request.
+    actual_expiry_seconds = result["actual_expiry_seconds"] or expiry_seconds
+    db.update_binomo_trade_expiry_seconds(trade_id, actual_expiry_seconds)
+
     notify_admin(
         f"📥 Binomo #{trade_id} {asset_name} {direction.upper()}\n"
-        f"Сума: {amount:.2f} · Експірація: {expiry_seconds}с · Режим: {config.BINOMO_ACCOUNT_MODE}"
+        f"Сума: {amount:.2f} · Експірація: {actual_expiry_seconds}с"
+        + (f" (запитано {expiry_seconds}с)" if actual_expiry_seconds != expiry_seconds else "")
+        + f" · Режим: {config.BINOMO_ACCOUNT_MODE}"
     )
 
 

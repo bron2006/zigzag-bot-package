@@ -423,10 +423,64 @@ class UpdateBinomoTradeEntryTsTest(unittest.TestCase):
         self.assertEqual(trade["entry_ts"], original)
 
 
+class UpdateBinomoTradeExpirySecondsTest(unittest.TestCase):
+    """Regression test for the live incident found 2026-08-13: Binomo's
+    expiry stepper has no fixed per-click step size (confirmed live,
+    read-only test session - consecutive clicks from the same baseline
+    advanced by 2 minutes, then 1 minute), so a request for 300s can land
+    real trades anywhere from ~5 to ~17 minutes actual duration. Runs
+    against the real DB, same account_mode-scoping pattern as
+    UpdateBinomoTradeEntryTsTest."""
+
+    ACCOUNT_MODE = "e2etest2"
+
+    def setUp(self):
+        self._purge()
+
+    def tearDown(self):
+        self._purge()
+
+    def _purge(self):
+        with binomo_executor.db.get_db() as session:
+            if session is None:
+                return
+            rows = session.query(binomo_executor.db.BinomoTrade).filter(
+                binomo_executor.db.BinomoTrade.account_mode == self.ACCOUNT_MODE
+            ).all()
+            for row in rows:
+                session.delete(row)
+            session.commit()
+
+    def test_updates_expiry_seconds_on_a_pending_trade(self):
+        trade_id = binomo_executor.db.create_binomo_trade(
+            asset="EUR/USD", pair="EURUSD", direction="up", amount=100.0,
+            expiry_seconds=300, account_mode=self.ACCOUNT_MODE,
+        )
+        self.assertIsNotNone(trade_id)
+
+        self.assertTrue(binomo_executor.db.update_binomo_trade_expiry_seconds(trade_id, 1020))
+
+        trade = binomo_executor.db.get_binomo_trade(trade_id)
+        self.assertEqual(trade["expiry_seconds"], 1020)
+
+    def test_does_nothing_to_an_already_resolved_trade(self):
+        trade_id = binomo_executor.db.create_binomo_trade(
+            asset="EUR/USD", pair="EURUSD", direction="up", amount=100.0,
+            expiry_seconds=300, account_mode=self.ACCOUNT_MODE,
+        )
+        self.assertIsNotNone(trade_id)
+        binomo_executor.db.resolve_binomo_trade(trade_id, result="win", payout_amount=80.0)
+
+        self.assertFalse(binomo_executor.db.update_binomo_trade_expiry_seconds(trade_id, 1020))
+        trade = binomo_executor.db.get_binomo_trade(trade_id)
+        self.assertEqual(trade["expiry_seconds"], 300)
+
+
 class HandleSignalEntryTsTest(unittest.TestCase):
-    """Covers _handle_signal's use of the entry_ts fix above with the
-    DB/Playwright layers mocked out - UpdateBinomoTradeEntryTsTest above
-    covers the DB function itself against the real database."""
+    """Covers _handle_signal's use of the entry_ts and expiry_seconds
+    corrections with the DB/Playwright layers mocked out -
+    UpdateBinomoTradeEntryTsTest above covers the DB functions themselves
+    against the real database."""
 
     def _asset_map(self):
         return {"EURUSD": {"binomo_name": "EUR/USD", "otc_name": None}}
@@ -440,8 +494,12 @@ class HandleSignalEntryTsTest(unittest.TestCase):
              patch.object(binomo_executor, "get_account_balance", return_value=10000.0), \
              patch.object(binomo_executor, "_check_risk_limits", return_value=None), \
              patch.object(binomo_executor.db, "create_binomo_trade", return_value=42), \
-             patch.object(binomo_executor, "place_binary_trade", return_value={"success": True, "error": None}), \
+             patch.object(
+                 binomo_executor, "place_binary_trade",
+                 return_value={"success": True, "error": None, "actual_expiry_seconds": 300},
+             ), \
              patch.object(binomo_executor.db, "update_binomo_trade_entry_ts") as mock_update, \
+             patch.object(binomo_executor.db, "update_binomo_trade_expiry_seconds"), \
              patch.object(binomo_executor, "notify_admin"):
             binomo_executor._handle_signal(page=object(), asset_map=self._asset_map(), signal=self._signal())
 
@@ -455,14 +513,116 @@ class HandleSignalEntryTsTest(unittest.TestCase):
              patch.object(binomo_executor, "get_account_balance", return_value=10000.0), \
              patch.object(binomo_executor, "_check_risk_limits", return_value=None), \
              patch.object(binomo_executor.db, "create_binomo_trade", return_value=42), \
-             patch.object(binomo_executor, "place_binary_trade", return_value={"success": False, "error": "boom"}), \
+             patch.object(
+                 binomo_executor, "place_binary_trade",
+                 return_value={"success": False, "error": "boom", "actual_expiry_seconds": None},
+             ), \
              patch.object(binomo_executor.db, "mark_binomo_trade_error") as mock_error, \
              patch.object(binomo_executor.db, "update_binomo_trade_entry_ts") as mock_update, \
+             patch.object(binomo_executor.db, "update_binomo_trade_expiry_seconds") as mock_expiry, \
              patch.object(binomo_executor, "notify_admin"):
             binomo_executor._handle_signal(page=object(), asset_map=self._asset_map(), signal=self._signal())
 
         mock_update.assert_not_called()
+        mock_expiry.assert_not_called()
         mock_error.assert_called_once()
+
+    def test_persists_the_actual_expiry_seconds_reached_not_the_requested_one(self):
+        # Regression for the live incident (2026-08-13): the expiry
+        # stepper's per-click step size isn't fixed, so a request for 300s
+        # can land anywhere - real production trades landed at up to ~17
+        # minutes actual duration. The DB must record what actually
+        # happened, not what was asked for.
+        with patch.object(binomo_executor, "is_active", return_value=True), \
+             patch.object(binomo_executor, "_stake_weight_for_pair", return_value=1.0), \
+             patch.object(binomo_executor, "get_account_balance", return_value=10000.0), \
+             patch.object(binomo_executor, "_check_risk_limits", return_value=None), \
+             patch.object(binomo_executor.db, "create_binomo_trade", return_value=42), \
+             patch.object(
+                 binomo_executor, "place_binary_trade",
+                 return_value={"success": True, "error": None, "actual_expiry_seconds": 1020},  # overshot to 17min
+             ), \
+             patch.object(binomo_executor.db, "update_binomo_trade_entry_ts"), \
+             patch.object(binomo_executor.db, "update_binomo_trade_expiry_seconds") as mock_expiry, \
+             patch.object(binomo_executor, "notify_admin"):
+            binomo_executor._handle_signal(page=object(), asset_map=self._asset_map(), signal=self._signal())
+
+        mock_expiry.assert_called_once_with(42, 1020)
+
+
+class SetExpiryTimeTest(unittest.TestCase):
+    """_set_expiry_time now returns the actual elapsed seconds reached (or
+    None on failure), not a bool - see its docstring for the live incident
+    (2026-08-13, unpredictable per-click step size on Binomo's expiry
+    stepper) this exists to surface honestly rather than hide behind a
+    boolean "it worked"."""
+
+    class _FakeLocator:
+        def __init__(self, page):
+            self._page = page
+
+        def input_value(self, timeout=None):
+            return self._page.values[self._page.index]
+
+    class _FakePage:
+        def __init__(self, values):
+            self.values = values  # displayed "HH:MM" at index 0 (baseline), then after each click
+            self.index = 0
+
+        def locator(self, selector):
+            return SetExpiryTimeTest._FakeLocator(self)
+
+        def wait_for_function(self, *args, **kwargs):
+            pass
+
+        def screenshot(self, path):
+            from pathlib import Path
+
+            Path(path).write_bytes(b"")
+
+    def setUp(self):
+        import tempfile
+        from pathlib import Path
+
+        self._tmp = tempfile.TemporaryDirectory()
+        self._dir_patch = patch.object(binomo_executor, "SCREENSHOT_DIR", Path(self._tmp.name))
+        self._dir_patch.start()
+
+    def tearDown(self):
+        self._dir_patch.stop()
+        self._tmp.cleanup()
+
+    def _run(self, values, expiry_seconds):
+        page = self._FakePage(values)
+
+        def _find(page_arg, selector, *, description, **kwargs):
+            return object()
+
+        def _click(page_arg, selector, *, description, **kwargs):
+            page.index += 1
+            return True
+
+        with patch.object(binomo_executor, "_safe_find", side_effect=_find), \
+             patch.object(binomo_executor, "_safe_click", side_effect=_click):
+            return binomo_executor._set_expiry_time(page, expiry_seconds)
+
+    def test_lands_exactly_on_target_when_steps_add_up_cleanly(self):
+        result = self._run(["17:13", "17:14", "17:15", "17:16", "17:17", "17:18"], expiry_seconds=300)
+        self.assertEqual(result, 5 * 60)
+
+    def test_returns_the_actual_overshoot_not_the_requested_duration(self):
+        # Regression for the live incident (2026-08-13): unpredictable
+        # per-click step size (a real +2min then +6min sequence, matching
+        # the live "no discoverable pattern" finding) overshoots a 5-min
+        # (300s) request to 9 minutes - the function must report 540, not
+        # pretend 300 was achieved.
+        result = self._run(["17:13", "17:16", "17:22"], expiry_seconds=300)
+        self.assertEqual(result, 9 * 60)
+
+    def test_returns_none_when_the_target_is_never_reached(self):
+        # Field stuck at baseline for the whole click budget.
+        result = self._run(["17:13"] * (binomo_executor._MAX_TIME_STEPPER_CLICKS + 1), expiry_seconds=300)
+        self.assertIsNone(result)
 
 
 class StakeWeightForPairTest(unittest.TestCase):
