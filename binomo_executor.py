@@ -1360,12 +1360,22 @@ def read_trade_result(page, asset: str, entered_after: datetime, expiry_seconds:
 def _check_risk_limits(balance: float) -> Optional[str]:
     """Returns a reason string if a trade should be blocked, else None.
     Trips the kill switch itself when a hard limit (consecutive losses /
-    daily loss) is breached."""
+    daily loss) is breached.
+
+    BUG found live 2026-08-14: get_consecutive_binomo_losses recomputed the
+    streak from raw trade history on every call, with no memory of a kill-
+    switch clear - so clearing it after a genuine 4-loss streak changed
+    nothing, and the very next call here (before any new trade could be
+    placed) saw the same losses and tripped it right back. Passing the
+    kill switch's own last-cleared timestamp as `since` excludes trades
+    resolved before that point, so the streak has to actually restart
+    post-clear - see get_consecutive_binomo_losses's docstring."""
     trades_today = db.count_binomo_trades_today(config.BINOMO_ACCOUNT_MODE)
     if trades_today >= config.BINOMO_MAX_TRADES_PER_DAY:
         return f"MAX_TRADES_PER_DAY reached ({trades_today}/{config.BINOMO_MAX_TRADES_PER_DAY})"
 
-    losses = db.get_consecutive_binomo_losses(config.BINOMO_ACCOUNT_MODE)
+    cleared_at = db.get_binomo_runtime_state().get("kill_switch_cleared_at")
+    losses = db.get_consecutive_binomo_losses(config.BINOMO_ACCOUNT_MODE, since=cleared_at)
     if losses >= config.BINOMO_MAX_CONSECUTIVE_LOSSES:
         _trip_kill_switch(
             f"{losses} збитків поспіль (ліміт {config.BINOMO_MAX_CONSECUTIVE_LOSSES})"

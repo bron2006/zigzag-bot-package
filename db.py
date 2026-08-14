@@ -2181,24 +2181,37 @@ def count_binomo_trades_today(account_mode: str) -> int:
         return 0
 
 
-def get_consecutive_binomo_losses(account_mode: str, limit: int = 50) -> int:
+def get_consecutive_binomo_losses(account_mode: str, limit: int = 50, since: datetime | None = None) -> int:
     """Counts losses in the most recent resolved trades, stopping at the
     first non-loss (win) result. Used for the MAX_CONSECUTIVE_LOSSES kill
     switch - 'error' results don't count as losses or reset the streak,
-    they're skipped (a broken selector isn't a trading loss)."""
+    they're skipped (a broken selector isn't a trading loss).
+
+    BUG found live 2026-08-14: this recomputes the streak from trade
+    history on every call, with no memory of a kill-switch clear. Once a
+    real 4-loss streak tripped the switch, clearing it (set_binomo_runtime_
+    enabled(True) + clear_binomo_kill_switch()) changed nothing here - the
+    very next _check_risk_limits call, before any new trade could even be
+    placed, saw the exact same last-4-losses fact and tripped it right back
+    (confirmed live: re-tripped ~1 minute after clearing, with zero new
+    trades placed in between). The kill switch was effectively permanent
+    once triggered. `since` (the kill switch's last-cleared timestamp, see
+    clear_binomo_kill_switch) excludes trades resolved before that point,
+    so a fresh streak has to actually happen post-clear before this can
+    trip again."""
     try:
         with get_db() as session:
             if session is None:
                 return 0
 
-            rows = (
+            query = (
                 session.query(BinomoTrade)
                 .filter(BinomoTrade.account_mode == (account_mode or "demo").lower())
                 .filter(BinomoTrade.result.in_(("win", "loss")))
-                .order_by(BinomoTrade.resolved_at.desc())
-                .limit(max(1, min(int(limit or 50), 200)))
-                .all()
             )
+            if since is not None:
+                query = query.filter(BinomoTrade.resolved_at >= since)
+            rows = query.order_by(BinomoTrade.resolved_at.desc()).limit(max(1, min(int(limit or 50), 200))).all()
     except SQLAlchemyError:
         logger.exception("Error computing consecutive binomo losses")
         return 0
@@ -2245,26 +2258,38 @@ def get_daily_binomo_pnl(account_mode: str) -> float:
 _BINOMO_ENABLED_KEY = "binomo_runtime_enabled"
 _BINOMO_KILL_SWITCH_KEY = "binomo_kill_switch_tripped"
 _BINOMO_KILL_SWITCH_REASON_KEY = "binomo_kill_switch_reason"
+_BINOMO_KILL_SWITCH_CLEARED_AT_KEY = "binomo_kill_switch_cleared_at"
 
 
 def get_binomo_runtime_state() -> dict:
     try:
         with get_db() as session:
             if session is None:
-                return {"runtime_enabled": True, "kill_switch_tripped": False, "kill_switch_reason": None}
+                return {
+                    "runtime_enabled": True, "kill_switch_tripped": False, "kill_switch_reason": None,
+                    "kill_switch_cleared_at": None,
+                }
 
             enabled_raw = _get_runtime_setting(session, _BINOMO_ENABLED_KEY)
             tripped_raw = _get_runtime_setting(session, _BINOMO_KILL_SWITCH_KEY)
             reason = _get_runtime_setting(session, _BINOMO_KILL_SWITCH_REASON_KEY)
+            cleared_at_raw = _get_runtime_setting(session, _BINOMO_KILL_SWITCH_CLEARED_AT_KEY)
 
             return {
                 "runtime_enabled": enabled_raw != "false",  # unset -> enabled by default
                 "kill_switch_tripped": tripped_raw == "true",
                 "kill_switch_reason": reason,
+                # Used by get_consecutive_binomo_losses(since=...) so a clear
+                # only counts losses from this point forward - see that
+                # function's docstring for the live incident this fixes.
+                "kill_switch_cleared_at": _normalize_datetime(cleared_at_raw),
             }
     except SQLAlchemyError:
         logger.exception("Error loading binomo runtime state")
-        return {"runtime_enabled": True, "kill_switch_tripped": False, "kill_switch_reason": None}
+        return {
+            "runtime_enabled": True, "kill_switch_tripped": False, "kill_switch_reason": None,
+            "kill_switch_cleared_at": None,
+        }
 
 
 def set_binomo_runtime_enabled(enabled: bool) -> bool:
@@ -2299,6 +2324,7 @@ def clear_binomo_kill_switch() -> bool:
                 return False
             _set_runtime_setting(session, _BINOMO_KILL_SWITCH_KEY, "false")
             _set_runtime_setting(session, _BINOMO_KILL_SWITCH_REASON_KEY, None)
+            _set_runtime_setting(session, _BINOMO_KILL_SWITCH_CLEARED_AT_KEY, _utcnow().isoformat())
             return True
     except SQLAlchemyError:
         logger.exception("Error clearing binomo kill switch")

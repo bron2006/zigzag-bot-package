@@ -166,12 +166,16 @@ class IsActiveTest(unittest.TestCase):
 
 
 class CheckRiskLimitsTest(unittest.TestCase):
-    def _patch_db(self, *, trades_today=0, consecutive_losses=0, daily_pnl=0.0):
+    def _patch_db(self, *, trades_today=0, consecutive_losses=0, daily_pnl=0.0, kill_switch_cleared_at=None):
         return patch.multiple(
             binomo_executor.db,
             count_binomo_trades_today=lambda mode: trades_today,
-            get_consecutive_binomo_losses=lambda mode: consecutive_losses,
+            get_consecutive_binomo_losses=lambda mode, since=None: consecutive_losses,
             get_daily_binomo_pnl=lambda mode: daily_pnl,
+            get_binomo_runtime_state=lambda: {
+                "runtime_enabled": True, "kill_switch_tripped": False, "kill_switch_reason": None,
+                "kill_switch_cleared_at": kill_switch_cleared_at,
+            },
         )
 
     def test_blocks_on_max_trades_per_day(self):
@@ -207,6 +211,33 @@ class CheckRiskLimitsTest(unittest.TestCase):
              self._patch_db(trades_today=1, consecutive_losses=0, daily_pnl=10.0):
             reason = binomo_executor._check_risk_limits(balance=1000.0)
         self.assertIsNone(reason)
+
+    def test_passes_kill_switch_cleared_at_as_since_to_the_loss_query(self):
+        # Regression for the live incident (2026-08-14): the streak query
+        # used to ignore any prior kill-switch clear entirely, so this
+        # plumbing must actually reach get_consecutive_binomo_losses, not
+        # just exist on get_binomo_runtime_state's returned dict.
+        cleared_at = datetime(2026, 8, 14, 12, 0, 0)
+        captured = {}
+
+        def _fake_losses(mode, since=None):
+            captured["since"] = since
+            return 0
+
+        with patch.object(binomo_executor.config, "BINOMO_MAX_TRADES_PER_DAY", 100), \
+             patch.multiple(
+                 binomo_executor.db,
+                 count_binomo_trades_today=lambda mode: 0,
+                 get_consecutive_binomo_losses=_fake_losses,
+                 get_daily_binomo_pnl=lambda mode: 0.0,
+                 get_binomo_runtime_state=lambda: {
+                     "runtime_enabled": True, "kill_switch_tripped": False, "kill_switch_reason": None,
+                     "kill_switch_cleared_at": cleared_at,
+                 },
+             ):
+            binomo_executor._check_risk_limits(balance=1000.0)
+
+        self.assertEqual(captured["since"], cleared_at)
 
 
 class KillSwitchEndToEndTest(unittest.TestCase):
@@ -369,6 +400,39 @@ class KillSwitchEndToEndTest(unittest.TestCase):
                 )
                 mock_balance.assert_not_called()
                 mock_place.assert_not_called()
+
+    def test_clearing_after_a_trip_does_not_immediately_re_trip_with_no_new_trades(self):
+        # BUG found live 2026-08-14: get_consecutive_binomo_losses recomputed
+        # the streak from raw trade history with no memory of a kill-switch
+        # clear, so clearing after a genuine losing streak changed nothing -
+        # the very next _check_risk_limits call, with zero new trades placed,
+        # saw the same losses and tripped it right back (confirmed live:
+        # re-tripped about a minute after a manual clear). This runs the
+        # real trip -> real clear -> real re-check sequence against the real
+        # DB and proves the second check no longer trips.
+        with patch.object(binomo_executor.config, "BINOMO_ACCOUNT_MODE", self.ACCOUNT_MODE), \
+             patch.object(binomo_executor.config, "BINOMO_MAX_CONSECUTIVE_LOSSES", 3), \
+             patch.object(binomo_executor.config, "BINOMO_MAX_TRADES_PER_DAY", 1000), \
+             patch.object(binomo_executor.config, "BINOMO_MAX_DAILY_LOSS_PERCENT", 1000.0), \
+             patch.object(binomo_executor, "notify_admin"):
+
+            self._place_and_lose("EURUSD", "EUR/USD")
+            self._place_and_lose("EURUSD", "EUR/USD")
+            self._place_and_lose("EURUSD", "EUR/USD")
+
+            reason = binomo_executor._check_risk_limits(balance=10000.0)
+            self.assertIsNotNone(reason, "3 losses with a limit of 3 must trip")
+            self.assertTrue(binomo_executor.db.get_binomo_runtime_state()["kill_switch_tripped"])
+
+            binomo_executor.db.set_binomo_runtime_enabled(True)
+            binomo_executor.db.clear_binomo_kill_switch()
+
+            # No new trade was placed since the clear - the same 3 old
+            # losses are still the most recent resolved trades. Before the
+            # fix, this second call would trip it again immediately.
+            reason_after_clear = binomo_executor._check_risk_limits(balance=10000.0)
+            self.assertIsNone(reason_after_clear)
+            self.assertFalse(binomo_executor.db.get_binomo_runtime_state()["kill_switch_tripped"])
 
 
 class UpdateBinomoTradeEntryTsTest(unittest.TestCase):
