@@ -104,6 +104,18 @@ SIGNAL_TP_ATR_MULTIPLIER = _env_float("SIGNAL_TP_ATR_MULTIPLIER", 1.5)
 SIGNAL_SL_ATR_MULTIPLIER = _env_float("SIGNAL_SL_ATR_MULTIPLIER", 1.0)
 SIGNAL_OUTCOME_TIMEOUT_HOURS = _env_float("SIGNAL_OUTCOME_TIMEOUT_HOURS", 4.0)
 
+# backtest.py (standalone, one-shot, local-only script — see its own
+# docstring) - reuses SIGNAL_TP_ATR_MULTIPLIER/SIGNAL_SL_ATR_MULTIPLIER
+# above for TP/SL sizing, these are just its own defaults.
+BACKTEST_DEFAULT_POSITION_SIZE = _env_float("BACKTEST_DEFAULT_POSITION_SIZE", 1000.0)
+BACKTEST_DEFAULT_SPREAD_PIPS = _env_float("BACKTEST_DEFAULT_SPREAD_PIPS", 1.5)
+# Safety cap, not a feature: the user explicitly wants NO artificial
+# timeout-close, but a signal whose TP/SL genuinely never resolves must
+# still stop pulling forward data somewhere rather than paginate
+# indefinitely. Trades still open past this are reported as "still open",
+# not force-closed at this cutoff - see backtest.py's walk-forward loop.
+BACKTEST_MAX_FORWARD_DAYS = _env_int("BACKTEST_MAX_FORWARD_DAYS", 90) or 90
+
 # Signal outcome tracking (binary-option style): how often the resolver
 # loop checks pending signals whose horizon has elapsed, and how big a
 # price move (as % of entry price) counts as noise ("flat") rather than a

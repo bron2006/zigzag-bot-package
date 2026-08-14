@@ -1704,6 +1704,46 @@ def get_pair_signal_outcome_stats(pair: str, days: int = 30) -> dict:
     return _aggregate_signal_outcomes_binomo_style(rows)
 
 
+def get_signal_outcome_rows_for_backtest(days: int, pairs: list[str] | None = None) -> list[dict]:
+    """Read-only raw rows (not aggregated) for backtest.py - the only
+    directional (BUY/SELL) signals, oldest first so a walk-forward backtest
+    processes them in chronological order. Never writes to signal_outcomes;
+    backtest.py's simulated TP/SL/R results live entirely in that script's
+    own output, not back in this table."""
+    days = max(1, min(int(days or 30), 365))
+    since = _utcnow() - timedelta(days=days)
+
+    try:
+        with get_db() as session:
+            if session is None:
+                return []
+
+            query = (
+                session.query(SignalOutcome)
+                .filter(SignalOutcome.entry_ts >= since)
+                .filter(SignalOutcome.verdict.in_(("BUY", "SELL")))
+            )
+            if pairs:
+                query = query.filter(SignalOutcome.pair.in_([p.upper() for p in pairs]))
+            rows = query.order_by(SignalOutcome.entry_ts.asc()).all()
+    except SQLAlchemyError:
+        logger.exception("Error loading signal outcome rows for backtest")
+        return []
+
+    return [
+        {
+            "id": row.id,
+            "pair": row.pair,
+            "timeframe": row.timeframe,
+            "verdict": row.verdict,
+            "score": row.score,
+            "entry_price": row.entry_price,
+            "entry_ts": row.entry_ts,
+        }
+        for row in rows
+    ]
+
+
 def get_signal_outcome_score_breakdown(days: int = 30, bucket_size: int = 5) -> list[dict]:
     """Win-rate per score bucket (e.g. 75-80, 80-85, ...), used to evaluate
     whether the BUY/SELL threshold in config is well calibrated. BUY signals
