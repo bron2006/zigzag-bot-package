@@ -2226,6 +2226,18 @@ def get_consecutive_binomo_losses(account_mode: str, limit: int = 50, since: dat
 
 
 def get_daily_binomo_pnl(account_mode: str) -> float:
+    """Net profit/loss (credited back minus staked) across today's resolved
+    trades - what MAX_DAILY_LOSS_PERCENT actually needs to know.
+
+    BUG found live 2026-08-14: this used to just sum payout_amount, which is
+    the GROSS amount credited on a win (stake + profit) and 0 on a loss - it
+    never subtracted the stake that was wagered on either outcome. A real
+    day of 27 wins / 23 losses (70,065 staked, 69,633 credited back on the
+    wins - a real net of -432) came back as +69,633, since every loss
+    counted as "0 change" instead of "-stake" and every win counted its
+    full gross return instead of just the profit. The daily-loss kill
+    switch built on this could essentially never trip, since a real net
+    loss would almost always still show as a large apparent profit."""
     day_start = _utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
 
     try:
@@ -2241,7 +2253,7 @@ def get_daily_binomo_pnl(account_mode: str) -> float:
                 .filter(BinomoTrade.payout_amount.isnot(None))
                 .all()
             )
-            return sum(row.payout_amount for row in rows)
+            return sum(row.payout_amount - row.amount for row in rows)
     except SQLAlchemyError:
         logger.exception("Error computing daily binomo pnl")
         return 0.0

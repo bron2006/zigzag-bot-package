@@ -435,6 +435,68 @@ class KillSwitchEndToEndTest(unittest.TestCase):
             self.assertFalse(binomo_executor.db.get_binomo_runtime_state()["kill_switch_tripped"])
 
 
+class GetDailyBinomoPnlTest(unittest.TestCase):
+    """BUG found live 2026-08-14: get_daily_binomo_pnl used to just sum
+    payout_amount, which is the GROSS amount credited on a win (stake +
+    profit) and 0 on a loss - it never subtracted the stake wagered on
+    either outcome. A real day of 27 wins / 23 losses (70,065 staked,
+    69,633 credited back on the wins - a true net of -432) came back as
+    +69,633: every loss counted as "0 change" instead of "-stake", and
+    every win counted its full gross return instead of just the profit.
+    MAX_DAILY_LOSS_PERCENT is built on this number, so it could essentially
+    never trip - a real net loss would almost always still look like a
+    large apparent profit. This runs against the real DB, not a mock, so
+    it exercises the actual SQL sum, not just the Python arithmetic."""
+
+    ACCOUNT_MODE = "e2etest3"
+
+    def setUp(self):
+        self._purge()
+
+    def tearDown(self):
+        self._purge()
+
+    def _purge(self):
+        with binomo_executor.db.get_db() as session:
+            if session is None:
+                return
+            rows = session.query(binomo_executor.db.BinomoTrade).filter(
+                binomo_executor.db.BinomoTrade.account_mode == self.ACCOUNT_MODE
+            ).all()
+            for row in rows:
+                session.delete(row)
+            session.commit()
+
+    def _resolved_trade(self, *, amount: float, result: str, payout_amount: float) -> None:
+        trade_id = binomo_executor.db.create_binomo_trade(
+            asset="EUR/USD", pair="EURUSD", direction="up", amount=amount,
+            expiry_seconds=300, account_mode=self.ACCOUNT_MODE,
+        )
+        self.assertIsNotNone(trade_id)
+        resolved = binomo_executor.db.resolve_binomo_trade(trade_id, result=result, payout_amount=payout_amount)
+        self.assertTrue(resolved)
+
+    def test_a_losing_day_reports_a_negative_net_not_a_positive_gross(self):
+        # Mirrors the live incident's shape: more winning trades than
+        # losing ones by count, but a real net loss once stakes are
+        # accounted for (a 100-stake, 80%-payout win only nets +80, not the
+        # full 180 credited back).
+        self._resolved_trade(amount=1000.0, result="win", payout_amount=1800.0)  # net +800
+        self._resolved_trade(amount=1000.0, result="loss", payout_amount=0.0)  # net -1000
+        self._resolved_trade(amount=1000.0, result="loss", payout_amount=0.0)  # net -1000
+
+        pnl = binomo_executor.db.get_daily_binomo_pnl(self.ACCOUNT_MODE)
+        self.assertAlmostEqual(pnl, -1200.0)
+
+    def test_a_profitable_day_reports_a_smaller_net_than_the_old_gross_sum(self):
+        self._resolved_trade(amount=1000.0, result="win", payout_amount=1800.0)  # net +800
+        self._resolved_trade(amount=1000.0, result="win", payout_amount=1800.0)  # net +800
+        self._resolved_trade(amount=1000.0, result="loss", payout_amount=0.0)  # net -1000
+
+        pnl = binomo_executor.db.get_daily_binomo_pnl(self.ACCOUNT_MODE)
+        self.assertAlmostEqual(pnl, 600.0)  # old buggy version would have reported 3600.0
+
+
 class UpdateBinomoTradeEntryTsTest(unittest.TestCase):
     """Regression test for the live incident found 2026-08-12: not one real
     trade resolved successfully all day despite settled winning rows
