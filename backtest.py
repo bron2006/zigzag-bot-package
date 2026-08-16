@@ -2,7 +2,7 @@
 against real cTrader price history, simulating cTrader-style TP/SL trading
 instead of Binomo's fixed-horizon binary options.
 
-    python backtest.py --days 30 [--position-size 1000] [--spread-pips 1.5]
+    python backtest.py --days 30 [--position-size 1000] [--spread-atr-fraction 0.1]
                         [--pairs EURUSD,GBPUSD] [--limit 200]
 
 WHY this exists (2026-08-14, user request): the numbers this session has
@@ -52,8 +52,13 @@ Position sizing: FIXED size for every trade (config.BACKTEST_DEFAULT_
 POSITION_SIZE, overridable via --position-size) in units of the pair's base
 currency - a deliberate simplification (no per-pair risk normalization, no
 quote-currency conversion for cross pairs), disclosed here rather than
-hidden. Spread is modelled as a fixed pip cost applied against the trader at
-entry (config.BACKTEST_DEFAULT_SPREAD_PIPS / --spread-pips).
+hidden. Spread is modelled as a cost applied against the trader at entry,
+sized as a FRACTION OF THE SIGNAL'S OWN M1 ATR (config.BACKTEST_DEFAULT_
+SPREAD_ATR_FRACTION / --spread-atr-fraction) rather than a fixed "pip" -
+see the AUDIT FIX comment on _simulate_one_signal for why a pip-derived
+cost was wrong (it silently assumed every symbol's quoting precision
+implies the traditional pip convention, which understated JPY-pair
+spread by ~100x on this broker).
 """
 
 import argparse
@@ -153,7 +158,7 @@ def _fetch_trendbar_range(client, symbol_cache, pair: str, from_ts_s: int, to_ts
 
 
 @defer.inlineCallbacks
-def _simulate_one_signal(client, symbol_cache, signal: dict, *, position_size: float, spread_pips: float):
+def _simulate_one_signal(client, symbol_cache, signal: dict, *, position_size: float, spread_atr_fraction: float):
     """Walks the real M1 price path forward from a single signal's entry_ts
     until TP or SL fires (no timeout-close), and returns a result dict:
 
@@ -161,7 +166,19 @@ def _simulate_one_signal(client, symbol_cache, signal: dict, *, position_size: f
          "pair", "r": float, "money_pnl": float, "entry_ts", ...}
 
     See this module's docstring for the same-bar TP+SL tie-break rule
-    (SL wins) and the BACKTEST_MAX_FORWARD_DAYS safety cap."""
+    (SL wins) and the BACKTEST_MAX_FORWARD_DAYS safety cap.
+
+    AUDIT FIX (2026-08-16, high): spread used to be derived as
+    spread_pips * (10.0 / resolve_price_divisor(symbol_details)), i.e. it
+    assumed the broker's quoting precision (digits) implies the
+    traditional pip convention (0.0001 for majors, 0.01 for JPY pairs).
+    Live-confirmed this broker quotes JPY pairs at the same 5-digit
+    precision as majors, so that formula understated JPY-pair spread by
+    ~100x (making JPY pairs look artificially strong in the first 30-day
+    backtest run) while also overstating spread for pairs whose M1 ATR is
+    small relative to a flat pip cost. Sizing spread as a fraction of the
+    signal's own M1 ATR removes the pip-convention assumption entirely -
+    ATR is already computed in raw price units with no ambiguity."""
     pair = signal["pair"]
     norm_pair = _normalize_pair(pair)
     entry_price = signal["entry_price"]
@@ -173,9 +190,6 @@ def _simulate_one_signal(client, symbol_cache, signal: dict, *, position_size: f
     if symbol_details is None:
         defer.returnValue({"status": "insufficient_data", "pair": pair, "reason": "symbol not found"})
         return
-    divisor = resolve_price_divisor(symbol_details)
-    pip_size = 10.0 / divisor  # standard 5-digit/3-digit broker convention (1 pip = 10 points)
-    spread_cost = spread_pips * pip_size
 
     warmup_from = entry_ts_s - (ATR_WARMUP_BARS + 5) * BAR_SECONDS
     warmup_df = yield _fetch_trendbar_range(client, symbol_cache, norm_pair, warmup_from, entry_ts_s)
@@ -183,6 +197,7 @@ def _simulate_one_signal(client, symbol_cache, signal: dict, *, position_size: f
     if atr is None:
         defer.returnValue({"status": "insufficient_data", "pair": pair, "reason": "no ATR (insufficient warm-up bars)"})
         return
+    spread_cost = spread_atr_fraction * atr
 
     if direction == "BUY":
         effective_entry = entry_price + spread_cost
@@ -302,7 +317,7 @@ def _run(args) -> None:
     for i, signal in enumerate(signals, start=1):
         result = yield _simulate_one_signal(
             client, app_state.symbol_cache, signal,
-            position_size=args.position_size, spread_pips=args.spread_pips,
+            position_size=args.position_size, spread_atr_fraction=args.spread_atr_fraction,
         )
         results.append(result)
         if i % 10 == 0 or i == len(signals):
@@ -333,8 +348,10 @@ def main() -> None:
         help=f"Fixed position size (base-currency units) for every trade. Default: {config.BACKTEST_DEFAULT_POSITION_SIZE}.",
     )
     parser.add_argument(
-        "--spread-pips", type=float, default=config.BACKTEST_DEFAULT_SPREAD_PIPS,
-        help=f"Fixed spread cost in pips, applied against the trader at entry. Default: {config.BACKTEST_DEFAULT_SPREAD_PIPS}.",
+        "--spread-atr-fraction", type=float, default=config.BACKTEST_DEFAULT_SPREAD_ATR_FRACTION,
+        help="Spread cost as a fraction of the signal's own M1 ATR, applied against the trader at "
+             f"entry (replaces a fixed pip cost - see backtest.py's module docstring for why). "
+             f"Default: {config.BACKTEST_DEFAULT_SPREAD_ATR_FRACTION}.",
     )
     parser.add_argument("--pairs", type=str, default=None, help="Comma-separated pair filter, e.g. EURUSD,GBPUSD.")
     parser.add_argument("--limit", type=int, default=None, help="Cap the number of signals processed (for a quick trial run).")

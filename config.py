@@ -131,7 +131,19 @@ SIGNAL_OUTCOME_TIMEOUT_HOURS = _env_float("SIGNAL_OUTCOME_TIMEOUT_HOURS", 4.0)
 # docstring) - reuses SIGNAL_TP_ATR_MULTIPLIER/SIGNAL_SL_ATR_MULTIPLIER
 # above for TP/SL sizing, these are just its own defaults.
 BACKTEST_DEFAULT_POSITION_SIZE = _env_float("BACKTEST_DEFAULT_POSITION_SIZE", 1000.0)
-BACKTEST_DEFAULT_SPREAD_PIPS = _env_float("BACKTEST_DEFAULT_SPREAD_PIPS", 1.5)
+# AUDIT FIX (2026-08-16, high): spread used to be derived from a "pip",
+# via 10.0/resolve_price_divisor(symbol_details) - that assumes the
+# traditional pip convention (0.0001 for majors, 0.01 for JPY pairs)
+# follows directly from the broker's quoting precision (digits). Live-
+# confirmed this broker quotes JPY pairs at 5 digits too (same as
+# majors), so that formula understated JPY spread by ~100x while
+# simultaneously overstating it for pairs whose M1 ATR is small relative
+# to a flat pip cost. Expressing spread as a FRACTION OF ATR sidesteps
+# the pip-convention question entirely, since ATR is already computed in
+# raw price units with no currency-specific ambiguity. 0.1 (10% of the
+# M1 ATR at entry) is a first-approximation default, not empirically
+# tuned - same disclosure as MAX_ENTRY_DRIFT_PERCENT_* above.
+BACKTEST_DEFAULT_SPREAD_ATR_FRACTION = _env_float("BACKTEST_DEFAULT_SPREAD_ATR_FRACTION", 0.1)
 # Safety cap, not a feature: the user explicitly wants NO artificial
 # timeout-close, but a signal whose TP/SL genuinely never resolves must
 # still stop pulling forward data somewhere rather than paginate
