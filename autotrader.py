@@ -247,7 +247,12 @@ def _prepare_and_check_risk(pair: str, verdict: str, entry_price: float, atr: fl
         logger.warning("Autotrader: no account balance available, skipping %s", pair)
         return None
 
-    daily_pnl = db.get_daily_auto_trade_pnl(AUTOTRADE_ACCOUNT_MODE)
+    # `since` (audit fix, 2026-08-15): without it, clearing the kill switch
+    # mid-day did nothing - the very next check here recomputed the same
+    # still-negative day and tripped it right back before any new trade
+    # could happen. See get_daily_auto_trade_pnl's own docstring.
+    cleared_at = db.get_autotrade_runtime_state().get("kill_switch_cleared_at")
+    daily_pnl = db.get_daily_auto_trade_pnl(AUTOTRADE_ACCOUNT_MODE, since=cleared_at)
     max_daily_loss = balance * (MAX_DAILY_LOSS_PERCENT / 100.0)
     if daily_pnl <= -max_daily_loss:
         _trip_kill_switch(daily_pnl, max_daily_loss)
@@ -471,7 +476,20 @@ def _persist_execution_event(execution_type, trade_id_hint, broker_order_id, bro
     if deal is not None and deal.HasField("closePositionDetail"):
         detail = deal.closePositionDetail
         money_digits = detail.moneyDigits or 2
-        pnl_amount = (detail.grossProfit + detail.swap) / (10 ** money_digits)
+        # AUDIT FIX (2026-08-15, high): this used to omit detail.commission
+        # entirely - grossProfit+swap is not the true net result of a
+        # closed cTrader position, the same "gross instead of net" shape
+        # already found and fixed for get_daily_binomo_pnl. ProtoOAClose
+        # PositionDetail has a dedicated commission field (confirmed via
+        # its own .proto descriptor), reported as a signed cost per
+        # Spotware's Open API convention (negative on a real charge) so it
+        # sums directly alongside grossProfit/swap - same pattern this
+        # function already used for those two, just missing the third.
+        # NOT live-verified against a real closed position (autotrader is
+        # disabled by default, no live trades to observe) - if a live
+        # closed-position PnL is ever compared against Binomo-side manual
+        # math and doesn't reconcile, check this sign first.
+        pnl_amount = (detail.grossProfit + detail.swap + detail.commission) / (10 ** money_digits)
         status = _classify_close(deal.executionPrice or None, trade.get("tp_price"), trade.get("sl_price"))
 
         if db.mark_auto_trade_closed(trade["id"], status=status, pnl_amount=pnl_amount):

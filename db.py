@@ -1979,7 +1979,17 @@ def count_open_auto_trades(account_mode: str) -> int:
         return 0
 
 
-def get_daily_auto_trade_pnl(account_mode: str) -> float:
+def get_daily_auto_trade_pnl(account_mode: str, since: datetime | None = None) -> float:
+    """Net PnL (already includes commission - see _persist_execution_event's
+    2026-08-15 fix for pnl_amount's own computation) across today's closed
+    trades - what autotrader.py's MAX_DAILY_LOSS_PERCENT needs.
+
+    `since` (audit fix, 2026-08-15): mirrors get_daily_binomo_pnl's own
+    `since` fix, same shape - without it, clearing the autotrade kill
+    switch mid-day did nothing, since the very next check still summed the
+    same still-negative day and tripped it right back before any new trade
+    could happen. ANDed with the existing calendar-day bound, not a
+    replacement for it - see get_daily_binomo_pnl's docstring for why."""
     day_start = _utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
 
     try:
@@ -1987,14 +1997,16 @@ def get_daily_auto_trade_pnl(account_mode: str) -> float:
             if session is None:
                 return 0.0
 
-            rows = (
+            query = (
                 session.query(AutoTrade)
                 .filter(AutoTrade.account_mode == (account_mode or "demo").lower())
                 .filter(AutoTrade.closed_at.isnot(None))
                 .filter(AutoTrade.closed_at >= day_start)
                 .filter(AutoTrade.pnl_amount.isnot(None))
-                .all()
             )
+            if since is not None:
+                query = query.filter(AutoTrade.closed_at >= since)
+            rows = query.all()
             return sum(row.pnl_amount for row in rows)
     except SQLAlchemyError:
         logger.exception("Error computing daily auto trade pnl")
