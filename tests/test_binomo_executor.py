@@ -1,5 +1,5 @@
 import unittest
-from datetime import datetime
+from datetime import datetime, timedelta
 from unittest.mock import patch
 
 import binomo_executor
@@ -171,7 +171,7 @@ class CheckRiskLimitsTest(unittest.TestCase):
             binomo_executor.db,
             count_binomo_trades_today=lambda mode: trades_today,
             get_consecutive_binomo_losses=lambda mode, since=None: consecutive_losses,
-            get_daily_binomo_pnl=lambda mode: daily_pnl,
+            get_daily_binomo_pnl=lambda mode, since=None: daily_pnl,
             get_binomo_runtime_state=lambda: {
                 "runtime_enabled": True, "kill_switch_tripped": False, "kill_switch_reason": None,
                 "kill_switch_cleared_at": kill_switch_cleared_at,
@@ -221,15 +221,19 @@ class CheckRiskLimitsTest(unittest.TestCase):
         captured = {}
 
         def _fake_losses(mode, since=None):
-            captured["since"] = since
+            captured["losses_since"] = since
             return 0
+
+        def _fake_pnl(mode, since=None):
+            captured["pnl_since"] = since
+            return 0.0
 
         with patch.object(binomo_executor.config, "BINOMO_MAX_TRADES_PER_DAY", 100), \
              patch.multiple(
                  binomo_executor.db,
                  count_binomo_trades_today=lambda mode: 0,
                  get_consecutive_binomo_losses=_fake_losses,
-                 get_daily_binomo_pnl=lambda mode: 0.0,
+                 get_daily_binomo_pnl=_fake_pnl,
                  get_binomo_runtime_state=lambda: {
                      "runtime_enabled": True, "kill_switch_tripped": False, "kill_switch_reason": None,
                      "kill_switch_cleared_at": cleared_at,
@@ -237,7 +241,12 @@ class CheckRiskLimitsTest(unittest.TestCase):
              ):
             binomo_executor._check_risk_limits(balance=1000.0)
 
-        self.assertEqual(captured["since"], cleared_at)
+        self.assertEqual(captured["losses_since"], cleared_at)
+        # Regression for the SECOND bug found live 2026-08-15: get_daily_
+        # binomo_pnl had the exact same missing-`since` gap as get_
+        # consecutive_binomo_losses, just left unfixed alongside it - this
+        # proves the same cleared_at now reaches it too.
+        self.assertEqual(captured["pnl_since"], cleared_at)
 
 
 class KillSwitchEndToEndTest(unittest.TestCase):
@@ -434,6 +443,35 @@ class KillSwitchEndToEndTest(unittest.TestCase):
             self.assertIsNone(reason_after_clear)
             self.assertFalse(binomo_executor.db.get_binomo_runtime_state()["kill_switch_tripped"])
 
+    def test_clearing_a_daily_loss_trip_does_not_immediately_re_trip_either(self):
+        # SECOND bug found live 2026-08-15, same shape as the test above but
+        # for MAX_DAILY_LOSS_PERCENT specifically: get_daily_binomo_pnl was
+        # missing the `since` fix applied to get_consecutive_binomo_losses,
+        # so a real daily-loss trip could not actually be recovered from
+        # mid-day either. Real trip -> real clear -> real re-check against
+        # the real DB, proving the second check no longer trips.
+        with patch.object(binomo_executor.config, "BINOMO_ACCOUNT_MODE", self.ACCOUNT_MODE), \
+             patch.object(binomo_executor.config, "BINOMO_MAX_CONSECUTIVE_LOSSES", 1000), \
+             patch.object(binomo_executor.config, "BINOMO_MAX_TRADES_PER_DAY", 1000), \
+             patch.object(binomo_executor.config, "BINOMO_MAX_DAILY_LOSS_PERCENT", 1.0), \
+             patch.object(binomo_executor, "notify_admin"):
+
+            self._place_and_lose("EURUSD", "EUR/USD")  # -100 net on a 10,000 balance = -1%
+
+            reason = binomo_executor._check_risk_limits(balance=10000.0)
+            self.assertIsNotNone(reason, "a -1% day with a 1% limit must trip")
+            self.assertIn("MAX_DAILY_LOSS_PERCENT", reason)
+            self.assertTrue(binomo_executor.db.get_binomo_runtime_state()["kill_switch_tripped"])
+
+            binomo_executor.db.set_binomo_runtime_enabled(True)
+            binomo_executor.db.clear_binomo_kill_switch()
+
+            # No new trade since the clear - the same -100 is still today's
+            # only resolved trade. Before the fix, this would trip again.
+            reason_after_clear = binomo_executor._check_risk_limits(balance=10000.0)
+            self.assertIsNone(reason_after_clear)
+            self.assertFalse(binomo_executor.db.get_binomo_runtime_state()["kill_switch_tripped"])
+
 
 class GetDailyBinomoPnlTest(unittest.TestCase):
     """BUG found live 2026-08-14: get_daily_binomo_pnl used to just sum
@@ -495,6 +533,34 @@ class GetDailyBinomoPnlTest(unittest.TestCase):
 
         pnl = binomo_executor.db.get_daily_binomo_pnl(self.ACCOUNT_MODE)
         self.assertAlmostEqual(pnl, 600.0)  # old buggy version would have reported 3600.0
+
+    def test_since_excludes_trades_resolved_before_it(self):
+        # SECOND bug found live 2026-08-15: this function had no `since`
+        # parameter at all, unlike its sibling get_consecutive_binomo_
+        # losses - so a kill-switch clear couldn't exclude the old losses
+        # that caused the trip. Backdates one trade's resolved_at to
+        # earlier TODAY (must stay within the day_start window this
+        # function already applies) and confirms it's excluded once
+        # `since` is set to a point after it but still before "now".
+        now = binomo_executor.db._utcnow()
+        earlier_today = now - timedelta(hours=2)
+        cutoff = now - timedelta(hours=1)
+
+        self._resolved_trade(amount=1000.0, result="loss", payout_amount=0.0)  # net -1000, to be excluded
+        with binomo_executor.db.get_db() as session:
+            row = session.query(binomo_executor.db.BinomoTrade).filter(
+                binomo_executor.db.BinomoTrade.account_mode == self.ACCOUNT_MODE
+            ).one()
+            row.resolved_at = earlier_today
+            session.commit()
+
+        self._resolved_trade(amount=1000.0, result="win", payout_amount=1800.0)  # net +800, resolved "now" (after cutoff)
+
+        pnl_unfiltered = binomo_executor.db.get_daily_binomo_pnl(self.ACCOUNT_MODE)
+        pnl_since_cutoff = binomo_executor.db.get_daily_binomo_pnl(self.ACCOUNT_MODE, since=cutoff)
+
+        self.assertAlmostEqual(pnl_unfiltered, -200.0)  # -1000 + 800, old bug's shape: since ignored
+        self.assertAlmostEqual(pnl_since_cutoff, 800.0)  # only the post-cutoff win counts
 
 
 class UpdateBinomoTradeEntryTsTest(unittest.TestCase):

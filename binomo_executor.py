@@ -1369,7 +1369,13 @@ def _check_risk_limits(balance: float) -> Optional[str]:
     placed) saw the same losses and tripped it right back. Passing the
     kill switch's own last-cleared timestamp as `since` excludes trades
     resolved before that point, so the streak has to actually restart
-    post-clear - see get_consecutive_binomo_losses's docstring."""
+    post-clear - see get_consecutive_binomo_losses's docstring.
+
+    SECOND BUG found live 2026-08-15: get_daily_binomo_pnl had the exact
+    same missing-`since` shape and wasn't fixed alongside the above - a
+    MAX_DAILY_LOSS_PERCENT trip could not actually be recovered from
+    mid-day for the identical reason. Now passes the same `cleared_at`
+    through to it too - see get_daily_binomo_pnl's own docstring."""
     trades_today = db.count_binomo_trades_today(config.BINOMO_ACCOUNT_MODE)
     if trades_today >= config.BINOMO_MAX_TRADES_PER_DAY:
         return f"MAX_TRADES_PER_DAY reached ({trades_today}/{config.BINOMO_MAX_TRADES_PER_DAY})"
@@ -1382,7 +1388,7 @@ def _check_risk_limits(balance: float) -> Optional[str]:
         )
         return "MAX_CONSECUTIVE_LOSSES kill switch tripped"
 
-    daily_pnl = db.get_daily_binomo_pnl(config.BINOMO_ACCOUNT_MODE)
+    daily_pnl = db.get_daily_binomo_pnl(config.BINOMO_ACCOUNT_MODE, since=cleared_at)
     max_daily_loss = balance * (config.BINOMO_MAX_DAILY_LOSS_PERCENT / 100.0)
     if daily_pnl <= -max_daily_loss:
         _trip_kill_switch(

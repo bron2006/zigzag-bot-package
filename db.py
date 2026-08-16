@@ -2265,7 +2265,7 @@ def get_consecutive_binomo_losses(account_mode: str, limit: int = 50, since: dat
     return streak
 
 
-def get_daily_binomo_pnl(account_mode: str) -> float:
+def get_daily_binomo_pnl(account_mode: str, since: datetime | None = None) -> float:
     """Net profit/loss (credited back minus staked) across today's resolved
     trades - what MAX_DAILY_LOSS_PERCENT actually needs to know.
 
@@ -2277,7 +2277,18 @@ def get_daily_binomo_pnl(account_mode: str) -> float:
     counted as "0 change" instead of "-stake" and every win counted its
     full gross return instead of just the profit. The daily-loss kill
     switch built on this could essentially never trip, since a real net
-    loss would almost always still show as a large apparent profit."""
+    loss would almost always still show as a large apparent profit.
+
+    SECOND BUG found live 2026-08-15 (same audit that found the first): this
+    had no `since` parameter at all, unlike its sibling get_consecutive_
+    binomo_losses two lines away in _check_risk_limits - so clearing the
+    kill switch after a real MAX_DAILY_LOSS_PERCENT trip did nothing: the
+    very next call still summed the same still-negative day and tripped it
+    right back before any new trade could happen. `since` (the kill
+    switch's last-cleared timestamp) is ANDed with the calendar-day bound,
+    not a replacement for it - a clear from earlier today excludes trades
+    before it; a clear from a previous day is superseded by the day
+    boundary itself, same as an admin would expect."""
     day_start = _utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
 
     try:
@@ -2285,14 +2296,16 @@ def get_daily_binomo_pnl(account_mode: str) -> float:
             if session is None:
                 return 0.0
 
-            rows = (
+            query = (
                 session.query(BinomoTrade)
                 .filter(BinomoTrade.account_mode == (account_mode or "demo").lower())
                 .filter(BinomoTrade.resolved_at.isnot(None))
                 .filter(BinomoTrade.resolved_at >= day_start)
                 .filter(BinomoTrade.payout_amount.isnot(None))
-                .all()
             )
+            if since is not None:
+                query = query.filter(BinomoTrade.resolved_at >= since)
+            rows = query.all()
             return sum(row.payout_amount - row.amount for row in rows)
     except SQLAlchemyError:
         logger.exception("Error computing daily binomo pnl")
