@@ -160,7 +160,14 @@ class BinomoTrade(Base):
     account_mode = Column(String(8), nullable=False, index=True)  # demo | live
     # pending -> win | loss | error
     result = Column(String(16), nullable=False, default="pending", index=True)
-    payout_amount = Column(Float, nullable=True)  # net profit/loss once resolved
+    # GROSS amount credited back on a win (stake + profit), exactly 0.0 on
+    # a loss - NOT net profit/loss (this comment used to say "net", which
+    # was wrong and is exactly the kind of stale claim that already caused
+    # get_daily_binomo_pnl to be written as a naive sum once - see that
+    # function's own docstring for the 2026-08-14 incident this caused).
+    # Net P&L for a trade is payout_amount - amount; get_daily_binomo_pnl
+    # already computes it that way - don't sum this column alone again.
+    payout_amount = Column(Float, nullable=True)
     resolved_at = Column(DateTime, nullable=True)
     # Real FK (added 2026-08-10): this was a bare Integer, so after the
     # signal_outcomes archival restarted IDs at 1, old rows here would have
