@@ -4,6 +4,7 @@ import logging
 import os
 import queue
 import re
+import secrets
 import time
 from functools import wraps
 from html import escape as html_escape
@@ -391,6 +392,15 @@ def register_routes(app):
 
     @app.route("/api/ctrader/oauth/start")
     def ctrader_oauth_start():
+        # SECURITY FIX (2026-08-15, audit finding): this route had no auth
+        # at all - anyone on the internet could visit it, complete the
+        # OAuth flow with THEIR OWN cTrader account, and the callback would
+        # unconditionally overwrite this app's shared CTRADER_ACCESS_TOKEN/
+        # CTRADER_REFRESH_TOKEN and force-reconnect the live price/broker
+        # client to their account. Only the admin may start this flow.
+        if not _is_admin_request():
+            return Response("Unauthorized.", status=401, mimetype="text/plain")
+
         client_id = get_ct_client_id()
         client_secret = get_ct_client_secret()
         redirect_uri = get_ctrader_redirect_uri()
@@ -398,17 +408,31 @@ def register_routes(app):
         if not client_id or not client_secret:
             return Response("cTrader OAuth is not configured.", status=500, mimetype="text/plain")
 
+        # CSRF/state (2026-08-15): proves the callback corresponds to a
+        # flow THIS app started, not a code injected via a crafted callback
+        # link - see AppState.consume_ctrader_oauth_pending_state's own
+        # comment for the attack this closes.
+        state = secrets.token_urlsafe(32)
+        app_state.set_ctrader_oauth_pending_state(state)
+
         auth_url = (
             "https://id.ctrader.com/my/settings/openapi/grantingaccess/"
             f"?client_id={quote(client_id, safe='')}"
             f"&redirect_uri={quote(redirect_uri, safe='')}"
             "&scope=trading"
             "&product=web"
+            f"&state={quote(state, safe='')}"
         )
         return redirect(auth_url, code=302)
 
     @app.route("/api/ctrader/oauth/callback")
     def ctrader_oauth_callback():
+        # See ctrader_oauth_start's comment - this must match the state
+        # minted there, one-time-use, before touching anything else.
+        state = request.args.get("state") or ""
+        if not app_state.consume_ctrader_oauth_pending_state(state):
+            return Response("Invalid or expired OAuth state.", status=403, mimetype="text/plain")
+
         code = request.args.get("code")
         error_code = request.args.get("error") or request.args.get("errorCode")
         error_description = request.args.get("error_description") or request.args.get("description")

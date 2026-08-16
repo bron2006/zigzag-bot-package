@@ -1,4 +1,5 @@
 # state.py
+import hmac
 import logging
 import queue
 import threading
@@ -66,6 +67,14 @@ class AppState:
         self.ctrader_auth_issue: Optional[str] = None
         self.ctrader_auth_updated_at: float = 0.0
         self._load_persisted_ctrader_tokens()
+
+        # OAuth CSRF state (see set_ctrader_oauth_pending_state) - single
+        # pending value, not a per-session map: this app has exactly one
+        # admin who can ever legitimately start this flow (gated by
+        # _is_admin_request() at the route), so there is only ever one
+        # legitimate in-flight OAuth attempt at a time.
+        self._ctrader_oauth_pending_state: Optional[str] = None
+        self._ctrader_oauth_pending_state_expires_at: float = 0.0
 
     # ------------------------------------------------------------------
     # Thread pools / background tasks
@@ -173,6 +182,33 @@ class AppState:
     def get_ctrader_auth_issue(self) -> Optional[str]:
         with self._state_lock:
             return self.ctrader_auth_issue
+
+    # cTrader OAuth CSRF protection (added 2026-08-15 - the audit finding
+    # this fixes: /api/ctrader/oauth/callback previously accepted any
+    # `code` with no proof it corresponds to a flow this app itself
+    # started, so a crafted callback link could inject an attacker's own
+    # OAuth code and get it wired into the shared CTRADER_ACCESS_TOKEN/
+    # CTRADER_REFRESH_TOKEN used by the whole app). /start (now admin-only)
+    # mints a random state and stores it here; /callback must present the
+    # exact same value, and consuming it clears it so it can't be replayed.
+    _CTRADER_OAUTH_STATE_TTL_SECONDS = 600.0
+
+    def set_ctrader_oauth_pending_state(self, state: str) -> None:
+        with self._state_lock:
+            self._ctrader_oauth_pending_state = state
+            self._ctrader_oauth_pending_state_expires_at = time.time() + self._CTRADER_OAUTH_STATE_TTL_SECONDS
+
+    def consume_ctrader_oauth_pending_state(self, state: str) -> bool:
+        """Returns True and clears the pending state iff `state` matches
+        exactly what /start most recently minted and it hasn't expired -
+        single-use, so a callback URL can't be replayed to re-trigger the
+        reconnect/token-overwrite side effect."""
+        with self._state_lock:
+            expected = self._ctrader_oauth_pending_state
+            not_expired = time.time() < self._ctrader_oauth_pending_state_expires_at
+            self._ctrader_oauth_pending_state = None
+            self._ctrader_oauth_pending_state_expires_at = 0.0
+            return bool(expected) and not_expired and hmac.compare_digest(expected, state or "")
 
     def set_scanner_state(self, category: str, enabled: bool) -> None:
         with self._state_lock:
