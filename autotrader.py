@@ -17,8 +17,12 @@ Safety model (see config.py):
     the ATR-derived stop-loss distance (never a fixed lot size).
   - MAX_OPEN_POSITIONS caps concurrent open trades.
   - MAX_DAILY_LOSS_PERCENT is a kill switch: once the day's realized loss
-    exceeds it, trading stops and stays stopped (even across restarts of
-    _runtime_enabled) until an admin explicitly runs /autotrade_on again.
+    exceeds it, trading stops and stays stopped until an admin explicitly
+    runs /autotrade_on again. Persisted via db.get/set_autotrade_runtime_
+    state (audit fix, 2026-08-15) - this used to be a bare in-process
+    module global, so a restart or Fly.io redeploy silently reset it and
+    resumed automated real order placement with no admin action at all,
+    directly contradicting this same promise.
 """
 import logging
 
@@ -55,9 +59,6 @@ from state import app_state
 
 logger = logging.getLogger("autotrader")
 
-_runtime_enabled = bool(AUTOTRADE_ENABLED)
-_kill_switch_tripped = False
-
 _balance_cache: dict = {"value": None, "ts": 0.0}
 
 
@@ -71,36 +72,37 @@ def _blocking_pool():
 
 
 def is_active() -> bool:
-    return bool(AUTOTRADE_ENABLED) and _runtime_enabled and not _kill_switch_tripped
+    if not AUTOTRADE_ENABLED:
+        return False
+    state = db.get_autotrade_runtime_state()
+    return state["runtime_enabled"] and not state["kill_switch_tripped"]
 
 
 def enable() -> tuple[bool, str]:
-    global _runtime_enabled, _kill_switch_tripped
-
     if not AUTOTRADE_ENABLED:
         return False, "AUTOTRADE_ENABLED=false у конфігурації — зміни змінну середовища на Fly.io і передеплой."
 
-    _runtime_enabled = True
-    was_tripped = _kill_switch_tripped
-    _kill_switch_tripped = False
+    was_tripped = db.get_autotrade_runtime_state()["kill_switch_tripped"]
+    db.set_autotrade_runtime_enabled(True)
+    db.clear_autotrade_kill_switch()
     return True, "Автотрейдинг увімкнено." + (" Kill switch скинуто." if was_tripped else "")
 
 
 def disable() -> tuple[bool, str]:
-    global _runtime_enabled
-    _runtime_enabled = False
+    db.set_autotrade_runtime_enabled(False)
     return True, "Автотрейдинг вимкнено."
 
 
 def get_status() -> dict:
     import time as _time
 
+    state = db.get_autotrade_runtime_state()
     return {
         "config_enabled": bool(AUTOTRADE_ENABLED),
-        "runtime_enabled": _runtime_enabled,
+        "runtime_enabled": state["runtime_enabled"],
         "active": is_active(),
         "account_mode": AUTOTRADE_ACCOUNT_MODE,
-        "kill_switch_tripped": _kill_switch_tripped,
+        "kill_switch_tripped": state["kill_switch_tripped"],
         "max_risk_percent_per_trade": MAX_RISK_PERCENT_PER_TRADE,
         "max_open_positions": MAX_OPEN_POSITIONS,
         "max_daily_loss_percent": MAX_DAILY_LOSS_PERCENT,
@@ -126,18 +128,19 @@ def _notify_admin_async(text: str) -> None:
 
 
 def _trip_kill_switch(daily_pnl: float, max_daily_loss: float) -> None:
-    global _kill_switch_tripped
-
-    if _kill_switch_tripped:
+    # Persisted via db.trip_autotrade_kill_switch (audit fix, 2026-08-15) -
+    # see that function's own section header for why a bare module global
+    # was wrong here. No "already tripped" guard needed: is_active() (which
+    # reads the same persisted flag) gates maybe_enter_trade before this can
+    # ever be reached again, same as binomo_executor.py's equivalent.
+    reason = (
+        f"daily pnl {daily_pnl:.2f} breached limit -{max_daily_loss:.2f} "
+        f"({MAX_DAILY_LOSS_PERCENT:.2f}% of balance)"
+    )
+    if not db.trip_autotrade_kill_switch(reason):
         return
 
-    _kill_switch_tripped = True
-    logger.critical(
-        "AUTOTRADE KILL SWITCH: daily pnl %.2f breached limit -%.2f (%.2f%% of balance)",
-        daily_pnl,
-        max_daily_loss,
-        MAX_DAILY_LOSS_PERCENT,
-    )
+    logger.critical("AUTOTRADE KILL SWITCH: %s", reason)
     _notify_admin_async(
         "🛑 <b>AUTOTRADE KILL SWITCH</b>\n"
         f"Денний PnL: {daily_pnl:.2f}\n"

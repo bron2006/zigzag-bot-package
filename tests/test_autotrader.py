@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import autotrader
+import db
 
 
 class ComputeTpSlTest(unittest.TestCase):
@@ -72,9 +73,28 @@ class ClassifyCloseTest(unittest.TestCase):
 
 
 class RuntimeToggleTest(unittest.TestCase):
+    """AUDIT FIX (2026-08-15, critical): is_active()/enable()/disable() used
+    to read/write bare Python module globals (_runtime_enabled,
+    _kill_switch_tripped) - a process restart or Fly.io redeploy silently
+    reset both, resuming automated real order placement with zero admin
+    action, directly contradicting this module's own docstring promise
+    that the kill switch "stays stopped... until an admin explicitly runs
+    /autotrade_on again". Runs against the REAL db.py AppRuntimeSetting
+    table (same mechanism binomo_executor.py's kill switch already uses),
+    not mocks - a mock would only prove the plumbing is wired, not that
+    the state actually survives outside the process. setUp/tearDown save
+    and restore whatever was really there before, so this can never leave
+    the real autotrade runtime state in a dirty condition."""
+
+    def setUp(self):
+        self._saved_state = db.get_autotrade_runtime_state()
+
     def tearDown(self):
-        autotrader._runtime_enabled = bool(autotrader.AUTOTRADE_ENABLED)
-        autotrader._kill_switch_tripped = False
+        db.set_autotrade_runtime_enabled(self._saved_state["runtime_enabled"])
+        if self._saved_state["kill_switch_tripped"]:
+            db.trip_autotrade_kill_switch(self._saved_state["kill_switch_reason"] or "restored after RuntimeToggleTest")
+        else:
+            db.clear_autotrade_kill_switch()
 
     def test_enable_is_noop_when_config_disabled(self):
         with patch.object(autotrader, "AUTOTRADE_ENABLED", False):
@@ -83,11 +103,11 @@ class RuntimeToggleTest(unittest.TestCase):
         self.assertFalse(autotrader.is_active())
 
     def test_enable_clears_kill_switch_when_config_enabled(self):
-        autotrader._kill_switch_tripped = True
+        db.trip_autotrade_kill_switch("test trip")
         with patch.object(autotrader, "AUTOTRADE_ENABLED", True):
             ok, _ = autotrader.enable()
             self.assertTrue(ok)
-            self.assertFalse(autotrader._kill_switch_tripped)
+            self.assertFalse(db.get_autotrade_runtime_state()["kill_switch_tripped"])
             self.assertTrue(autotrader.is_active())
 
     def test_disable_deactivates_even_when_config_enabled(self):
@@ -95,6 +115,32 @@ class RuntimeToggleTest(unittest.TestCase):
             autotrader.enable()
             autotrader.disable()
             self.assertFalse(autotrader.is_active())
+
+    def test_state_is_read_fresh_from_the_db_not_a_process_local_cache(self):
+        # Proves the actual fix: nothing in autotrader.py's own namespace
+        # holds this state anymore - is_active() must reflect whatever the
+        # real DB row says, exactly as a fresh process (post-restart)
+        # reading it for the first time would see it.
+        with patch.object(autotrader, "AUTOTRADE_ENABLED", True):
+            db.set_autotrade_runtime_enabled(True)
+            db.clear_autotrade_kill_switch()
+            self.assertTrue(autotrader.is_active())
+
+            db.trip_autotrade_kill_switch("simulated trip from another process")
+            self.assertFalse(autotrader.is_active())
+
+    def test_trip_kill_switch_persists_the_reason(self):
+        # _notify_admin_async stays mocked here for the same reason the
+        # Binomo kill-switch tests mock notify_admin: it dispatches via
+        # deferToThreadPool, which can actually run and page the real admin
+        # even outside a running reactor - confirmed live earlier this
+        # session for the Binomo equivalent (duplicate real Telegram
+        # alerts from a bare test run).
+        with patch.object(autotrader, "_notify_admin_async"):
+            autotrader._trip_kill_switch(daily_pnl=-500.0, max_daily_loss=400.0)
+        state = db.get_autotrade_runtime_state()
+        self.assertTrue(state["kill_switch_tripped"])
+        self.assertIn("-500.00", state["kill_switch_reason"])
 
 
 if __name__ == "__main__":

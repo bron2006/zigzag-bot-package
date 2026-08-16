@@ -2397,6 +2397,91 @@ def clear_binomo_kill_switch() -> bool:
 
 
 # ----------------------------------------------------------------------
+# Autotrader runtime state — same rationale and shape as the Binomo block
+# above, added 2026-08-15 (audit finding, critical): autotrader.py used to
+# keep _runtime_enabled/_kill_switch_tripped as bare Python module globals,
+# despite its own docstring explicitly promising the kill switch "stays
+# stopped (even across restarts of _runtime_enabled) until an admin
+# explicitly runs /autotrade_on again" - a process restart or Fly.io
+# redeploy silently reset both, resuming automated REAL order placement
+# with zero admin action. Persisting to the same AppRuntimeSetting table
+# closes that gap the same way it was already closed for Binomo.
+# ----------------------------------------------------------------------
+
+_AUTOTRADE_ENABLED_KEY = "autotrade_runtime_enabled"
+_AUTOTRADE_KILL_SWITCH_KEY = "autotrade_kill_switch_tripped"
+_AUTOTRADE_KILL_SWITCH_REASON_KEY = "autotrade_kill_switch_reason"
+_AUTOTRADE_KILL_SWITCH_CLEARED_AT_KEY = "autotrade_kill_switch_cleared_at"
+
+
+def get_autotrade_runtime_state() -> dict:
+    try:
+        with get_db() as session:
+            if session is None:
+                return {
+                    "runtime_enabled": True, "kill_switch_tripped": False, "kill_switch_reason": None,
+                    "kill_switch_cleared_at": None,
+                }
+
+            enabled_raw = _get_runtime_setting(session, _AUTOTRADE_ENABLED_KEY)
+            tripped_raw = _get_runtime_setting(session, _AUTOTRADE_KILL_SWITCH_KEY)
+            reason = _get_runtime_setting(session, _AUTOTRADE_KILL_SWITCH_REASON_KEY)
+            cleared_at_raw = _get_runtime_setting(session, _AUTOTRADE_KILL_SWITCH_CLEARED_AT_KEY)
+
+            return {
+                "runtime_enabled": enabled_raw != "false",  # unset -> enabled by default
+                "kill_switch_tripped": tripped_raw == "true",
+                "kill_switch_reason": reason,
+                "kill_switch_cleared_at": _normalize_datetime(cleared_at_raw),
+            }
+    except SQLAlchemyError:
+        logger.exception("Error loading autotrade runtime state")
+        return {
+            "runtime_enabled": True, "kill_switch_tripped": False, "kill_switch_reason": None,
+            "kill_switch_cleared_at": None,
+        }
+
+
+def set_autotrade_runtime_enabled(enabled: bool) -> bool:
+    try:
+        with session_scope() as session:
+            if session is None:
+                return False
+            _set_runtime_setting(session, _AUTOTRADE_ENABLED_KEY, "true" if enabled else "false")
+            return True
+    except SQLAlchemyError:
+        logger.exception("Error setting autotrade runtime enabled=%s", enabled)
+        return False
+
+
+def trip_autotrade_kill_switch(reason: str) -> bool:
+    try:
+        with session_scope() as session:
+            if session is None:
+                return False
+            _set_runtime_setting(session, _AUTOTRADE_KILL_SWITCH_KEY, "true")
+            _set_runtime_setting(session, _AUTOTRADE_KILL_SWITCH_REASON_KEY, (reason or "")[:255])
+            return True
+    except SQLAlchemyError:
+        logger.exception("Error tripping autotrade kill switch")
+        return False
+
+
+def clear_autotrade_kill_switch() -> bool:
+    try:
+        with session_scope() as session:
+            if session is None:
+                return False
+            _set_runtime_setting(session, _AUTOTRADE_KILL_SWITCH_KEY, "false")
+            _set_runtime_setting(session, _AUTOTRADE_KILL_SWITCH_REASON_KEY, None)
+            _set_runtime_setting(session, _AUTOTRADE_KILL_SWITCH_CLEARED_AT_KEY, _utcnow().isoformat())
+            return True
+    except SQLAlchemyError:
+        logger.exception("Error clearing autotrade kill switch")
+        return False
+
+
+# ----------------------------------------------------------------------
 # Scanner category toggles (forex/crypto/commodities/watchlist) — these
 # used to live only in app_state.SCANNER_STATE (in-memory), which silently
 # resets to all-off on every process restart/deploy, since nothing ever
