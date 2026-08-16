@@ -893,7 +893,20 @@ def _select_asset(page, asset: str) -> Optional[str]:
         return "asset_search_input not found"
     search_input.fill(asset)
 
-    row_selector = f"{SELECTORS['asset_row']}:has({SELECTORS['asset_row_name']}:text-is('{asset}'))"
+    # AUDIT FIX (2026-08-15, high): this used to build the row selector from
+    # the bare, unscoped asset_row selector - the exact scoping bug already
+    # found and fixed in get_available_binomo_assets (asset_list_scope's own
+    # comment: an unscoped "div.asset-row" search also matches hidden rows
+    # from OTHER trade-mode tabs already present in the DOM, confirmed live
+    # 111 unscoped rows vs 84 scoped for a list showing "Активно: 85"). This
+    # function places REAL trades, so a name collision here isn't just a
+    # wrong payout read - it's a Playwright strict-mode click failure
+    # (silently blocking the trade) on any asset name that also exists in
+    # a hidden tab.
+    row_selector = (
+        f"{SELECTORS['asset_list_scope']} {SELECTORS['asset_row']}"
+        f":has({SELECTORS['asset_row_name']}:text-is('{asset}'))"
+    )
     asset_row_probe = _safe_find(page, row_selector, description="asset_row")
     if asset_row_probe is None:
         return f"asset row not found for {asset!r}"

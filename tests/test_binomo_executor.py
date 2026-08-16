@@ -145,6 +145,54 @@ class ResolveBinomoAssetNameTest(unittest.TestCase):
         self.assertIsNone(binomo_executor._resolve_binomo_asset_name(entry))
 
 
+class SelectAssetTest(unittest.TestCase):
+    """AUDIT FIX (2026-08-15, high): _select_asset - the REAL trade-
+    placement path (used by place_binary_trade) - used to build its row
+    selector from the bare, unscoped asset_row selector, the exact scoping
+    bug already found and fixed in the read-only get_available_binomo_
+    assets (see asset_list_scope's own comment: an unscoped selector also
+    matches hidden rows from OTHER trade-mode tabs already in the DOM).
+    A name collision here isn't just a wrong payout read - it's a
+    Playwright strict-mode click failure silently blocking a real trade."""
+
+    class _FakePage:
+        def fill(self, *args, **kwargs):
+            pass
+
+    def _run(self, asset="EUR/USD"):
+        page = self.__class__._FakePage()
+        selectors_used = []
+
+        def _find(page_arg, selector, *, description, **kwargs):
+            selectors_used.append((description, selector))
+            if description == "asset_search_input":
+                return page
+            return object()
+
+        def _click(page_arg, selector, *, description, **kwargs):
+            selectors_used.append((description, selector))
+            return True
+
+        with patch.object(binomo_executor, "_dismiss_blocking_overlay"), \
+             patch.object(binomo_executor, "_safe_find", side_effect=_find), \
+             patch.object(binomo_executor, "_safe_click", side_effect=_click), \
+             patch.object(binomo_executor, "_clear_price_feed_cache"):
+            result = binomo_executor._select_asset(page, asset)
+        return result, selectors_used
+
+    def test_row_selector_is_scoped_to_the_currently_open_picker_list(self):
+        result, selectors_used = self._run("EUR/USD")
+
+        self.assertIsNone(result)
+        row_selectors = [sel for desc, sel in selectors_used if desc == "asset_row"]
+        self.assertTrue(row_selectors, "expected at least one asset_row lookup")
+        for sel in row_selectors:
+            self.assertTrue(
+                sel.startswith(binomo_executor.SELECTORS["asset_list_scope"]),
+                f"asset_row selector not scoped: {sel!r}",
+            )
+
+
 class IsActiveTest(unittest.TestCase):
     def test_false_when_config_disabled(self):
         with patch.object(binomo_executor.config, "BINOMO_EXECUTOR_ENABLED", False):
