@@ -217,7 +217,10 @@ def _compute_tp_sl(verdict: str, entry_price: float, atr: float) -> tuple[float,
 
 
 def _normalize_volume(pair: str, raw_units: float) -> int | None:
-    symbol = ctrader._resolve_broker_symbol(pair)
+    # AUDIT FIX (2026-08-16, high): must use the exact-match resolver, not
+    # ctrader._resolve_broker_symbol's fuzzy prefix fallback - this feeds
+    # real order sizing (min/max/step volume for a REAL order).
+    symbol = ctrader._resolve_broker_symbol_exact(pair)
     if symbol is None or raw_units <= 0:
         return None
 
@@ -316,7 +319,11 @@ def _submit_order_on_reactor_thread(prepared: dict | None):
 
     client = app_state.client
     account_id = getattr(getattr(client, "_client", None), "account_id", None)
-    symbol = ctrader._resolve_broker_symbol(pair)
+    # AUDIT FIX (2026-08-16, high): exact-match only - see
+    # ctrader._resolve_broker_symbol_exact's docstring. A fuzzy prefix
+    # match here could silently place a REAL order on a different
+    # instrument than the one the signal was actually for.
+    symbol = ctrader._resolve_broker_symbol_exact(pair)
 
     if not client or not account_id or symbol is None:
         logger.warning("Autotrader: client/account/symbol not ready, aborting order for %s", pair)

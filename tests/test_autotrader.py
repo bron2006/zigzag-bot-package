@@ -32,27 +32,27 @@ class NormalizeVolumeTest(unittest.TestCase):
         return SimpleNamespace(minVolume=min_volume, maxVolume=max_volume, stepVolume=step_volume, symbolId=1)
 
     def test_rounds_down_to_step(self):
-        with patch.object(autotrader.ctrader, "_resolve_broker_symbol", return_value=self._symbol()):
+        with patch.object(autotrader.ctrader, "_resolve_broker_symbol_exact", return_value=self._symbol()):
             volume = autotrader._normalize_volume("EURUSD", raw_units=12.3456)
         # raw_units * 100 = 1234.56 -> int 1234 -> rounded down to nearest 1000 -> 1000
         self.assertEqual(volume, 1000)
 
     def test_rejects_below_min_volume(self):
-        with patch.object(autotrader.ctrader, "_resolve_broker_symbol", return_value=self._symbol(min_volume=10000)):
+        with patch.object(autotrader.ctrader, "_resolve_broker_symbol_exact", return_value=self._symbol(min_volume=10000)):
             volume = autotrader._normalize_volume("EURUSD", raw_units=50.0)
         self.assertIsNone(volume)
 
     def test_clamps_to_max_volume(self):
-        with patch.object(autotrader.ctrader, "_resolve_broker_symbol", return_value=self._symbol(max_volume=100000)):
+        with patch.object(autotrader.ctrader, "_resolve_broker_symbol_exact", return_value=self._symbol(max_volume=100000)):
             volume = autotrader._normalize_volume("EURUSD", raw_units=100000.0)
         self.assertLessEqual(volume, 100000)
 
     def test_returns_none_when_symbol_missing(self):
-        with patch.object(autotrader.ctrader, "_resolve_broker_symbol", return_value=None):
+        with patch.object(autotrader.ctrader, "_resolve_broker_symbol_exact", return_value=None):
             self.assertIsNone(autotrader._normalize_volume("UNKNOWN", raw_units=10.0))
 
     def test_returns_none_for_non_positive_units(self):
-        with patch.object(autotrader.ctrader, "_resolve_broker_symbol", return_value=self._symbol()):
+        with patch.object(autotrader.ctrader, "_resolve_broker_symbol_exact", return_value=self._symbol()):
             self.assertIsNone(autotrader._normalize_volume("EURUSD", raw_units=0))
 
 

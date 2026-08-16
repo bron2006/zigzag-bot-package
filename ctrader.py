@@ -111,7 +111,20 @@ def _collect_configured_assets() -> list[str]:
     return normalized
 
 
-def _resolve_broker_symbol(pair: str):
+def _resolve_broker_symbol_exact(pair: str):
+    """Exact-match only (either an exact symbol_cache key hit, or an exact
+    key-set match against a broker symbol) - no fuzzy prefix fallback.
+
+    AUDIT FIX (2026-08-16, high): this is the version REAL order placement
+    must use. _resolve_broker_symbol (below) also accepts a fuzzy
+    startswith() prefix match as a last resort, which is fine for
+    read-only uses (subscribing to a price feed, a UI "is this pair
+    available" check) where a slightly-wrong match just means a
+    stale/missing price display - but for sizing or submitting a REAL
+    order it could silently trade a different instrument than the one the
+    signal was actually generated for. autotrader.py's order-submission
+    path (_normalize_volume, _submit_order_on_reactor_thread) calls this
+    function, not _resolve_broker_symbol."""
     requested_keys = _broker_pair_keys(pair)
     if not requested_keys:
         return None
@@ -121,12 +134,30 @@ def _resolve_broker_symbol(pair: str):
         if exact is not None:
             return exact
 
-    candidates = []
     for symbol in _unique_symbols_from_cache():
         keys = _symbol_cache_keys(symbol)
         if any(requested in keys for requested in requested_keys):
             return symbol
 
+    return None
+
+
+def _resolve_broker_symbol(pair: str):
+    """Like _resolve_broker_symbol_exact, but falls back to a fuzzy
+    startswith() prefix match if no exact hit is found. Read-only uses
+    only - see _resolve_broker_symbol_exact's docstring for why real order
+    placement must not use this."""
+    exact = _resolve_broker_symbol_exact(pair)
+    if exact is not None:
+        return exact
+
+    requested_keys = _broker_pair_keys(pair)
+    if not requested_keys:
+        return None
+
+    candidates = []
+    for symbol in _unique_symbols_from_cache():
+        keys = _symbol_cache_keys(symbol)
         for key in keys:
             for requested in requested_keys:
                 if key.startswith(requested):
