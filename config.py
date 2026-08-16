@@ -98,6 +98,29 @@ MARKET_DATA_REQUEST_INTERVAL_MS = _env_int("MARKET_DATA_REQUEST_INTERVAL_MS", 40
 MARKET_DATA_MAX_CONCURRENT_REQUESTS = _env_int("MARKET_DATA_MAX_CONCURRENT_REQUESTS", 1) or 1
 MIN_ATR_PERCENTAGE = _env_float("MIN_ATR_PERCENTAGE", 0.05)
 
+# Entry-drift block (audit fix, 2026-08-15): how much price is allowed to
+# have moved between the signal's own price and the live price before a
+# trade is blocked as "already moved against you". Used to be ONE flat
+# 0.005% for every instrument analysis.py scans - forex, crypto,
+# commodities, stocks - despite their typical per-second volatility
+# differing by orders of magnitude (0.005% of a BTCUSD price near $60k is
+# ~$3, a move that can happen within the seconds _analysis_flow takes to
+# fetch data and run the model; the same 0.005% is a much rarer, more
+# meaningful move for a calm forex major). A single threshold silently
+# suppressed far more valid crypto/commodity signals than forex ones,
+# indistinguishable from "the strategy doesn't work for those instruments".
+# See classify_instrument_class/entry_drift_percent_for_pair below (defined
+# after CRYPTO_PAIRS/COMMODITIES/STOCK_TICKERS, which they depend on).
+#
+# These per-class values are a first approximation, NOT empirically tuned -
+# scaled roughly by typical relative volatility (crypto and commodities
+# move a lot more per unit time than forex majors), pending real
+# observation of how often each class's threshold actually fires once live.
+MAX_ENTRY_DRIFT_PERCENT_FOREX = _env_float("MAX_ENTRY_DRIFT_PERCENT_FOREX", 0.005)
+MAX_ENTRY_DRIFT_PERCENT_CRYPTO = _env_float("MAX_ENTRY_DRIFT_PERCENT_CRYPTO", 0.05)
+MAX_ENTRY_DRIFT_PERCENT_COMMODITIES = _env_float("MAX_ENTRY_DRIFT_PERCENT_COMMODITIES", 0.02)
+MAX_ENTRY_DRIFT_PERCENT_STOCKS = _env_float("MAX_ENTRY_DRIFT_PERCENT_STOCKS", 0.015)
+
 # Signal outcome tracking (Part 1, legacy TP/SL fields — kept only so old
 # rows/paths don't break; no longer used to size new tracking).
 SIGNAL_TP_ATR_MULTIPLIER = _env_float("SIGNAL_TP_ATR_MULTIPLIER", 1.5)
@@ -347,6 +370,38 @@ COMMODITIES = _assets["commodities"]
 
 def normalize_symbol_key(value: str) -> str:
     return "".join(ch for ch in (value or "").upper() if ch.isalnum())
+
+
+_CRYPTO_KEYS = {normalize_symbol_key(p) for p in CRYPTO_PAIRS}
+_COMMODITY_KEYS = {normalize_symbol_key(p) for p in COMMODITIES}
+_STOCK_KEYS = {normalize_symbol_key(p) for p in STOCK_TICKERS}
+
+
+def classify_instrument_class(pair: str) -> str:
+    """"forex" | "crypto" | "commodities" | "stocks" - forex is the
+    default/fallback for anything not found in the other three lists
+    (matches how FOREX_SESSIONS already works as the catch-all currency-
+    pair source elsewhere in this codebase, e.g. scanner.py)."""
+    key = normalize_symbol_key(pair)
+    if key in _CRYPTO_KEYS:
+        return "crypto"
+    if key in _COMMODITY_KEYS:
+        return "commodities"
+    if key in _STOCK_KEYS:
+        return "stocks"
+    return "forex"
+
+
+_ENTRY_DRIFT_PERCENT_BY_CLASS = {
+    "forex": MAX_ENTRY_DRIFT_PERCENT_FOREX,
+    "crypto": MAX_ENTRY_DRIFT_PERCENT_CRYPTO,
+    "commodities": MAX_ENTRY_DRIFT_PERCENT_COMMODITIES,
+    "stocks": MAX_ENTRY_DRIFT_PERCENT_STOCKS,
+}
+
+
+def entry_drift_percent_for_pair(pair: str) -> float:
+    return _ENTRY_DRIFT_PERCENT_BY_CLASS[classify_instrument_class(pair)]
 
 
 SYMBOL_ALIASES = {

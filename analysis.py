@@ -26,6 +26,7 @@ from config import (
     ML_BUY_SCORE_THRESHOLD,
     ML_SELL_SCORE_THRESHOLD,
     broker_symbol_key,
+    entry_drift_percent_for_pair,
 )
 from ctrader_open_api.messages.OpenApiMessages_pb2 import (
     ProtoOAGetTrendbarsReq,
@@ -48,7 +49,6 @@ PERIOD_MAP = {
 MARKET_DATA_TIMEOUT = 45
 CPU_ANALYSIS_TIMEOUT = 30
 PRICE_FRESH_SECONDS = 60
-MAX_ENTRY_DRIFT_PERCENT = 0.005
 MARKET_DATA_REQUEST_INTERVAL_SECONDS = max(0.0, MARKET_DATA_REQUEST_INTERVAL_MS / 1000.0)
 
 MODEL_FEATURE_NAMES = ["ATR", "ADX", "RSI", "EMA50", "EMA200"]
@@ -378,7 +378,16 @@ def _confirmed_verdict(verdict_a: str, verdict_b: str) -> str:
     return "NEUTRAL"
 
 
-def _entry_drift_block_reason(verdict: str, signal_price, live_price) -> str | None:
+def _entry_drift_block_reason(verdict: str, signal_price, live_price, pair: str) -> str | None:
+    """AUDIT FIX (2026-08-15, high): the threshold used to be ONE flat
+    0.005% for every instrument this module scans - forex, crypto,
+    commodities, stocks - despite their typical volatility differing by
+    orders of magnitude (0.005% of a BTCUSD price near $60k is ~$3, easily
+    crossed by ordinary noise within the seconds a scan takes; the same
+    0.005% is a much rarer, more meaningful move for a calm forex major).
+    Now looks up a per-instrument-class threshold via config.
+    entry_drift_percent_for_pair - see its own definition for the
+    (not yet empirically tuned) per-class values."""
     if not _is_directional(verdict):
         return None
     if not isinstance(signal_price, (int, float)) or not isinstance(live_price, (int, float)):
@@ -387,7 +396,7 @@ def _entry_drift_block_reason(verdict: str, signal_price, live_price) -> str | N
         return None
 
     drift_percent = abs((live_price - signal_price) / signal_price) * 100
-    if drift_percent < MAX_ENTRY_DRIFT_PERCENT:
+    if drift_percent < entry_drift_percent_for_pair(pair):
         return None
 
     if verdict == "BUY" and live_price < signal_price:
@@ -504,7 +513,7 @@ def _analysis_flow(client, symbol_cache, symbol, user_id, timeframe="5m", lang: 
                 "Вхід заблоковано: таймфрейми не підтвердили один напрямок"
             )
 
-        drift_reason = _entry_drift_block_reason(confirmed_verdict, signal_price, live_price)
+        drift_reason = _entry_drift_block_reason(confirmed_verdict, signal_price, live_price, pair_norm)
         if drift_reason:
             reasons.append(drift_reason)
 

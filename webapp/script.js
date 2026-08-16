@@ -50,6 +50,16 @@ let signalEventSource = null;
 let priceEventSource = null;
 
 const debouncedFetchSignal = debounce(fetchSignal, 300);
+// KNOWN DIVERGENCE (2026-08-15): the backend (analysis.py) split this into
+// per-instrument-class thresholds (forex/crypto/commodities/stocks -
+// config.entry_drift_percent_for_pair) after finding one flat 0.005%
+// silently suppressed far more valid crypto/commodity signals than forex
+// ones. This client-side copy still uses the old flat 0.005% for every
+// pair - it's only a local re-check for a snappier UI warning without a
+// server round-trip, not what actually gates is_trade_allowed server-side,
+// so it's not urgent, but it will now disagree with the backend for
+// non-forex pairs (warning less readily than the server actually blocks).
+// Not fixed here - flagging as a follow-up rather than leaving it silent.
 const MAX_ENTRY_DRIFT_PERCENT_CLIENT = 0.005;
 const WATCHLIST_STORAGE_KEY = "zigzag_watchlist";
 const LANG_STORAGE_KEY = "zigzag_language";

@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import pandas as pd
 
 import analysis
+import config
 import ml_models
 
 
@@ -67,6 +68,42 @@ class AnalysisContractTest(unittest.TestCase):
         self.assertEqual(payload["score"], 50)
         self.assertFalse(payload["is_trade_allowed"])
         self.assertIsInstance(payload["reasons"], list)
+
+
+class EntryDriftBlockReasonTest(unittest.TestCase):
+    """AUDIT FIX (2026-08-15, high): _entry_drift_block_reason used to
+    apply ONE flat 0.005% threshold to every instrument (forex, crypto,
+    commodities, stocks), silently suppressing far more valid signals for
+    volatile instruments than calm ones. Now looks up a per-instrument-
+    class threshold via config.entry_drift_percent_for_pair."""
+
+    def test_forex_pair_blocked_only_past_the_tight_forex_threshold(self):
+        signal_price = 1.10000
+        # A move just under BTC's much wider crypto threshold but past
+        # forex's tight one - must still block for a forex pair.
+        drift = config.MAX_ENTRY_DRIFT_PERCENT_CRYPTO / 100.0 * 0.5
+        live_price = signal_price * (1 - drift - 0.0001)  # a bit past forex's own threshold too
+
+        reason = analysis._entry_drift_block_reason("BUY", signal_price, live_price, "EURUSD")
+        self.assertIsNotNone(reason)
+
+    def test_crypto_pair_not_blocked_by_a_move_that_would_block_forex(self):
+        # Same relative move that WOULD block a forex pair (comfortably
+        # past MAX_ENTRY_DRIFT_PERCENT_FOREX) must NOT block a crypto pair,
+        # since crypto's own threshold is deliberately much wider.
+        signal_price = 60000.0
+        forex_drift = config.MAX_ENTRY_DRIFT_PERCENT_FOREX / 100.0
+        live_price = signal_price * (1 - forex_drift * 2)  # well past forex's threshold
+
+        self.assertIsNotNone(analysis._entry_drift_block_reason("BUY", signal_price, live_price, "EURUSD"))
+        self.assertIsNone(analysis._entry_drift_block_reason("BUY", signal_price, live_price, "BTCUSD"))
+
+    def test_crypto_pair_blocked_once_past_its_own_wider_threshold(self):
+        signal_price = 60000.0
+        crypto_drift = config.MAX_ENTRY_DRIFT_PERCENT_CRYPTO / 100.0
+        live_price = signal_price * (1 - crypto_drift * 2)
+
+        self.assertIsNotNone(analysis._entry_drift_block_reason("BUY", signal_price, live_price, "BTCUSD"))
 
 
 if __name__ == "__main__":
