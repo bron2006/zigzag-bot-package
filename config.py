@@ -97,6 +97,16 @@ MARKET_DATA_CACHE_TTL_SECONDS = _env_int("MARKET_DATA_CACHE_TTL_SECONDS", 20) or
 MARKET_DATA_REQUEST_INTERVAL_MS = _env_int("MARKET_DATA_REQUEST_INTERVAL_MS", 400) or 400
 MARKET_DATA_MAX_CONCURRENT_REQUESTS = _env_int("MARKET_DATA_MAX_CONCURRENT_REQUESTS", 1) or 1
 MIN_ATR_PERCENTAGE = _env_float("MIN_ATR_PERCENTAGE", 0.05)
+# "Monday signal drought" fix (2026-08-17, per external consultation) -
+# see CLAUDE.md and get_market_data's own comment (analysis.py) for the
+# full incident: get_market_data's lookback window is fixed calendar
+# time, so right after a weekend forex closure it mostly covers closed-
+# market time and comes back short of the bars _run_technical_analysis
+# needs (confirmed live: 177 of 300 requested 5m bars), which then
+# silently suppresses signals bot-wide for hours. Widens the window by
+# this factor on Saturday/Sunday/Monday (UTC) only - every other weekday
+# keeps the normal, un-widened window.
+MARKET_DATA_WEEKEND_LOOKBACK_MULTIPLIER = _env_float("MARKET_DATA_WEEKEND_LOOKBACK_MULTIPLIER", 3.5)
 
 # Entry-drift block (audit fix, 2026-08-15): how much price is allowed to
 # have moved between the signal's own price and the live price before a

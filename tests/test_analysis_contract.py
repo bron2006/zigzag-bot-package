@@ -1,5 +1,7 @@
 import unittest
+from datetime import datetime, timezone
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pandas as pd
 
@@ -104,6 +106,32 @@ class EntryDriftBlockReasonTest(unittest.TestCase):
         live_price = signal_price * (1 - crypto_drift * 2)
 
         self.assertIsNotNone(analysis._entry_drift_block_reason("BUY", signal_price, live_price, "BTCUSD"))
+
+
+class MarketDataLookbackMultiplierTest(unittest.TestCase):
+    """"Monday signal drought" fix (2026-08-17, see CLAUDE.md): forex is
+    closed roughly Fri ~21:00 UTC to Sun ~22:00 UTC, so a fixed-size
+    lookback window can come back short of real bars for hours after the
+    weekend reopen. get_market_data widens its window on Sat/Sun/Mon
+    (UTC) only - every other weekday keeps the normal window."""
+
+    def _weekday(self, year, month, day):
+        with patch("analysis.datetime") as mock_dt:
+            mock_dt.now.return_value = datetime(year, month, day, 12, 0, tzinfo=timezone.utc)
+            return analysis._market_data_lookback_multiplier()
+
+    def test_saturday_uses_the_widened_multiplier(self):
+        self.assertEqual(self._weekday(2026, 8, 15), config.MARKET_DATA_WEEKEND_LOOKBACK_MULTIPLIER)
+
+    def test_sunday_uses_the_widened_multiplier(self):
+        self.assertEqual(self._weekday(2026, 8, 16), config.MARKET_DATA_WEEKEND_LOOKBACK_MULTIPLIER)
+
+    def test_monday_uses_the_widened_multiplier(self):
+        self.assertEqual(self._weekday(2026, 8, 17), config.MARKET_DATA_WEEKEND_LOOKBACK_MULTIPLIER)
+
+    def test_a_normal_weekday_uses_the_unwidened_multiplier(self):
+        # Wednesday - a normal midweek trading day.
+        self.assertEqual(self._weekday(2026, 8, 19), 1.0)
 
 
 if __name__ == "__main__":
