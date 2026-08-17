@@ -130,6 +130,17 @@ MIN_ATR_PERCENTAGE = _env_float("MIN_ATR_PERCENTAGE", 0.05)
 # keeps the normal, un-widened window.
 MARKET_DATA_WEEKEND_LOOKBACK_MULTIPLIER = _env_float("MARKET_DATA_WEEKEND_LOOKBACK_MULTIPLIER", 3.5)
 
+# Defense-in-depth cap on SpotwareConnect._pending_data_requests (2026-08-17,
+# per external consultation, following up on the 2026-08-17 auth-sequencing
+# fix). Each queued request already self-clears via its own
+# responseTimeoutInSeconds timeout and the whole queue is already cleared on
+# every disconnect/stop/host-switch, so unbounded growth wasn't reproduced -
+# this is an extra ceiling in case some future caller queues requests faster
+# than they can time out (e.g. a very tight scan interval against a
+# long-hanging auth handshake). Once hit, new requests fail immediately
+# instead of queuing.
+SPOTWARE_MAX_PENDING_DATA_REQUESTS = _env_int("SPOTWARE_MAX_PENDING_DATA_REQUESTS", 50) or 50
+
 # Entry-drift block (audit fix, 2026-08-15): how much price is allowed to
 # have moved between the signal's own price and the live price before a
 # trade is blocked as "already moved against you". Used to be ONE flat

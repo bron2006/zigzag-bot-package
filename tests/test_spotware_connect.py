@@ -13,6 +13,8 @@ from ctrader_open_api.messages.OpenApiMessages_pb2 import (
     ProtoOAGetTrendbarsReq,
 )
 from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOAPayloadType
+
+import config
 from spotware_connect import SpotwareConnect
 
 
@@ -112,6 +114,22 @@ class SpotwareConnectQueueTest(unittest.TestCase):
         self.assertTrue(outer.called)
         self.assertEqual(self.sc._pending_data_requests, [])
         outer.addErrback(lambda failure: None)
+
+    def test_queue_has_a_size_cap(self):
+        # Defense-in-depth (2026-08-17, per external consultation): each
+        # queued item already self-clears via its own timeout, and the
+        # queue is already cleared on disconnect/stop/host-switch - this
+        # just proves the extra ceiling actually holds.
+        for i in range(config.SPOTWARE_MAX_PENDING_DATA_REQUESTS):
+            outer = self.sc.send(ProtoOAGetTrendbarsReq(ctidTraderAccountId=1, symbolId=i))
+            outer.addErrback(lambda failure: None)
+        self.assertEqual(len(self.sc._pending_data_requests), config.SPOTWARE_MAX_PENDING_DATA_REQUESTS)
+
+        overflow = self.sc.send(ProtoOAGetTrendbarsReq(ctidTraderAccountId=1, symbolId=9999))
+        overflow.addErrback(lambda failure: None)
+
+        # The overflow request must not have been added to the queue.
+        self.assertEqual(len(self.sc._pending_data_requests), config.SPOTWARE_MAX_PENDING_DATA_REQUESTS)
 
 
 if __name__ == "__main__":

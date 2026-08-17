@@ -23,7 +23,12 @@ from ctrader_open_api.messages.OpenApiMessages_pb2 import (
 from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOAPayloadType
 from ctrader_open_api.tcpProtocol import TcpProtocol
 
-from config import get_ctrader_proto_hosts, get_ctrader_proto_port, get_demo_account_id
+from config import (
+    SPOTWARE_MAX_PENDING_DATA_REQUESTS,
+    get_ctrader_proto_hosts,
+    get_ctrader_proto_port,
+    get_demo_account_id,
+)
 from state import app_state
 
 logger = logging.getLogger(__name__)
@@ -173,6 +178,23 @@ class SpotwareConnect(EventEmitter):
                 responseTimeoutInSeconds=responseTimeoutInSeconds,
                 **params,
             )
+
+        # Defense-in-depth cap (2026-08-17, per external consultation): each
+        # queued item already self-clears via its own timeout below, and the
+        # whole queue is already cleared on disconnect/stop/host-switch, so
+        # this ceiling is a belt-and-suspenders guard against some future
+        # caller queuing faster than items can time out, not a fix for a
+        # reproduced leak.
+        if len(self._pending_data_requests) >= SPOTWARE_MAX_PENDING_DATA_REQUESTS:
+            logger.error(
+                "cTrader auth queue is full (%d pending) - failing %s instead of queuing",
+                len(self._pending_data_requests), type(message).__name__,
+            )
+            outer = Deferred()
+            reactor.callLater(0, outer.errback, Exception(
+                f"cTrader auth request queue is full ({SPOTWARE_MAX_PENDING_DATA_REQUESTS} pending)"
+            ))
+            return outer
 
         logger.info(
             "Queuing %s until cTrader account auth completes (%d already queued)",
