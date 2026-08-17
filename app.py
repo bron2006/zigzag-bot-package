@@ -96,6 +96,9 @@ def _start_background_services() -> None:
         logger.exception("Не вдалося запустити cTrader client")
 
     _start_loop(60.0, scanner.scan_markets_once, now=False, name="scanner")
+    _start_loop(
+        config.SCANNER_CRYPTO_INTERVAL_SECONDS, scanner.scan_crypto_once, now=False, name="scanner_crypto"
+    )
     _start_loop(30.0, ctrader.monitor_price_stream_health, now=False, name="price_watchdog")
     _start_loop(120.0, db.refresh_cached_user_statuses, now=False, name="user_status_cache")
     _start_loop(0.2, api.drain_sse_events, now=False, name="sse_drain")

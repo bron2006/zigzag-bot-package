@@ -92,6 +92,28 @@ SCANNER_COOLDOWN_SECONDS = _env_int("SCANNER_COOLDOWN_SECONDS", 300)
 SCANNER_BATCH_SIZE = _env_int("SCANNER_BATCH_SIZE", 8) or 8
 SCANNER_MANUAL_PRIORITY_WINDOW_SECONDS = _env_int("SCANNER_MANUAL_PRIORITY_WINDOW_SECONDS", 20) or 20
 SCANNER_RATE_LIMIT_PAUSE_SECONDS = _env_int("SCANNER_RATE_LIMIT_PAUSE_SECONDS", 180) or 180
+# Dedicated, faster crypto scan cadence (2026-08-17, per external
+# consultation): the main "scanner" loop (60s tick) rotates ALL enabled
+# categories - forex (active sessions only), crypto, commodities, watchlist -
+# through ONE shared SCANNER_BATCH_SIZE-sized batch per tick. Crypto trades
+# 24/7 with no session gating, so mixed into that one rotation it can go
+# ~10+ minutes between rescans of the same pair (e.g. ~85 total assets /
+# batch 8 = ~11 ticks x 60s). This gives crypto its OWN loop (see app.py's
+# _start_loop("scanner_crypto", ...)) and its own rotating cursor, so each
+# crypto pair gets rescanned roughly every ceil(len(CRYPTO_PAIRS) /
+# SCANNER_CRYPTO_BATCH_SIZE) * SCANNER_CRYPTO_INTERVAL_SECONDS - with the
+# defaults below (38 pairs, batch 8, 20s) that's ~100s instead of ~11min.
+#
+# Rate-limit safety: this does NOT raise the actual request rate to
+# cTrader - analysis.py's MARKET_DATA_MAX_CONCURRENT_REQUESTS/
+# MARKET_DATA_REQUEST_INTERVAL_MS (a single shared semaphore + pacing gate
+# ALL scanning, including this loop, funnels through) already caps that at
+# ~1 request/400ms regardless of how many logical loops call it. A faster
+# crypto cadence just means crypto pairs get a larger share of that same
+# fixed, already-safe budget, interleaved with forex/watchlist - it cannot
+# by itself trigger RATE_LIMIT_BLOCKED/REQUEST_FREQUENCY_EXCEEDED.
+SCANNER_CRYPTO_INTERVAL_SECONDS = _env_float("SCANNER_CRYPTO_INTERVAL_SECONDS", 20.0)
+SCANNER_CRYPTO_BATCH_SIZE = _env_int("SCANNER_CRYPTO_BATCH_SIZE", 8) or 8
 ANALYSIS_CACHE_TTL_SECONDS = _env_int("ANALYSIS_CACHE_TTL_SECONDS", 20) or 20
 MARKET_DATA_CACHE_TTL_SECONDS = _env_int("MARKET_DATA_CACHE_TTL_SECONDS", 20) or 20
 MARKET_DATA_REQUEST_INTERVAL_MS = _env_int("MARKET_DATA_REQUEST_INTERVAL_MS", 400) or 400

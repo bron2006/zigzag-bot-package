@@ -1,6 +1,8 @@
+import time
 import unittest
 from unittest.mock import patch
 
+import config
 import scanner
 from state import app_state
 
@@ -65,6 +67,119 @@ class HandleAnalysisResultPriceSanityTest(unittest.TestCase):
         # Telegram send_signal call - the sanity guard isn't blocking
         # either, unlike the implausible-price case above.
         self.assertTrue(mock_defer.called)
+
+
+class TakeBatchTest(unittest.TestCase):
+    """_take_batch is the pure helper shared by the main and crypto
+    rotations (2026-08-17, per external consultation) - no globals, so it's
+    testable directly without touching scanner module state."""
+
+    def test_small_list_returns_everything_and_resets_the_cursor(self):
+        batch, cursor = scanner._take_batch(["A", "B"], cursor=5, batch_size=8)
+        self.assertEqual(batch, ["A", "B"])
+        self.assertEqual(cursor, 0)
+
+    def test_rotates_across_calls_and_wraps_around(self):
+        assets = [f"P{i}" for i in range(10)]
+
+        batch1, cursor1 = scanner._take_batch(assets, cursor=0, batch_size=4)
+        self.assertEqual(batch1, ["P0", "P1", "P2", "P3"])
+
+        batch2, cursor2 = scanner._take_batch(assets, cursor=cursor1, batch_size=4)
+        self.assertEqual(batch2, ["P4", "P5", "P6", "P7"])
+
+        batch3, _ = scanner._take_batch(assets, cursor=cursor2, batch_size=4)
+        self.assertEqual(batch3, ["P8", "P9", "P0", "P1"])
+
+    def test_empty_list_returns_empty_batch(self):
+        batch, cursor = scanner._take_batch([], cursor=3, batch_size=4)
+        self.assertEqual(batch, [])
+        self.assertEqual(cursor, 0)
+
+
+class CollectAssetsCryptoSplitTest(unittest.TestCase):
+    """Crypto pairs get a dedicated, faster-cadence loop (2026-08-17, per
+    external consultation) instead of sharing the main loop's single
+    rotation - _collect_assets_to_scan must never include them, even with
+    the crypto toggle on."""
+
+    def setUp(self):
+        self._saved_state = dict(app_state.SCANNER_STATE)
+
+    def tearDown(self):
+        app_state.SCANNER_STATE.clear()
+        app_state.SCANNER_STATE.update(self._saved_state)
+
+    def test_main_collector_excludes_crypto_even_when_enabled(self):
+        app_state.SCANNER_STATE["forex"] = False
+        app_state.SCANNER_STATE["crypto"] = True
+        app_state.SCANNER_STATE["commodities"] = False
+        app_state.SCANNER_STATE["watchlist"] = False
+
+        assets = scanner._collect_assets_to_scan()
+
+        crypto_keys = {p.replace("/", "").upper() for p in config.CRYPTO_PAIRS}
+        self.assertEqual(set(assets) & crypto_keys, set())
+
+    def test_crypto_collector_is_empty_when_disabled(self):
+        app_state.SCANNER_STATE["crypto"] = False
+        self.assertEqual(scanner._collect_crypto_assets_to_scan(), [])
+
+    def test_crypto_collector_returns_all_crypto_pairs_when_enabled(self):
+        app_state.SCANNER_STATE["crypto"] = True
+        assets = scanner._collect_crypto_assets_to_scan()
+        self.assertEqual(len(assets), len(config.CRYPTO_PAIRS))
+
+
+class ScanCryptoOnceTest(unittest.TestCase):
+    def setUp(self):
+        self._saved_crypto_state = app_state.SCANNER_STATE.get("crypto")
+        self._saved_cursor = scanner._crypto_scan_cursor
+        self._saved_active = scanner._crypto_scan_active
+        self._saved_paused_until = scanner._scanner_paused_until
+        scanner._crypto_scan_cursor = 0
+        scanner._crypto_scan_active = False
+        scanner._scanner_paused_until = 0.0
+
+    def tearDown(self):
+        app_state.SCANNER_STATE["crypto"] = self._saved_crypto_state
+        scanner._crypto_scan_cursor = self._saved_cursor
+        scanner._crypto_scan_active = self._saved_active
+        scanner._scanner_paused_until = self._saved_paused_until
+
+    def test_does_nothing_when_crypto_is_disabled(self):
+        app_state.SCANNER_STATE["crypto"] = False
+        with patch.object(scanner, "_process_one_asset") as mock_process:
+            scanner.scan_crypto_once()
+        mock_process.assert_not_called()
+
+    def test_processes_a_batch_when_crypto_is_enabled(self):
+        from twisted.internet.defer import succeed
+
+        app_state.SCANNER_STATE["crypto"] = True
+        with patch.object(scanner, "_process_one_asset", return_value=succeed(None)) as mock_process:
+            scanner.scan_crypto_once()
+
+        self.assertTrue(mock_process.called)
+        self.assertLessEqual(mock_process.call_count, config.SCANNER_CRYPTO_BATCH_SIZE)
+
+    def test_skips_while_a_previous_cycle_is_still_running(self):
+        app_state.SCANNER_STATE["crypto"] = True
+        scanner._crypto_scan_active = True
+
+        with patch.object(scanner, "_process_one_asset") as mock_process:
+            scanner.scan_crypto_once()
+
+        mock_process.assert_not_called()
+
+    def test_respects_the_shared_rate_limit_pause(self):
+        app_state.SCANNER_STATE["crypto"] = True
+        scanner._scanner_paused_until = time.time() + 60
+
+        with patch.object(scanner, "_process_one_asset") as mock_process:
+            scanner.scan_crypto_once()
+
+        mock_process.assert_not_called()
 
 
 if __name__ == "__main__":

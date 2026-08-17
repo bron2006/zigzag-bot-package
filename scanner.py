@@ -19,6 +19,7 @@ from config import (
     CRYPTO_PAIRS,
     FOREX_SESSIONS,
     SCANNER_BATCH_SIZE,
+    SCANNER_CRYPTO_BATCH_SIZE,
     SESSION_WINDOWS_UTC,
     SCANNER_COOLDOWN_SECONDS,
     SCANNER_MANUAL_PRIORITY_WINDOW_SECONDS,
@@ -42,6 +43,16 @@ _scan_semaphore = DeferredSemaphore(tokens=_MAX_CONCURRENT_ANALYSIS)
 _scan_active = False
 _scan_cursor = 0
 _scanner_paused_until = 0.0
+
+# Dedicated crypto scan loop (2026-08-17, see config.SCANNER_CRYPTO_
+# INTERVAL_SECONDS's comment) - own cursor and own "already running" guard
+# so a slow crypto batch can't block/be blocked by the main forex/
+# commodities/watchlist loop, but shares _scan_semaphore (so combined
+# concurrent analysis across both loops still never exceeds
+# _MAX_CONCURRENT_ANALYSIS) and _scanner_paused_until (a rate-limit pause
+# applies to both loops).
+_crypto_scan_active = False
+_crypto_scan_cursor = 0
 
 
 def _pair_key(pair: str) -> str:
@@ -82,6 +93,14 @@ def _get_active_forex_sessions() -> list:
 
 @safe_call("collect_assets", threshold=5, default=[])
 def _collect_assets_to_scan() -> list:
+    # Crypto pairs (config.CRYPTO_PAIRS) are NOT collected here - see
+    # scan_crypto_once/_collect_crypto_assets_to_scan below. Crypto trades
+    # 24/7 with no session gating, so it gets its own, faster-cadence
+    # rotation instead of sharing this loop's single SCANNER_BATCH_SIZE
+    # batch with forex/commodities/watchlist. A crypto pair reachable via
+    # the watchlist branch below is scanned by both loops - harmless,
+    # ANALYSIS_CACHE_TTL_SECONDS-based caching in analysis.py absorbs the
+    # overlap.
     assets = []
 
     if app_state.get_scanner_state("forex"):
@@ -90,9 +109,6 @@ def _collect_assets_to_scan() -> list:
 
         for session_name in active_sessions:
             assets.extend(FOREX_SESSIONS.get(session_name, []))
-
-    if app_state.get_scanner_state("crypto"):
-        assets.extend(CRYPTO_PAIRS)
 
     if app_state.get_scanner_state("commodities"):
         assets.extend(COMMODITIES)
@@ -106,6 +122,17 @@ def _collect_assets_to_scan() -> list:
                 if _pair_key(pair) in configured
             )
 
+    return _dedupe_pairs(assets)
+
+
+@safe_call("collect_crypto_assets", threshold=5, default=[])
+def _collect_crypto_assets_to_scan() -> list:
+    if not app_state.get_scanner_state("crypto"):
+        return []
+    return _dedupe_pairs(CRYPTO_PAIRS)
+
+
+def _dedupe_pairs(assets: list[str]) -> list[str]:
     seen = set()
     normalized = []
 
@@ -134,20 +161,32 @@ def pause_scanning_for_rate_limit(reason: str, seconds: int | None = None) -> No
     )
 
 
+def _take_batch(assets: list[str], cursor: int, batch_size: int) -> tuple[list[str], int]:
+    """Pure helper shared by the main and crypto rotations: returns (batch,
+    new_cursor) - no globals, so each caller manages its own cursor."""
+    if not assets:
+        return [], 0
+
+    if len(assets) <= batch_size:
+        return list(assets), 0
+
+    start = cursor % len(assets)
+    actual_batch_size = min(batch_size, len(assets))
+    batch = [assets[(start + offset) % len(assets)] for offset in range(actual_batch_size)]
+    return batch, (start + actual_batch_size) % len(assets)
+
+
 def _take_scan_batch(assets: list[str]) -> list[str]:
     global _scan_cursor
 
-    if not assets:
-        return []
+    batch, _scan_cursor = _take_batch(assets, _scan_cursor, SCANNER_BATCH_SIZE)
+    return batch
 
-    if len(assets) <= SCANNER_BATCH_SIZE:
-        _scan_cursor = 0
-        return list(assets)
 
-    start = _scan_cursor % len(assets)
-    batch_size = min(SCANNER_BATCH_SIZE, len(assets))
-    batch = [assets[(start + offset) % len(assets)] for offset in range(batch_size)]
-    _scan_cursor = (start + batch_size) % len(assets)
+def _take_crypto_scan_batch(assets: list[str]) -> list[str]:
+    global _crypto_scan_cursor
+
+    batch, _crypto_scan_cursor = _take_batch(assets, _crypto_scan_cursor, SCANNER_CRYPTO_BATCH_SIZE)
     return batch
 
 
@@ -411,6 +450,62 @@ def scan_markets_once() -> None:
         global _scan_active
         _scan_active = False
         logger.error("SCANNER: цикл завершився з помилкою: %s", failure.getErrorMessage())
+        return None
+
+    dl.addCallbacks(_finish, _finish_err)
+
+
+@safe_call("scanner_crypto_loop", threshold=5, default=None)
+def scan_crypto_once() -> None:
+    """Dedicated, faster-cadence crypto rotation - see config.SCANNER_
+    CRYPTO_INTERVAL_SECONDS's comment for why. Structurally mirrors
+    scan_markets_once, but with its own cursor/"already running" guard;
+    shares _scan_semaphore (combined concurrency across both loops still
+    capped at _MAX_CONCURRENT_ANALYSIS) and _scanner_paused_until (a
+    rate-limit pause applies to both)."""
+    global _crypto_scan_active
+
+    now = time.time()
+    if _scanner_paused_until and now < _scanner_paused_until:
+        logger.info("SCANNER_CRYPTO: пауза через rate limit ще %ss", int(_scanner_paused_until - now))
+        return
+
+    manual_age = app_state.last_manual_analysis_age()
+    if manual_age is not None and manual_age < SCANNER_MANUAL_PRIORITY_WINDOW_SECONDS:
+        logger.info("SCANNER_CRYPTO: пропускаю цикл, ручний аналіз був %ss тому", int(manual_age))
+        return
+
+    if _crypto_scan_active:
+        logger.warning("SCANNER_CRYPTO: попередній цикл ще триває, пропускаємо новий запуск")
+        return
+
+    assets = _collect_crypto_assets_to_scan()
+    if not assets:
+        return
+
+    batch = _take_crypto_scan_batch(assets)
+    if not batch:
+        return
+
+    logger.info(
+        "SCANNER_CRYPTO: реальний батч %s/%s активів (batch_size=%s)",
+        len(batch), len(assets), SCANNER_CRYPTO_BATCH_SIZE,
+    )
+    _crypto_scan_active = True
+
+    deferreds = [_scan_semaphore.run(_process_one_asset, asset) for asset in batch]
+    dl = DeferredList(deferreds, consumeErrors=True)
+
+    def _finish(_):
+        global _crypto_scan_active
+        _crypto_scan_active = False
+        logger.info("SCANNER_CRYPTO: цикл завершено")
+        return None
+
+    def _finish_err(failure):
+        global _crypto_scan_active
+        _crypto_scan_active = False
+        logger.error("SCANNER_CRYPTO: цикл завершився з помилкою: %s", failure.getErrorMessage())
         return None
 
     dl.addCallbacks(_finish, _finish_err)
