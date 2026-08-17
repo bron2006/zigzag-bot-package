@@ -50,6 +50,17 @@ class EventEmitter:
 
 
 class SpotwareConnect(EventEmitter):
+    # AUDIT FIX (2026-08-17, critical): these three ARE the auth handshake
+    # itself (app auth -> account list -> account auth) and must always go
+    # out immediately, even before self.is_authorized - everything else
+    # gets queued by send() until authorization is confirmed. See send()'s
+    # own comment for the incident this addresses.
+    _AUTH_HANDSHAKE_TYPES = (
+        ProtoOAApplicationAuthReq,
+        ProtoOAGetAccountListByAccessTokenReq,
+        ProtoOAAccountAuthReq,
+    )
+
     def __init__(self, client_id, client_secret):
         super().__init__()
 
@@ -65,6 +76,18 @@ class SpotwareConnect(EventEmitter):
         self._refresh_in_progress = False
         self._app_auth_completed = False
         self._oauth_client = CTraderAuth(client_id or "", client_secret or "", "")
+        # AUDIT FIX (2026-08-17, critical, live finding): ProtoOAGetTrendbarsReq
+        # (and other data requests) were observed going out before
+        # ProtoOAAccountAuthRes confirmed the account was authorized,
+        # getting rejected by cTrader with "Trading account is not
+        # authorized" - 0 bars back, every pair falls to WAIT. Callers
+        # (analysis.py, ctrader.py) already check client.account_id before
+        # sending, but that's a scattered, per-caller convention that's
+        # easy to get wrong or bypass; this queue makes the guarantee
+        # structural, in the one place all outgoing requests funnel
+        # through (send(), below), instead of relying on every call site
+        # getting the check right.
+        self._pending_data_requests = []
 
         self._client = self._create_client(self.host)
 
@@ -91,6 +114,7 @@ class SpotwareConnect(EventEmitter):
         self._stopping = True
         self.is_authorized = False
         self._app_auth_completed = False
+        self._fail_pending_data_requests(f"switching host from {old_host} to {self.host}")
 
         logger.warning(
             "cTrader app auth failed on %s. Switching to backup host %s:%s",
@@ -123,6 +147,7 @@ class SpotwareConnect(EventEmitter):
     def stop(self):
         self._stopping = True
         self.is_authorized = False
+        self._fail_pending_data_requests("stop() called")
 
         try:
             stop_method = getattr(self._client, "stopService", None)
@@ -136,12 +161,59 @@ class SpotwareConnect(EventEmitter):
         if timeout_alias is not None:
             responseTimeoutInSeconds = timeout_alias
 
-        return self._client.send(
-            message,
-            clientMsgId=clientMsgId,
-            responseTimeoutInSeconds=responseTimeoutInSeconds,
-            **params,
+        # AUDIT FIX (2026-08-17, critical): everything except the auth
+        # handshake itself queues here until self.is_authorized is True -
+        # see __init__'s comment and _flush_pending_data_requests for the
+        # incident this addresses (data requests going out before account
+        # auth completed, rejected by cTrader as unauthorized).
+        if self.is_authorized or isinstance(message, self._AUTH_HANDSHAKE_TYPES):
+            return self._client.send(
+                message,
+                clientMsgId=clientMsgId,
+                responseTimeoutInSeconds=responseTimeoutInSeconds,
+                **params,
+            )
+
+        logger.info(
+            "Queuing %s until cTrader account auth completes (%d already queued)",
+            type(message).__name__, len(self._pending_data_requests),
         )
+        outer = Deferred()
+        entry = [message, clientMsgId, responseTimeoutInSeconds, params, outer]
+        self._pending_data_requests.append(entry)
+
+        def _timeout_if_still_queued():
+            if entry in self._pending_data_requests:
+                self._pending_data_requests.remove(entry)
+                if not outer.called:
+                    outer.errback(Exception(
+                        "cTrader account auth did not complete before this queued "
+                        f"request ({type(message).__name__}) timed out"
+                    ))
+
+        reactor.callLater(responseTimeoutInSeconds, _timeout_if_still_queued)
+        return outer
+
+    def _flush_pending_data_requests(self):
+        pending, self._pending_data_requests = self._pending_data_requests, []
+        if pending:
+            logger.info("cTrader authorized - flushing %d queued request(s)", len(pending))
+        for message, clientMsgId, responseTimeoutInSeconds, params, outer in pending:
+            if outer.called:
+                continue
+            inner = self._client.send(
+                message,
+                clientMsgId=clientMsgId,
+                responseTimeoutInSeconds=responseTimeoutInSeconds,
+                **params,
+            )
+            inner.addCallbacks(outer.callback, outer.errback)
+
+    def _fail_pending_data_requests(self, reason: str):
+        pending, self._pending_data_requests = self._pending_data_requests, []
+        for _, _, _, _, outer in pending:
+            if not outer.called:
+                outer.errback(Exception(f"cTrader disconnected before this queued request could be sent: {reason}"))
 
     def _on_connected(self, client):
         logger.info("Connected to cTrader at %s:%s. Waiting 2s before Application Auth...", self.host, self.port)
@@ -150,6 +222,7 @@ class SpotwareConnect(EventEmitter):
     def _on_disconnected(self, client, reason=None):
         self.is_authorized = False
         self._client.account_id = None
+        self._fail_pending_data_requests(f"disconnected: {reason}")
 
         if self._stopping:
             logger.info("cTrader disconnected during intentional stop")
@@ -313,6 +386,7 @@ class SpotwareConnect(EventEmitter):
             self._client.account_id = res.ctidTraderAccountId
             self.is_authorized = True
             app_state.set_ctrader_auth_issue(None)
+            self._flush_pending_data_requests()
 
             logger.info("Step 2 OK. Account %s authorized.", res.ctidTraderAccountId)
             self.emit("ready")
@@ -351,6 +425,7 @@ class SpotwareConnect(EventEmitter):
                 self._client.account_id = account_id
 
             self.is_authorized = True
+            self._flush_pending_data_requests()
             logger.info("Account already authorized. Marking as ready.")
             self.emit("ready")
             return
