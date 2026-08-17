@@ -93,12 +93,28 @@ class PriceSanityReasonTest(unittest.TestCase):
         self.assertIsNotNone(reason)
         self.assertIn("1.10000", reason)
 
-    def test_missing_live_mid_has_nothing_to_compare(self):
+    def test_missing_live_mid_is_fail_closed_not_nothing_to_compare(self):
+        # FAIL-CLOSED (2026-08-17, same-day follow-up): the original
+        # fail-open version of this check let 7 more corrupted EURUSD
+        # signals through after the hotfix deployed, all with
+        # data_status.price.mid unavailable - this must now block, not
+        # silently allow through.
         result = {"price": 1.10000, "data_status": {"price": {"mid": None}}}
-        self.assertIsNone(signal_tracking.price_sanity_reason(result))
+        reason = signal_tracking.price_sanity_reason(result)
+        self.assertIsNotNone(reason)
+        self.assertIn("1.10000", reason)
 
-    def test_missing_data_status_has_nothing_to_compare(self):
-        self.assertIsNone(signal_tracking.price_sanity_reason({"price": 1.10000}))
+    def test_missing_data_status_is_fail_closed_not_nothing_to_compare(self):
+        reason = signal_tracking.price_sanity_reason({"price": 1.10000})
+        self.assertIsNotNone(reason)
+        self.assertIn("1.10000", reason)
+
+    def test_missing_entry_price_has_nothing_to_check_yet(self):
+        # Distinct from a missing live_mid: with no entry_price at all,
+        # there's nothing to sanity-check - that's maybe_record_signal's/
+        # scanner.py's own gating to handle, not this function's job.
+        result = {"price": None, "data_status": {"price": {"mid": 1.15800}}}
+        self.assertIsNone(signal_tracking.price_sanity_reason(result))
 
     def test_small_divergence_is_within_tolerance(self):
         # A few hundredths of a percent - normal instant timing/bid-ask

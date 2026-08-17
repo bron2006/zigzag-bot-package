@@ -50,18 +50,32 @@ def price_sanity_reason(result: dict) -> str | None:
     fallback defaults, live-price staleness, symbolId collisions) - this
     is a defense-in-depth plausibility check, not a root-cause fix.
 
-    Returns a human-readable reason if the two disagree by more than
-    config.SIGNAL_PRICE_SANITY_MAX_DIVERGENCE_PERCENT, else None (either
-    they agree, or one of them is missing and there's nothing to compare
-    - that's handled separately, this function never blocks on its own
-    absence)."""
-    entry_price = result.get("price")
-    live_mid = ((result.get("data_status") or {}).get("price") or {}).get("mid")
+    FAIL-CLOSED (2026-08-17, same-day follow-up): confirmed live that the
+    original fail-OPEN version of this check (treating a missing live_mid
+    as "nothing to compare, allow through") was the exact loophole letting
+    7 more corrupted EURUSD BUY signals through hours AFTER this hotfix
+    first deployed - every one of them had entry_price present but
+    data_status.price.mid unavailable at generation time. A present
+    entry_price with no live_mid to check it against is now treated as
+    implausible (blocked), not "unverifiable, therefore fine" - missing
+    entry_price itself is still handled separately by maybe_record_signal/
+    scanner.py's own is_signal gating, not by this function.
 
-    if not isinstance(entry_price, (int, float)) or not isinstance(live_mid, (int, float)):
-        return None
-    if entry_price <= 0 or live_mid <= 0:
-        return None
+    Returns a human-readable reason if entry_price can't be verified
+    against a live mid (missing/invalid live_mid) or if the two disagree
+    by more than config.SIGNAL_PRICE_SANITY_MAX_DIVERGENCE_PERCENT, else
+    None (nothing to check yet - entry_price itself missing/invalid - or
+    the two genuinely agree)."""
+    entry_price = result.get("price")
+    if not isinstance(entry_price, (int, float)) or entry_price <= 0:
+        return None  # nothing to sanity-check yet - handled elsewhere
+
+    live_mid = ((result.get("data_status") or {}).get("price") or {}).get("mid")
+    if not isinstance(live_mid, (int, float)) or live_mid <= 0:
+        return (
+            f"entry_price={entry_price:.5f} не можна перевірити на правдоподібність - "
+            "жива ціна (data_status.price.mid) недоступна"
+        )
 
     divergence_percent = abs(entry_price - live_mid) / live_mid * 100.0
     if divergence_percent <= SIGNAL_PRICE_SANITY_MAX_DIVERGENCE_PERCENT:
