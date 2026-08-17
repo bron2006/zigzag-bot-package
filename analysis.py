@@ -215,6 +215,12 @@ def _prepare_features(df: pd.DataFrame) -> Optional[pd.DataFrame]:
 
 
 def _run_technical_analysis(df: pd.DataFrame) -> Tuple[int, str, str]:
+    # TODO ("Monday signal drought", found 2026-08-17): this 250-bar floor
+    # is what actually fires right after a weekend forex reopen - see the
+    # window-sizing TODO on get_market_data's from_ts calculation for the
+    # full mechanism (fixed calendar-time lookback -> too few real bars ->
+    # this WAIT -> _analysis_flow's score averaging suppresses ALL
+    # signals for hours). Confirmed live, not fixed - see that TODO.
     if df is None or len(df) < 250:
         return 50, "WAIT", "Недостатньо історії"
 
@@ -499,6 +505,13 @@ def _analysis_flow(client, symbol_cache, symbol, user_id, timeframe="5m", lang: 
             elif not news_res.get("available", True):
                 reasons.append(f"Фільтр новин: {news_res['reason']} (вхід не блокується)")
 
+        # TODO ("Monday signal drought", found 2026-08-17): averaging in a
+        # WAIT-pinned score_b=50 (insufficient 5m history right after a
+        # weekend forex reopen) drags every pair's combined score toward
+        # 50 - see get_market_data's from_ts TODO for the root mechanism.
+        # Confirmed live: GBPUSD's 1m leg alone scored 78/SELL while its
+        # 5m leg sat at 50/WAIT, averaging to 64 - under the signal
+        # threshold. Not fixed here per user decision (2026-08-17).
         score = int((score_a + score_b) / 2)
         confirmed_verdict = _confirmed_verdict(verdict_a, verdict_b)
         verdict = "NEWS_WAIT" if news_v == "BLOCK" else confirmed_verdict
@@ -715,6 +728,27 @@ def get_market_data(client, symbol_cache, norm_pair: str, period: str, count: in
 
     now = int(time.time() * 1000)
     seconds = {"1m": 60, "5m": 300, "15m": 900}.get(period, 300)
+    # TODO (found 2026-08-17, "Monday signal drought" incident): this
+    # window is pure CALENDAR time, with no awareness of forex market
+    # hours. For period="5m"/count=300 that's a fixed 25h lookback - fine
+    # on a normal weekday, but forex is closed Fri ~21:00 UTC to Sun
+    # ~22:00 UTC. Right after the weekend reopen, a 25h window mostly
+    # covers closed-market time, so far fewer than 300 real bars come
+    # back (confirmed live: 177 bars instead of 300 on a Monday morning).
+    # _run_technical_analysis requires >=250 bars or it hard-returns
+    # (50, "WAIT", "Недостатньо історії") - see that function's own TODO.
+    # Since _analysis_flow averages the 1m and 5m scores, a WAIT-pinned 5m
+    # leg (score=50) drags every pair's combined score toward 50 and
+    # silently suppresses ALL signals bot-wide for several hours every
+    # Monday, even when the faster timeframe is confidently directional
+    # (confirmed live: GBPUSD 1m alone scored 78/SELL while the 5m leg
+    # sat at 50/WAIT, averaging out to 64 - well under the signal
+    # threshold). Self-resolves once enough post-reopen 5m bars
+    # accumulate (~250 bars = ~21h of open market, i.e. by Monday
+    # evening UTC) - not fixed here per user decision (2026-08-17): only
+    # documenting for now, no logic change. If this becomes worth fixing,
+    # options include a market-hours-aware lookback, a shorter min-bar
+    # requirement, or fetching more than `count` bars near a reopen.
     from_ts = now - (count * seconds * 1000)
 
     req = ProtoOAGetTrendbarsReq(
