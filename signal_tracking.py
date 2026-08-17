@@ -10,7 +10,8 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 import db
-from config import SIGNAL_OUTCOME_FLAT_THRESHOLD_PERCENT
+from config import SIGNAL_OUTCOME_FLAT_THRESHOLD_PERCENT, SIGNAL_PRICE_SANITY_MAX_DIVERGENCE_PERCENT
+from notifier import notify_admin
 from state import app_state
 
 logger = logging.getLogger("signal_tracking")
@@ -35,6 +36,43 @@ def compute_horizon_seconds(timeframe: str) -> int:
     return _HORIZON_BY_TIMEFRAME.get(timeframe, _DEFAULT_HORIZON_SECONDS)
 
 
+def price_sanity_reason(result: dict) -> str | None:
+    """HOTFIX (2026-08-17, critical, active incident): confirmed live in
+    production - EURUSD BUY signals on the 5m timeframe were repeatedly
+    recorded AND broadcast (scanner.py calls this before publishing to
+    the SSE stream binomo_executor.py --run consumes) with entry_price
+    stuck at exactly 1.10000 while the pair's real live price was ~1.158,
+    a ~4.3% gap between the two prices a single signal result carries:
+    result["price"] (trendbar-derived) and result["data_status"]["price"]
+    ["mid"] (live tick) - both meant to represent "right now", so a large
+    gap between them means one is wrong. The exact root cause was NOT
+    conclusively identified after investigation (ruled out: hardcoded
+    fallback defaults, live-price staleness, symbolId collisions) - this
+    is a defense-in-depth plausibility check, not a root-cause fix.
+
+    Returns a human-readable reason if the two disagree by more than
+    config.SIGNAL_PRICE_SANITY_MAX_DIVERGENCE_PERCENT, else None (either
+    they agree, or one of them is missing and there's nothing to compare
+    - that's handled separately, this function never blocks on its own
+    absence)."""
+    entry_price = result.get("price")
+    live_mid = ((result.get("data_status") or {}).get("price") or {}).get("mid")
+
+    if not isinstance(entry_price, (int, float)) or not isinstance(live_mid, (int, float)):
+        return None
+    if entry_price <= 0 or live_mid <= 0:
+        return None
+
+    divergence_percent = abs(entry_price - live_mid) / live_mid * 100.0
+    if divergence_percent <= SIGNAL_PRICE_SANITY_MAX_DIVERGENCE_PERCENT:
+        return None
+
+    return (
+        f"entry_price={entry_price:.5f} розходиться з живою ціною mid={live_mid:.5f} "
+        f"на {divergence_percent:.2f}% (поріг {SIGNAL_PRICE_SANITY_MAX_DIVERGENCE_PERCENT}%)"
+    )
+
+
 def maybe_record_signal(result: dict) -> int | None:
     """Record a pending SignalOutcome for a result the bot actually surfaced
     as a signal (is_trade_allowed=True, directional verdict). Safe to call
@@ -51,6 +89,15 @@ def maybe_record_signal(result: dict) -> int | None:
 
     if not pair or not isinstance(entry_price, (int, float)) or entry_price <= 0:
         logger.debug("Skipping outcome tracking for %s: no entry price", pair)
+        return None
+
+    sanity_reason = price_sanity_reason(result)
+    if sanity_reason:
+        logger.error("SIGNAL_OUTCOME: skipping implausible price for %s %s: %s", pair, verdict, sanity_reason)
+        notify_admin(
+            f"⚠️ Сигнал {pair} {verdict} пропущено: {sanity_reason}",
+            alert_key=f"signal_price_sanity_{pair}",
+        )
         return None
 
     horizon_seconds = compute_horizon_seconds(result.get("timeframe"))

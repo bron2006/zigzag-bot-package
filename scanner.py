@@ -28,7 +28,7 @@ from config import (
     get_chat_id,
 )
 from errors import safe_call
-from notifier import send_signal
+from notifier import notify_admin, send_signal
 from state import app_state
 
 logger = logging.getLogger("scanner")
@@ -220,6 +220,22 @@ def _handle_analysis_result(pair_norm: str, result: dict):
     app_state.latest_analysis_cache[pair_norm] = result
 
     if not is_signal:
+        return succeed(None)
+
+    # HOTFIX (2026-08-17, critical, active incident): confirmed live -
+    # EURUSD BUY signals on 5m kept firing with entry_price stuck at
+    # exactly 1.10000 (~4.3% off the real ~1.158 live price), and this
+    # same result dict is what gets published to the SSE stream
+    # binomo_executor.py --run consumes - so a bad price here doesn't
+    # just poison outcome-tracking stats, it can drive a real trade
+    # decision. See signal_tracking.price_sanity_reason's docstring.
+    sanity_reason = signal_tracking.price_sanity_reason(result)
+    if sanity_reason:
+        logger.error("[SCANNER] %s %s: implausible price, not firing signal: %s", pair_norm, verdict, sanity_reason)
+        notify_admin(
+            f"⚠️ Сигнал {pair_norm} {verdict} НЕ транслюється: {sanity_reason}",
+            alert_key=f"signal_price_sanity_{pair_norm}",
+        )
         return succeed(None)
 
     now = time.time()

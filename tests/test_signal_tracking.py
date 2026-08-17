@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 import signal_tracking
 
@@ -62,6 +63,48 @@ class MaybeRecordSignalTest(unittest.TestCase):
             "timeframe": "1m",
         }
         self.assertIsNone(signal_tracking.maybe_record_signal(result))
+
+    def test_skips_and_alerts_on_implausible_price(self):
+        # HOTFIX (2026-08-17): reproduces the active incident - EURUSD BUY
+        # signals recorded with entry_price stuck at 1.10000 while the
+        # live tick was ~1.158 (a ~4.3% gap). Must skip recording and
+        # alert the admin, not write a poisoned SignalOutcome row.
+        result = {
+            "is_trade_allowed": True,
+            "verdict_text": "BUY",
+            "pair": "EURUSD",
+            "price": 1.10000,
+            "timeframe": "5m",
+            "data_status": {"price": {"mid": 1.15800}},
+        }
+        with patch.object(signal_tracking, "notify_admin") as mock_notify:
+            self.assertIsNone(signal_tracking.maybe_record_signal(result))
+        mock_notify.assert_called_once()
+
+
+class PriceSanityReasonTest(unittest.TestCase):
+    def test_matching_prices_are_plausible(self):
+        result = {"price": 1.15800, "data_status": {"price": {"mid": 1.15810}}}
+        self.assertIsNone(signal_tracking.price_sanity_reason(result))
+
+    def test_reproduces_the_eurusd_incident(self):
+        result = {"price": 1.10000, "data_status": {"price": {"mid": 1.15800}}}
+        reason = signal_tracking.price_sanity_reason(result)
+        self.assertIsNotNone(reason)
+        self.assertIn("1.10000", reason)
+
+    def test_missing_live_mid_has_nothing_to_compare(self):
+        result = {"price": 1.10000, "data_status": {"price": {"mid": None}}}
+        self.assertIsNone(signal_tracking.price_sanity_reason(result))
+
+    def test_missing_data_status_has_nothing_to_compare(self):
+        self.assertIsNone(signal_tracking.price_sanity_reason({"price": 1.10000}))
+
+    def test_small_divergence_is_within_tolerance(self):
+        # A few hundredths of a percent - normal instant timing/bid-ask
+        # noise between the trendbar close and the live tick.
+        result = {"price": 1.15800, "data_status": {"price": {"mid": 1.15850}}}
+        self.assertIsNone(signal_tracking.price_sanity_reason(result))
 
 
 if __name__ == "__main__":

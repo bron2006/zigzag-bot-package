@@ -121,6 +121,23 @@ MAX_ENTRY_DRIFT_PERCENT_CRYPTO = _env_float("MAX_ENTRY_DRIFT_PERCENT_CRYPTO", 0.
 MAX_ENTRY_DRIFT_PERCENT_COMMODITIES = _env_float("MAX_ENTRY_DRIFT_PERCENT_COMMODITIES", 0.02)
 MAX_ENTRY_DRIFT_PERCENT_STOCKS = _env_float("MAX_ENTRY_DRIFT_PERCENT_STOCKS", 0.015)
 
+# HOTFIX (2026-08-17, critical, active-incident): confirmed live in
+# production - EURUSD BUY signals on the 5m timeframe were repeatedly
+# recorded/broadcast with entry_price stuck at exactly 1.10000 (score
+# always 80) while the pair's real live price was ~1.158, a ~4.3%
+# divergence between the trendbar-derived signal price and the live tick
+# price that should be near-identical at generation time. The exact root
+# cause (which of the two price sources is wrong, and why) was NOT
+# conclusively pinned down after investigation - this is a defense-in-depth
+# PLAUSIBILITY check, not a root-cause fix: signal_tracking.py rejects
+# (and alerts on) any signal whose entry_price and live-tick mid diverge
+# by more than this percent, since two sources both claiming to represent
+# "right now" should never differ this much for any instrument class.
+# 2% is deliberately generous - well above normal same-instant bid-ask/
+# timing noise for any pair this bot scans, comfortably below the ~4.3%
+# divergence that exposed the incident.
+SIGNAL_PRICE_SANITY_MAX_DIVERGENCE_PERCENT = _env_float("SIGNAL_PRICE_SANITY_MAX_DIVERGENCE_PERCENT", 2.0)
+
 # Signal outcome tracking (Part 1, legacy TP/SL fields — kept only so old
 # rows/paths don't break; no longer used to size new tracking).
 SIGNAL_TP_ATR_MULTIPLIER = _env_float("SIGNAL_TP_ATR_MULTIPLIER", 1.5)
