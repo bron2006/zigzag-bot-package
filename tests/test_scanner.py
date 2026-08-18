@@ -3,8 +3,64 @@ import unittest
 from unittest.mock import patch
 
 import config
+import db
 import scanner
+import telegram_ui
 from state import app_state
+
+
+class HandleAnalysisResultLanguageTest(unittest.TestCase):
+    """AUDIT FIX (2026-08-18): _format_signal_message/get_main_menu_kb both
+    default lang="en" and scanner.py used to call them with no lang at all
+    - every scanner-pushed signal ignored a user's own /language choice and
+    always rendered in English. These prove the user's saved language is
+    looked up and passed through for both the message text and the
+    keyboard."""
+
+    def setUp(self):
+        self._saved_threshold = app_state.IDEAL_ENTRY_THRESHOLD
+        app_state.IDEAL_ENTRY_THRESHOLD = 78
+
+    def tearDown(self):
+        app_state.IDEAL_ENTRY_THRESHOLD = self._saved_threshold
+        app_state.scanner_cooldown_cache.pop("EURUSD", None)
+
+    def _signal_result(self) -> dict:
+        return {
+            "verdict_text": "SELL",
+            "score": 90,
+            "sentiment": "GO",
+            "is_trade_allowed": True,
+            "price": 1.15800,
+            "data_status": {"price": {"mid": 1.15810}},
+            "timeframe": "5m",
+        }
+
+    def test_saved_ukrainian_preference_is_passed_to_message_and_keyboard(self):
+        with patch.object(app_state, "publish_signal_sse"), \
+             patch.object(scanner, "notify_admin"), \
+             patch.object(scanner, "deferToThreadPool"), \
+             patch.object(db, "get_user_language", return_value="uk"), \
+             patch.object(telegram_ui, "_format_signal_message", return_value="msg") as mock_fmt, \
+             patch.object(telegram_ui, "get_main_menu_kb", return_value="kb") as mock_kb:
+            scanner._handle_analysis_result("EURUSD", self._signal_result())
+
+        mock_fmt.assert_called_once()
+        self.assertEqual(mock_fmt.call_args.args[2], "uk")
+        mock_kb.assert_called_once_with("uk")
+
+    def test_no_saved_preference_falls_back_to_default_lang(self):
+        with patch.object(app_state, "publish_signal_sse"), \
+             patch.object(scanner, "notify_admin"), \
+             patch.object(scanner, "deferToThreadPool"), \
+             patch.object(db, "get_user_language", return_value=None), \
+             patch.object(telegram_ui, "_format_signal_message", return_value="msg") as mock_fmt, \
+             patch.object(telegram_ui, "get_main_menu_kb", return_value="kb") as mock_kb:
+            scanner._handle_analysis_result("EURUSD", self._signal_result())
+
+        expected_default = telegram_ui.normalize_lang(None)
+        self.assertEqual(mock_fmt.call_args.args[2], expected_default)
+        mock_kb.assert_called_once_with(expected_default)
 
 
 class HandleAnalysisResultPriceSanityTest(unittest.TestCase):

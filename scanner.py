@@ -310,8 +310,15 @@ def _handle_analysis_result(pair_norm: str, result: dict):
         return succeed(result)
 
     expiration = result.get("timeframe", SCANNER_TIMEFRAME)
-    message = telegram_ui._format_signal_message(result, expiration)
-    kb = telegram_ui.get_main_menu_kb()
+    # AUDIT FIX (2026-08-18): _format_signal_message/get_main_menu_kb both
+    # default lang="en" - the scanner isn't handling a live Telegram
+    # Update (no update.effective_user to read language_code from), so
+    # without explicitly looking up the user's saved preference here every
+    # scanner-pushed signal silently ignored a user's own /language choice
+    # and always rendered in English, regardless of what they'd set.
+    lang = telegram_ui.normalize_lang(db.get_user_language(chat_id))
+    message = telegram_ui._format_signal_message(result, expiration, lang)
+    kb = telegram_ui.get_main_menu_kb(lang)
 
     logger.info("[SCANNER] Надсилаємо сигнал для %s", pair_norm)
     d = _send_signal_async(chat_id, message, reply_markup=kb)
