@@ -1448,6 +1448,7 @@ _STREAM_RECONNECT_MAX_SECONDS = 60
 # event, both textbook-idle, not stuck. The silence was refresh_watchlist_
 # by_payout's own no-changes branch logging at DEBUG (invisible at the
 # default INFO level) rather than anything wrong with this stream.
+_STREAM_READ_TIMEOUT_SECONDS = 45
 
 
 def _stream_signals(out_queue: "queue.Queue[dict]", stop_event: threading.Event) -> None:
