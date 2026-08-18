@@ -30,3 +30,7 @@ Untitled*.ipynb
 # твого акаунту) і локальні логи/скріншоти/correlation-check CSV.
 storage_state.json
 logs/
+
+# Claude Code: особисті локальні дозволи (не для коміту, специфічні для
+# цього ноутбука/сесії).
+.claude/settings.local.json
