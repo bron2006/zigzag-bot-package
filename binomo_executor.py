@@ -1433,6 +1433,21 @@ def _signal_stream_url() -> str:
 
 _STREAM_RECONNECT_BASE_SECONDS = 5
 _STREAM_RECONNECT_MAX_SECONDS = 60
+# The cloud side publishes an "_ping" SSE event every 20s (app.py's
+# sse_ping loop) specifically so a live connection always has *something*
+# arriving. A read timeout comfortably above that (45s - over 2 missed
+# pings) means a connection that silently stalls (TCP session dropped by
+# a NAT/router without a clean FIN) gets detected and reconnected, instead
+# of requests.get(..., timeout=(10, None)) blocking client.events()
+# forever with no read timeout to ever trigger the except/reconnect path
+# below. Defense-in-depth, not a confirmed-bug fix: a 2026-08-18 restart
+# that LOOKED like exactly this (8+ minutes of total silence) turned out,
+# on a live py-spy stack dump, to be a healthy process the whole time -
+# the main loop was cycling normally on signal_queue.get(timeout=2.0) and
+# the SSE thread was blocked on a live socket read() waiting for the next
+# event, both textbook-idle, not stuck. The silence was refresh_watchlist_
+# by_payout's own no-changes branch logging at DEBUG (invisible at the
+# default INFO level) rather than anything wrong with this stream.
 
 
 def _stream_signals(out_queue: "queue.Queue[dict]", stop_event: threading.Event) -> None:
@@ -1455,7 +1470,7 @@ def _stream_signals(out_queue: "queue.Queue[dict]", stop_event: threading.Event)
         connected_at = time.monotonic()
         response = None
         try:
-            response = requests.get(url, stream=True, timeout=(10, None))
+            response = requests.get(url, stream=True, timeout=(10, _STREAM_READ_TIMEOUT_SECONDS))
             client = sseclient.SSEClient(response)
             for event in client.events():
                 if stop_event.is_set():
