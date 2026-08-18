@@ -122,6 +122,37 @@ class PriceSanityReasonTest(unittest.TestCase):
         result = {"price": 1.15800, "data_status": {"price": {"mid": 1.15850}}}
         self.assertIsNone(signal_tracking.price_sanity_reason(result))
 
+    def test_placeholder_entry_price_is_blocked_even_when_live_mid_agrees(self):
+        # PLACEHOLDER GUARD (2026-08-18): confirmed live that the same
+        # 1.10000 fingerprint recurred a full day after the fail-closed
+        # fix went live - the leading theory is that whatever corrupts
+        # entry_price also corrupts (or shares a stale source with)
+        # live_mid at that same instant, so the two "agree" and the plain
+        # divergence check below finds nothing wrong. A live_mid that
+        # matches the placeholder exactly must NOT save it from blocking.
+        result = {"price": 1.10000, "data_status": {"price": {"mid": 1.10000}}}
+        reason = signal_tracking.price_sanity_reason(result)
+        self.assertIsNotNone(reason)
+        self.assertIn("1.10000", reason)
+
+    def test_placeholder_1_0_is_blocked_regardless_of_live_mid(self):
+        result = {"price": 1.0, "data_status": {"price": {"mid": 1.0}}}
+        self.assertIsNotNone(signal_tracking.price_sanity_reason(result))
+
+    def test_placeholder_0_0_is_blocked_not_treated_as_nothing_to_check(self):
+        # Previously entry_price<=0 short-circuited to "nothing to check
+        # yet" (None) - 0.0 is one of the confirmed placeholder values, so
+        # it must now be blocked instead of silently waved through.
+        result = {"price": 0.0, "data_status": {"price": {"mid": 0.0}}}
+        self.assertIsNotNone(signal_tracking.price_sanity_reason(result))
+
+    def test_a_realistic_price_that_happens_to_be_round_is_not_blocked(self):
+        # Only the three confirmed placeholder values are blocked outright
+        # - an ordinary plausible price must not get caught by an
+        # overzealous "looks round" heuristic.
+        result = {"price": 1.15000, "data_status": {"price": {"mid": 1.15010}}}
+        self.assertIsNone(signal_tracking.price_sanity_reason(result))
+
 
 if __name__ == "__main__":
     unittest.main()

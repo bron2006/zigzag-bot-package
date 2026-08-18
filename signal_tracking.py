@@ -7,6 +7,7 @@ compute_horizon_seconds), matching the expiry binomo_executor.py would use
 for the same signal. This module knows nothing about Binomo itself — it
 only tracks outcomes against cTrader live prices."""
 import logging
+import math
 from datetime import datetime, timedelta, timezone
 
 import db
@@ -36,6 +37,12 @@ def compute_horizon_seconds(timeframe: str) -> int:
     return _HORIZON_BY_TIMEFRAME.get(timeframe, _DEFAULT_HORIZON_SECONDS)
 
 
+# Confirmed fingerprint of the still-unexplained entry_price corruption bug
+# (2026-08-17, recurred 2026-08-18) - see price_sanity_reason's PLACEHOLDER
+# GUARD docstring below for why these are blocked unconditionally.
+_KNOWN_PLACEHOLDER_ENTRY_PRICES = (1.1, 1.0, 0.0)
+
+
 def price_sanity_reason(result: dict) -> str | None:
     """HOTFIX (2026-08-17, critical, active incident): confirmed live in
     production - EURUSD BUY signals on the 5m timeframe were repeatedly
@@ -61,12 +68,35 @@ def price_sanity_reason(result: dict) -> str | None:
     entry_price itself is still handled separately by maybe_record_signal/
     scanner.py's own is_signal gating, not by this function.
 
+    PLACEHOLDER GUARD (2026-08-18): confirmed live that the SAME 1.10000
+    fingerprint recurred - 7 more corrupted EURUSD BUY signals recorded on
+    2026-08-18, well after the fail-closed fix above had already been live
+    for a full day. That rules out "missing live_mid slipped through" as
+    the mechanism this time; the far more likely explanation is that
+    whatever produces the corrupted entry_price ALSO corrupts (or shares a
+    stale/fallback source with) data_status.price.mid at that exact
+    instant, so the two values agree with each other and the divergence
+    check below finds nothing wrong. Since 1.10000/1.00000/0.0 are
+    essentially never a genuine live quote for any pair this bot trades,
+    these are now blocked OUTRIGHT the moment they appear as entry_price -
+    before ever comparing against live_mid, so a simultaneously-corrupted
+    live_mid can no longer rubber-stamp them as "in agreement".
+
     Returns a human-readable reason if entry_price can't be verified
     against a live mid (missing/invalid live_mid) or if the two disagree
     by more than config.SIGNAL_PRICE_SANITY_MAX_DIVERGENCE_PERCENT, else
     None (nothing to check yet - entry_price itself missing/invalid - or
     the two genuinely agree)."""
     entry_price = result.get("price")
+    if isinstance(entry_price, (int, float)) and any(
+        math.isclose(entry_price, placeholder, abs_tol=1e-9)
+        for placeholder in _KNOWN_PLACEHOLDER_ENTRY_PRICES
+    ):
+        return (
+            f"entry_price={entry_price:.5f} - відомий фінгерпринт зіпсованого значення "
+            "(1.10000/1.00000/0.0), блокується незалежно від live_mid"
+        )
+
     if not isinstance(entry_price, (int, float)) or entry_price <= 0:
         return None  # nothing to sanity-check yet - handled elsewhere
 
