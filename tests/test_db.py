@@ -119,5 +119,77 @@ class GetSignalOutcomeRowsForBacktestTest(unittest.TestCase):
         self.assertEqual(agg["total"], 0)
 
 
+class RuntimeSettingTest(unittest.TestCase):
+    """Real-DB round-trip (2026-08-19) for the generic AppRuntimeSetting
+    store threshold_advisor.check_trade_count_milestones() uses to avoid
+    re-notifying the same crossed milestone every day."""
+
+    KEY = "zztest_runtime_setting"
+
+    def tearDown(self):
+        db.set_runtime_setting(self.KEY, None)
+
+    def test_missing_key_returns_none(self):
+        self.assertIsNone(db.get_runtime_setting(self.KEY))
+
+    def test_set_then_get_round_trips(self):
+        self.assertTrue(db.set_runtime_setting(self.KEY, "1"))
+        self.assertEqual(db.get_runtime_setting(self.KEY), "1")
+
+    def test_overwriting_replaces_the_value(self):
+        db.set_runtime_setting(self.KEY, "1")
+        db.set_runtime_setting(self.KEY, "2")
+        self.assertEqual(db.get_runtime_setting(self.KEY), "2")
+
+
+class CountSettledBinomoTradesTest(unittest.TestCase):
+    """Real-DB test (2026-08-19), same isolation principle as the other
+    BinomoTrade e2e tests - a distinctive fake account_mode, purged in
+    setUp/tearDown, so this can never touch real demo/live trade counts."""
+
+    ACCOUNT_MODE = "zzcount"  # account_mode is VARCHAR(8) in the real schema
+
+    def setUp(self):
+        self._purge()
+
+    def tearDown(self):
+        self._purge()
+
+    def _purge(self):
+        with db.get_db() as session:
+            if session is None:
+                return
+            rows = session.query(db.BinomoTrade).filter(
+                db.BinomoTrade.account_mode == self.ACCOUNT_MODE
+            ).all()
+            for row in rows:
+                session.delete(row)
+            session.commit()
+
+    def _make_trade(self, result):
+        trade_id = db.create_binomo_trade(
+            asset="EUR/USD", pair="EURUSD", direction="up", amount=10.0,
+            expiry_seconds=300, account_mode=self.ACCOUNT_MODE,
+        )
+        if result is not None:
+            with db.get_db() as session:
+                row = session.query(db.BinomoTrade).filter(db.BinomoTrade.id == trade_id).first()
+                row.result = result
+                session.commit()
+        return trade_id
+
+    def test_counts_only_win_and_loss_not_pending(self):
+        self._make_trade("win")
+        self._make_trade("loss")
+        self._make_trade(None)  # stays "pending"
+
+        self.assertEqual(db.count_settled_binomo_trades(self.ACCOUNT_MODE), 2)
+
+    def test_does_not_leak_into_other_account_modes(self):
+        self._make_trade("win")
+        self.assertEqual(db.count_settled_binomo_trades(self.ACCOUNT_MODE), 1)
+        self.assertEqual(db.count_settled_binomo_trades("some-other-mode-entirely"), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

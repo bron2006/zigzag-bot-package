@@ -2222,6 +2222,50 @@ def mark_binomo_trade_error(trade_id: int, error_message: str) -> bool:
         return False
 
 
+def count_settled_binomo_trades(account_mode: str) -> int:
+    """All-time count of SETTLED (win/loss) trades - the same population
+    analyze_buy_sell_thresholds.py matches against SignalOutcome scores.
+    Used by threshold_advisor.check_trade_count_milestones() to know when
+    to remind the admin about the CLAUDE.md threshold-review protocol
+    (n=300 checkpoint, n=500 candidate-selection point)."""
+    try:
+        with get_db() as session:
+            if session is None:
+                return 0
+            return (
+                session.query(BinomoTrade)
+                .filter(BinomoTrade.account_mode == (account_mode or "demo").lower())
+                .filter(BinomoTrade.result.in_(["win", "loss"]))
+                .count()
+            )
+    except SQLAlchemyError:
+        logger.exception("Error counting settled binomo trades")
+        return 0
+
+
+def get_runtime_setting(key: str) -> str | None:
+    try:
+        with get_db() as session:
+            if session is None:
+                return None
+            return _get_runtime_setting(session, key)
+    except SQLAlchemyError:
+        logger.exception("Error reading runtime setting %r", key)
+        return None
+
+
+def set_runtime_setting(key: str, value: str | None) -> bool:
+    try:
+        with session_scope() as session:
+            if session is None:
+                return False
+            _set_runtime_setting(session, key, value)
+            return True
+    except SQLAlchemyError:
+        logger.exception("Error writing runtime setting %r", key)
+        return False
+
+
 def count_binomo_trades_today(account_mode: str) -> int:
     day_start = _utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
 

@@ -115,6 +115,12 @@ def _start_background_services() -> None:
         now=False,
         name="threshold_advisor",
     )
+    _start_loop(
+        max(3600.0, config.THRESHOLD_RECOMMENDATION_INTERVAL_HOURS * 3600.0),
+        threshold_advisor.check_trade_count_milestones,
+        now=False,
+        name="threshold_milestone_check",
+    )
 
 
 def _shutdown() -> None:

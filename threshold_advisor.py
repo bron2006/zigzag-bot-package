@@ -85,6 +85,45 @@ def build_recommendation() -> str | None:
     return "\n".join(lines)
 
 
+# CLAUDE.md protocol checkpoints (2026-08-19): n=300 is review-only (no
+# threshold changes), n=500 is where exactly one BUY/one SELL candidate
+# (each already n>=200 on its own) may be chosen, subject to confirmation
+# on a later, independent n>=200 sample. This just reminds the admin when
+# each is crossed - it makes no decisions and changes nothing itself.
+_TRADE_COUNT_MILESTONES = [300, 500]
+
+
+def check_trade_count_milestones() -> None:
+    try:
+        total = db.count_settled_binomo_trades(account_mode="demo")
+    except Exception:
+        logger.exception("Threshold advisor: could not count settled binomo trades")
+        return
+
+    for milestone in _TRADE_COUNT_MILESTONES:
+        if total < milestone:
+            continue
+
+        setting_key = f"threshold_milestone_notified_{milestone}"
+        if db.get_runtime_setting(setting_key):
+            continue  # already notified once for this milestone - don't repeat daily
+
+        message = (
+            f"📊 binomo_trades (settled, demo) перетнув {milestone} угод (зараз {total}).\n"
+            "Час перевірити протокол перегляду BUY_MAX_SCORE/SELL_MIN_SCORE — див. CLAUDE.md."
+        )
+        logger.info("Threshold advisor: %s", message.replace("\n", " | "))
+
+        try:
+            from notifier import notify_admin
+
+            notify_admin(message, alert_key=f"threshold_milestone_{milestone}")
+        except Exception:
+            logger.exception("Failed to send trade-count milestone alert")
+
+        db.set_runtime_setting(setting_key, "1")
+
+
 def send_daily_recommendation() -> None:
     try:
         message = build_recommendation()
