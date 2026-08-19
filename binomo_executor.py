@@ -1041,32 +1041,25 @@ def place_binary_trade(page, asset: str, direction: str, amount: float, expiry_s
     if not _safe_click(page, direction_selector, description=f"{direction}_button"):
         return {"success": False, "error": f"could not click {direction}_button", "actual_expiry_seconds": None}
 
-    # DIAGNOSTIC (2026-08-19): 'trade_confirmation_toast' (selector
-    # 'way-toast, .toast') started missing on every real trade today
-    # (2/2) - confirmed live via db.BinomoTrade that both trades placed
-    # and resolved fine regardless (this check is best-effort, never
-    # blocks placement), so it's not a functional problem, but it IS
-    # worth understanding whether Binomo's toast markup genuinely
-    # changed. A toast that auto-dismisses in a couple seconds is
-    # already gone by the time _safe_find's own 5s-timeout failure
-    # screenshot fires. This grabs one immediately after the click,
-    # before the toast has had time to disappear, purely to SEE the
-    # current markup - per the "не гадати" policy, the selector below
-    # is not touched until there's a live screenshot to base a real fix
-    # on. Remove this extra screenshot once that's resolved either way.
+    # QUIET BEST-EFFORT CHECK (2026-08-19): confirmed live via two
+    # diagnostic screenshots taken ~300ms after the click (before any
+    # toast could plausibly have auto-dismissed) that 'way-toast, .toast'
+    # simply never appears in the current UI - both captures show only
+    # the on-chart position marker (entry price line + countdown) and
+    # unrelated promo/warning cards, no toast-like element anywhere. This
+    # isn't a timing miss, the element doesn't exist in this flow
+    # anymore. db.BinomoTrade confirms trades place and resolve fine
+    # regardless (confirmation already comes from reading trade history
+    # later, not this toast). Switched from _safe_find (which always
+    # screenshots + pages the admin on a miss - appropriate for elements
+    # whose absence is genuinely actionable, wrong for one now proven to
+    # be permanently absent) to a quiet, unlogged-at-error-level check,
+    # so this stops manufacturing a false "потрібна ручна перевірка"
+    # alert on every single trade.
     try:
-        page.wait_for_timeout(300)
+        page.wait_for_selector(SELECTORS["trade_confirmation_toast"], timeout=2000)
     except Exception:
-        pass
-    _screenshot(page, f"toast_diagnostic_{asset}_{direction}")
-
-    confirmation = _safe_find(
-        page, SELECTORS["trade_confirmation_toast"], description="trade_confirmation_toast", timeout_ms=5000
-    )
-    if confirmation is None:
-        # Not necessarily a failure — some UIs skip a toast — but we can't
-        # positively confirm the trade went through either. Log loudly.
-        logger.warning("Binomo executor: no confirmation toast seen after clicking %s on %s", direction, asset)
+        logger.debug("Binomo executor: no confirmation toast seen after clicking %s on %s (expected - see comment)", direction, asset)
 
     return {"success": True, "error": None, "actual_expiry_seconds": actual_expiry_seconds}
 
