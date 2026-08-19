@@ -1041,6 +1041,25 @@ def place_binary_trade(page, asset: str, direction: str, amount: float, expiry_s
     if not _safe_click(page, direction_selector, description=f"{direction}_button"):
         return {"success": False, "error": f"could not click {direction}_button", "actual_expiry_seconds": None}
 
+    # DIAGNOSTIC (2026-08-19): 'trade_confirmation_toast' (selector
+    # 'way-toast, .toast') started missing on every real trade today
+    # (2/2) - confirmed live via db.BinomoTrade that both trades placed
+    # and resolved fine regardless (this check is best-effort, never
+    # blocks placement), so it's not a functional problem, but it IS
+    # worth understanding whether Binomo's toast markup genuinely
+    # changed. A toast that auto-dismisses in a couple seconds is
+    # already gone by the time _safe_find's own 5s-timeout failure
+    # screenshot fires. This grabs one immediately after the click,
+    # before the toast has had time to disappear, purely to SEE the
+    # current markup - per the "не гадати" policy, the selector below
+    # is not touched until there's a live screenshot to base a real fix
+    # on. Remove this extra screenshot once that's resolved either way.
+    try:
+        page.wait_for_timeout(300)
+    except Exception:
+        pass
+    _screenshot(page, f"toast_diagnostic_{asset}_{direction}")
+
     confirmation = _safe_find(
         page, SELECTORS["trade_confirmation_toast"], description="trade_confirmation_toast", timeout_ms=5000
     )
