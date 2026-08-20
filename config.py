@@ -268,6 +268,23 @@ elif BINOMO_EXECUTOR_ENABLED:
     logger.warning("BINOMO_EXECUTOR_ENABLED=true (mode=demo) — executor will place demo-account trades.")
 
 # Fixed stake as % of account balance — no martingale/progression, ever.
+#
+# TODO (2026-08-20, reminder per user instruction): lowered to 0.1% in
+# .env (10x smaller than the 1.0 default here) to collect binomo_trades
+# statistics faster/safer toward the n=300/500 threshold-review
+# checkpoints (see CLAUDE.md's "Протокол перегляду BUY_MAX_SCORE/
+# SELL_MIN_SCORE") without each loss costing as much. Verified at the
+# time of this change (balance ~332 500₴): even the lowest active stake-
+# weight tier (0.4, BINOMO_STAKE_WEIGHT_TIER_BREAKEVEN) computes to
+# ~133₴, comfortably above Binomo's real ~40₴ minimum stake (not
+# enforced anywhere in this codebase - a platform-side floor only).
+# That headroom shrinks as balance drops: at balance~100 000₴, the same
+# 0.4-tier stake computes to exactly 40₴. IF BALANCE EVER APPROACHES
+# ~100 000₴, check whether trades are silently landing at/below the
+# real Binomo minimum more often than before (Binomo may reject or clamp
+# the amount, not just this codebase's own `int(round(amount)) < 1`
+# floor, which is far lower and doesn't protect against this) - raise
+# BINOMO_MIN_STAKE_BEHAVIOR with the user rather than guessing a fix.
 BINOMO_STAKE_PERCENT = _env_float("BINOMO_STAKE_PERCENT", 1.0)
 
 # Per-pair stake weighting (POLICY, 2026-08-12) - binomo_executor multiplies
