@@ -822,7 +822,16 @@ def _fill_amount(page, amount: float) -> bool:
     Interacts via a Locator (page.locator(...)), not a captured
     ElementHandle - see _safe_click's 2026-08-12 rewrite docstring for the
     live bug (a click that reports success but never visibly lands) this
-    avoids for every action here, not just the click."""
+    avoids for every action here, not just the click.
+
+    AUDIT FIX (2026-08-20): confirmed live - a full-screen "VIP-трейдери"
+    promo modal (same class of overlay _dismiss_blocking_overlay already
+    guards _select_asset/_open_trade_history_panel/_close_trade_history_
+    panel against) can appear right before this step and was NOT guarded
+    here, so every amount_input click landed on the modal's backdrop
+    instead - 3/3 real trades failed this way in a row right after a
+    restart. Same fix as those other call sites: dismiss first."""
+    _dismiss_blocking_overlay(page)
     amount_input_probe = _safe_find(page, SELECTORS["amount_input"], description="amount_input")
     if amount_input_probe is None:
         return False
@@ -1032,6 +1041,10 @@ def place_binary_trade(page, asset: str, direction: str, amount: float, expiry_s
     if actual_expiry_seconds is None:
         return {"success": False, "error": "could not set expiry time", "actual_expiry_seconds": None}
 
+    # AUDIT FIX (2026-08-20): same full-screen promo-modal exposure as
+    # _fill_amount above - dismiss before this click too, not just the
+    # ones this function already covered via _select_asset/_fill_amount.
+    _dismiss_blocking_overlay(page)
     direction_selector = SELECTORS["up_button"] if direction == "up" else SELECTORS["down_button"]
     direction_button_probe = _safe_find(page, direction_selector, description=f"{direction}_button")
     if direction_button_probe is None:
