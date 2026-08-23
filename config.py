@@ -249,6 +249,92 @@ MAX_OPEN_POSITIONS = _env_int("MAX_OPEN_POSITIONS", 3) or 3
 MAX_DAILY_LOSS_PERCENT = _env_float("MAX_DAILY_LOSS_PERCENT", 5.0)
 AUTOTRADE_BALANCE_CACHE_SECONDS = _env_float("AUTOTRADE_BALANCE_CACHE_SECONDS", 30.0)
 
+# Крок 3.1 (feature/vwap-long-executor, 2026-08-22): LONG-only session-VWAP
+# mean-reversion real orders on cTrader, via vwap_executor.py - a separate
+# LOCAL process (like binomo_executor.py, unlike autotrader.py which lives
+# in the cloud app), plan approved by the user 2026-08-22. Disabled by
+# default; VWAP_EXECUTOR_ACCOUNT_MODE has the same no-runtime-toggle rule
+# as AUTOTRADE_ACCOUNT_MODE above - live requires manually editing the
+# local .env.
+VWAP_EXECUTOR_ENABLED = _env_bool("VWAP_EXECUTOR_ENABLED", False)
+VWAP_EXECUTOR_ACCOUNT_MODE = (_env_str("VWAP_EXECUTOR_ACCOUNT_MODE", "demo") or "demo").strip().lower()
+if VWAP_EXECUTOR_ACCOUNT_MODE not in {"demo", "live"}:
+    logger.warning("Unsupported VWAP_EXECUTOR_ACCOUNT_MODE=%r. Falling back to 'demo'.", VWAP_EXECUTOR_ACCOUNT_MODE)
+    VWAP_EXECUTOR_ACCOUNT_MODE = "demo"
+
+# VWAP_EXECUTOR_READ_ONLY is a SEPARATE opt-in flag from VWAP_EXECUTOR_
+# ENABLED (unlike autotrader/Binomo, which are just off/on): with ENABLED=
+# true and READ_ONLY=true, the executor runs its full poll loop and logs
+# every entry/exit decision it WOULD have made, without ever calling the
+# Order API - a way to observe live decisions against real ticks with zero
+# financial risk, one step past the shadow logger (which never even
+# evaluates entry/exit conditions, just logs VWAP levels). Defined before
+# the startup-warning block below so that block can report it accurately -
+# "ENABLED=true" alone doesn't tell you whether real orders are actually
+# possible.
+VWAP_EXECUTOR_READ_ONLY = _env_bool("VWAP_EXECUTOR_READ_ONLY", False)
+
+if VWAP_EXECUTOR_ENABLED and VWAP_EXECUTOR_ACCOUNT_MODE == "live" and not VWAP_EXECUTOR_READ_ONLY:
+    logger.critical(
+        "VWAP_EXECUTOR_ENABLED=true with VWAP_EXECUTOR_ACCOUNT_MODE=live — vwap_executor.py "
+        "will place REAL orders with REAL money on the configured cTrader account."
+    )
+elif VWAP_EXECUTOR_ENABLED and VWAP_EXECUTOR_READ_ONLY:
+    logger.warning(
+        "VWAP_EXECUTOR_ENABLED=true, VWAP_EXECUTOR_READ_ONLY=true (mode=%s) — vwap_executor.py "
+        "will run its full poll loop and log every decision, but will NOT place any real orders.",
+        VWAP_EXECUTOR_ACCOUNT_MODE,
+    )
+elif VWAP_EXECUTOR_ENABLED:
+    logger.warning("VWAP_EXECUTOR_ENABLED=true (mode=demo) — vwap_executor.py will place demo-account orders.")
+
+# Reference stop from the validated 6-month backtest (CLAUDE.md,
+# vwap_long_only_backtest.py/vwap_6mo_verification.py) - CI lower bound
+# clears zero at 1.5/2.0/4.59sigma; 2.0 is the user's own chosen reference.
+VWAP_EXECUTOR_STOP_SIGMA = _env_float("VWAP_EXECUTOR_STOP_SIGMA", 2.0)
+
+# Risk sizing - same risk-based-on-ATR-or-stop-distance convention as
+# MAX_RISK_PERCENT_PER_TRADE above, just a separate, independently
+# tunable set of limits (see CLAUDE.md's "known compromise" note: this
+# executor and autotrader.py do NOT coordinate combined account exposure).
+# 0.5% (half of autotrader's 1%) and MAX_OPEN_POSITIONS=5 (vs autotrader's
+# 3) - approved 2026-08-22 - reflect the VWAP strategy's higher signal
+# frequency (~4.7 events/day pooled across 25 symbols) needing a tighter
+# per-trade risk to keep worst-case simultaneous exposure comparable.
+VWAP_EXECUTOR_MAX_RISK_PERCENT_PER_TRADE = _env_float("VWAP_EXECUTOR_MAX_RISK_PERCENT_PER_TRADE", 0.5)
+VWAP_EXECUTOR_MAX_OPEN_POSITIONS = _env_int("VWAP_EXECUTOR_MAX_OPEN_POSITIONS", 5) or 5
+VWAP_EXECUTOR_MAX_DAILY_LOSS_PERCENT = _env_float("VWAP_EXECUTOR_MAX_DAILY_LOSS_PERCENT", 5.0)
+VWAP_EXECUTOR_MAX_CONSECUTIVE_LOSSES = _env_int("VWAP_EXECUTOR_MAX_CONSECUTIVE_LOSSES", 5) or 5
+# No separate VWAP_EXECUTOR_BALANCE_CACHE_SECONDS - vwap_executor.py reuses
+# autotrader._get_account_balance() as-is (commit 5/8), sharing its cache:
+# the account balance is the same underlying number for the same cTrader
+# account regardless of which strategy asks, so two independently-cached,
+# potentially-inconsistent views of it would be worse than one shared read.
+# This does NOT affect the two systems' independent risk LIMITS (position
+# size, max positions, daily loss, consecutive losses stay fully separate).
+
+# Max slippage tolerance for the two MARKET-order EXITS (VWAP-touch,
+# hard-time) - the ENTRY is a LIMIT order and structurally cannot slip
+# worse than its limit price, so this only applies here. cTrader's own
+# slippageInPoints field on ProtoOANewOrderReq enforces this broker-side,
+# rather than checking after the fact. 20 points ~= 2 pips for most of
+# this strategy's forex_cross symbols - a conservative retail default.
+VWAP_EXECUTOR_MAX_SLIPPAGE_POINTS = _env_int("VWAP_EXECUTOR_MAX_SLIPPAGE_POINTS", 20) or 20
+
+# Order submission - timeout+idempotent-retry (see vwap_executor.py's own
+# docstring for why blind retry-on-timeout, safe for read-only fetches
+# elsewhere in this project, is NOT safe here without an existing-order
+# check first).
+VWAP_EXECUTOR_ORDER_TIMEOUT_SECONDS = _env_float("VWAP_EXECUTOR_ORDER_TIMEOUT_SECONDS", 5.0)
+VWAP_EXECUTOR_ORDER_RETRY_ATTEMPTS = _env_int("VWAP_EXECUTOR_ORDER_RETRY_ATTEMPTS", 3) or 3
+
+# Dead man's switch for this standalone process (infra-audit item #1's
+# same principle, separate implementation - this process isn't visible to
+# /api/health/deep at all, being a separate local process from the cloud
+# app). Poll cadence matches vwap_shadow_logger.py's own default.
+VWAP_EXECUTOR_POLL_SECONDS = _env_float("VWAP_EXECUTOR_POLL_SECONDS", 60.0)
+VWAP_EXECUTOR_STALE_POLL_ALERT_SECONDS = _env_float("VWAP_EXECUTOR_STALE_POLL_ALERT_SECONDS", 90.0)
+
 # Part 3: Binomo binary-option executor (browser automation, Playwright).
 # Disabled by default. Meant to run LOCALLY (see binomo_executor.py docstring
 # and README) — not on Fly.io. BINOMO_ACCOUNT_MODE has no runtime toggle

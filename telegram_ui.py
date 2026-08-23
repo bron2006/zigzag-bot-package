@@ -30,6 +30,12 @@ from config import (
     CRYPTO_PAIRS,
     FOREX_SESSIONS,
     STOCK_TICKERS,
+    VWAP_EXECUTOR_ACCOUNT_MODE,
+    VWAP_EXECUTOR_ENABLED,
+    VWAP_EXECUTOR_MAX_CONSECUTIVE_LOSSES,
+    VWAP_EXECUTOR_MAX_DAILY_LOSS_PERCENT,
+    VWAP_EXECUTOR_MAX_OPEN_POSITIONS,
+    VWAP_EXECUTOR_MAX_RISK_PERCENT_PER_TRADE,
 )
 from locales import (
     LANGUAGE_NAMES,
@@ -178,6 +184,15 @@ def get_main_menu_kb(lang: str = "en") -> InlineKeyboardMarkup:
         keyboard.append(
             [InlineKeyboardButton(f"{status} {t('scanner', lang)} {text}", callback_data=f"toggle_scanner_{key}")]
         )
+
+    # VWAP executor controls (2026-08-22, per explicit user request) -
+    # directly in the shared main menu, no separate admin-only entry
+    # point: reuses get_vwap_executor_kb()'s own rows so the buttons here
+    # and the ones attached to /vwap_executor_status stay identical, one
+    # definition. The underlying vwapexec_* callback branch in
+    # button_handler still enforces db.is_admin_user on every action, so
+    # this stays safe even if this bot ever has non-admin users again.
+    keyboard.extend(get_vwap_executor_kb().inline_keyboard)
 
     return InlineKeyboardMarkup(keyboard)
 
@@ -652,6 +667,143 @@ def binomo_off_command(update, context):
     update.message.reply_text(f"Runtime-прапорець вимкнено.\n\n{_format_binomo_status()}", parse_mode="HTML")
 
 
+def _format_vwap_executor_status() -> str:
+    """vwap_executor.py runs as a separate local process (Крок 3.1,
+    2026-08-22), same reasoning as binomo_executor.py above - this reads
+    the shared DB-backed flags rather than any in-memory state, and this
+    process never imports vwap_executor.py itself."""
+    state = db.get_vwap_executor_runtime_state()
+    active = VWAP_EXECUTOR_ENABLED and state["runtime_enabled"] and not state["kill_switch_tripped"]
+    active_label = "✅ активний" if active else "⛔ неактивний"
+    kill_switch = f"🛑 СПРАЦЮВАВ ({state['kill_switch_reason']})" if state["kill_switch_tripped"] else "гаразд"
+    read_only_label = "📝 read-only (лише логи, без угод)" if state["read_only"] else "торгує"
+
+    open_count = db.count_open_vwap_trades(VWAP_EXECUTOR_ACCOUNT_MODE)
+    losses = db.get_consecutive_vwap_losses(VWAP_EXECUTOR_ACCOUNT_MODE)
+    daily_pnl = db.get_daily_vwap_pnl(VWAP_EXECUTOR_ACCOUNT_MODE)
+
+    return "\n".join(
+        [
+            "📊 <b>VWAP executor (Крок 3.1)</b>",
+            f"Статус: {active_label}",
+            f"Режим: {read_only_label}",
+            f"VWAP_EXECUTOR_ENABLED (конфіг локального процесу): {VWAP_EXECUTOR_ENABLED}",
+            f"Runtime увімкнено (спільний прапорець у БД): {state['runtime_enabled']}",
+            f"Kill switch: {kill_switch}",
+            f"Режим рахунку: <b>{VWAP_EXECUTOR_ACCOUNT_MODE}</b>",
+            f"Відкритих/очікуючих угод: {open_count} / {VWAP_EXECUTOR_MAX_OPEN_POSITIONS}",
+            f"Збитків поспіль: {losses} / {VWAP_EXECUTOR_MAX_CONSECUTIVE_LOSSES}",
+            f"Ризик на угоду: {VWAP_EXECUTOR_MAX_RISK_PERCENT_PER_TRADE}% від балансу",
+            f"Ліміт денного збитку: {VWAP_EXECUTOR_MAX_DAILY_LOSS_PERCENT}%",
+            f"Денний PnL: {daily_pnl:.2f}",
+            "",
+            "<i>Примітка: VWAP_EXECUTOR_ENABLED вмикається лише локально в .env "
+            "виконавця — цю команду видно, але вона не може запустити виконавець, "
+            "якщо VWAP_EXECUTOR_ENABLED=false на самому ноуті.</i>",
+        ]
+    )
+
+
+def get_vwap_executor_kb(state: dict | None = None) -> InlineKeyboardMarkup:
+    """Inline control panel for vwap_executor.py - on/off/readonly-toggle/
+    refresh, each a button instead of a separate typed command (per the
+    user's explicit request, 2026-08-22, before leaving for a week -
+    corrected here after wrongly not having built this the first time
+    around; Binomo control in this file also never had inline buttons,
+    despite having been referenced as an existing pattern to match)."""
+    state = state or db.get_vwap_executor_runtime_state()
+    readonly_label = "📝 Read-only: УВІМКНЕНО (натисни, щоб вимкнути)" if state["read_only"] else "📝 Read-only: вимкнено (натисни, щоб увімкнути)"
+
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("🟢 Увімкнути", callback_data="vwapexec_on"),
+                InlineKeyboardButton("🔴 Вимкнути (emergency stop)", callback_data="vwapexec_off"),
+            ],
+            [InlineKeyboardButton(readonly_label, callback_data="vwapexec_readonly")],
+            [InlineKeyboardButton("🔄 Оновити статус", callback_data="vwapexec_status")],
+        ]
+    )
+
+
+def vwap_executor_status_command(update, context):
+    lang = _lang(update)
+    user_id = _get_user_id(update)
+
+    if not db.is_admin_user(user_id):
+        update.message.reply_text(t("unauthorized", lang))
+        return
+
+    update.message.reply_text(
+        _format_vwap_executor_status(), parse_mode="HTML", reply_markup=get_vwap_executor_kb()
+    )
+
+
+def vwap_executor_on_command(update, context):
+    lang = _lang(update)
+    user_id = _get_user_id(update)
+
+    if not db.is_admin_user(user_id):
+        update.message.reply_text(t("unauthorized", lang))
+        return
+
+    db.set_vwap_executor_runtime_enabled(True)
+    db.clear_vwap_executor_kill_switch()
+    update.message.reply_text(
+        f"Runtime-прапорець увімкнено, kill switch скинуто.\n\n{_format_vwap_executor_status()}",
+        parse_mode="HTML",
+        reply_markup=get_vwap_executor_kb(),
+    )
+
+
+def vwap_executor_off_command(update, context):
+    """Sets the shared runtime_enabled=False flag - the LOCAL
+    vwap_executor.py process (which holds the live cTrader client, unlike
+    this cloud process) is what actually cancels pending orders and
+    closes open positions in response, checked at the top of its next
+    poll cycle (see vwap_executor.py's _emergency_stop_all)."""
+    lang = _lang(update)
+    user_id = _get_user_id(update)
+
+    if not db.is_admin_user(user_id):
+        update.message.reply_text(t("unauthorized", lang))
+        return
+
+    db.set_vwap_executor_runtime_enabled(False)
+    update.message.reply_text(
+        f"Runtime-прапорець вимкнено. Локальний процес закриє всі позиції й скасує всі "
+        f"ордери на наступному циклі опитування.\n\n{_format_vwap_executor_status()}",
+        parse_mode="HTML",
+        reply_markup=get_vwap_executor_kb(),
+    )
+
+
+def vwap_executor_readonly_command(update, context):
+    """Toggle: /vwap_executor_readonly on|off. Read-only runs the full
+    poll loop and logs every entry/exit decision without ever calling the
+    Order API - for observing live decisions against real ticks with zero
+    financial risk."""
+    lang = _lang(update)
+    user_id = _get_user_id(update)
+
+    if not db.is_admin_user(user_id):
+        update.message.reply_text(t("unauthorized", lang))
+        return
+
+    args = context.args if context and context.args else []
+    if not args or args[0].lower() not in ("on", "off"):
+        update.message.reply_text("Використання: /vwap_executor_readonly on|off")
+        return
+
+    read_only = args[0].lower() == "on"
+    db.set_vwap_executor_read_only(read_only)
+    update.message.reply_text(
+        f"Read-only режим: {'увімкнено' if read_only else 'вимкнено'}.\n\n{_format_vwap_executor_status()}",
+        parse_mode="HTML",
+        reply_markup=get_vwap_executor_kb(),
+    )
+
+
 def live_command(update, context):
     lang = _lang(update)
     lines = [t("prices", lang)]
@@ -789,6 +941,37 @@ def button_handler(update: Update, context: CallbackContext):
         cat = parts[2]
         app_state.set_scanner_state(cat, not app_state.get_scanner_state(cat))
         menu(update, context)
+        return
+
+    if action == "vwapexec" and len(parts) > 1:
+        user_id = _get_user_id(update) or chat_id
+        if not db.is_admin_user(user_id):
+            _send_tracked(context, chat_id, t("unauthorized", lang))
+            return
+
+        subaction = parts[1]
+        note = ""
+        if subaction == "on":
+            db.set_vwap_executor_runtime_enabled(True)
+            db.clear_vwap_executor_kill_switch()
+            note = "Runtime-прапорець увімкнено, kill switch скинуто.\n\n"
+        elif subaction == "off":
+            db.set_vwap_executor_runtime_enabled(False)
+            note = (
+                "Runtime-прапорець вимкнено. Локальний процес закриє всі позиції й "
+                "скасує всі ордери на наступному циклі опитування.\n\n"
+            )
+        elif subaction == "readonly":
+            current = db.get_vwap_executor_runtime_state()["read_only"]
+            db.set_vwap_executor_read_only(not current)
+            note = f"Read-only режим: {'увімкнено' if not current else 'вимкнено'}.\n\n"
+        elif subaction != "status":
+            return  # unknown subaction, ignore rather than guess
+
+        _send_tracked(
+            context, chat_id, f"{note}{_format_vwap_executor_status()}",
+            parse_mode="HTML", reply_markup=get_vwap_executor_kb(),
+        )
         return
 
     if action in ("main_menu", "main"):

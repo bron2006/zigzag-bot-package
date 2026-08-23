@@ -147,6 +147,49 @@ class AutoTrade(Base):
     error_message = Column(String(255), nullable=True)
 
 
+class VwapTrade(Base):
+    """vwap_executor.py (Крок 3.1, feature/vwap-long-executor, 2026-08-22):
+    LONG-only session-VWAP mean-reversion, real orders on cTrader. A LIMIT
+    entry at -2sigma (never AutoTrade's fixed-TP/SL market order - the
+    exit target here is the live, evolving VWAP, checked every poll cycle,
+    not a static broker-side price), a broker-side stop-loss, and one of
+    several distinct exit paths tracked in `status`/`exit_reason` below.
+    Deliberately its own table, not a repurposed AutoTrade - the exit
+    mechanics and the fields needed to audit them (limit vs fill price,
+    expected vs realized exit price for slippage, session_id) don't map
+    onto AutoTrade's fixed-bracket shape."""
+
+    __tablename__ = "vwap_trades"
+
+    id = Column(Integer, primary_key=True, index=True)
+    symbol = Column(String, nullable=False, index=True)
+    session_id = Column(String(10), nullable=False, index=True)  # "YYYY-MM-DD", the session this entry belongs to
+    volume = Column(Integer, nullable=False)  # cTrader volume units (already x100, same convention as AutoTrade)
+    limit_price = Column(Float, nullable=False)  # requested -2sigma level
+    stop_price = Column(Float, nullable=False)
+    entry_price = Column(Float, nullable=True)  # actual fill price (== limit_price or better, by construction)
+    filled_volume = Column(Integer, nullable=True)  # may be < volume on a partial fill before the remainder is cancelled
+    exit_price = Column(Float, nullable=True)
+    # The VWAP value (or session-close price, for a hard time exit) at the
+    # moment the exit decision was made - the reference "expected" price
+    # slippage is measured against, since a market order can fill a little
+    # away from that by the time it executes.
+    expected_exit_price = Column(Float, nullable=True)
+    slippage = Column(Float, nullable=True)  # exit_price - expected_exit_price, signed
+    # vwap_touch | hard_time_exit | stop_loss | manual | expired_unfilled
+    exit_reason = Column(String(24), nullable=True)
+    pnl_amount = Column(Float, nullable=True)
+    ts = Column(DateTime, server_default=func.now(), nullable=False, index=True)
+    closed_at = Column(DateTime, nullable=True)
+    account_mode = Column(String(8), nullable=False, index=True)  # demo | live
+    broker_order_id = Column(String(32), nullable=True, index=True)
+    broker_position_id = Column(String(32), nullable=True, index=True)
+    # pending (limit resting) -> open (filled) -> closed_target | closed_time_exit
+    # | closed_stop | closed_manual -> or pending/open -> expired | error
+    status = Column(String(20), nullable=False, default="pending", index=True)
+    error_message = Column(String(255), nullable=True)
+
+
 class BinomoTrade(Base):
     __tablename__ = "binomo_trades"
 
@@ -155,7 +198,24 @@ class BinomoTrade(Base):
     pair = Column(String, nullable=True, index=True)  # originating cTrader pair, if any
     direction = Column(String(8), nullable=False)  # up | down
     amount = Column(Float, nullable=False)  # stake, account currency
+    # ACTUAL duration the trade got on Binomo's side (see
+    # update_binomo_trade_expiry_seconds's own docstring for why this
+    # isn't always the requested duration) - due_at math and settlement
+    # matching use this one, not requested_expiry_seconds below.
     expiry_seconds = Column(Integer, nullable=False)
+    # AUDIT FIX (2026-08-21): what was actually asked for, set once at
+    # creation and never overwritten - kept alongside expiry_seconds
+    # (which gets corrected to the real value after placement) so a
+    # requested-vs-actual mismatch is a first-class, queryable fact
+    # instead of something later analysis has to re-derive by matching
+    # each trade back to its own signal_outcomes row (see
+    # execution_gap_audit.py's Task 3 finding: 15/198 real trades had a
+    # requested/actual mismatch, and those had markedly lower endpoint-
+    # vs-execution agreement - 66.7% vs 85.5% - worth being able to
+    # exclude or segment on directly, not mixed silently into "normal"
+    # trades for any future win-rate/calibration statistic).
+    requested_expiry_seconds = Column(Integer, nullable=True)
+    expiry_mismatch = Column(Boolean, nullable=False, default=False, index=True)
     entry_ts = Column(DateTime, server_default=func.now(), nullable=False, index=True)
     account_mode = Column(String(8), nullable=False, index=True)  # demo | live
     # pending -> win | loss | error
@@ -396,6 +456,7 @@ def initialize_database():
         _ensure_user_columns()
         _ensure_signal_outcome_columns()
         _ensure_binomo_trade_fk()
+        _ensure_binomo_trade_expiry_columns()
         logger.info("Database initialization complete.")
     except Exception as e:
         logger.error(f"Error initializing database: {e}", exc_info=True)
@@ -498,6 +559,45 @@ def _ensure_binomo_trade_fk() -> None:
         )
     except Exception:
         logger.exception("Could not ensure binomo_trades foreign key")
+
+
+def _ensure_binomo_trade_expiry_columns() -> None:
+    """Adds requested_expiry_seconds/expiry_mismatch to a binomo_trades
+    table created before they existed (2026-08-21) - see BinomoTrade's own
+    column comments for why: Binomo's expiry stepper doesn't always land
+    on the exact duration requested, and until now that fact only lived
+    in a transient Telegram message (_handle_signal's admin notification),
+    never in a queryable column. Existing rows get requested_expiry_
+    seconds left NULL (unknown - the original request was already
+    overwritten by update_binomo_trade_expiry_seconds long before this
+    migration existed) and expiry_mismatch defaulted to False, since
+    "unknown" is a more honest state for old rows than a guessed True/
+    False - only rows created AFTER this migration get a real answer."""
+    try:
+        inspector = inspect(engine)
+        if "binomo_trades" not in inspector.get_table_names():
+            return
+
+        existing = {column["name"] for column in inspector.get_columns("binomo_trades")}
+        statements = []
+
+        if "requested_expiry_seconds" not in existing:
+            statements.append("ALTER TABLE binomo_trades ADD COLUMN requested_expiry_seconds INTEGER NULL")
+        if "expiry_mismatch" not in existing:
+            statements.append(
+                "ALTER TABLE binomo_trades ADD COLUMN expiry_mismatch BOOLEAN DEFAULT FALSE NOT NULL"
+            )
+
+        if not statements:
+            return
+
+        with engine.begin() as conn:
+            for statement in statements:
+                conn.execute(text(statement))
+
+        logger.info("Database binomo_trades table migrated: %s", ", ".join(statements))
+    except Exception:
+        logger.exception("Could not ensure binomo_trades expiry columns")
 
 
 def _set_runtime_setting(session, key: str, value: str | None) -> None:
@@ -2021,6 +2121,357 @@ def get_daily_auto_trade_pnl(account_mode: str, since: datetime | None = None) -
 
 
 # ----------------------------------------------------------------------
+# VWAP executor (Крок 3.1, feature/vwap-long-executor) — see VwapTrade's
+# own docstring for why this is a separate table/CRUD set from AutoTrade.
+# ----------------------------------------------------------------------
+
+
+def _vwap_trade_to_dict(row: "VwapTrade") -> dict:
+    return {
+        "id": row.id,
+        "symbol": row.symbol,
+        "session_id": row.session_id,
+        "volume": row.volume,
+        "limit_price": row.limit_price,
+        "stop_price": row.stop_price,
+        "entry_price": row.entry_price,
+        "filled_volume": row.filled_volume,
+        "exit_price": row.exit_price,
+        "expected_exit_price": row.expected_exit_price,
+        "slippage": row.slippage,
+        "exit_reason": row.exit_reason,
+        "pnl_amount": row.pnl_amount,
+        "ts": row.ts,
+        "closed_at": row.closed_at,
+        "account_mode": row.account_mode,
+        "broker_order_id": row.broker_order_id,
+        "broker_position_id": row.broker_position_id,
+        "status": row.status,
+        "error_message": row.error_message,
+    }
+
+
+def create_vwap_trade(
+    *,
+    symbol: str,
+    session_id: str,
+    volume: int,
+    limit_price: float,
+    stop_price: float,
+    account_mode: str,
+) -> int | None:
+    try:
+        with session_scope() as session:
+            if session is None:
+                logger.warning("VWAP trade skipped: no database engine")
+                return None
+
+            row = VwapTrade(
+                symbol=(symbol or "").strip().upper(),
+                session_id=(session_id or "").strip(),
+                volume=int(volume),
+                limit_price=float(limit_price),
+                stop_price=float(stop_price),
+                account_mode=(account_mode or "demo").strip().lower(),
+                status="pending",
+            )
+            session.add(row)
+            session.flush()
+            return row.id
+    except SQLAlchemyError:
+        logger.exception("Error creating vwap trade for symbol=%s", symbol)
+        return None
+
+
+def get_vwap_trade(trade_id: int) -> dict | None:
+    try:
+        with get_db() as session:
+            if session is None:
+                return None
+            row = session.query(VwapTrade).filter(VwapTrade.id == trade_id).first()
+            return _vwap_trade_to_dict(row) if row else None
+    except SQLAlchemyError:
+        logger.exception("Error loading vwap trade id=%s", trade_id)
+        return None
+
+
+def find_vwap_trade_by_broker_order_id(broker_order_id: str) -> dict | None:
+    try:
+        with get_db() as session:
+            if session is None:
+                return None
+            row = (
+                session.query(VwapTrade)
+                .filter(VwapTrade.broker_order_id == str(broker_order_id))
+                .first()
+            )
+            return _vwap_trade_to_dict(row) if row else None
+    except SQLAlchemyError:
+        logger.exception("Error looking up vwap trade by broker_order_id=%s", broker_order_id)
+        return None
+
+
+def find_vwap_trade_by_broker_position_id(broker_position_id: str) -> dict | None:
+    try:
+        with get_db() as session:
+            if session is None:
+                return None
+            row = (
+                session.query(VwapTrade)
+                .filter(VwapTrade.broker_position_id == str(broker_position_id))
+                .order_by(VwapTrade.ts.desc())
+                .first()
+            )
+            return _vwap_trade_to_dict(row) if row else None
+    except SQLAlchemyError:
+        logger.exception("Error looking up vwap trade by broker_position_id=%s", broker_position_id)
+        return None
+
+
+def find_open_vwap_trade_for_session(symbol: str, session_id: str, account_mode: str) -> dict | None:
+    """Used before placing a new entry - at most one resting/open VWAP
+    trade per (symbol, session), so a poll cycle never stacks a second
+    entry on a symbol that already has one pending or open this session."""
+    try:
+        with get_db() as session:
+            if session is None:
+                return None
+            row = (
+                session.query(VwapTrade)
+                .filter(VwapTrade.symbol == (symbol or "").strip().upper())
+                .filter(VwapTrade.session_id == (session_id or "").strip())
+                .filter(VwapTrade.account_mode == (account_mode or "demo").lower())
+                .filter(VwapTrade.status.in_(("pending", "open")))
+                .first()
+            )
+            return _vwap_trade_to_dict(row) if row else None
+    except SQLAlchemyError:
+        logger.exception("Error looking up open vwap trade for %s/%s", symbol, session_id)
+        return None
+
+
+def mark_vwap_trade_open(
+    trade_id: int,
+    *,
+    broker_order_id: str | None,
+    broker_position_id: str | None,
+    entry_price: float | None,
+    filled_volume: int | None,
+) -> bool:
+    try:
+        with session_scope() as session:
+            if session is None:
+                return False
+            row = session.query(VwapTrade).filter(VwapTrade.id == trade_id).first()
+            if row is None:
+                return False
+
+            if broker_order_id:
+                row.broker_order_id = str(broker_order_id)
+            if broker_position_id:
+                row.broker_position_id = str(broker_position_id)
+            if entry_price is not None:
+                row.entry_price = float(entry_price)
+            if filled_volume is not None:
+                row.filled_volume = int(filled_volume)
+            row.status = "open"
+            return True
+    except SQLAlchemyError:
+        logger.exception("Error marking vwap trade open id=%s", trade_id)
+        return False
+
+
+def mark_vwap_trade_closing(trade_id: int, *, exit_reason: str, expected_exit_price: float) -> bool:
+    """Stashes the exit reason and the reference price the exit decision
+    was made against (current VWAP for a target exit, session close for a
+    hard time exit) BEFORE the close order's execution event comes back -
+    that event carries the real fill price and server-computed PnL, but
+    has no notion of what price we expected. Called right after
+    submitting the MARKET close order; mark_vwap_trade_closed (below)
+    reads this back via get_vwap_trade once the actual closing deal
+    arrives, to compute realized slippage. Status stays "open" - this is
+    a staging write, not a state transition."""
+    try:
+        with session_scope() as session:
+            if session is None:
+                return False
+            row = session.query(VwapTrade).filter(VwapTrade.id == trade_id).first()
+            if row is None or row.status != "open":
+                return False
+
+            row.exit_reason = exit_reason
+            row.expected_exit_price = float(expected_exit_price)
+            return True
+    except SQLAlchemyError:
+        logger.exception("Error marking vwap trade closing id=%s", trade_id)
+        return False
+
+
+def mark_vwap_trade_closed(
+    trade_id: int,
+    *,
+    status: str,
+    exit_reason: str,
+    exit_price: float | None,
+    expected_exit_price: float | None,
+    pnl_amount: float | None,
+) -> bool:
+    try:
+        with session_scope() as session:
+            if session is None:
+                return False
+            row = session.query(VwapTrade).filter(VwapTrade.id == trade_id).first()
+            if row is None or row.status not in {"pending", "open"}:
+                return False
+
+            row.status = status
+            row.exit_reason = exit_reason
+            row.exit_price = exit_price
+            row.expected_exit_price = expected_exit_price
+            if exit_price is not None and expected_exit_price is not None:
+                row.slippage = exit_price - expected_exit_price
+            row.pnl_amount = pnl_amount
+            row.closed_at = _utcnow()
+            return True
+    except SQLAlchemyError:
+        logger.exception("Error marking vwap trade closed id=%s", trade_id)
+        return False
+
+
+def mark_vwap_trade_expired(trade_id: int) -> bool:
+    """The resting LIMIT order's own expirationTimestamp (session end) was
+    never touched - GOOD_TILL_DATE expired it broker-side with zero fill."""
+    try:
+        with session_scope() as session:
+            if session is None:
+                return False
+            row = session.query(VwapTrade).filter(VwapTrade.id == trade_id).first()
+            if row is None or row.status != "pending":
+                return False
+
+            row.status = "expired"
+            row.closed_at = _utcnow()
+            return True
+    except SQLAlchemyError:
+        logger.exception("Error marking vwap trade expired id=%s", trade_id)
+        return False
+
+
+def mark_vwap_trade_error(trade_id: int, error_message: str) -> bool:
+    try:
+        with session_scope() as session:
+            if session is None:
+                return False
+            row = session.query(VwapTrade).filter(VwapTrade.id == trade_id).first()
+            if row is None:
+                return False
+
+            row.status = "error"
+            row.error_message = (error_message or "")[:255]
+            row.closed_at = _utcnow()
+            return True
+    except SQLAlchemyError:
+        logger.exception("Error marking vwap trade as error id=%s", trade_id)
+        return False
+
+
+def count_open_vwap_trades(account_mode: str) -> int:
+    try:
+        with get_db() as session:
+            if session is None:
+                return 0
+            return (
+                session.query(VwapTrade)
+                .filter(VwapTrade.account_mode == (account_mode or "demo").lower())
+                .filter(VwapTrade.status.in_(("pending", "open")))
+                .count()
+            )
+    except SQLAlchemyError:
+        logger.exception("Error counting open vwap trades")
+        return 0
+
+
+def get_open_and_pending_vwap_trades(account_mode: str) -> list[dict]:
+    """Used by vwap_executor.py's emergency-stop path (/vwap_executor_off,
+    plan item 13) - every trade the local process needs to actively
+    cancel (pending) or close (open) when told to stop immediately."""
+    try:
+        with get_db() as session:
+            if session is None:
+                return []
+            rows = (
+                session.query(VwapTrade)
+                .filter(VwapTrade.account_mode == (account_mode or "demo").lower())
+                .filter(VwapTrade.status.in_(("pending", "open")))
+                .all()
+            )
+            return [_vwap_trade_to_dict(row) for row in rows]
+    except SQLAlchemyError:
+        logger.exception("Error loading open/pending vwap trades")
+        return []
+
+
+def get_daily_vwap_pnl(account_mode: str, since: datetime | None = None) -> float:
+    """Same shape as get_daily_auto_trade_pnl (`since` mirrors the same
+    2026-08-15 fix - without it, clearing the kill switch mid-day would
+    re-trip on the very next check against the same still-negative day)."""
+    day_start = _utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+
+    try:
+        with get_db() as session:
+            if session is None:
+                return 0.0
+
+            query = (
+                session.query(VwapTrade)
+                .filter(VwapTrade.account_mode == (account_mode or "demo").lower())
+                .filter(VwapTrade.closed_at.isnot(None))
+                .filter(VwapTrade.closed_at >= day_start)
+                .filter(VwapTrade.pnl_amount.isnot(None))
+            )
+            if since is not None:
+                query = query.filter(VwapTrade.closed_at >= since)
+            rows = query.all()
+            return sum(row.pnl_amount for row in rows)
+    except SQLAlchemyError:
+        logger.exception("Error computing daily vwap pnl")
+        return 0.0
+
+
+def get_consecutive_vwap_losses(account_mode: str, limit: int = 50, since: datetime | None = None) -> int:
+    """Same shape/rationale as get_consecutive_binomo_losses (2026-08-14
+    fix): counts losses in the most recent closed trades, stopping at the
+    first non-loss - `since` (the kill switch's last-cleared timestamp)
+    keeps a cleared switch from immediately re-tripping on the same
+    pre-clear streak."""
+    try:
+        with get_db() as session:
+            if session is None:
+                return 0
+
+            query = (
+                session.query(VwapTrade)
+                .filter(VwapTrade.account_mode == (account_mode or "demo").lower())
+                .filter(VwapTrade.status.like("closed_%"))
+                .filter(VwapTrade.pnl_amount.isnot(None))
+            )
+            if since is not None:
+                query = query.filter(VwapTrade.closed_at >= since)
+            rows = query.order_by(VwapTrade.closed_at.desc()).limit(max(1, min(int(limit or 50), 200))).all()
+    except SQLAlchemyError:
+        logger.exception("Error computing consecutive vwap losses")
+        return 0
+
+    streak = 0
+    for row in rows:
+        if row.pnl_amount is not None and row.pnl_amount < 0:
+            streak += 1
+        else:
+            break
+    return streak
+
+
+# ----------------------------------------------------------------------
 # Binomo executor (Part 3)
 # ----------------------------------------------------------------------
 
@@ -2033,6 +2484,8 @@ def _binomo_trade_to_dict(row: "BinomoTrade") -> dict:
         "direction": row.direction,
         "amount": row.amount,
         "expiry_seconds": row.expiry_seconds,
+        "requested_expiry_seconds": row.requested_expiry_seconds,
+        "expiry_mismatch": row.expiry_mismatch,
         "entry_ts": row.entry_ts,
         "account_mode": row.account_mode,
         "result": row.result,
@@ -2065,6 +2518,12 @@ def create_binomo_trade(
                 direction=(direction or "").strip().lower(),
                 amount=float(amount),
                 expiry_seconds=int(expiry_seconds),
+                # Requested value, captured once here before placement -
+                # expiry_seconds above gets corrected to the real achieved
+                # duration after placement (update_binomo_trade_expiry_
+                # seconds); this one never changes, so the two can be
+                # compared later. See BinomoTrade's own column comment.
+                requested_expiry_seconds=int(expiry_seconds),
                 account_mode=(account_mode or "demo").strip().lower(),
                 result="pending",
                 signal_outcome_id=signal_outcome_id,
@@ -2167,7 +2626,17 @@ def update_binomo_trade_expiry_seconds(trade_id: int, expiry_seconds: int) -> bo
     _resolve_due_trades, and any later analysis of "how did a 5-minute
     signal actually do", both reflect reality instead of the request.
     Same result != "pending" guard as update_binomo_trade_entry_ts, called
-    alongside it right after place_binary_trade confirms success."""
+    alongside it right after place_binary_trade confirms success.
+
+    AUDIT FIX (2026-08-21): also sets expiry_mismatch when the achieved
+    duration differs from requested_expiry_seconds (captured once at
+    creation, never overwritten - see BinomoTrade's own column comment).
+    Confirmed via execution_gap_audit.py's Task 3 that this mismatch
+    class (15/198 real trades) correlates with markedly worse endpoint-
+    vs-execution agreement (66.7% vs 85.5%) - flagging it here means
+    future win-rate/calibration analysis can filter or segment on a
+    real column instead of re-deriving it by matching each trade back
+    to its own signal_outcomes row every time."""
     try:
         with session_scope() as session:
             if session is None:
@@ -2178,6 +2647,8 @@ def update_binomo_trade_expiry_seconds(trade_id: int, expiry_seconds: int) -> bo
                 return False
 
             row.expiry_seconds = int(expiry_seconds)
+            if row.requested_expiry_seconds is not None:
+                row.expiry_mismatch = (int(expiry_seconds) != row.requested_expiry_seconds)
             return True
     except SQLAlchemyError:
         logger.exception("Error updating binomo trade expiry_seconds id=%s", trade_id)
@@ -2541,6 +3012,105 @@ def clear_autotrade_kill_switch() -> bool:
             return True
     except SQLAlchemyError:
         logger.exception("Error clearing autotrade kill switch")
+        return False
+
+
+# ----------------------------------------------------------------------
+# VWAP executor runtime state (Крок 3.1) — same rationale/shape as
+# autotrade's block above (persisted, not a bare module global, so a
+# restart can never silently resume real order placement). vwap_executor.py
+# runs as its OWN separate local process (like binomo_executor.py, not
+# like autotrader.py which lives inside the cloud app) - these rows are
+# what the Telegram admin commands (in the cloud process) and the executor
+# process itself both read/write to stay in sync, same mechanism the
+# Binomo block already established.
+# ----------------------------------------------------------------------
+
+_VWAP_EXECUTOR_ENABLED_KEY = "vwap_executor_runtime_enabled"
+_VWAP_EXECUTOR_READONLY_KEY = "vwap_executor_readonly"
+_VWAP_EXECUTOR_KILL_SWITCH_KEY = "vwap_executor_kill_switch_tripped"
+_VWAP_EXECUTOR_KILL_SWITCH_REASON_KEY = "vwap_executor_kill_switch_reason"
+_VWAP_EXECUTOR_KILL_SWITCH_CLEARED_AT_KEY = "vwap_executor_kill_switch_cleared_at"
+
+
+def get_vwap_executor_runtime_state() -> dict:
+    try:
+        with get_db() as session:
+            if session is None:
+                return {
+                    "runtime_enabled": True, "read_only": False, "kill_switch_tripped": False,
+                    "kill_switch_reason": None, "kill_switch_cleared_at": None,
+                }
+
+            enabled_raw = _get_runtime_setting(session, _VWAP_EXECUTOR_ENABLED_KEY)
+            readonly_raw = _get_runtime_setting(session, _VWAP_EXECUTOR_READONLY_KEY)
+            tripped_raw = _get_runtime_setting(session, _VWAP_EXECUTOR_KILL_SWITCH_KEY)
+            reason = _get_runtime_setting(session, _VWAP_EXECUTOR_KILL_SWITCH_REASON_KEY)
+            cleared_at_raw = _get_runtime_setting(session, _VWAP_EXECUTOR_KILL_SWITCH_CLEARED_AT_KEY)
+
+            return {
+                "runtime_enabled": enabled_raw != "false",  # unset -> enabled by default
+                "read_only": readonly_raw == "true",  # unset -> trading by default (read_only is opt-in)
+                "kill_switch_tripped": tripped_raw == "true",
+                "kill_switch_reason": reason,
+                "kill_switch_cleared_at": _normalize_datetime(cleared_at_raw),
+            }
+    except SQLAlchemyError:
+        logger.exception("Error loading vwap executor runtime state")
+        return {
+            "runtime_enabled": True, "read_only": False, "kill_switch_tripped": False,
+            "kill_switch_reason": None, "kill_switch_cleared_at": None,
+        }
+
+
+def set_vwap_executor_runtime_enabled(enabled: bool) -> bool:
+    try:
+        with session_scope() as session:
+            if session is None:
+                return False
+            _set_runtime_setting(session, _VWAP_EXECUTOR_ENABLED_KEY, "true" if enabled else "false")
+            return True
+    except SQLAlchemyError:
+        logger.exception("Error setting vwap executor runtime enabled=%s", enabled)
+        return False
+
+
+def set_vwap_executor_read_only(read_only: bool) -> bool:
+    try:
+        with session_scope() as session:
+            if session is None:
+                return False
+            _set_runtime_setting(session, _VWAP_EXECUTOR_READONLY_KEY, "true" if read_only else "false")
+            return True
+    except SQLAlchemyError:
+        logger.exception("Error setting vwap executor read_only=%s", read_only)
+        return False
+
+
+def trip_vwap_executor_kill_switch(reason: str) -> bool:
+    try:
+        with session_scope() as session:
+            if session is None:
+                return False
+            _set_runtime_setting(session, _VWAP_EXECUTOR_KILL_SWITCH_KEY, "true")
+            _set_runtime_setting(session, _VWAP_EXECUTOR_KILL_SWITCH_REASON_KEY, (reason or "")[:255])
+            return True
+    except SQLAlchemyError:
+        logger.exception("Error tripping vwap executor kill switch")
+        return False
+
+
+def clear_vwap_executor_kill_switch() -> bool:
+    try:
+        with session_scope() as session:
+            if session is None:
+                return False
+            _set_runtime_setting(session, _VWAP_EXECUTOR_KILL_SWITCH_KEY, "false")
+            _set_runtime_setting(session, _VWAP_EXECUTOR_KILL_SWITCH_REASON_KEY, None)
+            _set_runtime_setting(session, _VWAP_EXECUTOR_KILL_SWITCH_CLEARED_AT_KEY, _utcnow().isoformat())
+            return True
+    except SQLAlchemyError:
+        logger.exception("Error clearing vwap executor kill switch")
         return False
 
 
