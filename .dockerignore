@@ -1,0 +1,14 @@
+# Local-only executors (Playwright/cTrader-order automation) — per CLAUDE.md
+# rule 8/9, these must never be deployed to Fly.io or bundled into the cloud
+# image, regardless of git branch/tracking state at deploy time.
+binomo_executor.py
+vwap_executor.py
+vwap_shadow_logger.py
+vwap_mean_reversion_event_study.py
+run_*.ps1
+scripts/register_vwap_executor_task.ps1
+scripts/unregister_vwap_executor_task.ps1
+logs/
+data/*.csv
+.git/
+.env
