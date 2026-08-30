@@ -1,4 +1,5 @@
 # news_filter.py
+import concurrent.futures
 import logging
 import os
 import threading
@@ -205,6 +206,35 @@ def _calendar_api_url(now: datetime) -> str:
     return f"{_CALENDAR_URL}?from={frm}&to={to}"
 
 
+# requests' own timeout=(5, 20) only bounds socket connect/read - it does
+# NOT bound DNS resolution (getaddrinfo), which on Windows can hang far
+# past any requests-level timeout, especially right after a reboot/network
+# reconfig (hit live 2026-08-24: this call hung for 7+ hours with zero
+# error). Running the request in its own thread and joining with a hard
+# wall-clock timeout catches that class of hang regardless of where inside
+# the call it happens. A few seconds of margin over the (5, 20) budget.
+_CALENDAR_FETCH_HARD_TIMEOUT_SECONDS = 30
+
+
+def _fetch_calendar(url: str) -> "requests.Response":
+    return requests.get(
+        url,
+        headers={"User-Agent": "Mozilla/5.0 ZigZagBot/1.0"},
+        timeout=(5, 20),
+    )
+
+
+def _fetch_calendar_with_hard_timeout(url: str) -> "requests.Response":
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    try:
+        future = pool.submit(_fetch_calendar, url)
+        return future.result(timeout=_CALENDAR_FETCH_HARD_TIMEOUT_SECONDS)
+    finally:
+        # Don't wait for a stuck worker thread to exit (it may never) -
+        # just stop tracking it and move on. It dies with the process.
+        pool.shutdown(wait=False)
+
+
 def _load_calendar_events() -> tuple[list[dict], Optional[str]]:
     now = _now()
 
@@ -215,10 +245,8 @@ def _load_calendar_events() -> tuple[list[dict], Optional[str]]:
     global _calendar_zero_event_streak_since
 
     try:
-        response = requests.get(
-            _calendar_api_url(datetime.now(timezone.utc)),
-            headers={"User-Agent": "Mozilla/5.0 ZigZagBot/1.0"},
-            timeout=(5, 20),
+        response = _fetch_calendar_with_hard_timeout(
+            _calendar_api_url(datetime.now(timezone.utc))
         )
         response.raise_for_status()
         payload = response.json()

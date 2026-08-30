@@ -53,6 +53,14 @@ class AppState:
 
         self.signal_sse_queue: queue.Queue = queue.Queue(maxsize=1000)
         self.price_sse_queue: queue.Queue = queue.Queue(maxsize=2000)
+        # Rate-limits the queue-overflow warning below (see _put_sse) - with
+        # zero SSE clients attached (e.g. vwap_executor.py, which reuses this
+        # shared state module but runs no SSE server at all) every single
+        # tick overflows the queue and this used to log on every one of
+        # them: 1.5M+ lines in under 9 hours, hit live 2026-08-24/25. The
+        # eviction itself is correct/intended (bounded queue, drop oldest);
+        # only the per-occurrence logging needed throttling.
+        self._sse_overflow_warning_last_ts: Dict[str, float] = {}
 
         self._sse_listeners: Dict[str, Dict[int, queue.Queue]] = {
             "signal": {},
@@ -396,6 +404,15 @@ class AppState:
             return "price_sse_queue"
         return "signal_sse_queue"
 
+    _SSE_OVERFLOW_WARNING_INTERVAL_SECONDS = 30
+
+    def _log_sse_overflow(self, message: str) -> None:
+        now = time.monotonic()
+        last = self._sse_overflow_warning_last_ts.get(message, 0.0)
+        if now - last >= self._SSE_OVERFLOW_WARNING_INTERVAL_SECONDS:
+            self._sse_overflow_warning_last_ts[message] = now
+            logger.warning(message)
+
     def _put_sse(self, channel: str, payload: dict) -> bool:
         if payload is None:
             return False
@@ -413,10 +430,10 @@ class AppState:
 
             try:
                 q.put_nowait(payload)
-                logger.warning(f"{channel} SSE queue була переповнена — найстаріший елемент видалено")
+                self._log_sse_overflow(f"{channel} SSE queue була переповнена — найстаріший елемент видалено")
                 return True
             except queue.Full:
-                logger.warning(f"{channel} SSE queue переповнена — подію скинуто")
+                self._log_sse_overflow(f"{channel} SSE queue переповнена — подію скинуто")
                 return False
 
     def publish_sse(self, payload: dict) -> bool:
