@@ -10,6 +10,7 @@ import logging
 
 import db
 from config import (
+    THRESHOLD_RECOMMENDATION_DAILY_NOTIFY_ENABLED,
     THRESHOLD_RECOMMENDATION_LOOKBACK_DAYS,
     THRESHOLD_RECOMMENDATION_MIN_IMPROVEMENT_PP,
     THRESHOLD_RECOMMENDATION_MIN_SAMPLES,
@@ -136,6 +137,15 @@ def send_daily_recommendation() -> None:
         return
 
     logger.info("Threshold advisor: %s", message.replace("\n", " | "))
+
+    if not THRESHOLD_RECOMMENDATION_DAILY_NOTIFY_ENABLED:
+        # 2026-08-31, user request: stop the daily Telegram send while focus
+        # is on the VWAP strategy - the directional/Binomo threshold this is
+        # about isn't going live. Calculation above still runs and logs every
+        # day (so the data trail isn't lost), only the notify_admin send is
+        # skipped. Flip THRESHOLD_RECOMMENDATION_DAILY_NOTIFY_ENABLED back on
+        # to resume.
+        return
 
     try:
         from notifier import notify_admin

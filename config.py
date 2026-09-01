@@ -225,6 +225,14 @@ THRESHOLD_RECOMMENDATION_LOOKBACK_DAYS = _env_int("THRESHOLD_RECOMMENDATION_LOOK
 THRESHOLD_RECOMMENDATION_MIN_SAMPLES = _env_int("THRESHOLD_RECOMMENDATION_MIN_SAMPLES", 20) or 20
 THRESHOLD_RECOMMENDATION_MIN_IMPROVEMENT_PP = _env_float("THRESHOLD_RECOMMENDATION_MIN_IMPROVEMENT_PP", 5.0)
 THRESHOLD_RECOMMENDATION_INTERVAL_HOURS = _env_float("THRESHOLD_RECOMMENDATION_INTERVAL_HOURS", 24.0)
+# 2026-08-31: focus is fully on the VWAP strategy now; the directional/
+# Binomo threshold this recommendation is about was already judged not
+# viable for real execution, so the daily Telegram message is just noise.
+# Default OFF - the calculation itself (build_recommendation, still logged
+# via logger.info every run) and the separate n=300/500 milestone alert
+# (check_trade_count_milestones - unaffected by this flag) are untouched;
+# only the daily notify_admin send is gated by this.
+THRESHOLD_RECOMMENDATION_DAILY_NOTIFY_ENABLED = _env_bool("THRESHOLD_RECOMMENDATION_DAILY_NOTIFY_ENABLED", False)
 
 # Part 3: autotrader. Disabled by default. AUTOTRADE_ACCOUNT_MODE has NO
 # Telegram/Web App toggle anywhere in this codebase on purpose — switching to
