@@ -411,7 +411,11 @@ class SpotwareConnect(EventEmitter):
             self._flush_pending_data_requests()
 
             logger.info("Step 2 OK. Account %s authorized.", res.ctidTraderAccountId)
-            self.emit("ready")
+            # BUG FIX (2026-09-03): pass self along so a stale/superseded
+            # client's "ready" can't be mistaken for the current one's - see
+            # the emit("ready", self) at _handle_api_error's ALREADY_LOGGED_IN
+            # branch below for the race this closes.
+            self.emit("ready", self)
             return
 
         if pt == ProtoOAPayloadType.PROTO_OA_ERROR_RES:
@@ -449,7 +453,20 @@ class SpotwareConnect(EventEmitter):
             self.is_authorized = True
             self._flush_pending_data_requests()
             logger.info("Account already authorized. Marking as ready.")
-            self.emit("ready")
+            # BUG FIX (2026-09-03, live finding): a disconnect can leave TWO
+            # SpotwareConnect instances authenticating in parallel - Twisted's
+            # own ClientService auto-reconnects the OLD one at the transport
+            # layer while ctrader.py's _do_reconnect() independently builds a
+            # NEW one and reassigns app_state.client to it. Both objects still
+            # have on_ctrader_ready wired (EventEmitter never unbinds a
+            # retired client), so whichever finishes auth SECOND used to
+            # trigger _request_symbols() against whatever app_state.client
+            # happened to be at that moment - often the OTHER, not-yet-
+            # authorized object, producing "Symbols error: No Account ID" and
+            # a stuck poll cycle (hit live 2026-09-03, ~7min hang, force-
+            # killed by the supervisor). Passing self lets on_ctrader_ready
+            # verify the ready client is still the current one before acting.
+            self.emit("ready", self)
             return
 
         if res.errorCode == "BLOCKED_PAYLOAD_TYPE":

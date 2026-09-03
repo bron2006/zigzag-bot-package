@@ -244,8 +244,21 @@ def _do_reconnect():
     start_ctrader_client()
 
 
-def on_ctrader_ready():
+def on_ctrader_ready(client):
     global _reconnect_attempt
+
+    # BUG FIX (2026-09-03): a "ready" event can arrive from a client that's
+    # no longer app_state.client - a disconnect can leave the OLD
+    # SpotwareConnect auto-reconnecting at the transport layer (Twisted's
+    # ClientService) at the same time ctrader.py's own _do_reconnect() built
+    # a NEW one and reassigned app_state.client. Both still have this handler
+    # wired. Acting on the stale one's "ready" used to call _request_symbols
+    # against whatever app_state.client happened to be at that moment - often
+    # the OTHER, not-yet-authorized client, producing "Symbols error: No
+    # Account ID" and a stuck poll cycle (hit live 2026-09-03, ~7min hang).
+    if client is not app_state.client:
+        logger.info("cTrader ready event from a superseded client - ignoring.")
+        return
 
     _reconnect_attempt = 0
     logger.info("cTrader account authorized. Loading symbols...")

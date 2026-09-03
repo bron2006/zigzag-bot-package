@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from twisted.internet.defer import Deferred
 
@@ -94,6 +94,32 @@ class SpotwareConnectQueueTest(unittest.TestCase):
         self.assertTrue(self.sc.is_authorized)
         self.send_mock.assert_called_once()
         self.assertEqual(self.sc._pending_data_requests, [])
+
+    def test_account_auth_res_emits_ready_with_the_client_instance(self):
+        # BUG FIX (2026-09-03, live finding): a stale/superseded
+        # SpotwareConnect's "ready" used to be indistinguishable from the
+        # current one's to ctrader.on_ctrader_ready, which read whatever
+        # app_state.client happened to be at that moment - see ctrader.py's
+        # own regression test for the actual race this closes. This just
+        # proves the client is included on the event so a listener CAN tell.
+        handler = MagicMock()
+        self.sc.on("ready", handler)
+
+        with patch("spotware_connect.reactor.callFromThread", side_effect=lambda f, *a, **k: f(*a, **k)):
+            auth_res = ProtoOAAccountAuthRes(ctidTraderAccountId=1)
+            self.sc._on_message_received(None, _wrap(ProtoOAPayloadType.PROTO_OA_ACCOUNT_AUTH_RES, auth_res))
+
+        handler.assert_called_once_with(self.sc)
+
+    def test_already_logged_in_error_emits_ready_with_the_client_instance(self):
+        handler = MagicMock()
+        self.sc.on("ready", handler)
+
+        with patch("spotware_connect.reactor.callFromThread", side_effect=lambda f, *a, **k: f(*a, **k)):
+            err = ProtoOAErrorRes(errorCode="ALREADY_LOGGED_IN", description="already")
+            self.sc._on_message_received(None, _wrap(ProtoOAPayloadType.PROTO_OA_ERROR_RES, err))
+
+        handler.assert_called_once_with(self.sc)
 
     def test_disconnect_fails_pending_queued_requests(self):
         req = ProtoOAGetTrendbarsReq(ctidTraderAccountId=1, symbolId=1)
