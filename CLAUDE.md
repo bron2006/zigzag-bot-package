@@ -969,3 +969,13 @@ StartWhenAvailable, limit20min, archives ONLY unlocked old .log.
 stdout/stderr: активний runlog усе ще може рости; retention після закриття
 не є hard size cap. Архів теж займає диск: сумарний diskspace не звільнено,
 зменшено лише робочу папку. Жодних executor restarts/Flydeploy у cleanup.
+
+GitHub push підтверджено ls-remote: recovery branch HEAD f97e0cd дорівнює
+local HEAD. 4 scoped commits0875170/3a05e9d/d76d3a4/f97e0cd; main не змінено.
+231 selected runtime/local regressions +77 research tests passed (308total),
+усі offline DATABASE_URL=SQLite-memory, executors disabled. Повторний archive
+dry-run0files; task manual run перевірено. Task uses Interactive principal:
+daily12:00 Kyiv працює при login, StartWhenAvailable дозволяє catch-up;
+не обіцяти запуск при logout/offline. Closed logs у working tree51.43MiB,
+heartbeat09.10 02:24:19Kyiv, cloudhealth02:24:24Kyiv ok/83prices/4stale.
+Архів має повний manifest; live journaling не зупиняли/не очищували.
