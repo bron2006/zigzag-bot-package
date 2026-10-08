@@ -34,3 +34,10 @@ logs/
 # Claude Code: особисті локальні дозволи (не для коміту, специфічні для
 # цього ноутбука/сесії).
 .claude/settings.local.json
+
+# Local generated research data; tracked training fixtures remain tracked.
+data/*.csv
+research*/**/*.csv
+research*/**/*.json
+research*/**/*.gz
+.hypothesis/

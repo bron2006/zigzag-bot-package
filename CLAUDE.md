@@ -464,3 +464,508 @@
 - Fly.io деплой завжди йде через короткий `degraded` (Quote feed
   перепідключається) одразу після рестарту машини — це нормально,
   чекати ~30-60с, не панікувати одразу.
+
+## 03.10.2026 — алерти сторожа під час вихідних
+
+У поточному локальному stderr знайдено 10 суботніх `poll cycle stale`
+алертів із підтвердженням `HTTP fallback message sent`. Джерело — старий
+локальний VWAP-виконавець, не новий паперовий AI-агент. `_poll_all_symbols`
+вже мав повне закриття Пт 22 UTC → Нд 21 UTC, але окремий watchdog його
+не перевіряв. Пауза мережевих дій не означала зупинки потоку сповіщень.
+
+Додано `_dead_mans_switch_tick`: під час цього ж вікна не надсилає алертів,
+скидає latch і оновлює лише внутрішню часову базу для grace після відкриття.
+НЕ пише heartbeat замість основного циклу й не маскує робочі зависання.
+Зміна також перенесена в `zigzag_bot_review`, не зачіпаючи його DB-таймаути.
+8 нових тестів watchdog та 19 попередніх тестів виконавця пройшли;
+попередні тести запускалися з SQLite у пам'яті, без прод-БД.
+
+ВАЖЛИВО: код на диску виправлений, але застосування до живого SYSTEM-процесу
+ще НЕ підтверджене. Спроба зупинити перевірений PID 47472 (supervisor 4196)
+отримала Access denied. Власнику потрібен адмінський PowerShell:
+`& 'C:\Users\Work\Desktop\zigzag_bot\scripts\reload_vwap_weekend_fix.ps1'`.
+Скрипт перевіряє повний шлях виконавця і supervisor перед зупинкою тільки
+старого дочірнього Python; supervisor має сам завантажити новий код.
+Після цього перевірити новий запис Starting, свіжий heartbeat і новий
+stderr, а не заявляти про живий фікс лише за тестами. Fly.io не змінювали.
+
+Уточнення після невдалого запуску reload-скрипта власником: перша версія
+помилково шукала повний шлях `vwap_executor.py` у CommandLine, тоді як
+supervisor реально запускає `python.exe -u vwap_executor.py` із WorkingDirectory.
+Скрипт виправлено: звіряє PID і час запуску supervisor з локальним журналом,
+шукає єдиного Python-нащадка з відповідним часом старту й не потребує видимого
+CommandLine SYSTEM-процесу. DryRun на живому стані підтвердив PID 47472,
+parent 4196, без зупинки процесів. Нова версія після зупинки також очікує
+новий PID та startup-маркер `VWAP watchdog: weekend silence enabled.` у stdout.
+Власник виконав адмінський перезапуск 03.10.2026 о 19:22 за Києвом.
+Живе застосування підтверджене: новий PID 44376, parent 4196; stdout містить
+`VWAP watchdog: weekend silence enabled.`, demo та Read-only: True.
+Heartbeat свіжий; у новому stderr лише стартові банери й попередження
+telegram/urllib3, без нових stale-cycle алертів на момент перевірки.
+Виправлення вихідного watchdog тепер завантажене у запущений виконавець.
+
+## 07.10.2026 — буденні зависання: виправлення основної локальної копії
+
+За запитом власника змінено саме `C:\Users\Work\Desktop\zigzag_bot`, не
+лише review-worktree. Стратегія, рахунок та .env не змінювалися.
+Сьогодні до перевірки було 29 supervisor stale-heartbeat рестартів,
+11:14–17:23 за Києвом; 9 із 29 stderr мали DNS-помилки, 28 — DISCONNECTED.
+Це не означає, що кожен рестарт спричинений БД: послідовне очікування
+по 20 секунд на кожну пару також робило недоступність брокера схожою на hang.
+
+Зміни:
+- `bounded_io.py`: один daemon-worker, дедлайн очікування reactor 10 секунд,
+  без черги додаткових worker-ів за завислим DNS, ігнорування пізніх результатів.
+  Потік ОС не можна примусово завершити; для його заміни збережений supervisor.
+- `vwap_executor.py`: DB-читання poll/entry/exit переведені на цей worker;
+  DB-помилка не видає успішний heartbeat, несподівана помилка не вбиває LoopingCall.
+  Немає нових ордерів при недоступних runtime-прапорцях. Emergency-stop
+  тепер також поважає READ_ONLY. Після трьох невдалих data fetch цикл
+  завершується degraded, scan budget 60 секунд, readiness wait 30 секунд.
+  Heartbeat завершеного degraded циклу означає живий цикл, НЕ здоровий quote feed.
+  Під час збоїв частина пар може бути пропущена — не вважати це повним збором даних.
+- `db.py`: connect 8s / pool 10s / statement 8s / lock 5s; runtime failure
+  fail-closed з `database_available=false`. Лише startup options НЕ спрацювали
+  на реальному pooler: тому SET LOCAL застосовується на початку КОЖНОЇ транзакції.
+  Схему та глобальні налаштування БД не змінювали.
+- cTrader: відключений ClientService тепер зупиняється; pending-запити
+  завершуються при disconnect; пізня помилка whenConnected після request timeout
+  не дає AlreadyCalledError. Черга TcpProtocol тепер окрема для кожного transport,
+  не class-level deque. Auth handshake errback запускає recovery; retired-client
+  callbacks ігноруються; навмисна пауза скасовує запланований reconnect.
+- OAuth HTTP має timeout; refresh/persistence працюють через bounded daemon I/O,
+  не блокують reactor. Пізній refresh після stop не переписує токени.
+
+Перевірка: `python -m unittest discover -s tests` — 314 tests OK з SQLite
+у пам'яті та вимкненими executor-ами. Старе SQLite FK migration warning
+лишається поза цим виправленням; тести пройшли. `scripts/check_db_deadlines.py`
+не імпортує db/config/schema-init, використовує killable child 25s і read-only
+транзакцію: SELECT 1 OK, SHOW statement_timeout=8s, lock_timeout=5s,
+SELECT pg_sleep(9) перервано через 8.06s. Жодних бізнес-даних не записано.
+
+ЖИВЕ ЗАСТОСУВАННЯ ЩЕ НЕ ПІДТВЕРДЖЕНЕ: SYSTEM worker PID 3864,
+supervisor PID 3920, старт 07.10 о 17:26. Сесія Codex не Administrator.
+Новий `scripts/reload_vwap_reliability_fix.ps1 -DryRun` підтвердив ці PID;
+без адмінських прав скрипт безпечно відмовляється ДО Stop-Process.
+Власнику виконати в Administrator PowerShell:
+`& 'C:\Users\Work\Desktop\zigzag_bot\scripts\reload_vwap_reliability_fix.ps1'`.
+Перевіряє унікальний старий worker за parent/start time, зупиняє тільки його,
+чекає до 180s на новий PID, startup marker v2, READ_ONLY=True та новий heartbeat.
+Потім окремо перевірити stderr/quote health; marker сам не доводить стабільність.
+Не запускати дубль виконавця й не копіювати старий review-файл поверх цих змін.
+Fly.io НЕ перезапускали та НЕ деплоїли: CLI не авторизований, deployed fix
+відсутній. Хмарне застосування й аналіз його внутрішніх логів залишаються окремим
+незавершеним кроком. Модельний paper-agent і його автозапуск цим патчем не змінені.
+
+Уточнення після адмінського reload власником 07.10.2026: старий PID 3864
+зупинений 18:49:14, supervisor 3920 запустив новий PID 26444 о 18:49:29.
+Живе завантаження v2 підтверджене stdout marker та demo / Read-only: True.
+cTrader авторизований 18:49:44, 352 символи завантажені 18:49:46.
+Новий heartbeat записаний 18:50:42; на перевірці 18:50:59 його вік 16 секунд.
+Є READ-ONLY would-enter GBPAUD о 18:50:25, тобто цикл дійшов до аналізу.
+У новому stderr на цю мить немає TimeoutError / DISCONNECTED / stale-cycle;
+є відоме bounded SSE queue-overflow warning, не підтвердження hang.
+Це підтверджує застосування патча та перший завершений цикл, НЕ доводить
+багатогодинної стабільності й НЕ змінює статус необновленої хмари.
+
+## 07.10.2026 — пошук нових підходів за запитом власника
+
+Дослідження ізольоване в `research_new_methods_20261007/`, без імпортів
+бота/БД/config і без ордерів. Працюючий VWAP та AI-агент не змінювали.
+PROTOCOL.md записаний до розрахунку: рівно три M5 правила, незмінні
+затримки/стопи/витрати, ранній і пізній блоки, paired opposite-direction
+контроль, bootstrap цілих днів усіх пар, поправка для трьох гіпотез.
+Наявна cTrader історія: 208536 барів, 25 пар, 29 повних робочих дат,
+725 повних pair-day сесій. Неповних сесій у цій брокерській історії немає;
+це НЕ означає відсутність пропусків у старому живому executor.
+Результат пізнього блоку 14.09–01.10: momentum n350 PF0.903,
+opening breakout n338 PF0.702, failed breakout n293 PF0.935.
+Усі три відхилені за попередньо заданими критеріями; не підбирати параметри.
+Історія вже використовувалася: ретроспективний поділ НЕ є сліпим OOS.
+
+Після цього записаний окремий DAILY_TREND_PROTOCOL.md до перегляду
+результатів четвертої гіпотези: BTC/ETH Spot, денний SMA200 long/cash,
+одноденний execution buffer, без плеча/short/funding/AI. Публічні
+Binance market-data-only klines скачані без API key або доступу до акаунта:
+по 2830 безперервних днів 01.01.2019–30.09.2026, raw JSON + provenance/hash.
+Ранній блок 2020–2023, пізній 01.01.2024–30.09.2026 (1004 дні).
+Пізній: BTC trend +48.7%, стресс +40.0%, DD −35.5%; buy/hold +97.4%,
+DD −53.0%. ETH trend +59.7%, стресс +52.8%, DD −44.3%; buy/hold +17.5%,
+DD −67.6%. Витрати умовні 0.1%/сторону, стрес 0.3%, не тариф користувача.
+Обидва активи пройшли ЛИШЕ описову перевірку ризику, НЕ доказ alpha.
+Менші DD можуть пояснюватися меншою експозицією, BTC відстає від hold.
+26 завершених угод пізнього блоку — не 26 незалежних режимів.
+18 тестів пройшли, включно з незалежною векторизованою звіркою equity
+на двох активах/двох блоках/двох витратах (rtol/atol1e-12) і future-mutation.
+CSV аналізувались bundled Python; сирі джерела залишено без змін.
+
+Підсумок та обмеження: `research_new_methods_20261007/REPORT.md`.
+Наступний крок: зрівняний за ризиком/експозицією контроль, перевірка
+по режимах/іншому джерелі та невизначеність. Тільки після цього обговорювати
+ізольований paper-прототип; реальні гроші й деплой не авторизовані.
+
+## 07.10.2026 — завершене відтворення записаних VWAP-намірів
+
+Після відхилених нових підходів виконано перевірку фактичних would enter,
+а не черговий підбір параметрів. Файли в research_new_methods_20261007/;
+головний підсумок VWAP_FINAL_REPORT.md, дані vwap_tick_results.json.
+858 логів: 17809 рядків, 17758 точних унікальних, 378 перших намірів
+на пару/UTC-день після фільтра 12:00–16:00 UTC. Період 25.08–07.10,
+25 кросів, усі 378 ASK/BID-вікна отримані та збережені .json.gz з SHA256.
+UTC+3 підтверджено для цього літнього інтервалу. LIMIT/SL буквальні;
+діагностичне JPY-перемасштабування неправильне й відхилене. LightSymbol
+у cache не має digits, старий converter бере fallback5: runtime100x
+помилки на цих логах НЕ підтверджено. Не міняти масштаб навмання.
+
+325 умовних виконань, 53 невиконані, невідомих результатів 0 за моделлю.
+ASK/BID + roundtrip комісія0.02ATR: PF0.525833, mean−0.269318R,
+денний bootstrap95% CI [−0.438675;−0.080112], сума−87.528R.
+Стрес0.04ATR комісія+0.02ATR негативне exit-slippage: PF0.505676.
+До комісії, зі спредом, PF~0.536; витрати не пояснюють весь негативний
+результат. Ранній PF0.4897, пізній PF0.5673. Пізній блок не сліпий OOS.
+Сума R не є доходністю депозиту. 61 offline-тест пройшов; незалежна
+звірка counts/PF/R/timestamps/stress/day totals пройшла.
+
+Важливі межі: перший намір pair-day, не всі цикли; умовний resting VWAP
+target останнього завершеного M5-бару, не live MARKET exit після poll;
+price touch не гарантія fill; без портфельних лімітів/risk-manager;
+пагінація може пропускати котирування тієї самої мілісекунди на межі
+сторінок. Watchdog-рестарти по днях окремі, НЕ відсоток uptime.
+Старий vwap_live_signal_report використовує Low навколо event timestamp
+та переобчислений SL, тому PF1.42 — не replay logged LIMIT/SL.
+READ-ONLY _maybe_enter повертається до create_vwap_trade: наміри не є
+повним журналом paper-позицій. Цю модель не переносити на реальні гроші.
+
+Дослідження завершене, фоновий fetch завершився; нового forward-тесту
+або shadow-журналу життєвого циклу не запускали. Runtime, токени,
+реальні ордери, Task Scheduler, Fly-деплой/рестарти не змінювали.
+Відтворення без мережі: python research_new_methods_20261007/finalize_vwap_replay.py
+Звірка: python research_new_methods_20261007/audit_final_vwap.py
+
+## 07.10.2026 — пошук виходу після негативного replay, капітал $1000
+
+User попросив шукати результат і уточнив капітал$1000. Допустима втрата
+й очікуваний місячний дохід поки невідомі. Ордерів/runtime змін не було.
+План і статус: research_new_methods_20261007/RECOVERY_PLAN.md.
+
+Виконано методологічний контроль VWAP на800повних pair-day сесіях:
+на одних156подіях legacy-style Low-вхід/поточний exit-bar target PF1.424;
+майбутній LIMIT/причинний вихід PF0.630; band-entry/SL як у executor
+PF0.499. First-eligible після12 на повній історії PF0.535. Це діагностика,
+НЕ точна репліка старих CSV, НЕ новий OOS, не однофакторний ефект лише
+ціни входу. Підтверджено різні entry/sigma/SL/target/відбір у старому
+backtest і executor. Деталі VWAP_ATTRIBUTION_REPORT.md; original code
+залишено для історії, не використовувати старий позитивний verdict
+як доказ придатності до real-trading. Зависання не пояснюють весь провал.
+
+Cash-and-carry public Binance screen: три ASKspot/BIDdated-futures зрізи,
+BTC/ETH current/nextquarter, без ключів/privateAPI. Свіжі BTCгрудень,
+ETHгрудень,BTCберезень покрили умовний0.8% буфер; ETHберезень stale/null.
+Перевірено глибину100рівнів для$1000/5000/10000spot-номіналу. BTCберезень
+gross~2.38%, netпісля додаткового0.8%~1.58%номіналу до26.03.2027;
+на умовному2×капіталі~1.7%простої річної оцінки. При бюджеті$1000
+і умовних$500spot/$500reserve — порядок$8 до погашення, не місячний
+дохід, не гарантований прибуток. Реальні tariffs/access/margin/settlement
+невідомі, резерв не гарантія відсутності ліквідації. Trading-agent не
+будувати під цей зріз. CARRY_SCREEN_REPORT.md. Public GET-child bounded90s.
+
+Незмінний BTC/ETH SMA200 перевірено на концентрацію: базовий late-період
+2024–30.09.2026,15/11циклів, безнайкращого BTC+11.2%,ETH+20.1%;
+без3кращих обидва негативні, це sensitivityexpost, не торговий фільтр.
+Просадки35.5%/44.3%, не регулярний заробіток. Попередній gate переваги
+надmatchedhold НЕ скасовано й НЕ пройдено; параметри не змінені.
+Добутки net-trade factors звірено з незалежною equity на2активах/2fee.
+TREND_CONCENTRATION_REPORT.md. Нового forward-процесу/paper-агента
+або моніторингу НЕ створено/НЕ запущено. Наступна перевірка після
+узгодження ризику — незалежні ціни та точний незмінний paper-облік.
+
+## 08.10.2026 — паперовий lifecycle реалізований, live-застосування очікує
+
+На прямий запит користувача реалізовано локальний paper-journal, а не
+лише черговий план. vwap_paper.py (stdlib SQLite/WAL + single-writer
+OS-lock) та vwap_paper_bridge.py (daemon + bounded queue2000) інтегровані
+в READ-ONLY vwap_executor.py до real create_vwap_trade. Broker-order гілку,
+торгові прапорці/.env/Supabase/Fly не змінено. Дублі would-enter замінено
+одноразовим paper-intention queued; прийняття підтверджує Paper pending.
+
+Один intent symbol/session: pending/open/closed/expired/cancelled/unknown,
+skipped_capacity теж журналюється. Fill за новим ASK<=LIMIT після сигналу,
+вихід за BID; fee proxy0.02ATR14, R не cash PnL. Сторони котирування мають
+окремі receipt timestamps і15s age-check. STOP-first, останній спостережений
+закритий M5 VWAP target, hard-end/manual-stop лише за відомим свіжим BID.
+Рестарт/connection gap/queue loss/stale data роблять активні outcomes
+unknown, не profit0. Paper max slots включає pending; повний валютний
+NAV та всі portfolio-kill limits поки не симулюються. Це observed-quote
+модель, НЕ гарантований broker-fill. Стратегія vwap-paper-quote-market-v1;
+реальний старий bar-range exit ще відрізняється й не проголошений тотожним.
+
+scripts/vwap_paper_replay.py використовує той самий PaperJournal для
+нормалізованих JSONL-подій; не чіпає production journal/існуючий output.
+scripts/vwap_paper_status.py читає без імпорту бота, показує статуси/дні/R.
+Деталі та обмеження VWAP_PAPER.md. 37 нових tests пройшли, у тому числі
+збіг bridge/replay;49 executor/watchdog/reliability regressions пройшли
+на SQLite-memory (наявний FK-warning harmless);77 research tests пройшли.
+Разом163. py_compile і PowerShell-parser успішні.
+
+Контрольований reload scripts/reload_vwap_paper_fix.ps1 перевіряє explicit
+READ_ONLY=true, identity supervisor/PID/starttime, попередній readonly
+stdout; потім лише одного worker, нового PID/marker/readonly/heartbeat
+і Paper journal ready. Не створює Task чи дубль. -DryRun підтвердив
+supervisor3920 і worker10364, start08.10.2026 16:29:57local. Старий stdout
+Read-only:True, без paper-marker; production journal ще не існує.
+Поточний tool-сеанс НЕ administrator, тому actual reload не виконувався.
+Код готовий, але НЕ називати live paper-тест запущеним до нового PID,
+paper-ready marker і наявного журналу. Потрібен запуск скрипта адміністратором.
+
+### Уточнення після reload та перевірки 08.10.2026 ввечері
+
+Власник виконав admin reload. Supervisor3920 запустив worker29160
+о22:44:32local. READ-ONLY=True, Paper journal ready та SQLite-журнал
+підтверджені; heartbeat22:46:43. Це off-session startup, НЕ перевірка
+живих входів: journal orders0, session закрита. Віртуальний облік
+активований, але прибутковість і справність повного in-session шляху
+поки не доведені. Історичний ASK/BID replay PF0.526 залишається
+негативним; paper-журнал не скасовує цього висновку.
+
+Після reload знайдено і виправлено ще одну помилку PaperBridge:
+invalid signal під час drain після connection/queue gap міг завершити
+writer, хоча normal path обробляв такий input без завершення.
+Тепер validation errors не зупиняють recovery, task_done виконується
+у finally; disk/SQLite errors як і раніше fail closed. Доданий тест
+перевіряє invalid input + gap, живий writer і подальший повний
+signal -> ASK fill -> BID exit. 38 paper-tests +49 executor/watchdog/
+reliability tests пройшли (87 разом), DB лише SQLite-memory.
+ЦЕ ОСТАННЄ ВИПРАВЛЕННЯ ЛИШЕ У SOURCE: PID29160 стартував до нього,
+повторного reload не виконували. Не видавати тести за live-застосування.
+
+## 08.10.2026 — окремий локальний diagnostic trend-bot створений і запущений
+
+Пряме доручення власника: «шукай варіанти, роби мені бота».
+local_trend_bot/ містить протокол ДО розрахунку, спільні чисті rules,
+offline backtest, stdlib public-data fetch та незалежний SQLite paper.
+Два фіксовані кандидати Donchian55/20 і momentum365, BTC/ETH Spot,
+одна повна доба buffer. Ніяких private/order API/config/DB/Supabase/
+cTrader імпортів, ключів, плеча або real orders. Старий VWAP не змінено.
+
+Stress0.3%/сторону,2024–30.09.2026: breakout BTC+26.1%,ETH+130.9%,
+DD−29.8%/−22.6%; momentum BTC+99.5%,ETH+15.0%,DD−32.1%/−45.5%.
+ОБИДВА gate FAILED, adjusted paired block-bootstrap lower excess
+негативний для кожного активу. Не проголошувати edge, не оптимізувати
+параметри після результату. Source hashes + protocol hash у
+local_trend_bot/research_result_v1.json. Ця історія вже відома, не OOS.
+
+Бот signals-only за замовчуванням; власнику запущено ОКРЕМИЙ
+--loop --diagnostic-paper для явно позначеної перевірки невдалих правил
+на нових даних, не рекомендація на real. Два незалежні модельні рахунки
+по1000, кожен BTCcash500+ETHcash500; НЕ один реальний депозит2000.
+Стартовий день bootstrap без входів, live наступні рішення за observed
+ASK/BID+0.3%/сторону, не за історичним Open. Різниця ціни/затримки
+документована. Restart/day dedup, single-writer lock, атомарні зміни,
+whole fetch child45s, stale/invalid inputs skip+last_error, retry15min.
+
+22 нових тестів (включно незалежною equity і паперовим roundtrip);
+38 paper-регресій повторно пройшли. Public fetch справді завершився.
+Background PID9700 старт08.10.2026 23:13:44local, last_success23:14:03,
+stderr0bytes, four decisions already_processed після початкового
+one-shot, paper_trades0. SQLite logs/local_trend_bot.sqlite3.
+Процес НЕ SYSTEM і без Task Scheduler: Windows reboot його не підніме.
+Статус: python -m local_trend_bot.bot --status; README.md містить межі.
+НЕ казати, що gate пройдено, або що healthy loop є доказом прибутку.
+
+## 08.10.2026 — два додаткові пошуки, не очікування forward
+
+На прямий запит «ну так шукай» виконано research_funding_20261008/.
+Нові протоколи ДО результатів: funding carry та relative12month BTC/ETH.
+Public raw funding3012 events/asset, future/mark1004daily bars/asset,
+2024–30.09.2026, hashes. Без private API/config/DB/orders/deploy.
+
+Funding-carry monthly rebuild50%spot+50%collateral:2025–Sep2026
+BTC−14.69USD,ETH−17.61USD на1000(base); stress−65.21/−68.20.
+Funding37.39/34.73 меншеfees52.23/52.46. 2024 був позитивним,
+late-gate провалений. Це НЕ доказ збитковості будь-якої funding-моделі:
+інші rebalance policies ще не перевірені. Margin stress10% пройдено,
+але не реальна liquidation simulation. PROTOCOL.md,results_v1.json.
+
+Relative12month ranking longwinner/shortloser,fullmonthbuffer:
+latebase−13.37%,stress−17.00%,dailycloseDD~43%; opposite тежnegative.
+Не підібрано переможця, не змінено horizon, gate FAILED.
+RELATIVE_PROTOCOL.md,relative_results_v1.json. Звіт REPORT.md.
+
+19 нових testspassed, independent audit132funding-month+396relative-leg
+checks passed (<1e-8). Повтор audit: python -m research_funding_20261008.audit.
+Працюючі VWAP/trendботи та реальні рахунки не змінювали, нові процеси
+не запускали. Пошук у цій ітерації не дав допущеного кандидата.
+
+## 09.10.2026 — перевірка напрямку всередині існуючого VWAP
+
+На вимогу шукати вихід без втрати сенсу бота виконано offline
+paired direction diagnostic, не запущено ще одного бота.
+Протокол до розрахунку: research_new_methods_20261007/VWAP_DIRECTION_PROTOCOL.md.
+378 записаних намірів:324 paired,52 unfilled,2 unknown.
+Симетричні1:1 SL/TP від фактичних ASK/BID, SAME common entry;
+НЕ старий replay рухомої VWAP-цілі. Не порівнювати LONG PF напряму
+зі старим0.526. Ретроспективна історія, НЕ новий OOS.
+AllbaseLONG PF0.735,SHORT0.838; latebase0.702/0.938,
+latestress0.675/0.903. Day-cluster CI перетинають0, gateFAILED.
+Перевертання сигналу не є підтвердженим виходом.
+11 unit-tests passed; independent1296PNL checks passed.
+
+6/324 entryASK<=originalSL; freshASK<=SL вже на signal timestamp:
+04.09 EURSGD,GBPSGD;18.09 AUDJPY,CADCHF,CADJPY,SGDJPY.
+Це потенційний ризик запізнілого сигналу, НЕ доказ real-order execution.
+Виключення6 не лікує результат:LONG PF0.754,SHORT0.811.
+У діагностиці стопи симетрично перебудовані, живе правило НЕ змінене.
+Детальний звіт VWAP_DIRECTION_REPORT.md, результат direction_probe_v1.json.
+Процеси/налаштування/рахунки/деплой не змінювали; livehealth тут не перевіряли.
+
+## 09.10.2026 — виправлення вимірювання результату ML-сигналів (SOURCE ONLY)
+
+Прямий дозвіл власника «розпочинай»: виправити статистику, НЕ напрямки
+сигналів/модель/торгівлю. Backup17.04 використано як приклад, не відкат.
+У backup Untitled1.ipynb label1=nextClose>Close, EURUSD15m, target1bar,
+testaccuracy51.20%. Той самий modelSHA93c526a9dc9694c461c41925041897f5c92d6db695c9928c4ed31cfe6c09c717
+у backup/current; model/scaler11040training examples як у notebook.
+Це сильна суперечність гіпотезі class1=down у HOTFIX09.08,
+але direction mapping НЕ переключали. Git підтверджує regression10.08
+через неузгоджений scanner gate після swap, а не доказ прибутковості.
+
+signal_tracking.resolve_pending_signals більше не використовує довільний
+latestmid після horizon. state має bounded600s/601samples per-symbol
+quote history (перший valid sample/сек). BID/ASK збираються з partial
+events, обидві сторони <=5s old, finite positive і uncrossed.
+Endpoint: перший retained full quote у [deadline,deadline+5s], <=now,
+timestamps це локальний UTC receipt time, НЕ broker settlement timestamp.
+NaiveDBdatetime трактуємо UTC, aware конвертуємо epoch.
+Немає sample після fixedwindow/після restart => unknown/exitNULL.
+До закінчення5s може залишатись pending. Feed gaps не домислюються.
+New results up_timed/down_timed/flat_timed; schema НЕ змінюється.
+Public /winrate/API статистика включає лише timed outcomes у winrate;
+старі up/down/flat як unverified, unknown окремо, обидва НЕ pending
+і НЕ win/loss. Старі записи НЕ видаляли/перераховували. Telegram/WebApp
+показують обидва лічильники. Пороги/MLправило/виконавці НЕ змінені.
+get_pair_signal_outcome_stats default legacy-compatible для stake-policy;
+verified_only=True доступний явно, не перемикати staking тут.
+
+Тести виконуються лише DATABASE_URL=sqlite:///:memory:, executor flagsfalse.
+Endpoint synthetic tests + SQLAlchemy SQLite roundtrip/real stats query,
+regressions signal_tracking/analysis/db helpers/threshold_advisor.
+Зміна НЕ deployed, процеси НЕ restarted, remoteDB НЕ чіпали.
+Після застосування старий процент закономірно стане n/a, доки не буде
+timed results. Це вимірювання напрямку midpoint, НЕ netPNL/profit proof.
+
+## 09.10.2026 — продовження без нових ботів, жива перевірка і model contract
+
+Пряме побажання власника: НЕ надсилати файли/посилання/перелік змінених
+файлів; пам'ять оновлена через дозволену ad_hoc note, не через MEMORY.md.
+Перевірено live /api/health: degraded, Quote feed ERROR, Live prices0,
+TelegramACTIVE. Це coarse SYMBOLS_LOADED=false, НЕ встановлена причина.
+fly auth whoami: no access token available. НЕ рестартували/deploy.
+Власнику потрібен fly auth login; токени/паролі в чат не надсилати.
+Не підміняти cloud/localhealth: локальний Python PID9096 зі стартом
+09.10 00:30:10local і heartbeat рухається, off-session London.
+
+Повторено original model evaluation на ідентичному backup/current
+EURUSD15m_history, 13800rows. Original train11040, heldout2759
+(останній рядок без futureClose виключено, на відміну від notebook).
+Accuracy51.17796%. Fixed raw score>75/<25:72signals,1tie,
+original38correct/71decided=53.52%,inverse33/71=46.48%.
+Це стара heldout історія2025-07-31..09-09, НЕ новийOOS і НЕ PNL.
+Результат не підтверджує обіцяну87%точність, але не є достатнім для
+автоматичного відкату mapping. Модель НЕ перезаписували/перенавчали.
+
+Offline extracted CURRENT _prepare_features (без importsconfig/DB/broker),
+latest300cachedM5bars на25FXcrosses:24/25 мають >=1feature поза
+min/max ORIGINALtraining11040. GBPCHF єдина без таких порушень.
+TrainingEMA200range1.0416709684..1.1786365440; ATR/EMAprice-units
+не універсальні між EURUSD і JPY/crypto. Це applicability diagnostic,
+НЕ inference profitability чи proof що будь-який OODprediction хибний.
+Модель навченаEURUSD15m, currentsignals1m/5m/15m+broadassets.
+Не мінятиfeatures під старий pkl: тоді це вже інша модель.
+
+.dockerignore локально excludes research*/local_trend_bot/scripts/tests/
+bytecode/notebooks: tickcaches і додаткові боти не потрібні COPY . .
+у cloudimage. НЕ deploy з dirtycheckout без review узгодженогоdiff.
+
+## 09.10.2026 — погоджене хмарне оновлення, release v1488
+
+Власник прямо дозволив «Так, застосувати оновлення» після опису scope:
+cTrader reconnect isolation/deadlines, broker quote timestamps і окрема
+перевірена статистика. BUY/SELL mapping, модель, рахунки та real orders
+не змінені. Fly auth успішний; перед deploy прод мав 0 quotes і понад
+7500 reconnect attempts. Restart/redeploy recovery НЕ доводить, що всі
+причини інциденту встановлені або баг більше ніколи не повториться.
+
+Release v1488 complete, machine 48e1239a7d3708, ams; new image
+registry.fly.io/zigzag-bot-package:deployment-01M4EW1AF4XGFFZDFH0R5BQNSN
+sha256:660d568e8d6642d5a8f0338c8fd6fa2b2974d98486dc3c16a6187bfeb28fc795.
+Стандартна збірка впала ДО machine update через Debian bullseye apt404.
+Dockerfile.hotfix накладає code-only COPY на verified existing v1487 image
+deployment-01M1M6AMMGX2XYPEFMBWGBCZNW; Python3.11.13/dependencies збережені,
+requirementsSHA f09d1cc9baed11563bc745d3e4e0069e71c19f8ea968757a2f83b7d6870def38
+і modelSHA93c526a9dc9694c461c41925041897f5c92d6db695c9928c4ed31cfe6c09c717
+збігаються remote/local. Нові source hashes state/signal_tracking/ctrader/db
+після deploy також збігаються з локальними. Runtime executor flags absent,
+defaults false. Ніяких real orders не вмикали. Docker context1.39MB,
+--ha=false, та сама одна машина; бібліотеки/ОС не переінсталювали.
+
+УТОЧНЕННЯ до SOURCE ONLY секції: endpoint timestamps тепер НЕ receipt time.
+ProtoOASubscribeSpotsReq.subscribeToSpotTimestamp=True; quote_ts походить
+з ProtoOASpotEvent.timestamp/1000. Receipt ts лишено старим consumers.
+Missing broker timestamp => немає verified endpoint, fallback відсутній.
+Це midpoint-direction measurement, НЕ broker settlement/net profit.
+141 isolated SQLite/mock tests passed до deploy; node syntax/diff check OK.
+
+Live startup 08.10 23:03:44UTC; account auth23:03:50, symbols loaded23:03:52,
+352 symbols/84 subscriptions. Health23:05:52UTC: ok, READY, TelegramACTIVE,
+83 liveprices/0stale. Scanner завершив цикл і реально записав #3138 CADJPY
+та #3139 CHFJPY з horizon300s; старий pending#3137 став unknown/exitNULL,
+не отримав випадкову пізню ціну. Новий endpoint roundtrip ще перевіряється.
+Публічний health coarse: READY означає SYMBOLS_LOADED, 0stale поріг300s,
+тому health сам по собі не доводить відсутність коротких розривів.
+
+Live endpoint roundtrip CONFIRMED23:10:44UTC: #3138 CADJPY BUY =>up_timed,
+entry111.025, exit111.056. Отже реальний broker-timestamp quote потрапив
+до retained endpoint window і результат записаний у БД. #3139 CHFJPY =>
+unknown/exitNULL: придатного full quote у5s window не було; це не loss
+і не win, не домислювати його причину з coarse health. Перша пара
+результатів НЕ доводить profitability. До23:11UTC спостереження (~7min)
+не виявило нового auth/reconnect storm; scanner продовжує записувати
+сигнали. Health23:11UTC ok/READY,83prices,4stale (>300s). Не називати
+всі83 котировки свіжими: 4 активи не оновлювались за цей поріг.
+Follow-up: оцінити coverage timed/unknown на реальних нових сигналах;
+зберегти unknown, не розширювати window задля красивого winrate.
+Загальна model-applicability проблема з попередньої секції НЕ виправлена
+цим reliability/statistics deploy; напрямки/MLfeatures не міняли.
+
+## 09.10.2026 — оборотне прибирання та збереження GitHub
+
+Прямий дозвіл власника: прибрати зайве, зберегти код на GitHub і назвати
+місце архіву. Гілка codex/verified-recovery-cleanup-20261009 створена від
+поточного main; main не мержимо/не пушимо без owner diff review (rule9).
+Старий GitHub main a5dbc88 від10.08 відставав на63 коміти; recovery branch
+зберігає цю історію й нові source changes. .env/storage_state/models/logs
+та generated research datasets не додавати в commits. Secret-pattern scan
+pending diff і63 unpublished commits не виявив known credential patterns;
+це не математична гарантія відсутності будь-яких секретів.
+
+Архів: C:\Users\Work\Desktop\zigzag_archives\2026-10-09
+419 files/1289.05MiB; 414 unlocked .log старших14days (supervisor excluded)
+і5 retired data files structural/triple_barrier/tick samples/features.
+Перед Remove-Item перевірено original/destination SHA256, size/mtime,
+record у manifest.jsonl. Повторний незалежний scan усіх419 archive hashes
+має0 failures; originals більше не в робочій папці. Все recoverable:
+manifest має точні original/archive paths, не переписувати нові livefiles.
+Training EURUSD history, VWAP CSV/journals/SQLite/heartbeat, модель,
+supervisor, local_trend_bot і research code/caches збережені на місці.
+Research code потрібен import-тестам і відтворюваності: не називати його
+зайвим лише через папку research, не видаляти автоматично.
+
+scripts/archive_project_history.ps1: native PowerShell, exact workspace
+allowlist, dated sibling archive, locked log skipped, keep14days; --
+IncludeRetiredDatasets тільки вручну для5 named historical CSV.
+Task Scheduler ZigZagBot-ArchiveClosedLogs daily12:00 local, hidden,
+StartWhenAvailable, limit20min, archives ONLY unlocked old .log.
+Не стирає SQLite/CSV/screenshot audit files. Не rotates/truncates активний
+stdout/stderr: активний runlog усе ще може рости; retention після закриття
+не є hard size cap. Архів теж займає диск: сумарний diskspace не звільнено,
+зменшено лише робочу папку. Жодних executor restarts/Flydeploy у cleanup.
