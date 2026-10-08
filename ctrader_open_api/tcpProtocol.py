@@ -11,9 +11,13 @@ logger = logging.getLogger(__name__) # <-- Додано ініціалізаці
 
 class TcpProtocol(Int32StringReceiver):
     MAX_LENGTH = 15000000
-    _send_queue = deque([])
-    _send_task = None
-    _lastSendMessageTime = None
+
+    def __init__(self):
+        # A class-level deque lets retired/replacement connections send each
+        # other's auth/data requests on the wrong transport.
+        self._send_queue = deque()
+        self._send_task = None
+        self._lastSendMessageTime = None
 
     def connectionMade(self):
         super().connectionMade()
@@ -25,8 +29,9 @@ class TcpProtocol(Int32StringReceiver):
 
     def connectionLost(self, reason):
         super().connectionLost(reason)
-        if self._send_task.running:
+        if self._send_task is not None and self._send_task.running:
             self._send_task.stop()
+        self._send_queue.clear()
         self.factory.disconnected(reason)
 
     def heartbeat(self):

@@ -119,6 +119,8 @@ const APP_I18N = {
         winrateTotal: "Signals",
         winrateResolved: "closed",
         winratePending: "pending",
+        winrateUnknown: "unknown",
+        winrateUnverified: "historical, unverified",
         winrateWins: "Wins",
         winrateLosses: "Losses",
         winrateTimeouts: "Flat",
@@ -174,6 +176,8 @@ const APP_I18N = {
         winrateTotal: "Сигналів",
         winrateResolved: "закрито",
         winratePending: "очікує",
+        winrateUnknown: "невідомо",
+        winrateUnverified: "старі неперевірені",
         winrateWins: "Виграші",
         winrateLosses: "Програші",
         winrateTimeouts: "Флет",
@@ -229,6 +233,8 @@ const APP_I18N = {
         winrateTotal: "Señales",
         winrateResolved: "cerradas",
         winratePending: "pendientes",
+        winrateUnknown: "desconocidos",
+        winrateUnverified: "históricos sin verificar",
         winrateWins: "Aciertos",
         winrateLosses: "Fallos",
         winrateTimeouts: "Plano",
@@ -284,6 +290,8 @@ const APP_I18N = {
         winrateTotal: "Signale",
         winrateResolved: "geschlossen",
         winratePending: "offen",
+        winrateUnknown: "unbekannt",
+        winrateUnverified: "historisch, ungeprüft",
         winrateWins: "Treffer",
         winrateLosses: "Fehltreffer",
         winrateTimeouts: "Flach",
@@ -339,6 +347,8 @@ const APP_I18N = {
         winrateTotal: "Сигналов",
         winrateResolved: "закрыто",
         winratePending: "ожидает",
+        winrateUnknown: "неизвестно",
+        winrateUnverified: "старые непроверенные",
         winrateWins: "Выигрыши",
         winrateLosses: "Проигрыши",
         winrateTimeouts: "Флэт",
@@ -1126,7 +1136,9 @@ function renderWinratePeriodSummary(label, stats) {
                     ${escapeHtml(tr("winrateTotal"))}: ${stats.total ?? 0}
                     (${stats.resolved ?? 0} ${escapeHtml(tr("winrateResolved"))}, ${stats.pending ?? 0} ${escapeHtml(tr("winratePending"))})<br>
                     ${escapeHtml(tr("winrateWins"))}: ${stats.wins ?? 0} ·
-                    ${escapeHtml(tr("winrateLosses"))}: ${stats.losses ?? 0}${flatsPart}
+                    ${escapeHtml(tr("winrateLosses"))}: ${stats.losses ?? 0}${flatsPart} ·
+                    ${escapeHtml(tr("winrateUnknown"))}: ${stats.unknown ?? 0} ·
+                    ${escapeHtml(tr("winrateUnverified"))}: ${stats.unverified ?? 0}
                 </span>
             </div>
         </div>

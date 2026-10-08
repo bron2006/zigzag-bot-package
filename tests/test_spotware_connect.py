@@ -77,7 +77,7 @@ class SpotwareConnectQueueTest(unittest.TestCase):
         self.send_mock.assert_not_called()
 
         auth_res = ProtoOAAccountAuthRes(ctidTraderAccountId=1)
-        self.sc._on_message_received(None, _wrap(ProtoOAPayloadType.PROTO_OA_ACCOUNT_AUTH_RES, auth_res))
+        self.sc._on_message_received(self.sc._client, _wrap(ProtoOAPayloadType.PROTO_OA_ACCOUNT_AUTH_RES, auth_res))
 
         self.assertTrue(self.sc.is_authorized)
         self.send_mock.assert_called_once()
@@ -89,7 +89,7 @@ class SpotwareConnectQueueTest(unittest.TestCase):
         self.send_mock.assert_not_called()
 
         err = ProtoOAErrorRes(errorCode="ALREADY_LOGGED_IN", description="already")
-        self.sc._on_message_received(None, _wrap(ProtoOAPayloadType.PROTO_OA_ERROR_RES, err))
+        self.sc._on_message_received(self.sc._client, _wrap(ProtoOAPayloadType.PROTO_OA_ERROR_RES, err))
 
         self.assertTrue(self.sc.is_authorized)
         self.send_mock.assert_called_once()
@@ -107,7 +107,7 @@ class SpotwareConnectQueueTest(unittest.TestCase):
 
         with patch("spotware_connect.reactor.callFromThread", side_effect=lambda f, *a, **k: f(*a, **k)):
             auth_res = ProtoOAAccountAuthRes(ctidTraderAccountId=1)
-            self.sc._on_message_received(None, _wrap(ProtoOAPayloadType.PROTO_OA_ACCOUNT_AUTH_RES, auth_res))
+            self.sc._on_message_received(self.sc._client, _wrap(ProtoOAPayloadType.PROTO_OA_ACCOUNT_AUTH_RES, auth_res))
 
         handler.assert_called_once_with(self.sc)
 
@@ -117,7 +117,7 @@ class SpotwareConnectQueueTest(unittest.TestCase):
 
         with patch("spotware_connect.reactor.callFromThread", side_effect=lambda f, *a, **k: f(*a, **k)):
             err = ProtoOAErrorRes(errorCode="ALREADY_LOGGED_IN", description="already")
-            self.sc._on_message_received(None, _wrap(ProtoOAPayloadType.PROTO_OA_ERROR_RES, err))
+            self.sc._on_message_received(self.sc._client, _wrap(ProtoOAPayloadType.PROTO_OA_ERROR_RES, err))
 
         handler.assert_called_once_with(self.sc)
 
@@ -125,7 +125,7 @@ class SpotwareConnectQueueTest(unittest.TestCase):
         req = ProtoOAGetTrendbarsReq(ctidTraderAccountId=1, symbolId=1)
         outer = self.sc.send(req)
 
-        self.sc._on_disconnected(None, reason="TEST")
+        self.sc._on_disconnected(self.sc._client, reason="TEST")
 
         self.assertTrue(outer.called)
         self.assertEqual(self.sc._pending_data_requests, [])

@@ -1,10 +1,12 @@
 # state.py
 import hmac
 import logging
+import math
 import queue
 import threading
 import time
 from datetime import datetime
+from collections import deque
 from typing import Any, Dict, List, Optional, Tuple
 
 from telegram.error import BadRequest
@@ -35,6 +37,10 @@ class AppState:
         self.SYMBOLS_LOADED: bool = False
 
         self.live_prices: Dict[str, Dict[str, Any]] = {}
+        # Endpoint measurements only: bounded, one full quote per second.
+        # Lost history on restart means unknown, never a guessed later price.
+        self._outcome_quotes = {}
+        self._outcome_quote_sides = {}
         self.scanner_cooldown_cache: Dict[str, float] = {}
         self.latest_analysis_cache: Dict[str, Dict[str, Any]] = {}
         self.SIGNAL_CACHE: Dict[str, Dict[str, Any]] = {}
@@ -269,6 +275,42 @@ class AppState:
     def update_live_price(self, symbol: str, payload: Dict[str, Any]) -> None:
         with self._state_lock:
             self.live_prices[symbol] = payload
+            ts = payload.get("quote_ts")
+            if not isinstance(ts, (int, float)) or not math.isfinite(ts) or ts > time.time() + 1:
+                return
+            sides = self._outcome_quote_sides.setdefault(symbol, {})
+            for side in ("bid", "ask"):
+                value = payload.get(side)
+                if value is None:
+                    continue
+                if not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+                    return
+                if side not in sides or ts >= sides[side][1]:
+                    sides[side] = (value, ts)
+            if not all(side in sides and 0 <= ts - sides[side][1] <= 5 for side in ("bid", "ask")):
+                return
+            bid, ask = sides["bid"][0], sides["ask"][0]
+            if ask < bid:
+                return
+            history = self._outcome_quotes.setdefault(symbol, deque(maxlen=601))
+            if history and int(ts) <= int(history[-1][0]):
+                return
+            history.append((ts, (bid + ask) / 2))
+            while history and ts - history[0][0] > 600:
+                history.popleft()
+
+    def get_signal_endpoint_quote(self, symbol: str, deadline: float, now: float, tolerance: float = 5.0):
+        """First retained full quote at/after deadline, never before or future.
+
+        Times are broker quote timestamps; receipt timestamps are not a fallback.
+        This is a cTrader midpoint direction measurement, not broker settlement
+        or executable net PNL. Sampling may conservatively lose a valid quote.
+        """
+        with self._state_lock:
+            for ts, mid in self._outcome_quotes.get(symbol, ()):
+                if deadline <= ts <= min(deadline + tolerance, now):
+                    return {"ts": ts, "mid": mid}
+        return None
 
     def get_live_price(self, symbol: str) -> Optional[Dict[str, Any]]:
         with self._state_lock:

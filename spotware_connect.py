@@ -1,9 +1,10 @@
 # spotware_connect.py
 import logging
+from datetime import datetime
 
 from twisted.internet import reactor
 from twisted.internet.defer import Deferred
-from twisted.internet.threads import deferToThread
+from bounded_io import BoundedIO
 
 from ctrader_open_api.auth import Auth as CTraderAuth
 from ctrader_open_api.client import Client as SpotwareClientBase
@@ -79,6 +80,8 @@ class SpotwareConnect(EventEmitter):
         self._stopping = False
         self._switching_host = False
         self._refresh_in_progress = False
+        self._oauth_io = BoundedIO(reactor, timeout=20.0)
+        self._token_persistence = BoundedIO(reactor, timeout=10.0)
         self._app_auth_completed = False
         self._oauth_client = CTraderAuth(client_id or "", client_secret or "", "")
         # AUDIT FIX (2026-08-17, critical, live finding): ProtoOAGetTrendbarsReq
@@ -238,10 +241,14 @@ class SpotwareConnect(EventEmitter):
                 outer.errback(Exception(f"cTrader disconnected before this queued request could be sent: {reason}"))
 
     def _on_connected(self, client):
+        if self._stopping or client is not self._client:
+            return
         logger.info("Connected to cTrader at %s:%s. Waiting 2s before Application Auth...", self.host, self.port)
         reactor.callLater(2.0, self._send_app_auth)
 
     def _on_disconnected(self, client, reason=None):
+        if client is not self._client:
+            return
         self.is_authorized = False
         self._client.account_id = None
         self._fail_pending_data_requests(f"disconnected: {reason}")
@@ -254,6 +261,8 @@ class SpotwareConnect(EventEmitter):
         self.emit("error", "DISCONNECTED")
 
     def _send_app_auth(self):
+        if self._stopping:
+            return
         if not self._client_id or not self._client_secret:
             logger.error("Missing cTrader client id/secret")
             self.emit("error", "MISSING_APP_CREDENTIALS")
@@ -264,9 +273,11 @@ class SpotwareConnect(EventEmitter):
             clientId=self._client_id,
             clientSecret=self._client_secret,
         )
-        self.send(req, responseTimeoutInSeconds=15)
+        self._send_handshake(req)
 
     def _request_account_list(self):
+        if self._stopping:
+            return
         token = app_state.get_ctrader_access_token()
 
         if not token:
@@ -276,9 +287,11 @@ class SpotwareConnect(EventEmitter):
 
         logger.info("Step 2: Requesting account list by access token...")
         req = ProtoOAGetAccountListByAccessTokenReq(accessToken=token)
-        self.send(req, responseTimeoutInSeconds=15)
+        self._send_handshake(req)
 
     def _authorize_account(self, account_id=None):
+        if self._stopping:
+            return
         acc_id = account_id or get_demo_account_id()
         token = app_state.get_ctrader_access_token()
 
@@ -298,7 +311,20 @@ class SpotwareConnect(EventEmitter):
             ctidTraderAccountId=acc_id,
             accessToken=token,
         )
-        self.send(req, responseTimeoutInSeconds=15)
+        self._send_handshake(req)
+
+    def _send_handshake(self, req):
+        """Missing auth responses must enter recovery, not leave an idle client."""
+        client = self._client
+
+        def failed(failure):
+            if not self._stopping and client is self._client:
+                logger.warning("cTrader handshake %s failed: %s", type(req).__name__,
+                               failure.getErrorMessage())
+                self.emit("error", "AUTH_HANDSHAKE_TIMEOUT")
+            return None
+
+        self.send(req, responseTimeoutInSeconds=15).addErrback(failed)
 
     def _refresh_access_token(self, reason: str = "manual"):
         refresh_token = app_state.get_ctrader_refresh_token()
@@ -316,17 +342,17 @@ class SpotwareConnect(EventEmitter):
         logger.warning("Refreshing cTrader access token (%s)...", reason)
         app_state.set_ctrader_auth_issue(f"refreshing:{reason}")
 
-        d = deferToThread(self._refresh_access_token_http)
-        d.addCallbacks(
-            lambda payload: reactor.callFromThread(self._on_refresh_success, payload),
-            lambda failure: reactor.callFromThread(self._on_refresh_failure, failure),
-        )
+        d = self._oauth_io.call(self._refresh_access_token_http)
+        d.addCallbacks(self._on_refresh_success, self._on_refresh_failure)
 
     def _refresh_access_token_http(self):
         refresh_token = app_state.get_ctrader_refresh_token()
         return self._oauth_client.refreshToken(refresh_token)
 
     def _on_refresh_success(self, payload):
+        if self._stopping:
+            self._refresh_in_progress = False
+            return
         if not isinstance(payload, dict):
             self._refresh_in_progress = False
             logger.error("cTrader refresh flow returned unexpected payload type: %r", type(payload))
@@ -358,17 +384,38 @@ class SpotwareConnect(EventEmitter):
             access_token=access_token,
             refresh_token=refresh_token,
             expires_in=expires_in,
+            persist=False,
         )
+        # A slow DB write must not freeze auth/heartbeats. Capture this token
+        # bundle, rather than writing whichever later token is in app_state.
+        expires_at = (datetime.utcfromtimestamp(app_state.access_token_expires_at)
+                      if app_state.access_token_expires_at else None)
+
+        def persist_bundle():
+            import db
+            return db.persist_ctrader_token_bundle(
+                access_token=access_token, refresh_token=refresh_token, expires_at=expires_at)
+
+        def persistence_failed(failure):
+            logger.warning("cTrader token persistence unavailable (%s)", failure.type.__name__)
+            return None
+
+        self._token_persistence.call(persist_bundle).addErrback(persistence_failed)
         logger.info("cTrader access token refreshed successfully (expires_in=%ss).", expires_in)
         reactor.callLater(0.2, self._authorize_account)
 
     def _on_refresh_failure(self, failure):
         self._refresh_in_progress = False
-        logger.exception("Failed to refresh cTrader access token")
+        if self._stopping:
+            return None
+        # HTTP exceptions can contain OAuth secrets in the request URL.
+        logger.error("Failed to refresh cTrader access token (%s)", failure.type.__name__)
         app_state.set_ctrader_auth_issue("refresh_request_failed")
         self.emit("error", "REFRESH_REQUEST_FAILED")
 
     def _on_message_received(self, client, message: ProtoMessage):
+        if self._stopping or client is not self._client:
+            return
         pt = message.payloadType
 
         if pt == ProtoOAPayloadType.PROTO_OA_APPLICATION_AUTH_RES:

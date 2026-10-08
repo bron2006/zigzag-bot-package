@@ -14,12 +14,14 @@ class Auth:
                                "code": authCode,
                               "redirect_uri": self.redirectUri,
                              "client_id": self.appClientId,
-                            "client_secret": self.appClientSecret})
+                            "client_secret": self.appClientSecret}, timeout=(5, 10))
+        request.raise_for_status()
         return request.json()
     def refreshToken(self, refreshToken, baseUri = EndPoints.TOKEN_URI):
         request = requests.get(baseUri, params=
                                {"grant_type": "refresh_token",
                                "refresh_token": refreshToken,
                              "client_id": self.appClientId,
-                            "client_secret": self.appClientSecret})
+                            "client_secret": self.appClientSecret}, timeout=(5, 10))
+        request.raise_for_status()
         return request.json()

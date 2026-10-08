@@ -1,0 +1,7 @@
+# Code-only recovery. RUNTIME_IMAGE must name a verified existing deployment
+# whose requirements/model hashes match this checkout. No dependency rebuild.
+ARG RUNTIME_IMAGE
+FROM ${RUNTIME_IMAGE}
+WORKDIR /app
+COPY . .
+CMD ["python", "app.py"]

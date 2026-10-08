@@ -12,3 +12,19 @@ logs/
 data/*.csv
 .git/
 .env
+# Research and local diagnostics are not part of the cloud signal service.
+# COPY . . must not upload tick caches or start bundling separate bots.
+research*/
+local_trend_bot/
+scripts/
+tests/
+**/__pycache__/
+**/*.pyc
+*.ipynb
+.pytest_cache/
+.venv*/
+venv/
+node_modules/
+**/.ipynb_checkpoints/
+.tmp.driveupload/
+.hypothesis/

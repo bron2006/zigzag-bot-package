@@ -23,8 +23,9 @@ class Client(ClientService):
         ClientService.startService(self)
 
     def stopService(self):
-        if self.running and self.isConnected:
-            ClientService.stopService(self)
+        # Disconnected services still retry; retire them before replacement.
+        if self.running:
+            return ClientService.stopService(self)
 
     def _connected(self, protocol):
         self.isConnected = True
@@ -33,7 +34,10 @@ class Client(ClientService):
 
     def _disconnected(self, reason):
         self.isConnected = False
-        self._responseDeferreds.clear()
+        pending, self._responseDeferreds = self._responseDeferreds, {}
+        for response in pending.values():
+            if not response.called:
+                response.errback(ConnectionError("cTrader transport disconnected"))
         if hasattr(self, "_disconnectedCallback"):
             self._disconnectedCallback(self, reason)
 
@@ -56,7 +60,18 @@ class Client(ClientService):
         responseDeferred.addErrback(lambda failure: self._onResponseFailure(failure, clientMsgId))
         responseDeferred.addTimeout(responseTimeoutInSeconds, self._runningReactor)
         protocolDiferred = self.whenConnected(failAfterFailures=1)       
-        protocolDiferred.addCallbacks(lambda protocol: protocol.send(message, clientMsgId=clientMsgId, isCanceled=lambda: clientMsgId not in self._responseDeferreds), responseDeferred.errback)
+        def connected(protocol):
+            if not responseDeferred.called:
+                protocol.send(message, clientMsgId=clientMsgId,
+                              isCanceled=lambda: clientMsgId not in self._responseDeferreds)
+
+        def connection_failed(failure):
+            # The request may have timed out while whenConnected was pending.
+            if not responseDeferred.called:
+                responseDeferred.errback(failure)
+            return None
+
+        protocolDiferred.addCallbacks(connected, connection_failed)
         return responseDeferred
 
     def setConnectedCallback(self, callback):

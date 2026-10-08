@@ -122,7 +122,8 @@ class SignalOutcome(Base):
     horizon_seconds = Column(Integer, nullable=True)
     exit_price = Column(Float, nullable=True)
     resolved_at = Column(DateTime, nullable=True)
-    # 'pending' | 'up' | 'down' | 'flat' (legacy rows may still have 'tp' | 'sl' | 'timeout')
+    # New measured endpoints: up_timed/down_timed/flat_timed/unknown.
+    # Historical up/down/flat and tp/sl/timeout remain untouched.
     outcome = Column(String(16), nullable=False, default="pending", index=True)
 
 
@@ -368,8 +369,24 @@ def _build_engine(url: str):
             "check_same_thread": False,
             "timeout": 30,
         }
+    elif url.startswith(("postgresql:", "postgresql+psycopg2:")):
+        kwargs["pool_timeout"] = 10
+        kwargs["connect_args"] = {
+            "connect_timeout": 8,
+            "options": "-c statement_timeout=8000 -c lock_timeout=5000",
+        }
 
-    return create_engine(url, **kwargs)
+    sqlalchemy_engine = create_engine(url, **kwargs)
+    if url.startswith(("postgresql:", "postgresql+psycopg2:")):
+        # Transaction poolers can ignore startup/session options. Reapply
+        # deadlines inside EACH transaction on its assigned backend connection.
+        event.listen(sqlalchemy_engine, "begin", _set_transaction_deadlines)
+    return sqlalchemy_engine
+
+
+def _set_transaction_deadlines(connection):
+    connection.exec_driver_sql("SET LOCAL statement_timeout = '8s'")
+    connection.exec_driver_sql("SET LOCAL lock_timeout = '5s'")
 
 
 def _configure_sqlite_pragmas(sqlalchemy_engine) -> None:
@@ -1650,15 +1667,15 @@ def resolve_signal_outcome(outcome_id: int, *, outcome: str, exit_price: float |
 
 
 def _row_is_correct_direction(row) -> bool:
-    return (row.verdict == "BUY" and row.outcome == "up") or (row.verdict == "SELL" and row.outcome == "down")
+    return (row.verdict == "BUY" and row.outcome in ("up", "up_timed")) or (row.verdict == "SELL" and row.outcome in ("down", "down_timed"))
 
 
 def _row_is_wrong_direction(row) -> bool:
-    return (row.verdict == "BUY" and row.outcome == "down") or (row.verdict == "SELL" and row.outcome == "up")
+    return (row.verdict == "BUY" and row.outcome in ("down", "down_timed")) or (row.verdict == "SELL" and row.outcome in ("up", "up_timed"))
 
 
-def _aggregate_signal_outcomes(rows: list) -> dict:
-    """Forex-oriented aggregation (unchanged 2026-08-11): a 'win' is price
+def _aggregate_signal_outcomes(rows: list, *, verified_only: bool = False) -> dict:
+    """Forex-oriented aggregation: a 'win' is price
     moving in the signal's predicted direction over its horizon, a 'loss' is
     the opposite, 'flat' means the move was inside the noise threshold
     (SIGNAL_OUTCOME_FLAT_THRESHOLD_PERCENT, applied once at resolve time by
@@ -1666,17 +1683,22 @@ def _aggregate_signal_outcomes(rows: list) -> dict:
     Legacy tp/sl/timeout rows from the previous tracking generation are
     counted as resolved-but-excluded so they don't skew win_rate.
 
-    Kept exactly as-is for callers that need it: get_signal_outcome_score_
+    With verified_only=True, old snapshot outcomes are counted as
+    unverified and excluded from win-rate. Unknown is terminal, not pending.
+    Historical aggregation remains available to callers: get_signal_outcome_score_
     breakdown/threshold_advisor.py (forex threshold calibration) and the
     debug ?style=forex view of /api/stats/signals. For the Binomo-oriented
     default view, see _aggregate_signal_outcomes_binomo_style below - Binomo
     binary options have no 'push', so that noise threshold doesn't apply
     there even though it's still meaningful here."""
-    wins = sum(1 for r in rows if _row_is_correct_direction(r))
-    losses = sum(1 for r in rows if _row_is_wrong_direction(r))
-    flats = sum(1 for r in rows if r.outcome == "flat")
+    eligible = [r for r in rows if not verified_only or r.outcome.endswith("_timed")]
+    unverified = sum(1 for r in rows if verified_only and r.outcome in ("up", "down", "flat"))
+    wins = sum(1 for r in eligible if _row_is_correct_direction(r))
+    losses = sum(1 for r in eligible if _row_is_wrong_direction(r))
+    flats = sum(1 for r in eligible if r.outcome in ("flat", "flat_timed"))
     legacy = sum(1 for r in rows if r.outcome in ("tp", "sl", "timeout"))
-    resolved = wins + losses + flats + legacy
+    unknown = sum(1 for r in rows if r.outcome == "unknown")
+    resolved = wins + losses + flats + legacy + unknown + unverified
     decided = wins + losses
     return {
         "total": len(rows),
@@ -1685,6 +1707,8 @@ def _aggregate_signal_outcomes(rows: list) -> dict:
         "wins": wins,
         "losses": losses,
         "flats": flats,
+        "unknown": unknown,
+        "unverified": unverified,
         "win_rate": round(100.0 * wins / decided, 1) if decided else None,
     }
 
@@ -1695,7 +1719,7 @@ def _binomo_style_direction(row) -> bool | None:
     or loss on ANY price difference, however small, there is no 'push'.
     Returns None for rows with nothing comparable to judge (still pending,
     or a legacy tp/sl/timeout row from the previous tracking generation)."""
-    if row.outcome == "pending" or row.outcome in ("tp", "sl", "timeout"):
+    if row.outcome in ("pending", "unknown", "tp", "sl", "timeout"):
         return None
     if row.exit_price is None or row.entry_price is None:
         return None
@@ -1706,7 +1730,7 @@ def _binomo_style_direction(row) -> bool | None:
     return None
 
 
-def _aggregate_signal_outcomes_binomo_style(rows: list) -> dict:
+def _aggregate_signal_outcomes_binomo_style(rows: list, *, verified_only: bool = False) -> dict:
     """Same shape as _aggregate_signal_outcomes, but recomputes win/loss
     directly from entry_price/exit_price rather than trusting the stored
     'outcome' column - a row the forex classification calls 'flat' (moved,
@@ -1716,13 +1740,17 @@ def _aggregate_signal_outcomes_binomo_style(rows: list) -> dict:
     aggregation's dict shape don't need special-casing."""
     wins = losses = 0
     for r in rows:
+        if verified_only and not r.outcome.endswith("_timed"):
+            continue
         won = _binomo_style_direction(r)
         if won is True:
             wins += 1
         elif won is False:
             losses += 1
     legacy = sum(1 for r in rows if r.outcome in ("tp", "sl", "timeout"))
-    resolved = wins + losses + legacy
+    unknown = sum(1 for r in rows if r.outcome == "unknown")
+    unverified = sum(1 for r in rows if verified_only and r.outcome in ("up", "down", "flat"))
+    resolved = wins + losses + legacy + unknown + unverified
     decided = wins + losses
     return {
         "total": len(rows),
@@ -1731,6 +1759,8 @@ def _aggregate_signal_outcomes_binomo_style(rows: list) -> dict:
         "wins": wins,
         "losses": losses,
         "flats": 0,
+        "unknown": unknown,
+        "unverified": unverified,
         "win_rate": round(100.0 * wins / decided, 1) if decided else None,
     }
 
@@ -1739,10 +1769,13 @@ def get_signal_outcome_stats(days: int = 7, *, binomo_style: bool = True) -> dic
     """Defaults to the Binomo-oriented view (no flat/push - see
     _aggregate_signal_outcomes_binomo_style) since that's what actually gets
     traded. Pass binomo_style=False for the forex-oriented view with the
-    noise-threshold 'flat' outcome (debug use - see api.py's ?style=forex)."""
+    noise-threshold 'flat' outcome (debug use - see api.py's ?style=forex).
+    Both public views now use measured *_timed results ONLY. Historical
+    snapshots remain stored and are shown separately as unverified."""
     days = max(1, min(int(days or 7), 365))
     since = _utcnow() - timedelta(days=days)
-    aggregate = _aggregate_signal_outcomes_binomo_style if binomo_style else _aggregate_signal_outcomes
+    aggregate_fn = _aggregate_signal_outcomes_binomo_style if binomo_style else _aggregate_signal_outcomes
+    aggregate = lambda items: aggregate_fn(items, verified_only=True)
     empty = {
         "ok": False, "days": days, "binomo_style": binomo_style,
         "by_pair": [], "by_timeframe": [], **aggregate([]),
@@ -1783,7 +1816,7 @@ def get_signal_outcome_stats(days: int = 7, *, binomo_style: bool = True) -> dic
     }
 
 
-def get_pair_signal_outcome_stats(pair: str, days: int = 30) -> dict:
+def get_pair_signal_outcome_stats(pair: str, days: int = 30, *, verified_only: bool = False) -> dict:
     """Binomo-style (no flat) win-rate for a single pair - see
     _aggregate_signal_outcomes_binomo_style. Used by binomo_executor's
     per-pair stake weighting (POLICY, 2026-08-12): scales the stake down
@@ -1797,7 +1830,7 @@ def get_pair_signal_outcome_stats(pair: str, days: int = 30) -> dict:
     try:
         with get_db() as session:
             if session is None:
-                return _aggregate_signal_outcomes_binomo_style([])
+                return _aggregate_signal_outcomes_binomo_style([], verified_only=verified_only)
 
             rows = (
                 session.query(SignalOutcome)
@@ -1806,9 +1839,9 @@ def get_pair_signal_outcome_stats(pair: str, days: int = 30) -> dict:
             )
     except SQLAlchemyError:
         logger.exception("Error loading pair signal outcome stats for %s", pair)
-        return _aggregate_signal_outcomes_binomo_style([])
+        return _aggregate_signal_outcomes_binomo_style([], verified_only=verified_only)
 
-    return _aggregate_signal_outcomes_binomo_style(rows)
+    return _aggregate_signal_outcomes_binomo_style(rows, verified_only=verified_only)
 
 
 def get_signal_outcome_rows_for_backtest(days: int, pairs: list[str] | None = None) -> list[dict]:
@@ -1868,7 +1901,7 @@ def get_signal_outcome_score_breakdown(days: int = 30, bucket_size: int = 5) -> 
             rows = (
                 session.query(SignalOutcome)
                 .filter(SignalOutcome.entry_ts >= since)
-                .filter(SignalOutcome.outcome.in_(("up", "down")))
+                .filter(SignalOutcome.outcome.in_(("up_timed", "down_timed")))
                 .filter(SignalOutcome.score.isnot(None))
                 .all()
             )
@@ -3038,7 +3071,8 @@ def get_vwap_executor_runtime_state() -> dict:
         with get_db() as session:
             if session is None:
                 return {
-                    "runtime_enabled": True, "read_only": False, "kill_switch_tripped": False,
+                    "runtime_enabled": False, "read_only": True, "kill_switch_tripped": False,
+                    "database_available": False,
                     "kill_switch_reason": None, "kill_switch_cleared_at": None,
                 }
 
@@ -3050,6 +3084,7 @@ def get_vwap_executor_runtime_state() -> dict:
 
             return {
                 "runtime_enabled": enabled_raw != "false",  # unset -> enabled by default
+                "database_available": True,
                 "read_only": readonly_raw == "true",  # unset -> trading by default (read_only is opt-in)
                 "kill_switch_tripped": tripped_raw == "true",
                 "kill_switch_reason": reason,
@@ -3058,7 +3093,8 @@ def get_vwap_executor_runtime_state() -> dict:
     except SQLAlchemyError:
         logger.exception("Error loading vwap executor runtime state")
         return {
-            "runtime_enabled": True, "read_only": False, "kill_switch_tripped": False,
+            "runtime_enabled": False, "read_only": True, "kill_switch_tripped": False,
+            "database_available": False,
             "kill_switch_reason": None, "kill_switch_cleared_at": None,
         }
 

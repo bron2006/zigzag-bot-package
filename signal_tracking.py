@@ -27,6 +27,7 @@ _HORIZON_BY_TIMEFRAME = {
     "15m": 15 * 60,
 }
 _DEFAULT_HORIZON_SECONDS = 15 * 60
+_ENDPOINT_TOLERANCE_SECONDS = 5.0
 
 
 def _utcnow_naive() -> datetime:
@@ -183,24 +184,29 @@ def resolve_pending_signals() -> None:
     for row in pending:
         entry_ts = row["entry_ts"]
         horizon_seconds = row["horizon_seconds"]
-        if not isinstance(entry_ts, datetime) or not horizon_seconds:
-            continue
-
-        if now - entry_ts < timedelta(seconds=horizon_seconds):
-            continue  # horizon hasn't elapsed yet
-
-        pair = row["pair"]
-        price_data = app_state.get_live_price(pair)
-        live_price = price_data.get("mid") if price_data else None
-
-        if not isinstance(live_price, (int, float)):
-            logger.debug("SIGNAL_OUTCOME: no live price for %s yet, will retry", pair)
-            continue
-
-        outcome = _classify_move(row["entry_price"], live_price)
+        # Database timestamps without tzinfo are UTC, not Windows local time.
+        now_epoch = now.replace(tzinfo=timezone.utc).timestamp() if now.tzinfo is None else now.timestamp()
+        live_price = None
+        outcome = "unknown"
+        if isinstance(entry_ts, datetime) and isinstance(horizon_seconds, (int, float)) and math.isfinite(horizon_seconds) and horizon_seconds > 0:
+            entry_epoch = entry_ts.replace(tzinfo=timezone.utc).timestamp() if entry_ts.tzinfo is None else entry_ts.timestamp()
+            deadline = entry_epoch + horizon_seconds
+            if now_epoch < deadline:
+                continue
+            quote = app_state.get_signal_endpoint_quote(row["pair"], deadline, now_epoch, _ENDPOINT_TOLERANCE_SECONDS)
+            live_price = quote.get("mid") if quote else None
+            entry_price = row["entry_price"]
+            if isinstance(entry_price, (int, float)) and math.isfinite(entry_price) and entry_price > 0 and isinstance(live_price, (int, float)) and math.isfinite(live_price) and live_price > 0:
+                # Versioned status separates measured endpoints from legacy
+                # snapshots without a schema change or rewriting old history.
+                outcome = _classify_move(entry_price, live_price) + "_timed"
+            elif now_epoch < deadline + _ENDPOINT_TOLERANCE_SECONDS:
+                continue  # Allow the fixed quote window to finish.
+        if outcome == "unknown":
+            live_price = None
 
         if db.resolve_signal_outcome(row["id"], outcome=outcome, exit_price=live_price):
             logger.info(
-                "SIGNAL_OUTCOME: #%s %s %s -> %s (entry=%.5f exit=%.5f)",
-                row["id"], pair, row["verdict"], outcome, row["entry_price"], live_price,
+                "SIGNAL_OUTCOME: #%s %s %s -> %s (entry=%s exit=%s)",
+                row["id"], row["pair"], row["verdict"], outcome, row["entry_price"], live_price,
             )

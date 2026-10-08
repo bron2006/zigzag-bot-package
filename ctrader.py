@@ -28,6 +28,7 @@ logger = logging.getLogger("ctrader")
 
 _reconnect_attempt = 0
 _reconnect_scheduled = False
+_reconnect_call = None
 _SUBSCRIBE_BATCH_SIZE = 50
 _SUBSCRIBE_BATCH_DELAY = 1.0
 _PRICE_FRESH_SECONDS = 120
@@ -172,8 +173,11 @@ def _resolve_broker_symbol(pair: str):
 
 
 def start_ctrader_client():
-    global _reconnect_scheduled
+    global _reconnect_scheduled, _reconnect_call
 
+    if _reconnect_call is not None and _reconnect_call.active():
+        _reconnect_call.cancel()
+    _reconnect_call = None
     _reconnect_scheduled = False
 
     try:
@@ -182,7 +186,8 @@ def start_ctrader_client():
 
         client.on("ready", on_ctrader_ready)
         client.on("spot_event", _on_spot_event)
-        client.on("error", _handle_error)
+        # Delayed events from a retired connection must not restart its successor.
+        client.on("error", lambda reason: _handle_error(reason) if app_state.client is client else None)
 
         try:
             import autotrader
@@ -217,7 +222,7 @@ def _handle_error(reason):
 
 
 def _schedule_reconnect(delay):
-    global _reconnect_scheduled, _reconnect_attempt
+    global _reconnect_scheduled, _reconnect_attempt, _reconnect_call
 
     if _reconnect_scheduled:
         return
@@ -226,7 +231,21 @@ def _schedule_reconnect(delay):
     _reconnect_attempt += 1
 
     logger.warning("Reconnecting cTrader in %ss (attempt %s)", delay, _reconnect_attempt)
-    reactor.callLater(delay, _do_reconnect)
+    _reconnect_call = reactor.callLater(delay, _do_reconnect)
+
+
+def stop_ctrader_client():
+    """Intentional off-session stop also cancels an already scheduled retry."""
+    global _reconnect_scheduled, _reconnect_call
+    if _reconnect_call is not None and _reconnect_call.active():
+        _reconnect_call.cancel()
+    _reconnect_call = None
+    _reconnect_scheduled = False
+    client, app_state.client = app_state.client, None
+    if client is not None:
+        client.stop()
+    app_state.clear_symbol_state()
+    app_state.clear_live_prices()
 
 
 def _do_reconnect():
@@ -417,6 +436,7 @@ def _subscribe_symbol_batch(batch):
         req = ProtoOASubscribeSpotsReq(
             ctidTraderAccountId=account_id,
             symbolId=symbol_ids,
+            subscribeToSpotTimestamp=True,
         )
         app_state.client.send(req, responseTimeoutInSeconds=10)
         logger.info("Підписка на ціни надіслана для %s символів: %s", len(symbol_ids), ", ".join(pairs))
@@ -577,6 +597,9 @@ def _on_spot_event(event: ProtoOASpotEvent):
             "ask": ask,
             "mid": mid,
             "ts": ts,
+            # Preserve receipt ts for existing clients. Endpoint statistics
+            # use the broker quote time, never delayed callback receipt time.
+            "quote_ts": event.timestamp / 1000.0 if event.HasField("timestamp") else None,
         }
 
         app_state.update_live_price(name, payload)
