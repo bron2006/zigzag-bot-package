@@ -1091,3 +1091,35 @@ Originalmodel/scaler SHA unchanged. VWAP remains retired; noDB/broker connection
 orders, deployments, executorstarts or restarts made in this work.
 9 new tests and91 research tests pass. Includes future-mutation, scale-invariance,
 gap reset, target purge, training-only scaler, hypothetical payoff and gate checks.
+
+## 09.10.2026 — news continuation checked, fixed hypothesis FAILED
+
+Owner «ну давай» authorized proposed event-driven research, not live trading.
+NEWS_CONTINUATION_PROTOCOL.md frozen BEFORE prices. EURUSD only, actual official
+BLS CPI/Employment Situation release headers2024–07.10.2026,65events/65dates;
+08:30 America/New_York correctly converted DST/UTC. Cancelled releases absent,
+postponed actual archive dates retained. No guessed firstFriday/forecastsurprises.
+FOMC excluded up front to keep one uniform bounded release group, not afterPNL.
+Direct BLSHTTP403; officialweb retrieval verified all65headers. Calendar in
+news_event_calendar.py. Read-only allowlisted demoProbe,0orders/0refreshes;
+persisted access token read through bounded SQL helper, no DB/config imports/write.
+
+One rule: first5min impulse>=1.5pre-eventATR14, followdirection, entry T+301seconds,
+exit ACTUALentry+300s. BID/ASK joined firstvalid within5s with <=1ssideage.
+Exact15contiguous pre-eventbars, nofuturefeatures. Broker count100 returns older
+bars beyondfromTimestamp; timefilter prevents warmup/ATR inflation. Endpoint6s
+windows nohasMore/truncatedpages; cachedimmutablegzip/sha, completed65events.
+Forexactualspread+illustrative.7pipcommission,stress+1pipadverse slippage.
+Binaryseparatehypothetic70/80/90 payout,midpointproxy NOTBinomo settlement.
+
+Early2024:24events22selected21known/1unknown,12wins=57.14%; forexmean+.24286pip
+stress CI[-3.4333,+3.805]. Late2025–2026:41events34selected34known100%coverage,
+12wins/34=35.29%; forexnetmean-4.85588pip,stress-5.85588pip CI[-8.73875,-3.05566].
+Alreadynegativebeforesamplecommission:grossspread-4.15588pip. Binaryat.80
+mean-.364706stakeunits CI[-.629412,-.047059]. BothgatesFAILED, no deployment.
+Oppositedirectionlate64.71% is retrospective diagnostic ONLY; earlyopposite
+stressmean-3.66667pip. Do NOT silently flip directions/pickeventtype afterresults.
+102researchtests incl11new pass. Independent separatebisect quote join/manualATR
+audit:65hashes55knownoutcomes allpass. Originalmodel/scalerunchangedSHA.
+No cloudrestart/deploy/config change, realorders, DBwrites or executorstarts.
+VWAP remains retired. Newhypothesis NOT forward-test running; history fetchdone.
