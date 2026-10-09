@@ -1070,3 +1070,24 @@ paired estimate of timeframe effect. Cost/fill data unavailable=>noPnLclaim.
 Sources/protocol/report + small curated resultJSON preserved in GitHub;
 raw broker caches never push. Current model/directions/cloud unchanged;
 do not turn on real orders or invert mapping based on these results.
+
+## 09.10.2026 — normalized M5 candidate trained, deployment gate FAILED
+
+Owner explicitly said «дій,роби все що потрібно» after normalized-candidate
+proposal. Implemented one isolated logistic model, eight price-independent
+features, fixed three cached pairs EURUSD/GBPCHF/AUDJPY, target300seconds.
+NORMALIZED_SIGNAL_PROTOCOL.md fixed before fit/results: train before16.09,
+validation16–22.09, test23.09 onward, target-boundary purge, fixed .55/.45 gates.
+Scaler fits training only; minimum200 contiguous bars, reset on missing bars.
+No model/pair/threshold search after results. Training9980 nonflat samples.
+Validation27/48 correct; test47/81=58.02%,83selected with2 assumedflatrefunds,
+10UTCdays. BUY81/SELL2. At assumed .80 payout mean+.04337stakeunits,
+daybootstrap95%CI[-.1175,+.3519]. At .70 meannegative. Advantage overalwaysUP
+CI[0,+.1286], alwaysDOWN[-.0497,+.792]. Gate FAILED (n<200/no robustedge).
+No production replacement; research artifact production_allowed=false/rejected.
+Retrospective history already researched, NOT prospectiveOOS. cTrader closes
+are NOT actual Binomo entry/settlement; payouts/refunds hypothetical. NoPNLclaim.
+Originalmodel/scaler SHA unchanged. VWAP remains retired; noDB/broker connections,
+orders, deployments, executorstarts or restarts made in this work.
+9 new tests and91 research tests pass. Includes future-mutation, scale-invariance,
+gap reset, target purge, training-only scaler, hypothetical payoff and gate checks.
