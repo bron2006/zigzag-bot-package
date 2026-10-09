@@ -1008,3 +1008,39 @@ backup включає committed data. Оригінали не видалені; 
 Cloudhealth16:10:36Kyiv ok/READY/TelegramACTIVE,83quotes/2stale.
 Повідомлення локального stopped VWAP після stop не повинні генеруватись;
 можливе вже відправлене/чергове Telegram повідомлення не є новим процесом.
+
+## 09.10.2026 16:24Kyiv — відновлено хмарні сигнали після ACCESS_DENIED
+
+Власник «ну виправляй» після read-only diagnosis. Health16:17 degraded,
+0quotes; CH_ACCESS_TOKEN_INVALID -> refresh ACCESS_DENIED. Сигналів за
+сьогодні було11, усі02:04..02:13Kyiv; нічого після02:13. Причину всієї
+денної паузи НЕ доведено коротким logbuffer. Watchlist persistedfalse
+updated16:13:48, Forex/Crypto false ще10.08. Не звинувачувати власника:
+хто натиснув toggle, не встановлено. Дозволений scope recoveryWatchlist,
+не вмикати інші категорії/real orders або retiredVWAP без нового рішення.
+
+Read-only bounded SQL connection (READ ONLY/8sstatement timeout), raw
+token values НЕ друкували. DB bundle updated11:17:40Kyiv, відрізняється
+від env; cloud startup02:03 завантажив попередній bundle і не синхронізує
+його далі. Local і cloud могли обертати спільний refresh token; точного
+writer11:17 не встановлено. cTrader official FAQ: refresh token перестає
+бути чинним після refresh/re-authorisation. Це механізм ризику спільних
+clients, НЕ доказ, що саме local process був автором останнього refresh.
+
+Через існуючий protected POST/api/scanner/toggle з adminsecret у BODY:
+спершу readstatus безcategory, потім enableWatchlist лишеifFalse.
+HTTP200 confirmed watchlisttrue, інші3категоріїfalse. Машину48e1239a7d3708
+restart (без deploy/image/config change); startup16:23:13, authsuccess
+16:23:19, symbols16:23:21. Нові DBключі прийняті без userlogin.
+Health16:24:50 ok/READY/TelegramACTIVE,83prices/0stale. Один повний scan
+23assets/batch8 завершено16:24:28; AUDJPY BUY#3149 надіслано16:24:19,
+entry110.390/horizon300s записаний pending. Весь новий outcome cycle ще
+не завершився; не називати pending виграшем/прибутком.
+
+Справжній HTTP GET/api/stats/signals через localhost з adminauth:
+7days200/success/ok,11signals6wins2losses3unknown/winrate75%;30days200,
+12signals6wins2losses4unknown/winrate75%. Це8timed endpoints, НЕ profit.
+Old results не змінювали. Protected API перевірено, actual WebApp rendering
+на екрані користувача не спостерігали. No python.exe/pythonw.exe local:
+VWAP залишився stopped/Taskdisabled/.envfalse. Sourcefix/deploy у recovery
+не робили; root day-longgap потребує окремого audit якщо повториться.
