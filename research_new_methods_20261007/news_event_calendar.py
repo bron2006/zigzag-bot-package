@@ -82,4 +82,3 @@ def events():
                        "release_utc": instant.astimezone(timezone.utc).isoformat(),
                        "source": url, "header_time_verified": True})
     return sorted(result, key=lambda row: row["release_ts"])
-
