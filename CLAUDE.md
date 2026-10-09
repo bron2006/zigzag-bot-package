@@ -1044,3 +1044,29 @@ Old results не змінювали. Protected API перевірено, actual 
 на екрані користувача не спостерігали. No python.exe/pythonw.exe local:
 VWAP залишився stopped/Taskdisabled/.envfalse. Sourcefix/deploy у recovery
 не робили; root day-longgap потребує окремого audit якщо повториться.
+
+## 09.10.2026 — виконаний новий frozen-model contract diagnostic
+
+Власник «ну так зроби щось» після пропозиції перевірити originalEURUSD M15
+vs current domain. Протокол MODEL_CONTRACT_PROTOCOL.md записаний ДО fetch/
+calculation. Нова EURUSD M5 історія25.08..07.10.2026:9016 bars,0duplicates;
+read-only allowlisted demoProbe,0orders/0refreshes, persisted token read only.
+LocalVWAP не запускали. GBPCHF/AUDJPY з existingM5 caches; M15 aggregations
+strict3consecutive aligned bars. ASTextract exact _prepare_features без
+importsapp/config/DB, rolling<=300pastbars/min250, allcompleted candles.
+Targetcommon+15min, gaps unknown/excluded, originalclass1UP/currentinverted
+fixedintscore>75/<25; НЕ відтворено liveM1/M5 confirmation/news/cooldown.
+Retrospective after-training diagnostic, НЕ prospectiveOOS і НЕ netPNL.
+
+Decidedsignals/originalrate/invertedrate:EURUSD M15 404/49.01/50.99%;
+EURUSD M5 1713/49.04/50.96%;GBPCHF126/57.94/42.06%;AUDJPY3315/51.01/48.99%.
+GBPCHF alwaysUP58.73% >model57.94%; EURUSD M15 simpleUP/DOWN49.01/50.99.
+All4 daybootstrap95% model-accuracy intervals include50%; all4 paired
+excess-over-alwaysUP intervals include0. No demonstrated classifier edge.
+OODfeature ranges4.13/61.62/49.82/100%, so domain-mismatch alone does not
+explain away EURUSD M15 failure. Different sampling/warmup => NOT causal
+paired estimate of timeframe effect. Cost/fill data unavailable=>noPnLclaim.
+5newtests/82researchtests passed. Model/scaler unchangedhash93c526a9/c6aa64b1.
+Sources/protocol/report + small curated resultJSON preserved in GitHub;
+raw broker caches never push. Current model/directions/cloud unchanged;
+do not turn on real orders or invert mapping based on these results.

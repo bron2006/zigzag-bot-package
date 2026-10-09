@@ -1,0 +1,133 @@
+{
+  "retrospective": true,
+  "prospective_OOS": false,
+  "no_profit_claim": true,
+  "full_live_strategy": false,
+  "horizon_seconds": 900,
+  "window_bars": 300,
+  "model_sha256": "93c526a9dc9694c461c41925041897f5c92d6db695c9928c4ed31cfe6c09c717",
+  "scaler_sha256": "c6aa64b1849b27917adbfbe3450bf7cdbc5ff3a3b97917d344c74d192e2c07f1",
+  "analysis_sha256": "59d569b21b879eaf03976bc864c5579f704abb97cdf49cafd5f732465b862c1d",
+  "arms": [
+    {
+      "symbol": "EURUSD",
+      "period": 900,
+      "bars": 3000,
+      "missing_future": 12,
+      "first_bar_utc": "2026-08-25T08:00:00+00:00",
+      "last_bar_utc": "2026-10-07T15:45:00+00:00",
+      "outside_training_feature_range_fraction": 0.04125593282219788,
+      "all_nonflat": 2679,
+      "all_original_accuracy": 0.5069055617767824,
+      "threshold_signals": 404,
+      "ties": 60,
+      "original_wins": 198,
+      "deployed_inverted_wins": 206,
+      "original_rate": 0.4900990099009901,
+      "deployed_inverted_rate": 0.5099009900990099,
+      "always_up_rate_same_signals": 0.4900990099009901,
+      "always_down_rate_same_signals": 0.5099009900990099,
+      "original_day_cluster_ci95": [
+        0.4369,
+        0.5455
+      ],
+      "original_excess_over_always_up_day_cluster_ci95": [
+        -0.0076,
+        0.0073
+      ],
+      "signal_days": 32,
+      "below25": 2,
+      "above75": 402
+    },
+    {
+      "symbol": "EURUSD",
+      "period": 300,
+      "bars": 9016,
+      "missing_future": 44,
+      "first_bar_utc": "2026-08-25T08:00:00+00:00",
+      "last_bar_utc": "2026-10-07T15:55:00+00:00",
+      "outside_training_feature_range_fraction": 0.6161870915969276,
+      "all_nonflat": 8547,
+      "all_original_accuracy": 0.49713349713349714,
+      "threshold_signals": 1713,
+      "ties": 176,
+      "original_wins": 840,
+      "deployed_inverted_wins": 873,
+      "original_rate": 0.4903677758318739,
+      "deployed_inverted_rate": 0.5096322241681261,
+      "always_up_rate_same_signals": 0.4862813776999416,
+      "always_down_rate_same_signals": 0.5137186223000584,
+      "original_day_cluster_ci95": [
+        0.4609,
+        0.5225
+      ],
+      "original_excess_over_always_up_day_cluster_ci95": [
+        -0.0009,
+        0.0103
+      ],
+      "signal_days": 36,
+      "below25": 27,
+      "above75": 1686
+    },
+    {
+      "symbol": "GBPCHF",
+      "period": 300,
+      "bars": 9024,
+      "missing_future": 21,
+      "first_bar_utc": "2026-08-25T08:00:00+00:00",
+      "last_bar_utc": "2026-10-07T15:55:00+00:00",
+      "outside_training_feature_range_fraction": 0.49817226410783644,
+      "all_nonflat": 8584,
+      "all_original_accuracy": 0.5153774464119292,
+      "threshold_signals": 126,
+      "ties": 170,
+      "original_wins": 73,
+      "deployed_inverted_wins": 53,
+      "original_rate": 0.5793650793650794,
+      "deployed_inverted_rate": 0.42063492063492064,
+      "always_up_rate_same_signals": 0.5873015873015873,
+      "always_down_rate_same_signals": 0.4126984126984127,
+      "original_day_cluster_ci95": [
+        0.4711,
+        0.6894
+      ],
+      "original_excess_over_always_up_day_cluster_ci95": [
+        -0.1418,
+        0.1316
+      ],
+      "signal_days": 33,
+      "below25": 75,
+      "above75": 51
+    },
+    {
+      "symbol": "AUDJPY",
+      "period": 300,
+      "bars": 9019,
+      "missing_future": 22,
+      "first_bar_utc": "2026-08-25T08:00:00+00:00",
+      "last_bar_utc": "2026-10-07T15:55:00+00:00",
+      "outside_training_feature_range_fraction": 1.0,
+      "all_nonflat": 8664,
+      "all_original_accuracy": 0.503808864265928,
+      "threshold_signals": 3315,
+      "ties": 84,
+      "original_wins": 1691,
+      "deployed_inverted_wins": 1624,
+      "original_rate": 0.510105580693816,
+      "deployed_inverted_rate": 0.489894419306184,
+      "always_up_rate_same_signals": 0.49411764705882355,
+      "always_down_rate_same_signals": 0.5058823529411764,
+      "original_day_cluster_ci95": [
+        0.4884,
+        0.5325
+      ],
+      "original_excess_over_always_up_day_cluster_ci95": [
+        -0.028,
+        0.0617
+      ],
+      "signal_days": 37,
+      "below25": 3275,
+      "above75": 40
+    }
+  ]
+}
