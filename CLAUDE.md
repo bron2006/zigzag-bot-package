@@ -1165,3 +1165,44 @@ CRCRLFblanklinesparserfixedBEFOREoutcomes,sentinelsNaN/valueweightfirstblockchec
 Exactpaper/sourceversionreconciliation and tradableETF/fillcostvalidation remain,
 ETF/accountmigration needs explicitnewdecision. Do NOTdeploytutorial signals.
 No DB/brokerconnections/orders/tokenrefresh/cloudchanges/VWAPrestart/processstarts.
+
+## 09.10.2026 — біржова крипта дозволена лише як дослідження; funding screen
+
+Власник відповів «Так, розглядати біржеву крипту». Це НЕ дозвіл на ордери,
+рахунок, кошти, ключі, міграцію cTrader або запуск постійного paper worker.
+Підсумок дослідження: SEARCH_AND_FUNDING_REPORT.md уresearch_new_methods_20261007.
+Не надсилати користувачу файли/посилання/переліки файлів; пояснювати результат.
+
+Додатковий Industry Timing paper profile14day/.015 без20%assetcap:
+reference CAGR19.538%, contemporary3.195% vsmarket18.750%; не точна replica
+статті й не торгові ETF. Старий tutorial/source не переписаний під результат.
+Інші первинні джерела перевірені: BTC ML paper має нероз'яснену історію Binance
+futures до їх запуску2019; FXcross-sectional momentum потребує broad forward
+даних; crypto whole-universe trend потребує delisted history. Не приписувати
+їм наші старі негативні тести трьох CFD/BTCETH і не підганяти нові правила.
+
+Funding BTC/ETH USD-M+COIN-M2023–07.10.2026:16510 записів; негативні збережені.
+Для повної спрощеної inverse позиції додано97056 погодинних spot/mark барів.
+Обмежений child240s завершив першу спробу; immutable checkpoints дозволили
+продовжити й закінчити другою. Немає нескінченного збору/нового daemon.
+Умовні1000USD на asset/year,face900; застава не подвоюється як другий spot.
+Модель негайної конверсії: BTC2024 +108.72/105.90stress,2025 +42.76/39.99;
+ETH2024 +116.96/114.13,2025 +39.63/36.86USD після умовних комісій.
+
+Живі public spot filters minNotional5USDT роблять негайні .09USD продажі
+невиконуваними. Окремий pinned batched protocol: накопичення/rounding/купівля
+монет при дефіциті/залишки. Marked netBTC2024 +110.21/107.50stress,
+2025 +42.30/39.72; ETH2024 +117.05/114.34,2025 +40.08/37.15USD.
+Залишки монети .05–.90USD у marked net, не в кінцевому cash. Current filters
+застосовані до минулого умовно; feeUSDT,USDT=USD,instant transfers,Open=fills
+не перевірені. Margin/notional=1 — алгебра, НЕ доказ відсутності liquidation.
+ADL може закрити short і зруйнувати hedge. Без плеча/обіцянок прибутку.
+
+2026UNKNOWN: обидваCOIN-M не мають30.06 08UTC funding record, direct small
+window API підтвердив. Не встановлено причини; НЕ нуль, не повний2026PNL.
+144researchtestsPASS; окремийDecimal audit16ledgers/112gziphashes/counts/
+remainingcoinPASS. Cashflow цієї моделі позитивний2024/25, але це лише
+кілька доларів на місяць на1000, не виконувана стратегія/forward/livetest.
+Наступне: synchronized quote/replay, transfer/account constraints, two-leg
+partialfills/ADL/disconnection stress. Жодного нового worker/orders/cloudchange;
+VWAP залишається вимкненим. Main не мержено; livehealth у цьому кроці не перевірено.
