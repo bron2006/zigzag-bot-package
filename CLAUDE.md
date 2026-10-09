@@ -1123,3 +1123,24 @@ stressmean-3.66667pip. Do NOT silently flip directions/pickeventtype afterresult
 audit:65hashes55knownoutcomes allpass. Originalmodel/scalerunchangedSHA.
 No cloudrestart/deploy/config change, realorders, DBwrites or executorstarts.
 VWAP remains retired. Newhypothesis NOT forward-test running; history fetchdone.
+
+## 09.10.2026 — fixed comparative M5 screen: all three rules FAILED
+
+Owner «роби» authorized one comparative research experiment, not deployment.
+Read COMPARATIVE_PROTOCOL.md / COMPARATIVE_REPORT.md underresearch_new_methods_20261007.
+Fixed trend EMA10/50, prior20bar breakout, nonVWAP meanreversion on EURUSD/GBPUSD/
+USDJPY. 2024Jan–07.10.2026 demoM5history,105pages630000rawbars,620069boundedbars.
+Early2024–25, final2026; previouslyresearchedfragments NOTblindprospectiveOOS.
+One firstsignal/pair/day,08–16UTC,60contiguousbarwarmup/resetgaps, decisionbar i,
+onebarbuffer,entryOpen i+2,expiryClose i+2=300s. No threshold/pair/horizonsearch.
+Final198days594observations/rule: trend286/585nonflat=48.889%;breakout272/582=46.735%;
+reversion314/583=53.859%. At hypothetical80%payoutmeanstake -.118182/-.155556/-.029966;
+allgatesfailed, earlymeansalsoallnegative. ForexgrossATRmeans -.004353/-.012574/+.002601
+allfamilyadjustedCIincludezero; afterillustrativebase/stresscosts allnegative.
+No realfills/Binomoquotes, no executablePNLclaim. No pairfiltering or inversion.
+11newtests/113researchtestspass; independentstdlibOHLC/ATR/EMA/session/firstsignal/
+endpoint/cost/baselineaudit6428records/105pageSHAchecks passes. ReportlockedSHA.
+StopTHIS3rule5minsearch, do NOT deploy or silentlystartforwardtest of rejectedrules.
+NoDBwrites/tokenrefresh/orders/cloudchange/executorstarts/VWAPreactivation.
+Supabase skill used only existing bounded persistedtokenread; demoverified.
+Productionmodel/scalerunchangedSHA; livehealthNOTcheckedinthisexperiment.
