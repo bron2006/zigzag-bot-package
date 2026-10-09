@@ -979,3 +979,32 @@ daily12:00 Kyiv працює при login, StartWhenAvailable дозволяє c
 не обіцяти запуск при logout/offline. Closed logs у working tree51.43MiB,
 heartbeat09.10 02:24:19Kyiv, cloudhealth02:24:24Kyiv ok/83prices/4stale.
 Архів має повний manifest; live journaling не зупиняли/не очищували.
+
+## 09.10.2026 — VWAP тест ЗАВЕРШЕНО за прямою вказівкою власника
+
+Власник «Все,прибирай,вимикай його», потім повернувся до комп'ютера для UAC.
+НЕ продовжувати VWAP-тест і НЕ запускати/reload/register executor без нового
+прямого дозволу. Cloud сигналам не потрібен окремий локальний VWAP executor.
+.env VWAP_EXECUTOR_ENABLED=false; READ_ONLY=true і demo збережені.
+Правила/модель/хмарні flags/реальні ордери НЕ змінювали.
+
+Elevated scripts/stop_vwap_test.ps1 перевірив exact task action/path,
+READ_ONLY, supervisor PID4744/starttime/commandline. SYSTEM task
+ZigZagBot-VwapExecutor DISABLED і STOPPED09.10 16:09:27Kyiv.
+logs/vwap_stop_result.json success=true/taskDisabled=true; supervisor і
+його workers відсутні; повторний global python-process check16:10:36
+не знайшов жодного python.exe/pythonw.exe. Поточний worker міг сам вийти
+до elevated stop через static flagfalse; не заявляти, що конкретний PID
+примусово killed, якщо його не було. Autostart залишений disabled для
+оборотності, не unregister/delete code, runtime DB flags не змінювали.
+
+Завершальний локальний архів:
+C:\Users\Work\Desktop\zigzag_archives\2026-10-09\VWAP_finished
+688 files55.64MiB (VWAP logs/heartbeat/status та5 VWAP CSV), копії звірені
+SHA256. Journal vwap_paper.sqlite3 через SQLite read-only backup API,
+PRAGMA integrity_check=ok. WAL/SHM файли окремо не копіювали: consistent
+backup включає committed data. Оригінали не видалені; .env/токени/сесії
+в архів НЕ копіювали. Без real orders/перезапусків/хмарного deploy.
+Cloudhealth16:10:36Kyiv ok/READY/TelegramACTIVE,83quotes/2stale.
+Повідомлення локального stopped VWAP після stop не повинні генеруватись;
+можливе вже відправлене/чергове Telegram повідомлення не є новим процесом.
