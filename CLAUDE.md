@@ -1144,3 +1144,24 @@ StopTHIS3rule5minsearch, do NOT deploy or silentlystartforwardtest of rejectedru
 NoDBwrites/tokenrefresh/orders/cloudchange/executorstarts/VWAPreactivation.
 Supabase skill used only existing bounded persistedtokenread; demoverified.
 Productionmodel/scalerunchangedSHA; livehealthNOTcheckedinthisexperiment.
+
+## 09.10.2026 — external full-strategy reference selected/reconstructed
+
+Owner «вперед» after request to change approach, not repeat arbitraryrules.
+Selected externalresearchreference IndustryTiming Zarattini/Antonacci, public48
+KennethFrenchindustrytotalreturns/RF/market, completeportfolio ratherthan5minlabels.
+EXTERNAL_REFERENCE_PROTOCOL/REPORT document selection and limits. Not tradable
+indices; no ETF/accountmigration approved, no productioncandidate demonstrated.
+Tutorial20dayvol/.02 sizing differs current2025paper14day/.015. Pinnedtutorial
+BEFOREresult, did NOT tweak to match18.2%paperCAGR. NOTexactpaperreplication.
+Independentimplementation, no thirdpartycodeexecuted. PublicGETonly isolated90s.
+Reference1926Jul–2024Mar25710days: CAGR21.972%,vol15.315%,RFexcessSharpe1.126,
+MDD-42.342%,marketCAGR10.084%; meanexposure133.42%,cap200%,free turnover/RFborrowing.
+Prespecifiedcontemporary2024Apr–2026Aug607days: strategyCAGR3.270% vsmarket18.750%,
+MDD-15.052% vs-19.558%,excessSharpe-.032. NOTexecutableprofits, NOTblindOOS.
+No fees/fills/slippage/historicalretailfinancingclaim. Sourcevintage202608revised.
+CRCRLFblanklinesparserfixedBEFOREoutcomes,sentinelsNaN/valueweightfirstblockchecked.
+11newtests/124researchtestspass inclindependentscalarfixture220days×8assets.
+Exactpaper/sourceversionreconciliation and tradableETF/fillcostvalidation remain,
+ETF/accountmigration needs explicitnewdecision. Do NOTdeploytutorial signals.
+No DB/brokerconnections/orders/tokenrefresh/cloudchanges/VWAPrestart/processstarts.
