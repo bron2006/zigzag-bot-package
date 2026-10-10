@@ -1425,3 +1425,47 @@ MCP status UPGRADING, UI preparation new server. НЕ називати completed
 до active/SQL version/application validation. Pre-upgrade snapshot:
 signal_outcomes2980,signal_evidence0,signal_history1556,users4,
 binomo_trades253,vwap_trades0,secured_public_tables14.
+
+Поки upgrade тривав, зроблено actual restore drill public schema у temporary
+local PostgreSQL17.11 (official EDB binaries, localhost127.0.0.1:55677).
+pg_restore --schema=public --no-owner --no-acl --exit-on-error успішний:
+14tables,signal_outcomes2980,signal_history1556,binomo_trades253,users4.
+Це підтвердження відновлення саме application public schema, НЕ всіх
+Supabase managed auth/storage/services. pg_ctl stop -m fast completed,
+localhost listener55677 відсутній. Private original backup не змінено.
+Dockerfile.release base переведено на verified CLEAN v1490 digest, щоб
+майбутні code-only образи не наслідували secret з нижніх старих шарів.
+Dockerfile.hotfix вимагає clean v1490-or-later base в comment; не підставляти
+старий RUNTIME_IMAGE лише тому, що final filesystem cleanup є.
+
+### 2026-10-10 18:26 UTC — upgrade завершено й перевірено
+
+Supabase ACTIVE_HEALTHY, stable17.11.0.003, SQL server_version17.11;
+dashboard visibly "Upgrade completed". WARN vulnerable_postgres_version
+зник. Advisor лише INFO14 RLS-no-policy (backend-only deny-all), WARN/ERROR0.
+Public anon/authenticated SELECT privileges0. Повторний actual production
+resolver/accounting roundtrip і API probe OK; всі synthetic rows rollback.
+Natural new live_mid cohort0 — НЕ стверджувати profit/live outcome validation.
+
+Upgrade приніс actual postgres collation mismatch153.120→153.121. Не просто
+приглушили warning: scripts/repair_pg_collation.py local verified project,
+DBowner/version preflight, autocommit, statement_timeout90s, lock_timeout5s,
+REINDEX DATABASE CONCURRENTLY postgres успішний, warnings/skipped0,
+invalid/exclusion preflight0, invalid post0; тільки після цього ALTER DATABASE
+postgres REFRESH COLLATION VERSION. Actual recorded=actual153.121.
+Операція maintenance через direct psycopg2, НЕ transactional migration
+(REINDEX DATABASE CONCURRENTLY не дозволений у transaction).
+Орієнтир https://www.postgresql.org/docs/17/sql-reindex.html
+
+Після upgrade+reindex counts незмінні: signals2980,history1556,users4,
+binomo_trades253,secured_public_tables14. Browser Win-rate фактично повторно
+запитано після оновлення: історичні248,15pairs,new0,conditional1000.
+Main public health ok/Quote READY/Telegram ACTIVE, суботні stale forex
+quotes очікувані й НЕ є доказом актуального відкритого forex ринку.
+AUTOTRADE effectivefalse перевірений production probe; executors не запускали.
+Private backup збережений, temporary restore server STOPPED. Спроба optional
+cleanup його stopped data directory заблокована shell policy — temporary
+private restore data лишилися у task-specific Temp dir, нічого не видалено.
+GitHub push/main merge НЕ робили. Старі registry images можуть містити
+Binomo session у lower layer — owner має відкликати старі сесії вручну;
+видалення файла на VM/clean new image цього не замінює.

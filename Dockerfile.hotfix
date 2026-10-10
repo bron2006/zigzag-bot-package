@@ -1,5 +1,7 @@
 # Code-only recovery. RUNTIME_IMAGE must name a verified existing deployment
 # whose requirements/model hashes match this checkout. No dependency rebuild.
+# Use a clean full-build image from v1490 or later, not a pre-cleanup image:
+# removing credentials from the final filesystem does not erase lower layers.
 ARG RUNTIME_IMAGE
 FROM ${RUNTIME_IMAGE}
 WORKDIR /app
