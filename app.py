@@ -8,6 +8,7 @@ import time
 from flask import Flask
 from twisted.internet import reactor
 from twisted.internet.task import LoopingCall
+from twisted.internet.threads import deferToThreadPool
 from twisted.python.threadpool import ThreadPool
 from twisted.web.server import Site
 
@@ -72,6 +73,22 @@ def _publish_sse_ping() -> None:
     app_state.publish_sse({"_ping": int(time.time())})
 
 
+def _resolve_outcomes_async():
+    # LoopingCall waits for this Deferred: no overlapping resolver cycles,
+    # and database timeouts cannot freeze cTrader's reactor callbacks.
+    d = deferToThreadPool(reactor, app_state.blocking_pool or reactor.getThreadPool(),
+                         signal_tracking.resolve_pending_signals)
+
+    def failed(failure):
+        logger.error("Signal resolver failed; next cycle will retry: %s", failure.getErrorMessage())
+        import measurement_health
+        measurement_health.count("resolver_errors")
+        return None
+
+    d.addErrback(failed)
+    return d
+
+
 def _start_background_services() -> None:
     try:
         app_state.restore_scanner_state()
@@ -105,8 +122,8 @@ def _start_background_services() -> None:
     _start_loop(20.0, _publish_sse_ping, now=False, name="sse_ping")
     _start_loop(
         max(30.0, config.SIGNAL_OUTCOME_CHECK_INTERVAL_MINUTES * 60.0),
-        signal_tracking.resolve_pending_signals,
-        now=False,
+        _resolve_outcomes_async,
+        now=True,
         name="signal_outcome_resolver",
     )
     _start_loop(

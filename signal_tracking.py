@@ -8,6 +8,7 @@ for the same signal. This module knows nothing about Binomo itself — it
 only tracks outcomes against cTrader live prices."""
 import logging
 import math
+import time
 from datetime import datetime, timedelta, timezone
 
 import db
@@ -147,6 +148,23 @@ def maybe_record_signal(result: dict) -> int | None:
 
     horizon_seconds = compute_horizon_seconds(result.get("timeframe"))
 
+    # Scanner opts into a new, separate measurement cohort. Historical callers
+    # retain their semantics; never silently rewrite the old candle reference.
+    evidence = None
+    entry_ts = None
+    if result.get("measurement_version") == "live_mid_v1":
+        published_ts = result.get("ts")
+        quote = result.get("entry_quote")
+        if not isinstance(published_ts, (int, float)) or not math.isfinite(published_ts) or not quote:
+            return None
+        if not 0 <= published_ts - quote["ts"] <= 5:
+            return None
+        entry_price = quote["mid"]
+        entry_ts = datetime.fromtimestamp(published_ts, timezone.utc).replace(tzinfo=None)
+        evidence = {"version": "live_mid_v1", "entry_quote": quote,
+                    "model_reference_price": result.get("price"), "source": "cTrader"}
+
+    extra = {"evidence": evidence, "entry_ts": entry_ts} if evidence else {}
     outcome_id = db.create_signal_outcome(
         pair=pair,
         timeframe=result.get("timeframe") or "",
@@ -154,7 +172,15 @@ def maybe_record_signal(result: dict) -> int | None:
         score=result.get("score"),
         entry_price=entry_price,
         horizon_seconds=horizon_seconds,
+        **extra,
     )
+    if outcome_id and evidence:
+        if time.time() - published_ts > 5:
+            evidence["reason"] = "publication_cancelled_db_delay"
+            db.resolve_signal_outcome(outcome_id, outcome="unknown", exit_price=None, evidence=evidence)
+            return None
+        import endpoint_sampler
+        endpoint_sampler.register(outcome_id, pair, published_ts + horizon_seconds)
     if outcome_id:
         logger.info(
             "SIGNAL_OUTCOME: recorded pending #%s %s %s entry=%.5f horizon=%ss",
@@ -191,9 +217,17 @@ def resolve_pending_signals() -> None:
         if isinstance(entry_ts, datetime) and isinstance(horizon_seconds, (int, float)) and math.isfinite(horizon_seconds) and horizon_seconds > 0:
             entry_epoch = entry_ts.replace(tzinfo=timezone.utc).timestamp() if entry_ts.tzinfo is None else entry_ts.timestamp()
             deadline = entry_epoch + horizon_seconds
+            evidence = row.get("evidence")
+            if evidence:
+                import endpoint_sampler
+                if not evidence.get("endpoint"):
+                    endpoint_sampler.register(row["id"], row["pair"], deadline)
             if now_epoch < deadline:
                 continue
-            quote = app_state.get_signal_endpoint_quote(row["pair"], deadline, now_epoch, _ENDPOINT_TOLERANCE_SECONDS)
+            captured = endpoint_sampler.captured(row["id"]) if evidence else None
+            quote = (evidence or {}).get("endpoint") or captured or app_state.get_signal_endpoint_quote(row["pair"], deadline, now_epoch, _ENDPOINT_TOLERANCE_SECONDS, full=bool(evidence))
+            if quote and not deadline <= quote.get("ts", -1) <= min(deadline + _ENDPOINT_TOLERANCE_SECONDS, now_epoch):
+                quote = None
             live_price = quote.get("mid") if quote else None
             entry_price = row["entry_price"]
             if isinstance(entry_price, (int, float)) and math.isfinite(entry_price) and entry_price > 0 and isinstance(live_price, (int, float)) and math.isfinite(live_price) and live_price > 0:
@@ -205,7 +239,22 @@ def resolve_pending_signals() -> None:
         if outcome == "unknown":
             live_price = None
 
-        if db.resolve_signal_outcome(row["id"], outcome=outcome, exit_price=live_price):
+        extra = {}
+        if row.get("evidence"):
+            evidence = dict(row["evidence"])
+            if live_price is not None:
+                evidence["endpoint"] = quote
+                evidence.pop("reason", None)
+            else:
+                evidence["reason"] = "invalid_entry_or_horizon" if not isinstance(entry_ts, datetime) or not isinstance(horizon_seconds, (int, float)) or not math.isfinite(horizon_seconds) or horizon_seconds <= 0 or not isinstance(row["entry_price"], (int, float)) or not math.isfinite(row["entry_price"]) or row["entry_price"] <= 0 else "no_valid_quote_in_5s_window"
+                if evidence["reason"] == "no_valid_quote_in_5s_window":
+                    evidence["reason"] = app_state.signal_measurement_gap_reason(row["pair"], deadline)
+            evidence["checked_at"] = now.isoformat()
+            extra["evidence"] = evidence
+        if db.resolve_signal_outcome(row["id"], outcome=outcome, exit_price=live_price, **extra):
+            if row.get("evidence"):
+                import endpoint_sampler
+                endpoint_sampler.unregister(row["id"])
             logger.info(
                 "SIGNAL_OUTCOME: #%s %s %s -> %s (entry=%s exit=%s)",
                 row["id"], row["pair"], row["verdict"], outcome, row["entry_price"], live_price,

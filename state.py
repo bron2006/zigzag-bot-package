@@ -292,14 +292,18 @@ class AppState:
             bid, ask = sides["bid"][0], sides["ask"][0]
             if ask < bid:
                 return
+            import endpoint_sampler
+            endpoint_sampler.observe(symbol, {"ts": ts, "mid": (bid + ask) / 2,
+                                              "bid": bid, "ask": ask,
+                                              "bid_ts": sides["bid"][1], "ask_ts": sides["ask"][1]})
             history = self._outcome_quotes.setdefault(symbol, deque(maxlen=601))
             if history and int(ts) <= int(history[-1][0]):
                 return
-            history.append((ts, (bid + ask) / 2))
+            history.append((ts, (bid + ask) / 2, bid, ask))
             while history and ts - history[0][0] > 600:
                 history.popleft()
 
-    def get_signal_endpoint_quote(self, symbol: str, deadline: float, now: float, tolerance: float = 5.0):
+    def get_signal_endpoint_quote(self, symbol: str, deadline: float, now: float, tolerance: float = 5.0, *, full: bool = False):
         """First retained full quote at/after deadline, never before or future.
 
         Times are broker quote timestamps; receipt timestamps are not a fallback.
@@ -307,10 +311,37 @@ class AppState:
         or executable net PNL. Sampling may conservatively lose a valid quote.
         """
         with self._state_lock:
-            for ts, mid in self._outcome_quotes.get(symbol, ()):
+            for sample in self._outcome_quotes.get(symbol, ()):
+                ts, mid = sample[:2]
                 if deadline <= ts <= min(deadline + tolerance, now):
+                    if full:
+                        return {"ts": ts, "mid": mid, "bid": sample[2], "ask": sample[3]}
                     return {"ts": ts, "mid": mid}
         return None
+
+    def get_signal_entry_quote(self, symbol: str, now: float):
+        """Most recent complete broker-time quote, at most five seconds old."""
+        with self._state_lock:
+            history = self._outcome_quotes.get(symbol, ())
+            if history and 0 <= now - history[-1][0] <= 5:
+                ts, mid, bid, ask = history[-1]
+                return {"ts": ts, "mid": mid, "bid": bid, "ask": ask}
+        return None
+
+    def signal_measurement_gap_reason(self, symbol: str, deadline: float):
+        """Report what evidence is missing; do not guess DNS/restart root causes."""
+        with self._state_lock:
+            history = self._outcome_quotes.get(symbol, ())
+            live = self.live_prices.get(symbol, {})
+            if not history:
+                if live and live.get("quote_ts") is None:
+                    return "missing_broker_timestamp"
+                return "no_complete_quote_history"
+            if history[-1][0] < deadline:
+                return "last_complete_quote_before_deadline"
+            if history[0][0] > deadline + 5:
+                return "history_does_not_cover_endpoint"
+            return "no_valid_quote_in_5s_window"
 
     def get_live_price(self, symbol: str) -> Optional[Dict[str, Any]]:
         with self._state_lock:

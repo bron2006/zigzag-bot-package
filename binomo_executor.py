@@ -1542,14 +1542,14 @@ def _stake_weight_for_pair(pair: str) -> float:
     trailing 30-day Binomo-style win rate (see config.py's
     BINOMO_STAKE_WEIGHT_* for the tiers/thresholds and, importantly, why
     this is not martingale). A pair with fewer than
-    BINOMO_STAKE_WEIGHT_MIN_TRADES resolved signals gets
+    BINOMO_STAKE_WEIGHT_MIN_TRADES measured wins+losses gets
     BINOMO_STAKE_WEIGHT_DEFAULT - not full size, since there isn't enough
     history to trust yet, but not zero either."""
     stats = db.get_pair_signal_outcome_stats(pair, days=30)
-    resolved = stats.get("resolved") or 0
+    decided = (stats.get("wins") or 0) + (stats.get("losses") or 0)
     win_rate = stats.get("win_rate")
 
-    if resolved < config.BINOMO_STAKE_WEIGHT_MIN_TRADES or win_rate is None:
+    if decided < config.BINOMO_STAKE_WEIGHT_MIN_TRADES or win_rate is None:
         return config.BINOMO_STAKE_WEIGHT_DEFAULT
     if win_rate >= config.BINOMO_STAKE_WEIGHT_TIER_HIGH_WINRATE:
         return config.BINOMO_STAKE_WEIGHT_TIER_HIGH

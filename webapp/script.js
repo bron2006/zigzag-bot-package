@@ -1102,9 +1102,8 @@ async function loadWinrateStats() {
 }
 
 function winrateRateClass(winRate) {
-    if (typeof winRate !== "number") return "neutral";
-    if (winRate >= 50) return "positive";
-    return "negative";
+    // Direction accuracy is not profitability; no green 50% profit badge.
+    return "neutral";
 }
 
 function formatWinrate(winRate) {
@@ -1148,9 +1147,8 @@ function renderWinratePeriodSummary(label, stats) {
 function renderWinrateByPair(monthStats) {
     const byPair = (monthStats && Array.isArray(monthStats.by_pair)) ? monthStats.by_pair : [];
     const topPairs = byPair
-        .filter((item) => (item.resolved || 0) > 0)
-        .sort((a, b) => (b.resolved || 0) - (a.resolved || 0))
-        .slice(0, 8);
+        .filter((item) => (item.total || item.resolved || 0) > 0)
+        .sort((a, b) => ((b.wins || 0) + (b.losses || 0)) - ((a.wins || 0) + (a.losses || 0)));
 
     if (!topPairs.length) return "";
 
@@ -1161,7 +1159,7 @@ function renderWinrateByPair(monthStats) {
                 <span>${escapeHtml(item.pair || "?")}</span>
                 <span class="winrate-row-rate ${rateClass}">
                     ${formatWinrate(item.win_rate)}
-                    <span style="color:var(--hint-color); font-weight:normal;"> · ${escapeHtml(tr("winrateTrades", { count: item.resolved || 0 }))}</span>
+                    <span style="color:var(--hint-color); font-weight:normal;"> · визначено: ${(item.wins || 0) + (item.losses || 0)} · невідомо: ${item.unknown || 0} · очікує: ${item.pending || 0}</span>
                 </span>
             </div>
         `;
@@ -1169,7 +1167,7 @@ function renderWinrateByPair(monthStats) {
 
     return `
         <div class="winrate-section">
-            <div class="winrate-section-title">${escapeHtml(tr("winrateByPair"))}</div>
+            <div class="winrate-section-title">Усі пари (30д): точність напрямку, не прибуток</div>
             ${rows}
         </div>
     `;
@@ -1177,9 +1175,13 @@ function renderWinrateByPair(monthStats) {
 
 function renderWinrateStats(weekStats, monthStats) {
     if (!winrateModalBody) return;
+    if (!weekStats?.ok || !monthStats?.ok) {
+        winrateModalBody.innerHTML = `<div class="winrate-error">${escapeHtml(tr("winrateError"))} Немає підтвердження від бази — це не нуль сигналів.</div>`;
+        return;
+    }
 
-    const weekHasData = weekStats && weekStats.resolved > 0;
-    const monthHasData = monthStats && monthStats.resolved > 0;
+    const weekHasData = weekStats && weekStats.total > 0;
+    const monthHasData = monthStats && monthStats.total > 0;
 
     if (!weekHasData && !monthHasData) {
         winrateModalBody.innerHTML = `<div class="winrate-empty">${escapeHtml(tr("winrateEmpty"))}</div>`;
@@ -1189,7 +1191,27 @@ function renderWinrateStats(weekStats, monthStats) {
     winrateModalBody.innerHTML =
         renderWinratePeriodSummary(tr("winrateWeek"), weekStats) +
         renderWinratePeriodSummary(tr("winrateMonth"), monthStats) +
-        renderWinrateByPair(monthStats);
+        renderWinrateByPair(monthStats) + renderMeasurementAudit(monthStats.measurement_audit);
+    const runtime = monthStats.measurement_runtime;
+    if (runtime) {
+        const c = runtime.counters || {};
+        winrateModalBody.innerHTML += `<div class="winrate-section">Діагностика лише від запуску ${escapeHtml(runtime.since)}: спроб ${c.tracking_attempts || 0}, опубліковано ${c.published || 0}, пропущено через котировки ${c.skipped_no_fresh_quote || 0}, через запис ${c.skipped_tracking_write || 0}, через затримку публікації ${c.skipped_publication_delay || 0}, помилки підрахунку ${c.resolver_errors || 0}. Ці лічильники обнуляються після перезапуску.</div>`;
+    }
+}
+
+function renderMeasurementAudit(audit) {
+    if (!audit) return "";
+    const paper = audit.scenario;
+    const labels = {win: "Плюс", loss: "Мінус", refund: "Повернення (умовне)", pending: "Очікує", unknown: "Немає даних", cancelled: "Не опубліковано"};
+    const reasons = {no_valid_quote_in_5s_window: "Немає придатної котировки у потрібні 5 секунд", missing_broker_timestamp: "Котировки без часу брокера", no_complete_quote_history: "Немає історії повних котировок (можливий перезапуск або непридатні дані)", last_complete_quote_before_deadline: "Остання повна котировка була до завершення сигналу", history_does_not_cover_endpoint: "Збережена історія починається після потрібного моменту", invalid_entry_or_horizon: "Некоректні початкові дані", publication_cancelled_db_delay: "Публікацію скасовано: запис або публікація затрималися", endpoint_unavailable: "Кінцева ціна недоступна"};
+    const gaps = Object.entries(audit.missing_reasons || {}).map(([key, count]) => `<div>${escapeHtml(reasons[key] || key)}: ${count}</div>`).join("");
+    const recent = (audit.recent || []).map(row => `<div class="winrate-row"><span>#${row.id} ${escapeHtml(row.pair)} ${escapeHtml(row.direction)}<br>${escapeHtml(row.entry_ts)} UTC<br>${escapeHtml(String(row.entry))} → ${escapeHtml(String(row.exit ?? "—"))}</span><span>${escapeHtml(labels[row.status] || row.status)}${row.reason ? `<br>${escapeHtml(reasons[row.reason] || row.reason)}` : ""}</span></div>`).join("");
+    return `<div class="winrate-section"><div class="winrate-section-title">Новий облік cTrader — окремо від старих результатів</div>
+        <div>Початок: ${escapeHtml(audit.first_entry || "ще немає нових сигналів")} UTC. Старих записів окремо: ${audit.legacy_total}.</div>
+        <div>Умовний розрахунок: $1000, ставка $10, чиста виплата 80%. За визначеними результатами: $${paper.measured_balance}; зміна $${paper.measured_pnl}.</div>
+        <div>${paper.complete ? "Пропусків у новому обліку немає." : `Результат НЕПОВНИЙ. Межі з урахуванням невідомих та відкритих: $${paper.balance_lower}–$${paper.balance_upper}.`}</div>
+        <div>Це сценарій за напрямком ціни, НЕ реальні угоди. Виплата умовна; обмеження капіталу й одночасних ставок не моделюються. Повернення — лише правило цього сценарію при точно однаковій ціні.</div>
+        ${gaps}<div class="winrate-section-title">Останні 50 записів нового обліку</div>${recent}</div>`;
 }
 
 // Single source of truth for "how strongly does the model agree with the

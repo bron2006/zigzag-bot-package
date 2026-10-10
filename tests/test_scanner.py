@@ -1,5 +1,6 @@
 import time
 import unittest
+from twisted.internet.defer import succeed, Deferred
 from unittest.mock import patch
 
 import config
@@ -20,6 +21,9 @@ class HandleAnalysisResultLanguageTest(unittest.TestCase):
     def setUp(self):
         self._saved_threshold = app_state.IDEAL_ENTRY_THRESHOLD
         app_state.IDEAL_ENTRY_THRESHOLD = 78
+        quote_patch = patch.object(app_state, "get_signal_entry_quote", side_effect=lambda pair, now: dict(ts=now, mid=1.1581, bid=1.1580, ask=1.1582))
+        quote_patch.start()
+        self.addCleanup(quote_patch.stop)
 
     def tearDown(self):
         app_state.IDEAL_ENTRY_THRESHOLD = self._saved_threshold
@@ -39,7 +43,7 @@ class HandleAnalysisResultLanguageTest(unittest.TestCase):
     def test_saved_ukrainian_preference_is_passed_to_message_and_keyboard(self):
         with patch.object(app_state, "publish_signal_sse"), \
              patch.object(scanner, "notify_admin"), \
-             patch.object(scanner, "deferToThreadPool"), \
+             patch.object(scanner, "deferToThreadPool", side_effect=lambda *args: succeed(123)), \
              patch.object(db, "get_user_language", return_value="uk"), \
              patch.object(telegram_ui, "_format_signal_message", return_value="msg") as mock_fmt, \
              patch.object(telegram_ui, "get_main_menu_kb", return_value="kb") as mock_kb:
@@ -52,7 +56,7 @@ class HandleAnalysisResultLanguageTest(unittest.TestCase):
     def test_no_saved_preference_falls_back_to_default_lang(self):
         with patch.object(app_state, "publish_signal_sse"), \
              patch.object(scanner, "notify_admin"), \
-             patch.object(scanner, "deferToThreadPool"), \
+             patch.object(scanner, "deferToThreadPool", side_effect=lambda *args: succeed(123)), \
              patch.object(db, "get_user_language", return_value=None), \
              patch.object(telegram_ui, "_format_signal_message", return_value="msg") as mock_fmt, \
              patch.object(telegram_ui, "get_main_menu_kb", return_value="kb") as mock_kb:
@@ -76,6 +80,9 @@ class HandleAnalysisResultPriceSanityTest(unittest.TestCase):
     def setUp(self):
         self._saved_threshold = app_state.IDEAL_ENTRY_THRESHOLD
         app_state.IDEAL_ENTRY_THRESHOLD = 78
+        quote_patch = patch.object(app_state, "get_signal_entry_quote", side_effect=lambda pair, now: dict(ts=now, mid=1.1581, bid=1.1580, ask=1.1582))
+        quote_patch.start()
+        self.addCleanup(quote_patch.stop)
 
     def tearDown(self):
         app_state.IDEAL_ENTRY_THRESHOLD = self._saved_threshold
@@ -100,7 +107,7 @@ class HandleAnalysisResultPriceSanityTest(unittest.TestCase):
 
         with patch.object(app_state, "publish_signal_sse") as mock_publish, \
              patch.object(scanner, "notify_admin") as mock_notify, \
-             patch.object(scanner, "deferToThreadPool") as mock_defer:
+             patch.object(scanner, "deferToThreadPool", side_effect=lambda *args: succeed(123)) as mock_defer:
             d = scanner._handle_analysis_result("EURUSD", result)
 
         self.assertTrue(d.called)
@@ -114,7 +121,7 @@ class HandleAnalysisResultPriceSanityTest(unittest.TestCase):
 
         with patch.object(app_state, "publish_signal_sse") as mock_publish, \
              patch.object(scanner, "notify_admin") as mock_notify, \
-             patch.object(scanner, "deferToThreadPool") as mock_defer:
+             patch.object(scanner, "deferToThreadPool", side_effect=lambda *args: succeed(123)) as mock_defer:
             scanner._handle_analysis_result("EURUSD", result)
 
         mock_publish.assert_called_once()
@@ -123,6 +130,46 @@ class HandleAnalysisResultPriceSanityTest(unittest.TestCase):
         # Telegram send_signal call - the sanity guard isn't blocking
         # either, unlike the implausible-price case above.
         self.assertTrue(mock_defer.called)
+
+
+class DurablePublishTest(unittest.TestCase):
+    def setUp(self):
+        app_state.scanner_cooldown_cache.pop("EURUSD", None)
+        self.addCleanup(lambda: app_state.scanner_cooldown_cache.pop("EURUSD", None))
+
+    def attempt(self, outcome):
+        d = Deferred()
+        result = dict(verdict_text="SELL", score=90, sentiment="GO", is_trade_allowed=True,
+                      price=1.158, data_status={"price": {"mid": 1.1581}}, timeframe="5m")
+        with patch.object(app_state, "IDEAL_ENTRY_THRESHOLD", 78), \
+             patch.object(app_state, "get_signal_entry_quote", side_effect=lambda pair, now: dict(ts=now, mid=1.1581, bid=1.158, ask=1.1582)), \
+             patch.object(scanner, "deferToThreadPool", return_value=d), \
+             patch.object(scanner, "get_chat_id", return_value=None), \
+             patch.object(scanner.autotrader, "maybe_enter_trade") as execute, \
+             patch.object(app_state, "publish_signal_sse") as publish:
+            scanner._handle_analysis_result("EURUSD", result)
+            publish.assert_not_called()
+            execute.assert_not_called()
+            if isinstance(outcome, Exception):
+                d.errback(outcome)
+            else:
+                d.callback(outcome)
+            if outcome and not isinstance(outcome, Exception):
+                publish.assert_called_once()
+                self.assertEqual(publish.call_args.args[0]["signal_outcome_id"], outcome)
+                execute.assert_called_once()
+            else:
+                publish.assert_not_called()
+                execute.assert_not_called()
+
+    def test_publish_only_after_confirmed_record(self):
+        self.attempt(123)
+
+    def test_failed_record_never_published_or_executed(self):
+        self.attempt(None)
+
+    def test_tracking_exception_never_published_or_executed(self):
+        self.attempt(RuntimeError("test failure"))
 
 
 class TakeBatchTest(unittest.TestCase):

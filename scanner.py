@@ -289,14 +289,51 @@ def _handle_analysis_result(pair_norm: str, result: dict):
     result["timeframe"] = result.get("timeframe", SCANNER_TIMEFRAME)
     result["ts"] = now
 
-    app_state.publish_signal_sse(result)
+    quote = app_state.get_signal_entry_quote(pair_norm, now)
+    import measurement_health
+    measurement_health.count("tracking_attempts")
+    if quote is None:
+        measurement_health.count("skipped_no_fresh_quote")
+        logger.warning("SCANNER: %s not published: no fresh complete broker quote", pair_norm)
+        return succeed(None)
+    result["entry_quote"] = quote
+    result["measurement_version"] = "live_mid_v1"
+    # Reserve cooldown while the async durable write is in progress. Fail closed:
+    # neither SSE nor Telegram nor execution gets an untracked signal.
     app_state.scanner_cooldown_cache[pair_norm] = now
+    d = deferToThreadPool(reactor, _blocking_pool(), signal_tracking.maybe_record_signal, result)
 
-    deferToThreadPool(reactor, _blocking_pool(), signal_tracking.maybe_record_signal, result).addErrback(
-        lambda failure: logger.error(
-            "SCANNER: не вдалося записати SignalOutcome для %s: %s", pair_norm, failure.getErrorMessage()
-        )
-    )
+    def recorded(outcome_id):
+        if not outcome_id:
+            measurement_health.count("skipped_tracking_write")
+            logger.error("SCANNER: %s NOT published: tracking write failed or timed out", pair_norm)
+            return None
+        if time.time() - result["ts"] > 5:
+            measurement_health.count("skipped_publication_delay")
+            evidence = {"version": "live_mid_v1", "entry_quote": result["entry_quote"],
+                        "model_reference_price": result.get("price"), "source": "cTrader",
+                        "reason": "publication_cancelled_db_delay"}
+            cancelled = deferToThreadPool(reactor, _blocking_pool(), db.resolve_signal_outcome,
+                                         outcome_id, outcome="unknown", exit_price=None, evidence=evidence)
+            cancelled.addErrback(recording_failed)
+            return None
+        result["signal_outcome_id"] = outcome_id
+        return _publish_recorded_signal(pair_norm, result, score)
+
+    def recording_failed(failure):
+        measurement_health.count("skipped_tracking_write")
+        logger.error("SCANNER: %s NOT published: tracking failure %s", pair_norm, failure.getErrorMessage())
+        return None
+
+    d.addCallback(recorded)
+    d.addErrback(recording_failed)
+    return d
+
+
+def _publish_recorded_signal(pair_norm, result, score):
+    app_state.publish_signal_sse(result)
+    import measurement_health
+    measurement_health.count("published")
 
     try:
         # No-op unless AUTOTRADE_ENABLED=true; manages its own threading.

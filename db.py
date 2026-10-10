@@ -1,5 +1,7 @@
 ﻿# db.py
 import logging
+import json
+import math
 import threading
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -125,6 +127,13 @@ class SignalOutcome(Base):
     # New measured endpoints: up_timed/down_timed/flat_timed/unknown.
     # Historical up/down/flat and tp/sl/timeout remain untouched.
     outcome = Column(String(16), nullable=False, default="pending", index=True)
+
+
+class SignalEvidence(Base):
+    """Separate generation: immutable entry evidence, captured endpoint, reasons."""
+    __tablename__ = "signal_evidence"
+    signal_id = Column(Integer, ForeignKey("signal_outcomes.id"), primary_key=True)
+    payload = Column(String, nullable=False)
 
 
 class AutoTrade(Base):
@@ -470,6 +479,11 @@ def initialize_database():
 
     try:
         Base.metadata.create_all(bind=engine)
+        if engine.dialect.name == "postgresql":
+            # Backend-only; never expose measurement evidence through Data API.
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE signal_evidence ENABLE ROW LEVEL SECURITY"))
+                conn.execute(text("REVOKE ALL ON signal_evidence FROM anon, authenticated"))
         _ensure_user_columns()
         _ensure_signal_outcome_columns()
         _ensure_binomo_trade_fk()
@@ -1586,6 +1600,8 @@ def create_signal_outcome(
     score: int | float | None,
     entry_price: float,
     horizon_seconds: int,
+    evidence: dict | None = None,
+    entry_ts: datetime | None = None,
 ) -> int | None:
     try:
         with session_scope() as session:
@@ -1603,7 +1619,11 @@ def create_signal_outcome(
                 outcome="pending",
             )
             session.add(row)
+            if entry_ts is not None:
+                row.entry_ts = entry_ts
             session.flush()
+            if evidence is not None:
+                session.add(SignalEvidence(signal_id=row.id, payload=json.dumps(evidence, allow_nan=False)))
             return row.id
     except SQLAlchemyError:
         logger.exception("Error creating signal outcome for pair=%s", pair)
@@ -1630,6 +1650,8 @@ def get_pending_signal_outcomes(limit: int = 500) -> list[dict]:
                 .limit(limit)
                 .all()
             )
+            evidence = {r.signal_id: json.loads(r.payload) for r in session.query(SignalEvidence).filter(
+                SignalEvidence.signal_id.in_([r.id for r in rows])).all()}
             return [
                 {
                     "id": row.id,
@@ -1639,6 +1661,7 @@ def get_pending_signal_outcomes(limit: int = 500) -> list[dict]:
                     "entry_price": row.entry_price,
                     "horizon_seconds": row.horizon_seconds,
                     "entry_ts": row.entry_ts,
+                    "evidence": evidence.get(row.id),
                 }
                 for row in rows
             ]
@@ -1647,22 +1670,59 @@ def get_pending_signal_outcomes(limit: int = 500) -> list[dict]:
         return []
 
 
-def resolve_signal_outcome(outcome_id: int, *, outcome: str, exit_price: float | None) -> bool:
+def resolve_signal_outcome(outcome_id: int, *, outcome: str, exit_price: float | None, evidence: dict | None = None) -> bool:
     try:
         with session_scope() as session:
             if session is None:
                 return False
 
-            row = session.query(SignalOutcome).filter(SignalOutcome.id == outcome_id).first()
+            row = session.query(SignalOutcome).filter(SignalOutcome.id == outcome_id).with_for_update().first()
             if row is None or row.outcome != "pending":
                 return False
 
+            if evidence is not None:
+                audit = session.query(SignalEvidence).filter_by(signal_id=outcome_id).with_for_update().first()
+                if audit is not None:
+                    # Preserve a quote already saved by the independent sampler.
+                    saved = json.loads(audit.payload)
+                    if saved.get("endpoint") and saved["endpoint"] != evidence.get("endpoint"):
+                        return False  # retry with saved evidence, don't overwrite it
+                    audit.payload = json.dumps(evidence, allow_nan=False)
             row.outcome = outcome
             row.exit_price = exit_price
             row.resolved_at = _utcnow()
             return True
     except SQLAlchemyError:
         logger.exception("Error resolving signal outcome id=%s", outcome_id)
+        return False
+
+
+def save_signal_endpoint(outcome_id: int, quote: dict) -> bool:
+    """Persist endpoint BEFORE the normal resolver, independently of its schedule."""
+    try:
+        with session_scope() as session:
+            if session is None:
+                return False
+            row = session.query(SignalOutcome).filter_by(id=outcome_id).with_for_update().first()
+            if row is None or row.outcome != "pending" or not row.horizon_seconds or row.horizon_seconds <= 0:
+                return False
+            ts, mid = quote.get("ts"), quote.get("mid")
+            if not all(isinstance(v, (int, float)) and math.isfinite(v) for v in (ts, mid)) or mid <= 0:
+                return False
+            entry = row.entry_ts.replace(tzinfo=timezone.utc) if row.entry_ts.tzinfo is None else row.entry_ts
+            deadline = entry.timestamp() + row.horizon_seconds
+            if not deadline <= ts <= deadline + 5 or ts > datetime.now(timezone.utc).timestamp():
+                return False
+            audit = session.query(SignalEvidence).filter_by(signal_id=outcome_id).with_for_update().first()
+            if audit is None:
+                return False
+            saved = json.loads(audit.payload)
+            if not saved.get("endpoint"):
+                saved["endpoint"] = quote
+                audit.payload = json.dumps(saved, allow_nan=False)
+            return True
+    except SQLAlchemyError:
+        logger.exception("Endpoint persistence failed id=%s", outcome_id)
         return False
 
 
@@ -1787,6 +1847,8 @@ def get_signal_outcome_stats(days: int = 7, *, binomo_style: bool = True) -> dic
                 return empty
 
             rows = session.query(SignalOutcome).filter(SignalOutcome.entry_ts >= since).all()
+            evidence = {r.signal_id: json.loads(r.payload) for r in session.query(SignalEvidence).filter(
+                SignalEvidence.signal_id.in_([r.id for r in rows])).all()}
     except SQLAlchemyError:
         logger.exception("Error loading signal outcome stats")
         return empty
@@ -1813,10 +1875,12 @@ def get_signal_outcome_stats(days: int = 7, *, binomo_style: bool = True) -> dic
         **aggregate(rows),
         "by_pair": by_pair,
         "by_timeframe": by_timeframe,
+        "measurement_audit": __import__("signal_accounting").summarize(rows, evidence),
+        "measurement_runtime": __import__("measurement_health").snapshot(),
     }
 
 
-def get_pair_signal_outcome_stats(pair: str, days: int = 30, *, verified_only: bool = False) -> dict:
+def get_pair_signal_outcome_stats(pair: str, days: int = 30, *, verified_only: bool = True) -> dict:
     """Binomo-style (no flat) win-rate for a single pair - see
     _aggregate_signal_outcomes_binomo_style. Used by binomo_executor's
     per-pair stake weighting (POLICY, 2026-08-12): scales the stake down

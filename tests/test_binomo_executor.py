@@ -927,7 +927,7 @@ class StakeWeightForPairTest(unittest.TestCase):
     def _weight_for(self, *, resolved, win_rate):
         with patch.object(
             binomo_executor.db, "get_pair_signal_outcome_stats",
-            return_value={"resolved": resolved, "win_rate": win_rate},
+            return_value={"resolved": resolved, "win_rate": win_rate, "wins": resolved, "losses": 0},
         ):
             return binomo_executor._stake_weight_for_pair("EURUSD")
 
@@ -953,6 +953,11 @@ class StakeWeightForPairTest(unittest.TestCase):
 
     def test_no_data_gets_default_weight(self):
         self.assertEqual(self._weight_for(resolved=0, win_rate=None), 0.5)
+
+    def test_unknowns_cannot_pass_minimum_sample(self):
+        with patch.object(binomo_executor.db, "get_pair_signal_outcome_stats",
+                          return_value=dict(resolved=100, wins=9, losses=7, unknown=84, win_rate=80)):
+            self.assertEqual(binomo_executor._stake_weight_for_pair("EURUSD"), 0.5)
 
 
 class SignalStreamUrlTest(unittest.TestCase):
