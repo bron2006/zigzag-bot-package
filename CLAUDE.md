@@ -1206,3 +1206,158 @@ remainingcoinPASS. Cashflow цієї моделі позитивний2024/25, �
 Наступне: synchronized quote/replay, transfer/account constraints, two-leg
 partialfills/ADL/disconnection stress. Жодного нового worker/orders/cloudchange;
 VWAP залишається вимкненим. Main не мержено; livehealth у цьому кроці не перевірено.
+
+## 2026-10-10: перевірка Nasdaq expansion + pullback — НЕ пройшла відбір
+
+На «ну давай» перевірено окрему фіксовану гіпотезу, а не куплений cBot:
+USTEC, смуги open +/-0.5ATR14, перший breakout на quarter-hour close,
+M5 counter-direction pullback <=30min, entry наступний Open, hard stop
+session Open, exit16:00NY. Без відкладання стопа, мартингейлу чи підбору.
+Demo-only allowlisted read, bounded child240s; 195988M5/758D1 bars,
+688/688 повних запланованих сесій2024–07.10.2026; holidays/early-close excluded.
+Протокол до PnL: manifesthash36eb4263..., clarification weekday UTCcompletion
+0faf4069... записана ПІСЛЯ fetch, ДО першого PnL. Original manifest збережений.
+Не стверджувати незмінний pre-acquisition contract чи prospective OOS.
+
+237 угод:92/88/57 по2024/25/26. Stress5 INDEX POINTS round trip, не pips:
+PF1.270/1.400/1.062; net1080.54/1813.78/210.60points. CI95%2026mean/session
+[-13.04,+17.13], лише57<100угод. Видалення3найкращих дає від'ємний net
+в кожному році. Cheap gate FAILED; не дозволяє production/forwardexecutor.
+Умовні fractional1000USD/1%risk (reset щороку):base2points +105.95/40.90/14.21USD,
+stress5points +85.09/28.38/8.02USD. Це НЕ виконуваний прибуток: current min/step
+0.1units відсікає ВСІ237угод за10USDbudget. Мінімальний stop+stress budget
+10.535–121.23USD, median22.228. НЕ підвищувати ризик щоб змусити угоди.
+USD1/point/unit,5xnotionalcap умовні; історичні bid/ask/slippage/margin не доведені.
+
+11screen+6probe safetytestsPASS; separate state-machine replay688sessions/
+237trades і9year/cost totals+balancesMATCH, shared data/calendar не externalaudit.
+Research у research_nasdaq_pullback_20261010, cache/results gitignored.
+Робочий бот/flags/task/cloud/orders/tokenrefresh НЕ змінені; livehealth не перевірявся.
+GitHub push/deploy не виконувалися. Не надсилати користувачу файли/таблиці.
+Цю версію не просувати й не оптимізувати за вже побаченим результатом.
+
+## 2026-10-10: пакетна перевірка96кандидатів замість пауз після кожного
+
+Власник попросив «набери кучу стратегій,прожени їх всі,а тоді тільки пиши».
+Створено й завершено offline research_batch_20261010:24фіксовані signalrules
+наUSTEC/EURUSD/GBPUSD/USDJPY +12controls. ORB5/15/30 споріднені; не називати
+96незалежними відкриттями. Пробої/failedbreak/retest/gapfollow+fade/priorrange/
+NR7/EMA/Donchian/BBreentry/RSI2/MACD/stoch/insidebar/compression/morningfollow+
+fade/afternoon/dualthrust/openreclaim/3impulse. БезVWAP/funding/мартингейлу.
+Commonstop1.5M5ATR,target2R,flatEOD,stopfirstifboth,nextOpen,1intent/day.
+ПротоколSHA377483b4...до batchPNL; параметри не підбиралися. Cached2024–07.10.2026
+не незалежний/prospectiveOOS; повна сесія+continuous indicatorwarmup60/resetgaps.
+KnownsessionsUSTEC688/688,EUR715/723,GBP714/723,JPY714/723,DSTNY/London.
+
+53068candidate trades +8487controls=61555modeltrades. 46/96positivegross2026sumR,
+7/96positive2026base roundednet,1/96stress. 3positiveeachyearbase,0stress.
+73/96sample>=100stress2026taken;96coverage>=95%;0positivefamilywise lower.
+Отже0/96cheapgatePASS. Bootstrap20000circular5sessionblocks,alpha.05/96,
+fixed1000dailyroundedPNL; approximatemultiplicity correction не exactguarantee.
+Найкращий SELECTED2026stress USTECgap_fade:2024+27.76,2025−23.86,2026+81.64USD
+на1000;2026PF1.168/109taken,CI95meanUSD/day[-.5467,1.2913],adjustedlower−1.0883.
+НЕ валідований переможець,НЕ привід deploy. HypotheticalALLINcostFX2/4pips,
+USTEC2/5points; currentmin/step/max,USDJPYexitconversion,5xnotionalcap conditional.
+Capобмежуєобсягзнизуriskbudget,не форсуєmin; реальна margin/bidask/fees невідомі.
+
+11synthetic testsPASS; Decimal1296ledgers іprimitiveOHLC61555pathsMATCH;
+inputSHA/protocolMATCH. Перевіркаfuturepoisonдлякожноговходу вaudit.
+Indicators/data shared; НЕ externalaudit всіх signalrules. Висновки тільки про
+ці правила/спільні exits, не «всі боти збиткові». Слабка grossперевагачасто
+зникаєпіслявитрат; подальші довші горизонти потребують нового pinnedпротоколу.
+Результати збереженілокально; production/orders/DB/network/token/tasks/cloud
+не чіпалися,GitHubpush/deployнебуло;livehealthнеперевірено. Файлине надсилати.
+
+### 2026-10-10 — новий облік сигналів, ЛОКАЛЬНО, ще НЕ деплой
+
+Власник дозволив виправлення, щоб бачити результати й пропуски. Реальні
+ордери/режими/активація виконавців/VWAP не змінювались. GitHub push і
+деплой НЕ виконані; для хмари потрібне окреме погодження.
+
+Новий live_mid_v1: початкова повна котировка cTrader (bid/ask/mid + час
+брокера), знята під час підготовки сигналу, не candle Close. Час початку —
+підготовка; затримка запису/публікації понад 5 секунд скасовує публікацію.
+Модельний reference price не змінює BUY/SELL, зберігається окремо.
+Scanner чекає успішного запису до SSE, Telegram та execution callback;
+без запису fail-closed. Замість переписування SignalOutcome — окрема
+SignalEvidence з FK; atomic entry+evidence. При initialize_database
+створюється таблиця; на Postgres RLS + REVOKE anon/authenticated. Це ще
+НЕ виконувалось на Supabase; перевірено лише ізольованою SQLite.
+
+Endpoint observer ловить перший повний tick у вікні [deadline,deadline+5]
+до downsampling; один фоновий sampler зберігає endpoint у БД й повторює
+невдалий запис, не блокує reactor. Resolver спочатку читає durable evidence,
+потім captured memory, потім rolling history. Обидва DB writers блокують
+рядки в однаковому порядку; пізня/майбутня/невалідна котировка відхиляється.
+DB resolver у app перенесено в deferToThreadPool; LoopingCall чекає Deferred,
+без перекриття циклів, помилка не зупиняє наступні цикли.
+
+ВАЖЛИВО: restart після COMMIT endpoint переживається; crash ДО commit або
+відсутність feed у потрібний момент не можна чесно відновити. Не обіцяти
+100% результатів. Причини описують наявні докази (немає broker timestamp,
+історії full quotes, остання full quote до deadline, history після window),
+НЕ встановлюють точну корінну причину DNS/перезапуску. Runtime counters
+спроб/публікацій/пропусків лише від запуску, НЕ durable historical totals.
+
+Веб: всі активні пари, measured denominator wins+losses, unknown/pending;
+50% не зелене «прибутково»; DB failure не зображується нульовою статистикою.
+Окремий live_mid_v1 audit з останніми 50 записами, причинами, start date.
+Сценарій $1000/$10/80% net: +8/-10, точна рівність умовний paper refund,
+unknown НЕ refund, bounds включають pending/unknown. Це НЕ виконуваний
+ledger: capital/concurrent stake limits НЕ симулюються, payout умовний,
+API days window визначає період сценарію. Старі покоління НЕ входять у
+цей сценарій; старий загальний win-rate збережено для сумісності.
+Pair stake stats verified_only=True; sample minimum використовує тільки
+wins+losses, unknown не збільшує довіру. Самі tiers/ставки/торгівля не увімкнені.
+
+Перевірено 229 Python tests (tracking/endpoint/accounting/scanner/DB/
+Binomo/API), 8 JS UI assertions, node syntax, py_compile, git diff --check.
+SQLite startup має старий warning від PostgreSQL-only FK helper — не нова
+помилка цієї зміни. Production PostgreSQL migration/RLS, реальний браузер
+і хмарний runtime ще НЕ перевірені. Supabase + Postgres Best Practices
+прочитані; changelog/docs перевірені, database side effects лише тестові.
+
+### 2026-10-10 20:57 Kyiv — оновлення застосовано й перевірено в хмарі
+
+Цей пункт оновлює попередній статус «НЕ деплой». Власник явно дозволив:
+«оновлюй, роби все, що потрібно, без запитань, поки все не налаштуємо».
+Fly release v1489 complete, image deployment-01M4KF09B9RM5YGJYAV3DCES35,
+machine 48e1239a7d3708. Public health: ok, Quote feed READY, Telegram ACTIVE.
+AUTOTRADE_ENABLED effective false підтверджено на сервері, режими/ключі не
+міняли, real/demo виконавців не запускали, VWAP не відновлювали.
+
+Повна Dockerfile збірка впала ДО оновлення машини на Debian mirror 404.
+Використано Dockerfile.release: вузьке накладання саме перевірених 9 runtime
+джерел поверх попереднього робочого image, без заміни залежностей/моделі/
+config. Base digest 660d568e8d6642d5a8f0338c8fd6fa2b2974d98486dc3c16a6187bfeb28fc795.
+SHA256 усіх 9 deployed джерел збігаються з локальними. Original Dockerfile
+upstream dependency rebuild ще не виправлений; не приховувати цей факт.
+
+На правильному Supabase nrozqijadhvmgvhzmxqm застосовано cloud migrations
+signal_evidence_live_mid_v1 і lock_backend_only_bot_tables через MCP.
+Знайдено 13 старих public tables: anon/authenticated мали SELECT/UPDATE,
+RLS не було. У проєктному коді доступ SQLAlchemy/direct Postgres, не Data API;
+cloud backend rolbypassrls=true перевірено ДО lockdown. Тепер всі 14 public
+tables RLS=true, REVOKE PUBLIC/anon/authenticated; перевірка public_access=0.
+Вміст/старі історії не видаляли. Advisor ERROR rls_disabled_in_public зник;
+INFO no-policy очікуваний deny-all для backend-only таблиць, НЕ додавати
+allow-all policy заради зеленого advisor. WARN vulnerable_postgres_version
+(17.4.1.075) залишився: upgrade вимагає окремого maintenance/restart плану,
+у цій сесії НЕ робили. Посилання https://supabase.com/docs/guides/platform/upgrading
+
+scripts/verify_signal_release.py виконано на Fly через base64 in-memory
+command, не включено в image, не друкує credentials. Actual deployed API
+handlers + production DB повертають HTTP200/ok; 248 старих за30d,15pairs,
+new cohort=0, scenario balance1000. Це test_client у окремому процесі на
+Fly, НЕ твердження про перевірку основного WSGI authenticated HTTP/browser.
+Public actual HTTP /script.js=200, нові audit/all-pair функції присутні;
+поточний log buffer:0 '- ERROR -' messages. Браузер візуально НЕ перевіряли.
+
+Production Postgres roundtrip insert/read успішний, rollback підтверджено.
+Додатковий end-to-end resolver/accounting test: синтетичні win/loss/refund/
+unknown у SAVEPOINT sessions, приєднаних до однієї outer transaction.
+Підсумок 1/1/1/1, conditional balance998, complete=false. Outer ROLLBACK,
+відсутність УСІХ тестових rows підтверджено. Жодних SSE/Telegram/ордерів.
+Нових реальних сигналів live_mid_v1 на перевірці ще0; натуральний результат
+першого нового сигналу НЕ перевірено (субота). Не домальовувати його.
+GitHub push не робився; код локально й у Fly, не тотожне GitHub sync.
