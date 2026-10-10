@@ -2,6 +2,9 @@
 # Original dependency rebuild currently fails on upstream Debian mirror 404s.
 FROM registry.fly.io/zigzag-bot-package:deployment-01M4EW1AF4XGFFZDFH0R5BQNSN@sha256:660d568e8d6642d5a8f0338c8fd6fa2b2974d98486dc3c16a6187bfeb28fc795
 WORKDIR /app
+# Old base images may contain a copied local browser session. Never restore
+# that file or local-only executors during a code-only emergency release.
+RUN rm -f /app/storage_state.json /app/.env /app/binomo_executor.py /app/vwap_executor.py
 COPY app.py db.py scanner.py signal_tracking.py state.py endpoint_sampler.py signal_accounting.py measurement_health.py ./
 COPY webapp/script.js ./webapp/script.js
 RUN python -m py_compile app.py db.py scanner.py signal_tracking.py state.py endpoint_sampler.py signal_accounting.py measurement_health.py

@@ -12,6 +12,9 @@ logs/
 data/*.csv
 .git/
 .env
+.env.*
+**/storage_state*.json
+.claude/
 # Research and local diagnostics are not part of the cloud signal service.
 # COPY . . must not upload tick caches or start bundling separate bots.
 research*/

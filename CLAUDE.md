@@ -1361,3 +1361,67 @@ unknown у SAVEPOINT sessions, приєднаних до однієї outer tran
 Нових реальних сигналів live_mid_v1 на перевірці ще0; натуральний результат
 першого нового сигналу НЕ перевірено (субота). Не домальовувати його.
 GitHub push не робився; код локально й у Fly, не тотожне GitHub sync.
+
+### 2026-10-10 — продовження: повна збірка та локальна сесія в образі
+
+За наступним дозволом власника «виконуй, виправляй все» перевірено upgrade
+Supabase. Actual SQL: PostgreSQL 17.4, database_bytes=15051923,
+replication_slots=0, md5_login_roles=0. Встановлені лише pg_stat_statements,
+pgcrypto, plpgsql, supabase_vault, uuid-ossp. MCP не має backup/upgrade
+операції; браузер dashboard перенаправляє на sign-in, management token
+не доступний у environment. Upgrade НЕ виконаний: резервування й upgrade
+eligibility без входу не підтверджені. Не застосовувати pause/restore наосліп.
+Відкрито Chrome sign-in і запитано ручний вхід без передачі credentials.
+
+Full Dockerfile: Debian bookworm замість failing bullseye, Python лишився
+3.11, requirements/model files не змінені. apt retries=3, явний libgomp1.
+Build-only remote smoke test успішний: analysis/api/scanner imports,
+реальні model/scaler load і finite predict_proba shape(1,2). Старий SQLite
+FK warning не заважає тесту; це не перевірка цілого production startup.
+До image включено fail-fast перевірку відсутності local-only файлів.
+
+ВАЖЛИВО: storage_state.json був НЕ виключений .dockerignore і фактично
+існував /app/storage_state.json у deployed inherited image. Не читали й
+не друкували credentials. Копію на чинній Fly machine видалено адресно,
+absence підтверджено. Локальний файл збережений. Початковий trial build
+client зупинено ДО publishing; повторний build виключає цей файл.
+.dockerignore тепер виключає .env.*, **/storage_state*.json, .claude/.
+Emergency overlay Dockerfiles видаляють inherited session/.env/executors
+з final filesystem. Це НЕ стирає файл із нижніх шарів старих образів:
+повна чиста збірка потрібна, historical private images можуть містити
+сесію; власнику рекомендовано відкликати старі Binomo сесії вручну.
+Жодного executor/ордера не запускали. 229 logic tests + 3 packaging tests OK.
+
+Реальний owner Chrome tab перевірено після reload, Win-rate відкрито:
+усі15pairs, historical248, new cohort0, conditional1000, attempts0.
+Це нарешті actual main WSGI authenticated browser UI, а не test_client.
+Природного нового live_mid_v1 результату все ще немає; прибуток не доведено.
+
+Продовження після ручного входу власника: dashboard підтвердив Free plan,
+scheduled backups відсутні. Завантажено official EDB Windows client17.11
+за vendor link fileid1260616, без встановлення Windows service.
+scripts/backup_before_pg_upgrade.py читає credentials лише з .env,
+передає pg_dump через environment, не друкує й не кладе password у argv.
+Full database pg_dump custom --no-owner --no-acl успішний; pg_restore --list
+і повне pg_restore --file=NUL успішні,14publictables. Це read-validation,
+НЕ actual restore drill. Backup 375214bytes SHA256
+1988e8319ae8b6559c1112ba0ad7e06ad6aefd32f9c37b2d3d61145f9701ff4c
+збережено C:\Users\Work\Desktop\РЕЗЕРВНІ КОПІЇ\zigzag-maintenance-20261010\before-postgres-upgrade.dump.
+Не комітити чи надсилати цей private backup. Він містить приватні дані.
+
+Чиста повна збірка deployed v1490, image deployment-01M4KG696VTAT31B5X3CDTK56M,
+digest9d3ca5634b4768d08663237df5cfe57f24ce86be1d7ac9c988085aba16b38b04.
+Build-only сам по собі НЕ pushes image; спроба deploy --image build-only tag
+дала image-not-found ДО update. Звичайний cached full deploy completed.
+Production probe scripts/verify_signal_release.py знову OK з rollback,
+API200/history248/new0; effective AUTOTRADE=false. Public health ok.
+На final filesystem .env/storage_state/binomo_executor/vwap_executor ВСІ
+відсутні. SHA256 model/scaler збігаються з локальними незміненими файлами.
+
+Supabase upgrade initiated 2026-10-10T18:16:03Z, tracking
+098296ad-5d62-4b77-b742-4ccbb1ed80b0. Вибрано stable17.11.0.003, НЕ default
+preview17.6.1.164. UI warning: offline до1години, downgrade неможливий.
+MCP status UPGRADING, UI preparation new server. НЕ називати completed
+до active/SQL version/application validation. Pre-upgrade snapshot:
+signal_outcomes2980,signal_evidence0,signal_history1556,users4,
+binomo_trades253,vwap_trades0,secured_public_tables14.

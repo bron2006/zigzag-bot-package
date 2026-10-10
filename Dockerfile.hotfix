@@ -4,4 +4,5 @@ ARG RUNTIME_IMAGE
 FROM ${RUNTIME_IMAGE}
 WORKDIR /app
 COPY . .
+RUN rm -f /app/storage_state.json /app/.env /app/binomo_executor.py /app/vwap_executor.py
 CMD ["python", "app.py"]
