@@ -1686,6 +1686,50 @@ def get_signal_endpoint_audit(outcome_id: int) -> dict | None:
                     outcome=row.outcome, evidence=evidence)
 
 
+def get_asof_audit_ids(limit: int = 2) -> list[int]:
+    with get_db() as session:
+        if session is None or limit <= 0:
+            return []
+        rows = session.query(SignalOutcome.id).join(SignalEvidence, SignalEvidence.signal_id == SignalOutcome.id).filter(
+            SignalOutcome.outcome != 'pending', SignalOutcome.entry_ts >= datetime(2026, 10, 9, 21),
+            SignalOutcome.entry_ts >= _utcnow()-timedelta(days=6),
+            SignalEvidence.payload.contains('live_mid_v1'),
+            ~SignalEvidence.payload.contains('publication_cancelled_db_delay'),
+            ~SignalEvidence.payload.contains('"asof_audit"'),
+            SignalOutcome.horizon_seconds > 0).order_by(SignalOutcome.id.asc()).limit(min(limit, 500)).all()
+        return [row.id for row in rows]
+
+
+def save_signal_asof_audit(outcome_id: int, history: dict) -> bool:
+    """Parallel price-method comparison. NEVER changes original outcome/PNL."""
+    from historical_endpoints import validate_asof
+    try:
+        with session_scope() as session:
+            if session is None:
+                return False
+            row = session.query(SignalOutcome).filter_by(id=outcome_id).with_for_update().first()
+            if row is None or row.outcome == 'pending' or not row.horizon_seconds or row.entry_ts < datetime(2026,10,9,21):
+                return False
+            audit = session.query(SignalEvidence).filter_by(signal_id=outcome_id).with_for_update().first()
+            if audit is None:
+                return False
+            saved = json.loads(audit.payload)
+            if saved.get('version') != 'live_mid_v1' or saved.get('asof_audit'):
+                return False
+            entry = row.entry_ts.replace(tzinfo=timezone.utc) if row.entry_ts.tzinfo is None else row.entry_ts
+            deadline = entry.timestamp()+row.horizon_seconds
+            if not validate_asof(history, deadline):
+                return False
+            quote = history.get('endpoint')
+            saved['asof_audit'] = dict(history=history, checked_at=_utcnow().isoformat(),
+                                       result='quote_available' if quote else 'no_fresh_sides')
+            audit.payload = json.dumps(saved, allow_nan=False)
+            return True
+    except (SQLAlchemyError, TypeError, ValueError):
+        logger.exception('As-of audit persistence failed id=%s', outcome_id)
+        return False
+
+
 def get_recoverable_signal_ids(limit: int = 500) -> list[int]:
     with get_db() as session:
         if session is None:
@@ -1957,7 +2001,7 @@ def _aggregate_signal_outcomes_binomo_style(rows: list, *, verified_only: bool =
 
 
 def get_signal_outcome_stats(days: int = 7, *, binomo_style: bool = True, current_test: bool = False,
-                             historical_only: bool = False) -> dict:
+                             historical_only: bool = False, valuation: str = 'strict') -> dict:
     """Defaults to the Binomo-oriented view (no flat/push - see
     _aggregate_signal_outcomes_binomo_style) since that's what actually gets
     traded. Pass binomo_style=False for the forex-oriented view with the
@@ -1998,7 +2042,8 @@ def get_signal_outcome_stats(days: int = 7, *, binomo_style: bool = True, curren
         return empty
 
     if current_test:
-        audit = __import__("signal_accounting").summarize(rows, evidence)
+        audit = __import__("signal_accounting").summarize(rows, evidence, valuation=valuation)
+        original_audit = __import__('signal_accounting').summarize(rows,evidence) if valuation == 'asof60' else None
         def totals(counts):
             wins, losses = counts.get("win", 0), counts.get("loss", 0)
             refunds = counts.get("refund", 0)
@@ -2009,7 +2054,8 @@ def get_signal_outcome_stats(days: int = 7, *, binomo_style: bool = True, curren
         return dict(ok=True, scope="current_test", test_started="2026-10-10T00:00:00+03:00",
                     total=audit["total"], **totals(audit["counts"]),
                     by_pair=[dict(pair=p["pair"], total=p["total"], **totals(p["counts"])) for p in audit["by_pair"]],
-                    measurement_audit=audit, measurement_runtime=__import__("measurement_health").snapshot())
+                    measurement_audit=audit, original_measurement_audit=original_audit,
+                    measurement_runtime=__import__("measurement_health").snapshot())
 
     by_pair_map: dict[str, list] = {}
     by_tf_map: dict[str, list] = {}

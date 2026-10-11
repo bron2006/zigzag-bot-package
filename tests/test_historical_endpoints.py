@@ -120,7 +120,7 @@ class ReactorHistoryTest(unittest.TestCase):
             if mode == 'timeout':
                 return defer.Deferred()
             response = ProtoOAGetTickDataRes(ctidTraderAccountId=2 if mode == 'account' else 1, hasMore=False)
-            response.tickData.add(timestamp=1001000, tick=10000000 if req.type == 1 else 10200000)
+            response.tickData.add(timestamp=999000 if mode.startswith('asof') else 1001000, tick=10000000 if req.type == 1 else 10200000)
             return defer.succeed(Tick(payloadType=response.payloadType, payload=response.SerializeToString()))
         with patch('twisted.internet.reactor', clock), patch.object(history, '_busy', False), \
              patch.object(history, '_last_started', 0), patch.object(history.time, 'time', return_value=1020), \
@@ -128,7 +128,7 @@ class ReactorHistoryTest(unittest.TestCase):
              patch.object(app_state, 'client', client), \
              patch.object(ctrader, '_resolve_broker_symbol_exact', return_value=Tick(symbolId=2)), \
              patch.object(analysis, '_send_market_data_request', side_effect=send):
-            d = history.fetch_on_reactor('TEST', 1000)
+            d = history.fetch_on_reactor('TEST', 1000, 'asof300' if mode == 'asof300' else ('asof60' if mode == 'asof' else 'strict'))
             d.addCallbacks(values.append, lambda failure: errors.append(failure.value))
             if mode == 'retired':
                 app_state.client = Tick()
@@ -147,6 +147,21 @@ class ReactorHistoryTest(unittest.TestCase):
         values, errors, calls = self.exercise('timeout')
         self.assertFalse(values)
         self.assertEqual(len(errors), 1)
+
+    def test_asof_requests_stop_at_expiry_and_keep_side_timestamps(self):
+        values, errors, calls = self.exercise('asof')
+        self.assertFalse(errors)
+        self.assertTrue(all(req.fromTimestamp == 940000 and req.toTimestamp == 1000000 for req in calls))
+        self.assertEqual(values[0]['endpoint']['bid_ts'],999)
+        self.assertEqual(values[0]['endpoint']['ts'],1000)
+
+    def test_wider_diagnostic_has_distinct_source_and_cannot_be_settlement_proof(self):
+        from historical_endpoints import validate_asof
+        values,errors,calls=self.exercise('asof300')
+        self.assertFalse(errors)
+        self.assertTrue(all(req.fromTimestamp==700000 and req.toTimestamp==1000000 for req in calls))
+        self.assertEqual(values[0]['source'],'cTrader_asof300_diagnostic_v1')
+        self.assertFalse(validate_asof(values[0],1000))
 
     def test_account_and_retired_transport_rejected(self):
         for mode in ('account', 'retired'):

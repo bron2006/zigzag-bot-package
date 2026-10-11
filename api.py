@@ -559,15 +559,19 @@ def register_routes(app):
             if not row:
                 return jsonify(error="not_found"), 404
             phase = request.form.get('phase', 'expiry')
-            if phase not in {'entry', 'expiry'}:
+            if phase not in {'entry', 'expiry', 'asof60', 'asof300'}:
                 return jsonify(error='invalid_phase'), 400
             saved = row['evidence'].get('entry_quote' if phase == 'entry' else 'endpoint')
             target = saved.get('ts') if phase == 'entry' and isinstance(saved, dict) else row['deadline']
             if phase == 'entry' and saved is None:
                 return jsonify(error='missing_entry_quote'), 422
             import historical_endpoints
-            result = blockingCallFromThread(reactor, historical_endpoints.fetch_on_reactor,
-                                           row["pair"], target)
+            if phase in {'asof60', 'asof300'}:
+                result = blockingCallFromThread(reactor, historical_endpoints.fetch_on_reactor,
+                                               row['pair'], target, phase)
+            else:
+                result = blockingCallFromThread(reactor, historical_endpoints.fetch_on_reactor,
+                                               row["pair"], target)
             return jsonify(id=row["id"], pair=row["pair"], outcome=row["outcome"],
                            phase=phase, saved=saved, history=result)
         except Exception as exc:
@@ -615,8 +619,12 @@ def register_routes(app):
         scope = request.args.get("scope")
         if scope not in (None, "current_test", "history"):
             return jsonify({"success": False, "error": "Unknown statistics scope"}), 400
+        valuation = request.args.get('valuation','strict')
+        if valuation not in {'strict','asof60'} or (valuation == 'asof60' and scope != 'current_test'):
+            return jsonify(success=False,error='Invalid valuation'),400
+        extra = {'valuation':valuation} if valuation == 'asof60' else {}
         stats = db.get_signal_outcome_stats(days, binomo_style=binomo_style,
-                                           current_test=scope == "current_test", historical_only=scope == "history")
+                                           current_test=scope == "current_test", historical_only=scope == "history", **extra)
         return jsonify({"success": True, **stats})
 
     @app.route("/api/get_pairs")

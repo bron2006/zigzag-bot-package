@@ -27,6 +27,7 @@ assert(report.includes('&lt;script&gt;'));
 assert(!report.includes('<script>'));
 audit.total = 2;
 audit.counts = {win:1, pending:1};
+audit.asof_comparison = {counts: {checked:2, available:1, original_unknown_with_price:1}};
 audit.by_pair = [{pair:'NEWPAIR',total:2,counts:{win:1,pending:1},win_rate:100}];
 context.renderWinrateStats({ok:true,scope:'current_test',measurement_audit:audit},
     {ok:true,total:999,wins:888,by_pair:[{pair:'OLDPAIR',total:999,wins:888}]});
@@ -45,6 +46,9 @@ assert(main.includes('без даних'));
 assert(!main.includes('Останні 50'));
 assert(!main.includes('Діагностика'));
 assert(!main.includes('Перший запис'));
+assert(!main.includes('Перевірка ціни на завершенні'));
+assert(currentHtml.includes('Перевірка ціни на завершенні: 1 із 2'));
+assert(currentHtml.includes('Окреме порівняння, баланс не змінює'));
 assert(currentHtml.includes('<summary>Деталі тесту</summary>'));
 context.renderWinrateStats({ok:true,scope:'current_test',measurement_audit:audit,
     measurement_runtime:{since:'now',counters:{}}},null);
@@ -53,4 +57,12 @@ assert(withRuntime.indexOf('Діагностика') > withRuntime.indexOf('<sum
 assert(withRuntime.indexOf('Діагностика') < withRuntime.indexOf('</details>'));
 context.renderWinrateStats({ok:true,scope:'current_test',measurement_audit:audit},null);
 assert(context.winrateModalBody.innerHTML.includes('NEWPAIR'), 'history failure does not hide current test');
+audit.valuation='asof60';
+context.renderWinrateStats({ok:true,scope:'current_test',measurement_audit:audit,
+    original_measurement_audit:{...audit,valuation:'strict'}},null);
+const selected=context.winrateModalBody.innerHTML;
+assert(selected.includes('Ціна на завершенні · вік сторін до 60 с'));
+assert(selected.includes('Попередній спосіб: нова котировка після завершення'));
+assert(!selected.includes('<details open'));
+assert(selected.includes('$998.00'));
 console.log('UI: current experiment, collapsed history, escaping and missing data passed');

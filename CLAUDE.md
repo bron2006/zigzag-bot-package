@@ -1755,3 +1755,106 @@ methodology/cohort, comparing last known prices and broker history with freshnes
 and market-open rules; never silently relax current v1 or relabel gaps as refunds.
 Final health17:58UTC ok/READY/TelegramACTIVE. 47stale symbols then, primarily
 weekend-closed FX; do not infer global feed freshness from initial83live0stale.
+
+### 2026-10-11 — causal expiry-price shadow comparison (NOT activated as settlement)
+
+Owner authorized autonomous research/fixes. Added asof60_shadow_v1: independently
+decode both broker-history sides in deadline-60s..deadline, take LAST bid/ask
+at/before expiry, retain each original side timestamp and max_age, reject crossed
+prices, missing/stale sides, truncated history and future data. Fixed60s rule
+chosen BEFORE outcome audit, not optimized for PNL. No market-open/execution
+guarantee inferred from these quotes; this is a parallel PRICE audit, not actual
+broker settlement or a profitability claim. Live_mid_v1 semantics unchanged.
+
+Admin endpoint phase=asof60 and manual --asof --record-asof preserve original
+entry/exit/outcome/publication and store separate evidence.asof_audit after proof
+replay. Immutable/idempotent checks; no network calls under DB locks. Background
+worker shares a TOTAL TWO history-request budget per cycle with old recovery;
+current v1 non-pending rows bounded to recent6days, skips cancelled publication.
+Stats exposes asof_comparison.affects_balance=false; one summary line only in
+collapsed Details, main balance/pair layout unchanged. Skill guidance from
+Supabase/Postgres informed short transactional writes; advisors still only14INFO
+backend RLS-without-policy notices, no new WARN/ERROR; no DDL/access changes.
+
+Audited ALL36 then-unknown v1 signals plus FIRST10 chronological timed controls:
+32/36 have an eligible as-of60 quote,4/36 do not (3423SOL,3454TON,3498RENDER,
+3548ZEC). All10 controls have as-of quotes and0direction/equality outcome changes
+versus original endpoint (prices/timestamps can legitimately differ). The32
+formerly unknown forecasts give11direction wins/20losses/1exact-price equality
+under the SAME hypothetical binary-direction rule, not actual broker fills.
+Do NOT add these to primary balance silently; v1 and asof are different methods.
+Snapshot of152 original settled rows through3553 unchanged before/after audits:
+76da96c4b0d9bb74b4ff84ffd4679d28 (hash of IDs/outcomes/exit prices).
+
+First shadow image deployment-01M4P2PBNNRCJVFV3ANTR19522 deployed v1499,
+digest8ec66d518829486841398c55f3df2fef0d3cb74f24e44f66ce734588974aa007.
+01M4P2EMETVA2908SA5S0XZN1T was build-only without --push and NOT deployed.
+Paused new scanning18:08UTC; retained XMR3554 endpoint before rollout18:13UTC;
+restored original flags (watchlist/commodities=true,forex/crypto=false).
+All5 modified runtime/UI hashes matched actual first shadow deployment.
+
+IMPORTANT incident: during manual audit + old heavy stats verifier in parallel,
+API/SSH response stalls occurred~18:16UTC. VM512MB. No definitive OOM log/root
+cause captured; memory pressure from verifier importing full api/analysis is a
+plausible contributor, not proven. Interrupted own extra commands; SQL pending0;
+machine restart restored health. Replaced verifier with LIGHT HTTP requests to
+resident API (correct scopes current_test/history), no duplicate Flask app/DB/
+analysis imports. New tests enforce this and audit per-request timeout isolation.
+Read-only live HTTP probe200 returned full original stats+shadow counts; health
+18:19:28UTC ok/READY83live0stale/TelegramACTIVE. Process after model init279900KB
+RSS,~220MB available; no auxiliary Python left. Main68assets/38crypto cycles
+continued18:19..18:21UTC. Do not run heavyweight parallel Python probes on512MB.
+
+Added read-only phase=asof300/--asof --older for FOUR unresolved side-age cases;
+source cTrader_asof300_diagnostic_v1 CANNOT pass60s proof or alter stored audit/
+balance. This wider diagnostic is not an activated policy. 236 targeted Python
+tests passed incl causal request ranges, proof tampering, no future/stale quotes,
+transaction preservation, probe memory discipline, network timeout isolation;
+measurement/watchlist JS tests passed. Further live diagnostic results below.
+
+### 2026-10-11 — full comparison completed; primary paper report explicitly uses asof60
+
+The preceding shadow-only note records an earlier checkpoint. After checking ALL
+closed current-test rows, activated EXPLICIT valuation=asof60 only for current_test
+in the main web Win-rate. The original strict report remains separately collapsed;
+history/default API semantics and original persisted outcomes/prices are unchanged.
+No silent fallback to strict prices. Not-yet-audited closed signals show awaiting
+verification; validated empty history shows unknown, never invented win/loss/refund.
+Same start2026-10-10T00:00:00+03:00, initial$1000/stake$10/net payout80%, hypothetical
+direction scenario, NOT fills/fees/slippage/executable bankroll simulation.
+
+Full154-row comparison before final pending signal: all117 originally priced
+rows have eligible quotes with ZERO direction/equality changes;37unknown ->33
+eligible/4not. Natural XMR3556 expired18:42:21UTC, resolved original unknown and
+background worker AUTOMATICALLY stored asof proof before rollout. Final155 closed
+rows all checked;151eligible/4unknown;34of38 original unknown now have prices.
+Main live HTTP200:75win/75loss/1refund/4unknown;measured balance$850(-$150),
+unresolved-price range$810..$882. This shows NO demonstrated profitability.
+Publication receipts6confirmed/149legacy_unconfirmed: the historical149 cannot
+be retrospectively claimed as verified Telegram deliveries or executions.
+
+The four no60s-side cases remain3423SOL,3454TON,3498RENDER,3548ZEC. Read-only300s
+diagnostic found side updates aged84.0069s,74.6141s,99.0750s,71.7866s respectively.
+These ages measure PRICE CHANGE, not proof of disconnect. The300s rule is NOT
+activated, cannot pass60s proof, and does not alter balance. Do not widen freshness
+to improve apparent PNL. All recorded side arrays checked: no duplicate timestamp
+with differing price; selection nonetheless now correctly chooses LAST chronological
+event on equal timestamps, with regression test.
+
+Final rollout image deployment-01M4P494BTCNF4N4H4VGCYH7GQ,
+digest7fc6baf8288c530199a9cbf233568523c6a0868760e94c1197134ec7a2a42364,
+machine version01M4P4ESJDTBZ4Q39NHV2WSZ05. Built/pushed primary candidate
+01M4P3Y328TR971HZPBVEBXVQ4 NOT deployed (superseded by timestamp-tie correction).
+Paused new scanning~18:40UTC, waited for pending0/unaudited0, deployed18:44UTC,
+restored EXACT prior flags watchlist/commodities=true,forex/crypto=false. Crypto
+still runs through watchlist, not disabled globally. Five live runtime/UI SHA256
+hashes match local. Health18:45:20UTC ok/READY/TelegramACTIVE; initial83live0stale
+does NOT guarantee later weekend FX freshness. Real order flags remain FALSE,
+VWAP remains OFF. Do not claim every historical runtime incident is root-caused.
+
+ALL532 Python unittest tests passed in isolated in-memory SQLite, plus measurement
+and watchlist JS tests. Updated lightweight live verifier independently asserts
+primary asof60 cohort and preserved strict report. Subsequent2probe tests passed.
+Original152-row snapshot through3553 remains76da96c4b0d9bb74b4ff84ffd4679d28
+after final deployment. No schema/access changes, no archive deletion, no GitHub
+push. User gets plain verified results, no file links/changed-file lists.

@@ -1119,7 +1119,7 @@ async function loadWinrateStats() {
     winrateModalBody.innerHTML = `<div class="winrate-loading">${escapeHtml(tr("winrateLoading"))}</div>`;
 
     try {
-        const current = await apiGet("/api/stats/signals", { scope: "current_test" });
+        const current = await apiGet("/api/stats/signals", { scope: "current_test", valuation: "asof60" });
         // A failure of the optional history must not hide the current test.
         const history = await apiGet("/api/stats/signals", { days: 30, scope: "history" }).catch(() => null);
         renderWinrateStats(current, history);
@@ -1229,7 +1229,7 @@ function renderWinrateStats(currentStats, historyStats) {
         <div style="color:var(--hint-color)">Старт ${money(paper.initial ?? 1000)} · ставка ${money(stake)} · виплата ${Math.round(payout*100)}%</div>
         <div style="margin-top:10px">Плюс ${c.win || 0} · мінус ${c.loss || 0} · повернення ${c.refund || 0} · Win-rate ${rate}</div>
         ${!paper.complete ? `<div style="margin-top:6px;color:var(--hint-color)">Неповний: очікує ${c.pending || 0} · без даних ${c.unknown || 0}</div>` : ""}
-        <small style="color:var(--hint-color)">Тестовий розрахунок, не реальні гроші.</small></div>`
+        <small style="color:var(--hint-color)">${audit.valuation === "asof60" ? "Ціна на завершенні · вік сторін до 60 с. " : ""}Тестовий розрахунок, не реальні гроші.</small></div>`
         + `<div class="winrate-section"><div class="winrate-section-title">Пари</div>${rows || "Ще немає нових сигналів."}</div>`;
     const runtime = currentStats.measurement_runtime;
     let runtimeHtml = "";
@@ -1238,6 +1238,9 @@ function renderWinrateStats(currentStats, historyStats) {
         runtimeHtml = `<div class="winrate-section">Діагностика лише від запуску ${escapeHtml(runtime.since)}: спроб ${c.tracking_attempts || 0}, опубліковано ${c.published || 0}, пропущено через котировки ${c.skipped_no_fresh_quote || 0}, через запис ${c.skipped_tracking_write || 0}, через затримку публікації ${c.skipped_publication_delay || 0}, помилки підрахунку ${c.resolver_errors || 0}. Ці лічильники обнуляються після перезапуску.</div>`;
     }
     winrateModalBody.innerHTML += `<details class="winrate-section"><summary>Деталі тесту</summary>${renderMeasurementAudit(audit)}${runtimeHtml}</details>`;
+    if (currentStats.original_measurement_audit) {
+        winrateModalBody.innerHTML += `<details class="winrate-section"><summary>Попередній спосіб: нова котировка після завершення</summary>${renderMeasurementAudit(currentStats.original_measurement_audit)}</details>`;
+    }
     if (historyStats?.ok) {
         winrateModalBody.innerHTML += `<details class="winrate-section"><summary>Архів / попередні результати (30д) — не результат поточного тесту</summary>
             <div>Записи поточного тесту виключені з архівної вибірки. Ці цифри не впливають на новий баланс або точність.</div>
@@ -1250,10 +1253,14 @@ function renderMeasurementAudit(audit) {
     const paper = audit.scenario;
     const labels = {win: "Плюс", loss: "Мінус", refund: "Повернення (умовне)", pending: "Очікує", unknown: "Немає даних", cancelled: "Не опубліковано"};
     const reasons = {no_valid_quote_in_5s_window: "Немає придатної котировки у потрібні 5 секунд", missing_broker_timestamp: "Котировки без часу брокера", no_complete_quote_history: "Немає історії повних котировок (можливий перезапуск або непридатні дані)", last_complete_quote_before_deadline: "Остання повна котировка була до завершення сигналу", history_does_not_cover_endpoint: "Збережена історія починається після потрібного моменту", invalid_entry_or_horizon: "Некоректні початкові дані", publication_cancelled_db_delay: "Публікацію скасовано: запис або публікація затрималися", endpoint_unavailable: "Кінцева ціна недоступна"};
+    reasons.asof_check_pending = "Історична перевірка кінцевої ціни ще очікує";
+    reasons.asof_no_fresh_sides = "Одна зі сторін котировки не змінювалася в межах 60 секунд";
     reasons.publication_failed = "Сигнал не опубліковано";
     reasons.publication_unconfirmed = "Публікація сигналу не підтверджена";
     const publication = audit.publication_audit || {};
     const publicationInfo = `<div>Публікація: підтверджено ${publication.confirmed || 0} · без підтвердження ${(publication.prepared || 0) + (publication.unconfirmed || 0)} · старі без журналу ${publication.legacy_unconfirmed || 0}.</div>`;
+    const asof = audit.asof_comparison?.counts || {};
+    const asofInfo = asof.checked ? `<div>Перевірка ціни на завершенні: ${asof.available || 0} із ${asof.checked}; серед «без даних» знайдено ціну для ${asof.original_unknown_with_price || 0}. ${audit.valuation === "asof60" ? "Основний умовний розрахунок за ціною на завершенні." : "Окреме порівняння, баланс не змінює."}</div>` : "";
     const gaps = Object.entries(audit.missing_reasons || {}).map(([key, count]) => `<div>${escapeHtml(reasons[key] || key)}: ${count}</div>`).join("");
     const recent = (audit.recent || []).map(row => `<div class="winrate-row"><span>#${row.id} ${escapeHtml(row.pair)} ${escapeHtml(row.direction)}<br>${escapeHtml(row.entry_ts)} UTC<br>${escapeHtml(String(row.entry))} → ${escapeHtml(String(row.exit ?? "—"))}</span><span>${escapeHtml(labels[row.status] || row.status)}${row.reason ? `<br>${escapeHtml(reasons[row.reason] || row.reason)}` : ""}</span></div>`).join("");
     return `<div class="winrate-section"><div class="winrate-section-title">Новий облік cTrader — окремо від старих результатів</div>
@@ -1261,7 +1268,7 @@ function renderMeasurementAudit(audit) {
         <div>Умовний розрахунок: $1000, ставка $10, чиста виплата 80%. За визначеними результатами: $${paper.measured_balance}; зміна $${paper.measured_pnl}.</div>
         <div>${paper.complete ? "Пропусків у новому обліку немає." : `Результат НЕПОВНИЙ. Межі з урахуванням невідомих та відкритих: $${paper.balance_lower}–$${paper.balance_upper}.`}</div>
         <div>Це сценарій за напрямком ціни, НЕ реальні угоди. Виплата умовна; обмеження капіталу й одночасних ставок не моделюються. Повернення — лише правило цього сценарію при точно однаковій ціні.</div>
-        ${publicationInfo}${gaps}<div class="winrate-section-title">Останні 50 записів нового обліку</div>${recent}</div>`;
+        ${publicationInfo}${asofInfo}${gaps}<div class="winrate-section-title">Останні 50 записів нового обліку</div>${recent}</div>`;
 }
 
 // Single source of truth for "how strongly does the model agree with the

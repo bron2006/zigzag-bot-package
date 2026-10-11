@@ -17,6 +17,20 @@ class EndpointAuditTest(unittest.TestCase):
     def setUp(self):
         self.client = _make_client()
 
+    def test_primary_valuation_is_explicit_and_invalid_policy_is_rejected(self):
+        with patch('api.is_valid_admin_token',return_value=True), \
+             patch('api.db.is_admin_user',return_value=True), \
+             patch('api.db.get_signal_outcome_stats',return_value={'ok':True}) as read:
+            response=self.client.get('/api/stats/signals',query_string={
+                'admin_token':'mock','scope':'current_test','valuation':'asof60'})
+            self.assertEqual(response.status_code,200)
+            self.assertEqual(read.call_args.kwargs['valuation'],'asof60')
+            read.reset_mock()
+            response=self.client.get('/api/stats/signals',query_string={
+                'admin_token':'mock','scope':'history','valuation':'asof60'})
+            self.assertEqual(response.status_code,400)
+            read.assert_not_called()
+
     def test_unauthenticated_probe_is_rejected(self):
         with patch('api.db.get_signal_endpoint_audit') as read:
             self.assertEqual(self.client.post('/api/admin/endpoint-audit', data={'id': 1}).status_code, 401)
@@ -39,6 +53,17 @@ class EndpointAuditTest(unittest.TestCase):
              patch('api.blockingCallFromThread', side_effect=TimeoutError):
             resp = self.client.post('/api/admin/endpoint-audit', data={'id': 1})
         self.assertEqual(resp.status_code, 503)
+
+    def test_asof_audit_uses_separate_policy_without_writing(self):
+        row = dict(id=1,pair='BTCUSD',deadline=1300,outcome='unknown',evidence={})
+        with patch('api.is_valid_admin_token',return_value=True), \
+             patch('api.db.get_signal_endpoint_audit',return_value=row), \
+             patch('api.blockingCallFromThread',return_value={'endpoint':None}) as bridge, \
+             patch('api.db.save_signal_asof_audit') as write:
+            resp=self.client.post('/api/admin/endpoint-audit',data={'id':1,'phase':'asof60'})
+        self.assertEqual(resp.status_code,200)
+        self.assertEqual(bridge.call_args.args[2:],('BTCUSD',1300,'asof60'))
+        write.assert_not_called()
 
     def test_entry_audit_uses_saved_broker_quote_time(self):
         row = dict(id=1,pair='BTCUSD',deadline=1300,outcome='unknown',
