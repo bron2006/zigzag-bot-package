@@ -492,6 +492,10 @@ class SpotwareConnect(EventEmitter):
         res = ProtoOAErrorRes()
         res.ParseFromString(message.payload)
 
+        if res.errorCode == "ALREADY_SUBSCRIBED":
+            logger.info("Requested cTrader subscription is already active")
+            return  # Not an authentication failure or a lost connection.
+
         if res.errorCode == "ALREADY_LOGGED_IN":
             account_id = get_demo_account_id()
             if account_id:

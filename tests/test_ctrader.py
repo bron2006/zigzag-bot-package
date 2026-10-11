@@ -86,8 +86,94 @@ class OnCtraderReadyStalenessTest(unittest.TestCase):
         with patch("ctrader.reactor.callLater") as mock_call_later:
             ctrader.on_ctrader_ready(current_client)
 
-        mock_call_later.assert_called_once_with(1.0, ctrader._request_symbols)
+        mock_call_later.assert_called_once_with(1.0, ctrader._request_symbols, current_client, ctrader._subscription_generation)
         self.assertEqual(ctrader._reconnect_attempt, 0)
+
+
+class SubscriptionReliabilityTest(unittest.TestCase):
+    def setUp(self):
+        from unittest.mock import Mock
+        self.client = SimpleNamespace(_client=SimpleNamespace(account_id=1), send=Mock(return_value=None))
+        self.client_patch = patch.object(app_state, 'client', self.client)
+        self.client_patch.start()
+        ctrader._reset_spot_subscriptions(self.client)
+        self.symbol = SimpleNamespace(symbolId=2, symbolName='TEST')
+
+    def tearDown(self):
+        self.client_patch.stop()
+        ctrader._reset_spot_subscriptions()
+
+    def test_repeated_and_overlapping_batches_sent_once(self):
+        batch = [('TEST', self.symbol)]
+        ctrader._subscribe_symbol_batch(batch + batch)
+        ctrader._subscribe_symbol_batch(batch)
+        self.assertEqual(self.client.send.call_count, 1)
+        self.assertEqual(list(self.client.send.call_args.args[0].symbolId), [2])
+
+    def test_retired_connection_batch_ignored(self):
+        ctrader._subscribe_symbol_batch([('TEST', self.symbol)], SimpleNamespace())
+        self.client.send.assert_not_called()
+
+    def test_new_connection_can_subscribe_same_symbol(self):
+        ctrader._subscribe_symbol_batch([('TEST', self.symbol)])
+        ctrader._reset_spot_subscriptions(self.client)
+        ctrader._subscribe_symbol_batch([('TEST', self.symbol)])
+        self.assertEqual(self.client.send.call_count, 2)
+
+    def test_old_transport_generation_batch_ignored(self):
+        generation = ctrader._subscription_generation
+        ctrader._reset_spot_subscriptions(self.client)
+        ctrader._subscribe_symbol_batch([('TEST', self.symbol)], self.client, generation)
+        self.client.send.assert_not_called()
+
+    def test_old_symbols_response_ignored(self):
+        from twisted.internet.defer import Deferred
+        from unittest.mock import Mock
+        d = Deferred()
+        self.client.get_all_symbols = Mock(return_value=d)
+        with patch.object(ctrader, '_on_symbols_loaded') as loaded, patch.object(d, 'addTimeout'):
+            ctrader._request_symbols(self.client)
+            ctrader._reset_spot_subscriptions(self.client)
+            d.callback(object())
+        loaded.assert_not_called()
+
+    def test_old_subscription_failure_does_not_clear_new_reservation(self):
+        from twisted.internet.defer import Deferred
+        d = Deferred()
+        self.client.send.return_value = d
+        ctrader._subscribe_symbol_batch([('TEST', self.symbol)])
+        ctrader._reset_spot_subscriptions(self.client)
+        self.client.send.return_value = None
+        ctrader._subscribe_symbol_batch([('TEST', self.symbol)])
+        d.errback(RuntimeError('old transport'))
+        ctrader._subscribe_symbol_batch([('TEST', self.symbol)])
+        self.assertEqual(self.client.send.call_count, 2)
+
+    def test_failed_send_can_retry(self):
+        self.client.send.side_effect = [RuntimeError('test'), None]
+        ctrader._subscribe_symbol_batch([('TEST', self.symbol)])
+        ctrader._subscribe_symbol_batch([('TEST', self.symbol)])
+        self.assertEqual(self.client.send.call_count, 2)
+
+    def test_deferred_failure_can_retry(self):
+        from twisted.internet.defer import Deferred
+        d = Deferred()
+        self.client.send.return_value = d
+        ctrader._subscribe_symbol_batch([('TEST', self.symbol)])
+        d.errback(RuntimeError('test'))
+        self.client.send.return_value = None
+        ctrader._subscribe_symbol_batch([('TEST', self.symbol)])
+        self.assertEqual(self.client.send.call_count, 2)
+
+    def test_already_subscribed_does_not_reconnect(self):
+        with patch.object(ctrader, '_schedule_reconnect') as retry:
+            ctrader._handle_error('ALREADY_SUBSCRIBED')
+        retry.assert_not_called()
+
+    def test_other_connection_error_still_reconnects(self):
+        with patch.object(ctrader, '_schedule_reconnect') as retry:
+            ctrader._handle_error('DISCONNECTED')
+        retry.assert_called_once_with(30)
 
 
 if __name__ == "__main__":

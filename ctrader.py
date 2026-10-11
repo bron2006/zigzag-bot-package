@@ -41,6 +41,16 @@ _last_subscription_request_ts = 0.0
 _last_price_recovery_ts = 0.0
 _price_recovery_attempts = 0
 _last_spot_event_ts = 0.0
+_subscription_client = None
+_subscription_generation = 0
+_requested_spot_ids = set()
+
+
+def _reset_spot_subscriptions(client=None):
+    global _subscription_client, _subscription_generation
+    _subscription_generation += 1
+    _subscription_client = client
+    _requested_spot_ids.clear()
 
 
 def _compact_symbol(value: str) -> str:
@@ -183,9 +193,10 @@ def start_ctrader_client():
     try:
         client = SpotwareConnect(get_ct_client_id(), get_ct_client_secret())
         app_state.client = client
+        _reset_spot_subscriptions(client)
 
         client.on("ready", on_ctrader_ready)
-        client.on("spot_event", _on_spot_event)
+        client.on("spot_event", lambda event: _on_spot_event(event) if app_state.client is client else None)
         # Delayed events from a retired connection must not restart its successor.
         client.on("error", lambda reason: _handle_error(reason) if app_state.client is client else None)
 
@@ -207,6 +218,9 @@ def start_ctrader_client():
 
 
 def _handle_error(reason):
+    if reason == "ALREADY_SUBSCRIBED":
+        logger.info("cTrader subscription already active; keeping current connection")
+        return
     logger.error("cTrader error handler: %s", reason)
 
     if reason in {"RATE_LIMIT_BLOCKED", "REQUEST_FREQUENCY_EXCEEDED"}:
@@ -242,6 +256,7 @@ def stop_ctrader_client():
     _reconnect_call = None
     _reconnect_scheduled = False
     client, app_state.client = app_state.client, None
+    _reset_spot_subscriptions()
     if client is not None:
         client.stop()
     app_state.clear_symbol_state()
@@ -251,9 +266,11 @@ def stop_ctrader_client():
 def _do_reconnect():
     global _last_spot_event_ts
 
-    if app_state.client:
+    client, app_state.client = app_state.client, None
+    _reset_spot_subscriptions()
+    if client:
         try:
-            app_state.client.stop()
+            client.stop()
         except Exception:
             logger.exception("Failed to stop cTrader client before reconnect")
 
@@ -280,24 +297,30 @@ def on_ctrader_ready(client):
         return
 
     _reconnect_attempt = 0
+    _reset_spot_subscriptions(client)
     logger.info("cTrader account authorized. Loading symbols...")
-    reactor.callLater(1.0, _request_symbols)
+    reactor.callLater(1.0, _request_symbols, client, _subscription_generation)
 
 
-def _request_symbols():
+def _request_symbols(client=None, generation=None):
+    client = client or app_state.client
+    if client is not app_state.client or (generation is not None and generation != _subscription_generation):
+        return
     if not app_state.client:
         logger.warning("Cannot request symbols: app_state.client is empty")
         return
 
     logger.info("Запитую список символів cTrader...")
-    d = app_state.client.get_all_symbols()
+    d = client.get_all_symbols()
     if d is None:
         logger.error("Запит списку символів cTrader не повернув Deferred.")
         _schedule_reconnect(30)
         return
 
     d.addTimeout(30, reactor)
-    d.addCallbacks(_on_symbols_loaded, _on_symbols_error)
+    generation = _subscription_generation
+    d.addCallbacks(lambda msg: _on_symbols_loaded(msg) if app_state.client is client and generation == _subscription_generation else None,
+                   lambda failure: _on_symbols_error(failure) if app_state.client is client and generation == _subscription_generation else None)
 
 
 def _on_symbols_error(failure):
@@ -356,6 +379,11 @@ def start_price_subscriptions():
         logger.info("Символи ще не завантажені. Підписку на ціни пропущено.")
         return
 
+    client = app_state.client
+    if client is None:
+        return
+    if _subscription_client is not client:
+        _reset_spot_subscriptions(client)
     assets = _collect_configured_assets()
 
     if not assets:
@@ -372,13 +400,11 @@ def start_price_subscriptions():
             missing.append(pair)
             continue
 
-        resolved.append((pair, symbol))
+        if symbol.symbolId not in _requested_spot_ids:
+            resolved.append((pair, symbol))
 
     if not resolved:
-        logger.warning(
-            "Не знайдено жодного символу брокера для %s налаштованих активів.",
-            len(assets),
-        )
+        logger.debug("No new symbols to subscribe on current connection")
         return
 
     with app_state._state_lock:
@@ -401,10 +427,19 @@ def start_price_subscriptions():
             (i // _SUBSCRIBE_BATCH_SIZE) * _SUBSCRIBE_BATCH_DELAY,
             _subscribe_symbol_batch,
             batch,
+            client,
+            _subscription_generation,
         )
 
 
-def _subscribe_symbol_batch(batch):
+def _subscribe_symbol_batch(batch, client=None, generation=None):
+    client = client or app_state.client
+    if generation is not None and generation != _subscription_generation:
+        return
+    if client is not app_state.client:
+        return  # A delayed batch belongs to a retired connection.
+    if _subscription_client is not client:
+        _reset_spot_subscriptions(client)
     if not app_state.client:
         logger.warning("cTrader client не готовий. Батч підписки пропущено.")
         return
@@ -426,6 +461,8 @@ def _subscribe_symbol_batch(batch):
             logger.warning("Не зміг підписатися на пару %s, бо її немає в списку брокера", pair)
             continue
 
+        if symbol_id in _requested_spot_ids or symbol_id in symbol_ids:
+            continue
         symbol_ids.append(symbol_id)
         pairs.append(f"{pair}->{_display_symbol_name(symbol)}")
 
@@ -438,10 +475,22 @@ def _subscribe_symbol_batch(batch):
             symbolId=symbol_ids,
             subscribeToSpotTimestamp=True,
         )
-        app_state.client.send(req, responseTimeoutInSeconds=10)
+        # Reserve before send: simultaneous UI/watchlist calls must not overlap.
+        _requested_spot_ids.update(symbol_ids)
+        sent_generation = _subscription_generation
+        response = client.send(req, responseTimeoutInSeconds=10)
+        if hasattr(response, "addErrback"):
+            def failed(failure):
+                if app_state.client is client and _subscription_client is client and sent_generation == _subscription_generation:
+                    _requested_spot_ids.difference_update(symbol_ids)
+                    logger.warning("Spot subscription failed: %s", failure.getErrorMessage())
+                return None
+            response.addErrback(failed)
         logger.info("Підписка на ціни надіслана для %s символів: %s", len(symbol_ids), ", ".join(pairs))
 
     except Exception:
+        if _subscription_client is client:
+            _requested_spot_ids.difference_update(symbol_ids)
         logger.exception("Не вдалося надіслати батч підписки на ціни: %s", ", ".join(pairs))
 
 
@@ -549,7 +598,7 @@ def monitor_price_stream_health():
     )
 
     if _price_recovery_attempts <= _PRICE_RESUBSCRIBE_ATTEMPTS_BEFORE_RECONNECT:
-        logger.warning("Контроль цін: повторно надсилаю підписку на ціни.")
+        logger.warning("Контроль цін: підписую відсутні символи без дублювання активних.")
         start_price_subscriptions()
         return
 

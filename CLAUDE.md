@@ -1583,3 +1583,52 @@ API. Public health ok/READY83live0stale. Owner Chrome actual modal verified bala
 $970/-$30 above four pairs, Details and Archive collapsed, no visible diagnostics.
 Computer Use inspection informed final layout and caught details-fragment issue.
 No real trading, no GitHub push. Historical/statistical calculations unchanged.
+
+### 2026-10-11 — quote subscription reliability and endpoint delivery
+
+Owner authorized implementation, no real trading. Confirmed repeated scanner
+toggles/watchlist updates scheduled subscriptions for all already active symbols;
+broker ALREADY_SUBSCRIBED was treated as auth failure plus reconnect. Reproduced
+in live old release14:20:25UTC during maintenance pause. Fixed per-connection
+subscription ID reservations, duplicate batch filtering, failed-send retry,
+transport generation guards for delayed batches/symbol callbacks, retired spot
+events ignored. Reset reservations on new authorized transport. API scanner
+toggle now uses reactor.callFromThread, not callLater from a WSGI worker.
+Both API error layers treat ALREADY_SUBSCRIBED as benign, not auth issue.
+Price watchdog still reconnects on genuine loss; no duplicate forced resubscribe.
+
+Endpoint broker window remains deadline..deadline+5s, fresh-side policy unchanged.
+Versioned measurement now waits an additional10s for delayed delivery before
+declaring a missing endpoint; never accepts a broker-time quote beyond5s.
+Future unknowns persist bounded gap timing evidence (broker/receipt/full-history/
+side timestamps) for diagnosis. Connection clears partial sides but retains full
+history, avoiding assembly across different transports. Existing LINK3402 cannot
+be reconstructed honestly from retained evidence; outcome remains unknown.
+ATOM3406 also resolved unknown BEFORE this release, while BTC3407 endpoint was
+durably captured. No assertion that transport grace caused either historical gap;
+missing valid ticks/strict partial-side freshness remain possible limitations.
+
+195 targeted Python tests passed incl old-generation callbacks, retry, duplicate
+batch, benign error, thread-safe toggle, delayed-valid/late-invalid endpoint,
+reconnect side reset. Measurement JS test passed. No SQL/schema/RLS changes.
+Supabase skill used for read-only durable evidence verification; current timeout
+docs inspected, no global timeout/permission change. cTrader official quote docs
+confirmed optional bid/ask/timestamp fields, no candle/Binance fallback added.
+Final built image deployment-01M4NNE6825D7CPSVZSCP4R84Q,
+digest775ed51a61e36d244e04d5c4c5a41d183e63d215665fb1e0b8e97a82a7d4e224.
+Earlier image01M4NNAW27D2Y1G4D8MSCMD41Y was build-only, not deployed.
+New scans paused14:20UTC; quote feed/resolver kept running until last INJdeadline
+14:24:49UTC. Verify safe pending state before deploy; restore categories afterward.
+At14:25:01UTC durable SQL safe pending0, pending1 had saved endpoint. Deployed
+v1495 to machine48e1239a7d3708; all five deployed source SHA256 match local.
+Restored original commodities/watchlist=true,forex/crypto=false via main API.
+After restoration14:26..14:28UTC no ALREADY_SUBSCRIBED/reconnect/resubscribe logged;
+only initial50+34symbol subscription batches. Main cycles68assets/38crypto verified.
+Health14:28UTC ok/READY83live0stale/TelegramACTIVE. Readonly deployed stats probe
+HTTP200,total7,win1/loss4/unknown2,conditional$968,orders_enabledfalse. INJ3408
+resolved saved endpoint across deployment, BTC3407 loss, ATOM3406 unknown predeploy.
+Natural new-generation endpoint after this change not yet witnessed; tests prove
+arrival-grace behavior, not prevention of every future missing quote.
+Historical tick recovery is a possible read-only follow-up supported by cTrader
+ProtoOAGetTickDataReq, but NOT implemented or used to rewrite existing outcomes.
+No GitHub push, no real trades, VWAP remains off; UI unchanged.

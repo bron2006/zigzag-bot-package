@@ -271,6 +271,9 @@ class AppState:
     def clear_live_prices(self) -> None:
         with self._state_lock:
             self.live_prices.clear()
+            # Never combine a new connection's partial tick with an old side.
+            # Retain complete endpoint history for already-open signals.
+            self._outcome_quote_sides.clear()
 
     def update_live_price(self, symbol: str, payload: Dict[str, Any]) -> None:
         with self._state_lock:
@@ -342,6 +345,19 @@ class AppState:
             if history[0][0] > deadline + 5:
                 return "history_does_not_cover_endpoint"
             return "no_valid_quote_in_5s_window"
+
+    def signal_measurement_gap_snapshot(self, symbol: str, deadline: float):
+        """Bounded timing evidence for future missing endpoints, never guessed PNL."""
+        with self._state_lock:
+            history = self._outcome_quotes.get(symbol, ())
+            sides = self._outcome_quote_sides.get(symbol, {})
+            live = self.live_prices.get(symbol, {})
+            return dict(deadline=deadline, history_samples=len(history),
+                        first_full_ts=history[0][0] if history else None,
+                        last_full_ts=history[-1][0] if history else None,
+                        last_broker_ts=live.get("quote_ts"), last_receipt_ts=live.get("ts"),
+                        bid_ts=sides.get("bid", (None, None))[1],
+                        ask_ts=sides.get("ask", (None, None))[1])
 
     def get_live_price(self, symbol: str) -> Optional[Dict[str, Any]]:
         with self._state_lock:

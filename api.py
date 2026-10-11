@@ -786,7 +786,7 @@ def register_routes(app):
         cat = request.values.get("category")
         if cat in app_state.SCANNER_STATE:
             app_state.set_scanner_state(cat, not app_state.get_scanner_state(cat))
-            reactor.callLater(0.5, ctrader.start_price_subscriptions)
+            reactor.callFromThread(ctrader.start_price_subscriptions)
         return jsonify(app_state.get_scanner_state_snapshot())
 
     @app.route("/api/watchlist", methods=["POST"])

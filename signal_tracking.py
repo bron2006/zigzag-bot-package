@@ -29,6 +29,8 @@ _HORIZON_BY_TIMEFRAME = {
 }
 _DEFAULT_HORIZON_SECONDS = 15 * 60
 _ENDPOINT_TOLERANCE_SECONDS = 5.0
+# Allow transport/worker scheduling delay, NOT a later broker-time price.
+_ENDPOINT_ARRIVAL_GRACE_SECONDS = 10.0
 
 
 def _utcnow_naive() -> datetime:
@@ -234,7 +236,7 @@ def resolve_pending_signals() -> None:
                 # Versioned status separates measured endpoints from legacy
                 # snapshots without a schema change or rewriting old history.
                 outcome = _classify_move(entry_price, live_price) + "_timed"
-            elif now_epoch < deadline + _ENDPOINT_TOLERANCE_SECONDS:
+            elif now_epoch < deadline + _ENDPOINT_TOLERANCE_SECONDS + (_ENDPOINT_ARRIVAL_GRACE_SECONDS if evidence else 0):
                 continue  # Allow the fixed quote window to finish.
         if outcome == "unknown":
             live_price = None
@@ -249,6 +251,7 @@ def resolve_pending_signals() -> None:
                 evidence["reason"] = "invalid_entry_or_horizon" if not isinstance(entry_ts, datetime) or not isinstance(horizon_seconds, (int, float)) or not math.isfinite(horizon_seconds) or horizon_seconds <= 0 or not isinstance(row["entry_price"], (int, float)) or not math.isfinite(row["entry_price"]) or row["entry_price"] <= 0 else "no_valid_quote_in_5s_window"
                 if evidence["reason"] == "no_valid_quote_in_5s_window":
                     evidence["reason"] = app_state.signal_measurement_gap_reason(row["pair"], deadline)
+                    evidence["gap_diagnostics"] = app_state.signal_measurement_gap_snapshot(row["pair"], deadline)
             evidence["checked_at"] = now.isoformat()
             extra["evidence"] = evidence
         if db.resolve_signal_outcome(row["id"], outcome=outcome, exit_price=live_price, **extra):

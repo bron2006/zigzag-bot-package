@@ -95,6 +95,13 @@ class QuoteHistoryTest(unittest.TestCase):
             self.state.update_live_price('TEST', dict(ts=1001, bid=100, ask=102))
         self.assertIsNone(self.state.get_signal_endpoint_quote('TEST', 1000, 1005))
 
+    def test_reconnect_keeps_complete_history_but_clears_partial_sides(self):
+        self.quote(1000)
+        self.state.clear_live_prices()
+        self.quote(1001, None, 104)
+        self.assertIsNone(self.state.get_signal_endpoint_quote('TEST', 1001, 1005))
+        self.assertEqual(self.state.get_signal_endpoint_quote('TEST', 1000, 1005), dict(ts=1000, mid=101))
+
 
 class ResolveEndpointTest(unittest.TestCase):
     def setUp(self):
@@ -146,6 +153,34 @@ class ResolveEndpointTest(unittest.TestCase):
     def test_invalid_horizon_terminal_unknown(self):
         self.row['horizon_seconds'] = -1
         self.resolve(120).assert_called_once_with(1, outcome='unknown', exit_price=None)
+
+    def test_versioned_missing_endpoint_waits_for_transport_grace(self):
+        self.row['evidence'] = {'version':'live_mid_v1'}
+        with patch('endpoint_sampler.register'), patch('endpoint_sampler.captured', return_value=None):
+            self.assertFalse(self.resolve(5).called)
+            self.assertFalse(self.resolve(14.9).called)
+            result = self.resolve(15)
+        self.assertEqual(result.call_args.kwargs['outcome'], 'unknown')
+        self.assertIn('gap_diagnostics', result.call_args.kwargs['evidence'])
+
+    def test_delayed_valid_broker_tick_measured_without_widening_window(self):
+        self.row['evidence'] = {'version':'live_mid_v1'}
+        with patch('state.time.time', return_value=self.deadline+10):
+            self.state.update_live_price('TEST', dict(ts=self.deadline+10,
+                quote_ts=self.deadline+4, bid=104, ask=106))
+        with patch('endpoint_sampler.register'), patch('endpoint_sampler.captured', return_value=None):
+            result = self.resolve(10)
+        self.assertEqual(result.call_args.kwargs['outcome'], 'up_timed')
+        self.assertEqual(result.call_args.kwargs['evidence']['endpoint']['ts'], self.deadline+4)
+
+    def test_arrival_grace_does_not_accept_later_broker_price(self):
+        self.row['evidence'] = {'version':'live_mid_v1'}
+        self.quote(6)
+        with patch('endpoint_sampler.register'), patch('endpoint_sampler.captured', return_value=None):
+            self.assertFalse(self.resolve(10).called)
+            result = self.resolve(15)
+        self.assertEqual(result.call_args.kwargs['outcome'], 'unknown')
+        self.assertIsNone(result.call_args.kwargs['exit_price'])
 
 
 class UnknownAggregationTest(unittest.TestCase):

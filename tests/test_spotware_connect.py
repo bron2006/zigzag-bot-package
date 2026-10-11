@@ -50,6 +50,13 @@ class SpotwareConnectQueueTest(unittest.TestCase):
         self.assertEqual(len(self.sc._pending_data_requests), 1)
         outer.addErrback(lambda failure: None)
 
+    def test_existing_subscription_does_not_mark_auth_failed(self):
+        err = ProtoOAErrorRes(errorCode='ALREADY_SUBSCRIBED', description='already active')
+        with patch.object(self.sc, 'emit') as emit, patch('spotware_connect.app_state.set_ctrader_auth_issue') as auth_issue:
+            self.sc._handle_api_error(_wrap(ProtoOAPayloadType.PROTO_OA_ERROR_RES, err))
+        emit.assert_not_called()
+        auth_issue.assert_not_called()
+
     def test_handshake_requests_bypass_the_queue(self):
         handshake_requests = (
             ProtoOAApplicationAuthReq(clientId="x", clientSecret="y"),

@@ -70,6 +70,17 @@ class WatchlistApiTest(unittest.TestCase):
         response = self.client.post('/api/watchlist', data={'pair':'BTCUSD', 'enabled':'true'})
         self.assertEqual(response.status_code, 401)
 
+    def test_scanner_toggle_dispatches_subscriptions_to_reactor_thread(self):
+        with patch.object(api, 'is_valid_admin_token', return_value=True), \
+             patch.object(app_state, 'set_scanner_state') as update, \
+             patch.object(api.reactor, 'callFromThread') as schedule, \
+             patch.object(api.reactor, 'callLater') as unsafe_schedule:
+            response = self.client.post('/api/scanner/toggle?admin_token=test', data={'category':'watchlist'})
+        self.assertEqual(response.status_code, 200)
+        update.assert_called_once()
+        schedule.assert_called_once_with(api.ctrader.start_price_subscriptions)
+        unsafe_schedule.assert_not_called()
+
     def request(self, data, result):
         with patch.object(api, 'is_valid_admin_token', return_value=True), \
              patch.object(db, 'update_watchlist', return_value=result) as update, \
