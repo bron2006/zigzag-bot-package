@@ -56,7 +56,7 @@ def _http_fallback(chat_id, text: str, parse_mode: str | None = None) -> bool:
     try:
         url = _TG_API_URL.format(token=token)
         resp = _requests.post(url, json=payload, timeout=10)
-        if resp.ok:
+        if resp.ok and resp.json().get('ok') is True:
             logger.info("HTTP fallback message sent.")
             return True
 

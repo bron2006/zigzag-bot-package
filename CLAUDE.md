@@ -1690,3 +1690,68 @@ Deployed stats probe HTTP200,current133,win60/loss46/unknown27,ordersfalse.
 Conditional measured$1020 is INCOMPLETE; unknown range$750..$1236; not executable
 bankroll or proven live profit. Current-test beginsOct10Kyiv; history separate.
 No GitHub push, no real trades, VWAP off, compact UI unchanged.
+
+### 2026-10-11 — publication receipts and independent entry-history audit
+
+Owner asked to fix the complete start/publication chain autonomously. Confirmed
+bug: Telegram send_signal(False) was logged as successful delivery. Now accepts
+only True; HTTP fallback requires both HTTP success and Telegram JSON ok=True.
+Before any channel publication, live_mid_v1 evidence atomically contains
+publication.version=1,state=prepared. Entry quote must have finite positive
+uncrossed bid/ask, consistent mid, and broker timestamp in existing 5s window.
+Publication receipt separately records web queued/failed and Telegram
+accepted/failed/not_configured. Only Telegram acceptance confirms publication;
+web enqueue does NOT prove browser receipt or user reading. New unconfirmed
+signals cannot earn conditional PNL; both-channel failures are cancelled, not
+synthetic refunds. Old rows without receipts remain legacy_unconfirmed and
+their prior conditional forecast results are not rewritten or called delivered.
+
+Short row/evidence transactions preserve concurrent endpoint/receipt updates.
+Bounded memory queue retries DB receipt saves, at most3 per resolution cycle,
+breaking on first DB failure. No Telegram-message resend, no fake test signals.
+A crash before durable receipt leaves prepared/unconfirmed, never fake success.
+Supabase/Postgres skills informed lock order, short locks and conditional writes;
+no schema/RLS permission changes. Advisors returned existing14INFO backend-table
+RLS-without-policy notices, no ERROR/WARN. Balance/pair UI stays compact; one
+publication audit line added only inside collapsed Details.
+
+Admin historical audit now supports read-only phase=entry, using resident
+cTrader transport, not a second connection. Independently checked ALL27 prior
+unknowns: broker historical timestamp,bid,ask,mid exactly match saved entry
+quotes in all27. This proves their starting quotes, NOT historical Telegram
+delivery and NOT endpoint availability or profitability.
+
+224 targeted Python tests passed, measurement and watchlist UI tests passed.
+Final image deployment-01M4P14VKZWKNVKE754DJ19Q4B,
+digest9e92abfb55a3c40128ddaf3080d5be7d17b0cf20b2bf0d0bddcc2908c9a02ee3.
+Earlier image01M4P10T5FMP5548Z55YXWHYFN was build-only, not deployed.
+Paused new scanning before rollout, waited through last deadline17:48:52UTC
+and quote-arrival grace. At17:49:22 one expired pending row3549 had no endpoint;
+3550's valid endpoint was retained and resolved up_timed. 3549 became unknown;
+read-only broker history returned zero eligible ticks, no invented recovery.
+Deployed final image successfully; all8 modified runtime/UI hashes match local.
+Restored watchlist/commodities=true, forex/crypto=false via main API. Health
+17:50:55UTC ok/READY83live0stale/TelegramACTIVE; scanner68assets/38crypto active.
+Read-only stats probe HTTP200,total149,win63/loss53/unknown33,ordersfalse.
+Conditional measured$974 remains incomplete, NOT executable trading profit.
+Natural ETCUSD3551 at17:53:19UTC: web queued, Telegram accepted, durable
+publication confirmed checked17:53:20UTC. Main API read-only probe HTTP200
+reports publication_audit confirmed1/legacy_unconfirmed149; no synthetic signals.
+Added explicit confirmed-receipt preservation/idempotency and retry-stop-on-first
+DB-failure tests; final targeted rerun226passed. Endpoint verification continues
+below; do not infer it from successful unit tests alone. No real trades, VWAP
+remains off; no GitHub push.
+
+Final live verification: entry-history checks for natural3551/3552/3553 also
+matched all four fields. ETC3551 expired17:58:19UTC and resolved unknown with
+reason no_valid_quote_in_5s_window. Its confirmed Telegram/web receipt survived
+the resolver AND historical-check writes. Independent endpoint audit returned
+zero BID/ASK events in the strict10-second historical range; worker durably
+recorded the same absence. Thus publication/start fix is verified end-to-end,
+but missing-expiry measurement is NOT fixed. This recurrence with independently
+confirmed entry and publication shows that "no end" does not imply "no start".
+Next substantive work must evaluate an explicitly separate as-of-expiry
+methodology/cohort, comparing last known prices and broker history with freshness
+and market-open rules; never silently relax current v1 or relabel gaps as refunds.
+Final health17:58UTC ok/READY/TelegramACTIVE. 47stale symbols then, primarily
+weekend-closed FX; do not infer global feed freshness from initial83live0stale.

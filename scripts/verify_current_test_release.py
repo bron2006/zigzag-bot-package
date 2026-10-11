@@ -20,6 +20,7 @@ response = app.test_client().get('/api/stats/signals', query_string={
 assert response.status_code == 200 and response.json['scope'] == 'current_test'
 assert response.json['total'] == current['total']
 print(json.dumps(dict(current_total=current['total'], counts=current['measurement_audit']['counts'],
+                      publication_audit=current['measurement_audit'].get('publication_audit', {}),
                       scenario=current['measurement_audit']['scenario'],
                       start=current['test_started'], old_report_total=history['total'],
                       api_status=response.status_code, orders_enabled=False), sort_keys=True))

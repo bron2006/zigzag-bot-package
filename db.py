@@ -1770,6 +1770,35 @@ def record_signal_history_check(outcome_id: int, history: dict) -> bool:
         return False
 
 
+def save_signal_publication(outcome_id: int, web: str, telegram: str) -> bool:
+    """Channel acknowledgements, not user-read receipts. Preserve quote evidence."""
+    if web not in {'queued', 'failed'} or telegram not in {'accepted', 'failed', 'not_configured'}:
+        return False
+    try:
+        with session_scope() as session:
+            if session is None:
+                return False
+            row = session.query(SignalOutcome).filter_by(id=outcome_id).with_for_update().first()
+            audit = session.query(SignalEvidence).filter_by(signal_id=outcome_id).with_for_update().first()
+            if row is None or audit is None:
+                return False
+            saved = json.loads(audit.payload)
+            publication = saved.get('publication')
+            if not isinstance(publication, dict) or publication.get('version') != 1:
+                return False  # Never fabricate receipts for old signals.
+            if publication.get('state') in {'confirmed', 'failed', 'unconfirmed'}:
+                return publication.get('web') == web and publication.get('telegram') == telegram
+            # Enqueue alone is NOT proof that a browser received the signal.
+            state = 'confirmed' if telegram == 'accepted' else ('unconfirmed' if web == 'queued' else 'failed')
+            saved['publication'] = dict(version=1, state=state,
+                                        web=web, telegram=telegram, checked_at=_utcnow().isoformat())
+            audit.payload = json.dumps(saved, allow_nan=False)
+            return True
+    except SQLAlchemyError:
+        logger.exception('Signal publication receipt persistence failed id=%s', outcome_id)
+        return False
+
+
 def resolve_signal_outcome(outcome_id: int, *, outcome: str, exit_price: float | None, evidence: dict | None = None) -> bool:
     try:
         with session_scope() as session:
@@ -1787,6 +1816,8 @@ def resolve_signal_outcome(outcome_id: int, *, outcome: str, exit_price: float |
                     saved = json.loads(audit.payload)
                     if saved.get("endpoint") and saved["endpoint"] != evidence.get("endpoint"):
                         return False  # retry with saved evidence, don't overwrite it
+                    if saved.get('publication'):
+                        evidence = dict(evidence, publication=saved['publication'])
                     audit.payload = json.dumps(evidence, allow_nan=False)
             row.outcome = outcome
             row.exit_price = exit_price

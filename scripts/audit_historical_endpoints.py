@@ -9,12 +9,15 @@ import requests
 
 assert not config.AUTOTRADE_ENABLED and not config.BINOMO_EXECUTOR_ENABLED
 recover = '--recover' in sys.argv
-ids = [int(x) for x in sys.argv[1:] if x != '--recover']
+entry = '--entry' in sys.argv
+assert not (recover and entry), 'Entry audits are read-only'
+ids = [int(x) for x in sys.argv[1:] if x not in ('--recover', '--entry')]
 assert 1 <= len(ids) <= 500
 for identifier in ids:
     for attempt in range(5):
         response = requests.post('http://127.0.0.1:8080/api/admin/endpoint-audit',
-                                 data=dict(admin_token=config.get_admin_access_token(), id=identifier), timeout=(5, 20))
+                                 data=dict(admin_token=config.get_admin_access_token(), id=identifier,
+                                           phase='entry' if entry else 'expiry'), timeout=(5, 20))
         if response.status_code != 503:
             break
         time.sleep(3)

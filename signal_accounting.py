@@ -8,12 +8,22 @@ def summarize(rows, evidence):
     reasons = Counter()
     recent = []
     pair_counts = {}
+    publication_counts = Counter()
     new = [r for r in rows if r.id in evidence]
     for row in new:
         audit = evidence[row.id]
         status = row.outcome
         if audit.get("reason") == "publication_cancelled_db_delay":
             status = "cancelled"
+        publication = audit.get('publication')
+        publication_state = publication.get('state') if isinstance(publication, dict) else 'legacy_unconfirmed'
+        publication_counts[publication_state] += 1
+        publication_reason = None
+        if publication and publication_state != 'confirmed' and status != 'cancelled':
+            if publication_state == 'failed':
+                status, publication_reason = 'cancelled', 'publication_failed'
+            elif status != 'pending':
+                status, publication_reason = 'unknown', 'publication_unconfirmed'
         if status.endswith("_timed"):
             entry, exit_ = row.entry_price, row.exit_price
             if not all(isinstance(p, (int, float)) and math.isfinite(p) and p > 0 for p in (entry, exit_)):
@@ -26,7 +36,7 @@ def summarize(rows, evidence):
             status = "unknown"
         counts[status] += 1
         pair_counts.setdefault(row.pair, Counter())[status] += 1
-        reason = audit.get("reason") or ("endpoint_unavailable" if status == "unknown" else None)
+        reason = publication_reason or audit.get("reason") or ("endpoint_unavailable" if status == "unknown" else None)
         if reason:
             reasons[reason] += 1
         recent.append(dict(id=row.id, pair=row.pair, direction=row.verdict,
@@ -36,7 +46,7 @@ def summarize(rows, evidence):
     pnl = counts["win"] * 8 - counts["loss"] * 10
     missing = counts["pending"] + counts["unknown"]
     return dict(source="cTrader", cohort="live_mid_v1", total=len(new),
-                counts=dict(counts), missing_reasons=dict(reasons),
+                counts=dict(counts), missing_reasons=dict(reasons), publication_audit=dict(publication_counts),
                 by_pair=[dict(pair=pair, counts=dict(c), total=sum(c.values()),
                               win_rate=round(100*c["win"]/(c["win"]+c["loss"]), 1)
                               if c["win"]+c["loss"] else None)

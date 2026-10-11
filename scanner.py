@@ -331,20 +331,43 @@ def _handle_analysis_result(pair_norm: str, result: dict):
 
 
 def _publish_recorded_signal(pair_norm, result, score):
-    app_state.publish_signal_sse(result)
-    import measurement_health
-    measurement_health.count("published")
-
     try:
-        # No-op unless AUTOTRADE_ENABLED=true; manages its own threading.
-        autotrader.maybe_enter_trade(result)
+        web = 'queued' if app_state.publish_signal_sse(result) is True else 'failed'
     except Exception:
-        logger.exception("SCANNER: autotrader.maybe_enter_trade failed for %s", pair_norm)
+        web = 'failed'
+        logger.exception('SCANNER: web publication failed for %s', pair_norm)
+    import measurement_health
+    measurement_health.count('web_queued' if web == 'queued' else 'web_publish_failed')
+
+    def persist(telegram):
+        import publication_tracking
+        publication_tracking.remember(result['signal_outcome_id'], web, telegram)
+        d = deferToThreadPool(reactor, _blocking_pool(), publication_tracking.save,
+                             result['signal_outcome_id'], web, telegram)
+        def saved(ok):
+            if ok is not True:
+                measurement_health.count('publication_receipt_write_failed')
+                logger.error('SCANNER: publication receipt NOT saved id=%s', result['signal_outcome_id'])
+            elif web == 'queued' or telegram == 'accepted':
+                measurement_health.count('published')
+            return result if web == 'queued' or telegram == 'accepted' else None
+        def failed(failure):
+            measurement_health.count('publication_receipt_write_failed')
+            logger.error('SCANNER: receipt write failed id=%s: %s', result['signal_outcome_id'], failure.getErrorMessage())
+            return None
+        return d.addCallbacks(saved, failed)
+
+    if web == 'queued':
+        try:
+            # No-op unless separately enabled. Failed web enqueue is not a signal.
+            autotrader.maybe_enter_trade(result)
+        except Exception:
+            logger.exception("SCANNER: autotrader.maybe_enter_trade failed for %s", pair_norm)
 
     chat_id = get_chat_id()
     if not chat_id:
         logger.info("[SCANNER] Сигнал для %s готовий, але CHAT_ID не задано", pair_norm)
-        return succeed(result)
+        return persist('not_configured')
 
     expiration = result.get("timeframe", SCANNER_TIMEFRAME)
     # AUDIT FIX (2026-08-18): _format_signal_message/get_main_menu_kb both
@@ -353,16 +376,25 @@ def _publish_recorded_signal(pair_norm, result, score):
     # without explicitly looking up the user's saved preference here every
     # scanner-pushed signal silently ignored a user's own /language choice
     # and always rendered in English, regardless of what they'd set.
-    lang = telegram_ui.normalize_lang(db.get_user_language(chat_id))
-    message = telegram_ui._format_signal_message(result, expiration, lang)
-    kb = telegram_ui.get_main_menu_kb(lang)
+    try:
+        lang = telegram_ui.normalize_lang(db.get_user_language(chat_id))
+        message = telegram_ui._format_signal_message(result, expiration, lang)
+        kb = telegram_ui.get_main_menu_kb(lang)
+        logger.info("[SCANNER] Надсилаємо сигнал для %s", pair_norm)
+        d = _send_signal_async(chat_id, message, reply_markup=kb)
+    except Exception:
+        logger.exception('SCANNER: Telegram preparation failed for %s', pair_norm)
+        measurement_health.count('telegram_failed')
+        return persist('failed')
 
-    logger.info("[SCANNER] Надсилаємо сигнал для %s", pair_norm)
-    d = _send_signal_async(chat_id, message, reply_markup=kb)
-
-    def _done(_):
-        logger.info("SCANNER: сигнал надіслано для %s (score=%s)", pair_norm, score)
-        return result
+    def _done(accepted):
+        if accepted is True:
+            logger.info("SCANNER: Telegram accepted signal for %s (score=%s)", pair_norm, score)
+            measurement_health.count('telegram_accepted')
+        else:
+            logger.error('SCANNER: Telegram did NOT accept signal for %s', pair_norm)
+            measurement_health.count('telegram_failed')
+        return persist('accepted' if accepted is True else 'failed')
 
     def _failed(failure):
         logger.error(
@@ -370,7 +402,8 @@ def _publish_recorded_signal(pair_norm, result, score):
             pair_norm,
             failure.getErrorMessage(),
         )
-        return None
+        measurement_health.count('telegram_failed')
+        return persist('failed')
 
     d.addCallbacks(_done, _failed)
     return d

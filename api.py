@@ -558,11 +558,18 @@ def register_routes(app):
             row = db.get_signal_endpoint_audit(outcome_id)
             if not row:
                 return jsonify(error="not_found"), 404
+            phase = request.form.get('phase', 'expiry')
+            if phase not in {'entry', 'expiry'}:
+                return jsonify(error='invalid_phase'), 400
+            saved = row['evidence'].get('entry_quote' if phase == 'entry' else 'endpoint')
+            target = saved.get('ts') if phase == 'entry' and isinstance(saved, dict) else row['deadline']
+            if phase == 'entry' and saved is None:
+                return jsonify(error='missing_entry_quote'), 422
             import historical_endpoints
             result = blockingCallFromThread(reactor, historical_endpoints.fetch_on_reactor,
-                                           row["pair"], row["deadline"])
+                                           row["pair"], target)
             return jsonify(id=row["id"], pair=row["pair"], outcome=row["outcome"],
-                           saved=row["evidence"].get("endpoint"), history=result)
+                           phase=phase, saved=saved, history=result)
         except Exception as exc:
             logger.warning("Endpoint history audit failed: %s", type(exc).__name__)
             return jsonify(error="history_unavailable"), 503

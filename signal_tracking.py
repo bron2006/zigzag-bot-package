@@ -157,14 +157,19 @@ def maybe_record_signal(result: dict) -> int | None:
     if result.get("measurement_version") == "live_mid_v1":
         published_ts = result.get("ts")
         quote = result.get("entry_quote")
-        if not isinstance(published_ts, (int, float)) or not math.isfinite(published_ts) or not quote:
+        if not isinstance(published_ts, (int, float)) or not math.isfinite(published_ts) or not isinstance(quote, dict):
+            return None
+        if not all(isinstance(quote.get(k), (int, float)) and math.isfinite(quote[k]) for k in ('ts','mid','bid','ask')):
+            return None
+        if not 0 < quote['bid'] <= quote['ask'] or not math.isclose(quote['mid'], (quote['bid'] + quote['ask']) / 2, rel_tol=1e-12):
             return None
         if not 0 <= published_ts - quote["ts"] <= 5:
             return None
         entry_price = quote["mid"]
         entry_ts = datetime.fromtimestamp(published_ts, timezone.utc).replace(tzinfo=None)
         evidence = {"version": "live_mid_v1", "entry_quote": quote,
-                    "model_reference_price": result.get("price"), "source": "cTrader"}
+                    "model_reference_price": result.get("price"), "source": "cTrader",
+                    "publication": {"version": 1, "state": "prepared"}}
 
     extra = {"evidence": evidence, "entry_ts": entry_ts} if evidence else {}
     outcome_id = db.create_signal_outcome(
@@ -203,6 +208,8 @@ def _classify_move(entry_price: float, exit_price: float) -> str:
 
 
 def resolve_signal_cycle() -> None:
+    import publication_tracking
+    publication_tracking.flush_pending()
     resolve_pending_signals()
     import historical_endpoints
     historical_endpoints.recover_missing_endpoints()

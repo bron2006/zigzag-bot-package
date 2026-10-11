@@ -40,6 +40,17 @@ class EndpointAuditTest(unittest.TestCase):
             resp = self.client.post('/api/admin/endpoint-audit', data={'id': 1})
         self.assertEqual(resp.status_code, 503)
 
+    def test_entry_audit_uses_saved_broker_quote_time(self):
+        row = dict(id=1,pair='BTCUSD',deadline=1300,outcome='unknown',
+                   evidence={'entry_quote': {'ts': 998, 'mid': 100}})
+        with patch('api.is_valid_admin_token', return_value=True), \
+             patch('api.db.get_signal_endpoint_audit', return_value=row), \
+             patch('api.blockingCallFromThread', return_value={'endpoint': None}) as bridge:
+            resp = self.client.post('/api/admin/endpoint-audit',data={'id':1,'phase':'entry'})
+        self.assertEqual(resp.status_code,200)
+        self.assertEqual(bridge.call_args.args[2:],('BTCUSD',998))
+        self.assertEqual(resp.json['saved'],row['evidence']['entry_quote'])
+
 
 class CtraderOauthStartAuthTest(unittest.TestCase):
     """SECURITY FIX (2026-08-15, audit finding): /api/ctrader/oauth/start had

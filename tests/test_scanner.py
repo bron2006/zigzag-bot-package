@@ -143,10 +143,10 @@ class DurablePublishTest(unittest.TestCase):
                       price=1.158, data_status={"price": {"mid": 1.1581}}, timeframe="5m")
         with patch.object(app_state, "IDEAL_ENTRY_THRESHOLD", 78), \
              patch.object(app_state, "get_signal_entry_quote", side_effect=lambda pair, now: dict(ts=now, mid=1.1581, bid=1.158, ask=1.1582)), \
-             patch.object(scanner, "deferToThreadPool", return_value=d), \
+             patch.object(scanner, "deferToThreadPool", side_effect=lambda *args: d if args[2] is scanner.signal_tracking.maybe_record_signal else succeed(True)), \
              patch.object(scanner, "get_chat_id", return_value=None), \
              patch.object(scanner.autotrader, "maybe_enter_trade") as execute, \
-             patch.object(app_state, "publish_signal_sse") as publish:
+             patch.object(app_state, "publish_signal_sse", return_value=True) as publish:
             scanner._handle_analysis_result("EURUSD", result)
             publish.assert_not_called()
             execute.assert_not_called()
