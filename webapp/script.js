@@ -1211,21 +1211,33 @@ function renderWinrateStats(currentStats, historyStats) {
     const audit = currentStats.measurement_audit;
     const c = audit.counts || {};
     const decided = (c.win || 0) + (c.loss || 0);
-    const rate = decided ? `${(100*(c.win || 0)/decided).toFixed(1)}%` : "ще немає завершених результатів";
+    const rate = decided ? `${(100*(c.win || 0)/decided).toFixed(1)}%` : "—";
+    const paper = audit.scenario;
+    const money = value => Number.isFinite(value) ? `$${value.toFixed(2)}` : "—";
+    const pnl = value => Number.isFinite(value) ? `${value > 0 ? "+" : value < 0 ? "−" : ""}${money(Math.abs(value))}` : "—";
+    const stake = paper.stake ?? 10;
+    const payout = paper.net_payout ?? 0.8;
     const rows = (audit.by_pair || []).map(item => {
         const p = item.counts || {};
-        return `<div class="winrate-row"><span>${escapeHtml(item.pair)}</span><span>${formatWinrate(item.win_rate)} · плюс ${p.win || 0} · мінус ${p.loss || 0} · повернення ${p.refund || 0} · очікує ${p.pending || 0} · немає даних ${p.unknown || 0} · не опубліковано ${p.cancelled || 0}</span></div>`;
+        const extras = [[p.refund, "поверн."], [p.pending, "очікує"], [p.unknown, "без даних"], [p.cancelled, "скасовано"]]
+            .filter(([count]) => count > 0).map(([count, label]) => `${count} ${label}`).join(" · ");
+        return `<div class="winrate-row"><span><strong>${escapeHtml(item.pair)}</strong><br><small style="color:var(--hint-color)">+ ${p.win || 0} / − ${p.loss || 0}${extras ? ` · ${extras}` : ""}</small></span><span style="text-align:right"><strong>${pnl((p.win || 0)*stake*payout-(p.loss || 0)*stake)}</strong><br><small style="color:var(--hint-color)">Win-rate ${formatWinrate(item.win_rate)}</small></span></div>`;
     }).join("");
-    winrateModalBody.innerHTML = `<div class="winrate-section"><div class="winrate-section-title">Поточний тест від 10.10.2026 (Київ)</div>
-        <div>Записів: ${audit.total || 0}. Плюс: ${c.win || 0} · мінус: ${c.loss || 0} · повернення: ${c.refund || 0} · очікує: ${c.pending || 0} · немає даних: ${c.unknown || 0} · не опубліковано: ${c.cancelled || 0}.</div>
-        <div>Точність напрямку серед перемог і програшів: ${rate}. Це не прибутковість.</div></div>`
-        + renderMeasurementAudit(audit)
-        + `<div class="winrate-section"><div class="winrate-section-title">Пари поточного тесту</div>${rows || "Ще немає нових сигналів."}</div>`;
+    winrateModalBody.innerHTML = `<div class="winrate-section"><div class="winrate-section-title">Поточний тест від 10.10.2026</div>
+        <div style="color:var(--hint-color)">Умовний баланс</div>
+        <div style="font-size:30px;font-weight:700;margin:6px 0">${money(paper.measured_balance)} <span style="font-size:16px;color:var(--hint-color)">${pnl(paper.measured_pnl)}</span></div>
+        <div style="color:var(--hint-color)">Старт ${money(paper.initial ?? 1000)} · ставка ${money(stake)} · виплата ${Math.round(payout*100)}%</div>
+        <div style="margin-top:10px">Плюс ${c.win || 0} · мінус ${c.loss || 0} · повернення ${c.refund || 0} · Win-rate ${rate}</div>
+        ${!paper.complete ? `<div style="margin-top:6px;color:var(--hint-color)">Неповний: очікує ${c.pending || 0} · без даних ${c.unknown || 0}</div>` : ""}
+        <small style="color:var(--hint-color)">Тестовий розрахунок, не реальні гроші.</small></div>`
+        + `<div class="winrate-section"><div class="winrate-section-title">Пари</div>${rows || "Ще немає нових сигналів."}</div>`;
     const runtime = currentStats.measurement_runtime;
+    let runtimeHtml = "";
     if (runtime) {
         const c = runtime.counters || {};
-        winrateModalBody.innerHTML += `<div class="winrate-section">Діагностика лише від запуску ${escapeHtml(runtime.since)}: спроб ${c.tracking_attempts || 0}, опубліковано ${c.published || 0}, пропущено через котировки ${c.skipped_no_fresh_quote || 0}, через запис ${c.skipped_tracking_write || 0}, через затримку публікації ${c.skipped_publication_delay || 0}, помилки підрахунку ${c.resolver_errors || 0}. Ці лічильники обнуляються після перезапуску.</div>`;
+        runtimeHtml = `<div class="winrate-section">Діагностика лише від запуску ${escapeHtml(runtime.since)}: спроб ${c.tracking_attempts || 0}, опубліковано ${c.published || 0}, пропущено через котировки ${c.skipped_no_fresh_quote || 0}, через запис ${c.skipped_tracking_write || 0}, через затримку публікації ${c.skipped_publication_delay || 0}, помилки підрахунку ${c.resolver_errors || 0}. Ці лічильники обнуляються після перезапуску.</div>`;
     }
+    winrateModalBody.innerHTML += `<details class="winrate-section"><summary>Деталі тесту</summary>${renderMeasurementAudit(audit)}${runtimeHtml}</details>`;
     if (historyStats?.ok) {
         winrateModalBody.innerHTML += `<details class="winrate-section"><summary>Архів / попередні результати (30д) — не результат поточного тесту</summary>
             <div>Записи поточного тесту виключені з архівної вибірки. Ці цифри не впливають на новий баланс або точність.</div>

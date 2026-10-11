@@ -1564,3 +1564,22 @@ public health13:56:18UTC ok,Quote feed READY,83liveprices,0stale,TelegramACTIVE.
 This duplicate-subscription issue remains separate follow-up; do not claim fully
 fixed reliability. No additional manual restart or strategy/price-window change.
 No real orders enabled, no Telegram verification message sent, no GitHub push.
+
+### 2026-10-11 — compact Win-rate presentation
+
+Owner requested balance above pairs, not paragraphs. Presentation-only change:
+large conditional balance/change; short start/stake/payout/status summary; compact
+pair rows with measured scenario PNL and win-rate. Unknown/pending not hidden.
+Audit/recent entries/missing reasons/runtime now under CLOSED Details; history
+remains CLOSED separate archive. No cohort, DB, strategy or calculation changes.
+Measurement/watchlist JS tests and syntax check passed. Explicit regression checks
+balance above pairs and runtime inside a fully closed details element (browser
+normalizes incomplete innerHTML, so never append an unclosed details fragment).
+Before each rollout scanners paused; current counts loss3/unknown1, pending0.
+Final intended image deployment-01M4NMGWZ7J7N6KZ1QYWRE6ZW2,
+digest1e29c93c4a7c47ca4e22096de100cc05e50b38b0ec497055e1935f7cee86b4c7.
+Confirmed v1494 deployed, both original scanner categories restored via running
+API. Public health ok/READY83live0stale. Owner Chrome actual modal verified balance
+$970/-$30 above four pairs, Details and Archive collapsed, no visible diagnostics.
+Computer Use inspection informed final layout and caught details-fragment issue.
+No real trading, no GitHub push. Historical/statistical calculations unchanged.
