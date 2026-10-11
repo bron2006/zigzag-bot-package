@@ -1119,11 +1119,10 @@ async function loadWinrateStats() {
     winrateModalBody.innerHTML = `<div class="winrate-loading">${escapeHtml(tr("winrateLoading"))}</div>`;
 
     try {
-        const [week, month] = await Promise.all([
-            apiGet("/api/stats/signals", { days: 7 }),
-            apiGet("/api/stats/signals", { days: 30 }),
-        ]);
-        renderWinrateStats(week, month);
+        const current = await apiGet("/api/stats/signals", { scope: "current_test" });
+        // A failure of the optional history must not hide the current test.
+        const history = await apiGet("/api/stats/signals", { days: 30, scope: "history" }).catch(() => null);
+        renderWinrateStats(current, history);
     } catch (err) {
         console.error("Winrate stats load error:", err);
         winrateModalBody.innerHTML = `<div class="winrate-error">${escapeHtml(tr("winrateError"))}</div>`;
@@ -1202,29 +1201,35 @@ function renderWinrateByPair(monthStats) {
     `;
 }
 
-function renderWinrateStats(weekStats, monthStats) {
+function renderWinrateStats(currentStats, historyStats) {
     if (!winrateModalBody) return;
-    if (!weekStats?.ok || !monthStats?.ok) {
+    if (!currentStats?.ok || currentStats.scope !== "current_test" || !currentStats.measurement_audit) {
         winrateModalBody.innerHTML = `<div class="winrate-error">${escapeHtml(tr("winrateError"))} Немає підтвердження від бази — це не нуль сигналів.</div>`;
         return;
     }
 
-    const weekHasData = weekStats && weekStats.total > 0;
-    const monthHasData = monthStats && monthStats.total > 0;
-
-    if (!weekHasData && !monthHasData) {
-        winrateModalBody.innerHTML = `<div class="winrate-empty">${escapeHtml(tr("winrateEmpty"))}</div>`;
-        return;
-    }
-
-    winrateModalBody.innerHTML =
-        renderWinratePeriodSummary(tr("winrateWeek"), weekStats) +
-        renderWinratePeriodSummary(tr("winrateMonth"), monthStats) +
-        renderWinrateByPair(monthStats) + renderMeasurementAudit(monthStats.measurement_audit);
-    const runtime = monthStats.measurement_runtime;
+    const audit = currentStats.measurement_audit;
+    const c = audit.counts || {};
+    const decided = (c.win || 0) + (c.loss || 0);
+    const rate = decided ? `${(100*(c.win || 0)/decided).toFixed(1)}%` : "ще немає завершених результатів";
+    const rows = (audit.by_pair || []).map(item => {
+        const p = item.counts || {};
+        return `<div class="winrate-row"><span>${escapeHtml(item.pair)}</span><span>${formatWinrate(item.win_rate)} · плюс ${p.win || 0} · мінус ${p.loss || 0} · повернення ${p.refund || 0} · очікує ${p.pending || 0} · немає даних ${p.unknown || 0} · не опубліковано ${p.cancelled || 0}</span></div>`;
+    }).join("");
+    winrateModalBody.innerHTML = `<div class="winrate-section"><div class="winrate-section-title">Поточний тест від 10.10.2026 (Київ)</div>
+        <div>Записів: ${audit.total || 0}. Плюс: ${c.win || 0} · мінус: ${c.loss || 0} · повернення: ${c.refund || 0} · очікує: ${c.pending || 0} · немає даних: ${c.unknown || 0} · не опубліковано: ${c.cancelled || 0}.</div>
+        <div>Точність напрямку серед перемог і програшів: ${rate}. Це не прибутковість.</div></div>`
+        + renderMeasurementAudit(audit)
+        + `<div class="winrate-section"><div class="winrate-section-title">Пари поточного тесту</div>${rows || "Ще немає нових сигналів."}</div>`;
+    const runtime = currentStats.measurement_runtime;
     if (runtime) {
         const c = runtime.counters || {};
         winrateModalBody.innerHTML += `<div class="winrate-section">Діагностика лише від запуску ${escapeHtml(runtime.since)}: спроб ${c.tracking_attempts || 0}, опубліковано ${c.published || 0}, пропущено через котировки ${c.skipped_no_fresh_quote || 0}, через запис ${c.skipped_tracking_write || 0}, через затримку публікації ${c.skipped_publication_delay || 0}, помилки підрахунку ${c.resolver_errors || 0}. Ці лічильники обнуляються після перезапуску.</div>`;
+    }
+    if (historyStats?.ok) {
+        winrateModalBody.innerHTML += `<details class="winrate-section"><summary>Архів / попередні результати (30д) — не результат поточного тесту</summary>
+            <div>Записи поточного тесту виключені з архівної вибірки. Ці цифри не впливають на новий баланс або точність.</div>
+            ${renderWinratePeriodSummary("Історичний звіт (30д)", historyStats)}${renderWinrateByPair(historyStats)}</details>`;
     }
 }
 
@@ -1236,7 +1241,7 @@ function renderMeasurementAudit(audit) {
     const gaps = Object.entries(audit.missing_reasons || {}).map(([key, count]) => `<div>${escapeHtml(reasons[key] || key)}: ${count}</div>`).join("");
     const recent = (audit.recent || []).map(row => `<div class="winrate-row"><span>#${row.id} ${escapeHtml(row.pair)} ${escapeHtml(row.direction)}<br>${escapeHtml(row.entry_ts)} UTC<br>${escapeHtml(String(row.entry))} → ${escapeHtml(String(row.exit ?? "—"))}</span><span>${escapeHtml(labels[row.status] || row.status)}${row.reason ? `<br>${escapeHtml(reasons[row.reason] || row.reason)}` : ""}</span></div>`).join("");
     return `<div class="winrate-section"><div class="winrate-section-title">Новий облік cTrader — окремо від старих результатів</div>
-        <div>Початок: ${escapeHtml(audit.first_entry || "ще немає нових сигналів")} UTC. Старих записів окремо: ${audit.legacy_total}.</div>
+        <div>Перший запис нового обліку: ${escapeHtml(audit.first_entry || "ще немає нових сигналів")} UTC.</div>
         <div>Умовний розрахунок: $1000, ставка $10, чиста виплата 80%. За визначеними результатами: $${paper.measured_balance}; зміна $${paper.measured_pnl}.</div>
         <div>${paper.complete ? "Пропусків у новому обліку немає." : `Результат НЕПОВНИЙ. Межі з урахуванням невідомих та відкритих: $${paper.balance_lower}–$${paper.balance_upper}.`}</div>
         <div>Це сценарій за напрямком ціни, НЕ реальні угоди. Виплата умовна; обмеження капіталу й одночасних ставок не моделюються. Повернення — лише правило цього сценарію при точно однаковій ціні.</div>

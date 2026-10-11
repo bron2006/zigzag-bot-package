@@ -1514,3 +1514,53 @@ Final150 targetedPython tests passed (includes10newwatchlisttests), frontend
 watchlist/measurement tests passed, including failed-removal and migration retry.
 Supabase security advisor WARN/ERROR0;14INFO RLS-no-policy expectedbackenddenyall.
 No GitHubpush/mainmerge. Source fixes and verification scripts retained locally.
+
+### 2026-10-11 — separate current experiment from historical Win-rate
+
+Owner asked why old statistics remain visible when current test startedOct10.
+Changed Web Win-rate primary view and Telegram /winrate to fixed current cohort:
+entry_ts >=2026-10-09 21:00UTC (=Oct10 00:00Europe/Kyiv) AND journal.version
+live_mid_v1. Not a rolling7/30day window. Current rates and pair summaries use
+canonical scenario statuses, including exact-equality refund/cancelled/unknown.
+Old rows excluded from current totals/balance; new rows excluded from explicitly
+requested historyscope. Old report remains in CLOSED details archive (30days),
+not deleted. Optional history failure cannot hide current stats. API default
+without scope preserved for compatibility; current UI explicitly uses scope.
+Telegram command uses current_test=True, labels scenario/assumed80% payout,
+not broker trades; DB failure never displayed as zero signals.
+
+Natural new live signals now verified: LINK13:40:38UTC,TAO13:42:42,ZEC13:44:34,
+AVAX13:46:28. LINK became unknown(no_valid_quote_in_5s_window), noendpoint,
+BEFORE any restart for this statschange. TAO/ZEC durable endpoints captured,
+BUY down =>loss. Do NOT hide LINK or convert missing endpoint into refund.
+Price capture definition remains unchanged by this presentation fix.
+
+For safe deployment, temporarily paused only new scanner categories through
+running authenticated HTTP API; originalforex=false,crypto=false,commodities=true,
+watchlist=true preserved for restoration. Quotes/sampler/resolver kept running.
+At13:52:03UTC unsafe_pending0 (AVAXendpointdurablysaved, resolverstillpending1),
+so deploy cannot remove its end quote. Build-only used --push explicitly;
+final image deployment-01M4NKN4TRQFDBWGN5JKNFKHZ5,
+digeste33a05ed28f92ff46effb53195752e2b6a2fb193f068ea7394512a9d2fd5f265.
+Do not mistake earlier build-only image01M4NKH1H1HZJJM0DAZ51YN62R for final:
+it predates Telegram/history-exclusive changes and was NEVER deployed.
+164 targetedPython tests + measurement/watchlist JS tests passed; tests include
+cutoffexact/before,wronggeneration,norollingtruncation,DBfailure,emptyvalid,
+historyexclusion,collapsedarchive,historyfailureindependence,Telegramcohort.
+Stats changes readonly; no schema/RLS/strategy/model/orderexecutor changes.
+Deployment verification and resumption must be confirmed below before completion.
+
+Confirmed release v1492 started on machine48e1239a7d3708, finalimageabove.
+Deployed readonly DB/API probe: HTTP200,current4,loss3,unknown1,oldhistory248.
+AVAX resolved from persisted endpoint after restart; current conditional scenario
+$970 measured, incomplete bounds$960..$978, NOT actual PNL or executable ledger.
+Owner Chrome reloaded and actual Win-rate modal verified: main10.10Kyiv cohort,
+four records/current pairs, missingquote reason visible, closed historical archive.
+Scanner state restored via running API: commodities=true,watchlist=true,
+forex=false,crypto=false. Main scanner subsequently logged68assets/38crypto.
+During restoration category toggles triggered redundant spot subscriptions:
+ALREADY_SUBSCRIBED at13:55:23UTC caused reconnect attempt1. Automatically recovered;
+public health13:56:18UTC ok,Quote feed READY,83liveprices,0stale,TelegramACTIVE.
+This duplicate-subscription issue remains separate follow-up; do not claim fully
+fixed reliability. No additional manual restart or strategy/price-window change.
+No real orders enabled, no Telegram verification message sent, no GitHub push.

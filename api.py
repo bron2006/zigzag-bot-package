@@ -586,7 +586,11 @@ def register_routes(app):
         # to the old noise-threshold-aware view, e.g. for eyeballing
         # adaptive-threshold calibration data the same way it's used there.
         binomo_style = request.args.get("style", "binomo").strip().lower() != "forex"
-        stats = db.get_signal_outcome_stats(days, binomo_style=binomo_style)
+        scope = request.args.get("scope")
+        if scope not in (None, "current_test", "history"):
+            return jsonify({"success": False, "error": "Unknown statistics scope"}), 400
+        stats = db.get_signal_outcome_stats(days, binomo_style=binomo_style,
+                                           current_test=scope == "current_test", historical_only=scope == "history")
         return jsonify({"success": True, **stats})
 
     @app.route("/api/get_pairs")

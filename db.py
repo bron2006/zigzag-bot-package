@@ -1824,7 +1824,8 @@ def _aggregate_signal_outcomes_binomo_style(rows: list, *, verified_only: bool =
     }
 
 
-def get_signal_outcome_stats(days: int = 7, *, binomo_style: bool = True) -> dict:
+def get_signal_outcome_stats(days: int = 7, *, binomo_style: bool = True, current_test: bool = False,
+                             historical_only: bool = False) -> dict:
     """Defaults to the Binomo-oriented view (no flat/push - see
     _aggregate_signal_outcomes_binomo_style) since that's what actually gets
     traded. Pass binomo_style=False for the forex-oriented view with the
@@ -1832,7 +1833,9 @@ def get_signal_outcome_stats(days: int = 7, *, binomo_style: bool = True) -> dic
     Both public views now use measured *_timed results ONLY. Historical
     snapshots remain stored and are shown separately as unverified."""
     days = max(1, min(int(days or 7), 365))
-    since = _utcnow() - timedelta(days=days)
+    # Oct10 00:00 Europe/Kyiv = Oct09 21:00 UTC. Fixed experiment start,
+    # not a rolling 7/30-day window that silently forgets earlier results.
+    since = datetime(2026, 10, 9, 21) if current_test else _utcnow() - timedelta(days=days)
     aggregate_fn = _aggregate_signal_outcomes_binomo_style if binomo_style else _aggregate_signal_outcomes
     aggregate = lambda items: aggregate_fn(items, verified_only=True)
     empty = {
@@ -1848,9 +1851,33 @@ def get_signal_outcome_stats(days: int = 7, *, binomo_style: bool = True) -> dic
             rows = session.query(SignalOutcome).filter(SignalOutcome.entry_ts >= since).all()
             evidence = {r.signal_id: json.loads(r.payload) for r in session.query(SignalEvidence).filter(
                 SignalEvidence.signal_id.in_([r.id for r in rows])).all()}
-    except SQLAlchemyError:
+            if current_test:
+                evidence = {id_: audit for id_, audit in evidence.items()
+                            if isinstance(audit, dict) and audit.get("version") == "live_mid_v1"}
+                rows = [row for row in rows if row.id in evidence]
+            elif historical_only:
+                current_ids = {id_ for id_, audit in evidence.items()
+                               if isinstance(audit, dict) and audit.get("version") == "live_mid_v1"}
+                rows = [row for row in rows if row.id not in current_ids or row.entry_ts < datetime(2026, 10, 9, 21)]
+                retained = {row.id for row in rows}
+                evidence = {id_: audit for id_, audit in evidence.items() if id_ in retained}
+    except (SQLAlchemyError, ValueError):
         logger.exception("Error loading signal outcome stats")
         return empty
+
+    if current_test:
+        audit = __import__("signal_accounting").summarize(rows, evidence)
+        def totals(counts):
+            wins, losses = counts.get("win", 0), counts.get("loss", 0)
+            refunds = counts.get("refund", 0)
+            return dict(wins=wins, losses=losses, refunds=refunds,
+                        pending=counts.get("pending", 0), unknown=counts.get("unknown", 0),
+                        cancelled=counts.get("cancelled", 0), resolved=wins+losses+refunds,
+                        unverified=0, win_rate=round(100*wins/(wins+losses), 1) if wins+losses else None)
+        return dict(ok=True, scope="current_test", test_started="2026-10-10T00:00:00+03:00",
+                    total=audit["total"], **totals(audit["counts"]),
+                    by_pair=[dict(pair=p["pair"], total=p["total"], **totals(p["counts"])) for p in audit["by_pair"]],
+                    measurement_audit=audit, measurement_runtime=__import__("measurement_health").snapshot())
 
     by_pair_map: dict[str, list] = {}
     by_tf_map: dict[str, list] = {}
@@ -1871,6 +1898,8 @@ def get_signal_outcome_stats(days: int = 7, *, binomo_style: bool = True) -> dic
         "ok": True,
         "days": days,
         "binomo_style": binomo_style,
+        "scope": "current_test" if current_test else "history",
+        "test_started": "2026-10-10T00:00:00+03:00" if current_test else None,
         **aggregate(rows),
         "by_pair": by_pair,
         "by_timeframe": by_timeframe,

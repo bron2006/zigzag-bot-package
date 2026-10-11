@@ -7,6 +7,7 @@ def summarize(rows, evidence):
     counts = Counter()
     reasons = Counter()
     recent = []
+    pair_counts = {}
     new = [r for r in rows if r.id in evidence]
     for row in new:
         audit = evidence[row.id]
@@ -24,6 +25,7 @@ def summarize(rows, evidence):
         if status not in ("win", "loss", "refund", "pending", "unknown", "cancelled"):
             status = "unknown"
         counts[status] += 1
+        pair_counts.setdefault(row.pair, Counter())[status] += 1
         reason = audit.get("reason") or ("endpoint_unavailable" if status == "unknown" else None)
         if reason:
             reasons[reason] += 1
@@ -35,6 +37,10 @@ def summarize(rows, evidence):
     missing = counts["pending"] + counts["unknown"]
     return dict(source="cTrader", cohort="live_mid_v1", total=len(new),
                 counts=dict(counts), missing_reasons=dict(reasons),
+                by_pair=[dict(pair=pair, counts=dict(c), total=sum(c.values()),
+                              win_rate=round(100*c["win"]/(c["win"]+c["loss"]), 1)
+                              if c["win"]+c["loss"] else None)
+                         for pair, c in sorted(pair_counts.items())],
                 recent=sorted(recent, key=lambda r: (r["entry_ts"], r["id"]), reverse=True)[:50],
                 scenario=dict(initial=1000, stake=10, net_payout=0.8,
                               measured_pnl=pnl, measured_balance=1000+pnl,

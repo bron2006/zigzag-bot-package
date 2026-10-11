@@ -65,6 +65,41 @@ class EvidenceIntegrationTest(unittest.TestCase):
                                           evidence=dict(version="live_mid_v1", entry_quote=dict(mid=100)))
         self.deadline = self.entry.replace(tzinfo=timezone.utc).timestamp() + 300
 
+    def test_current_test_has_fixed_kyiv_cutoff_and_requires_generation(self):
+        cutoff = datetime(2026, 10, 9, 21)
+        def add(pair, entry, evidence):
+            return db.create_signal_outcome(pair=pair, timeframe="1m", verdict="BUY", score=20,
+                                            entry_price=100, horizon_seconds=300, entry_ts=entry, evidence=evidence)
+        new = dict(version="live_mid_v1", entry_quote=dict(mid=100))
+        before = add("BEFORE", cutoff-timedelta(microseconds=1), new)
+        exact = add("EXACT", cutoff, new)
+        legacy = add("LEGACY", cutoff+timedelta(hours=1), None)
+        other = add("OTHER_VERSION", cutoff+timedelta(hours=1), dict(version="old"))
+        with patch.object(db, "_utcnow", return_value=datetime(2027, 1, 1)):
+            stats = db.get_signal_outcome_stats(1, current_test=True)
+        ids = {r['id'] for r in stats['measurement_audit']['recent']}
+        self.assertIn(exact, ids)
+        self.assertNotIn(before, ids)
+        self.assertNotIn(legacy, ids)
+        self.assertNotIn(other, ids)
+        self.assertEqual(stats['scope'], 'current_test')
+        self.assertEqual(stats['total'], stats['measurement_audit']['total'])
+        self.assertEqual(stats['pending'], stats['total'])
+        with patch.object(db, "_utcnow", return_value=datetime(2026, 10, 11)):
+            history = db.get_signal_outcome_stats(30, historical_only=True)
+        history_pairs = {p['pair'] for p in history['by_pair']}
+        self.assertIn('LEGACY', history_pairs)
+        self.assertIn('BEFORE', history_pairs)
+        self.assertNotIn('EXACT', history_pairs)
+
+    def test_current_test_empty_is_valid_but_missing_db_is_not_zero(self):
+        with db.session_scope() as session:
+            session.query(db.SignalEvidence).delete()
+        self.assertTrue(db.get_signal_outcome_stats(current_test=True)['ok'])
+        self.assertEqual(db.get_signal_outcome_stats(current_test=True)['total'], 0)
+        with patch.object(db, 'SessionLocal', None):
+            self.assertFalse(db.get_signal_outcome_stats(current_test=True)['ok'])
+
     def test_atomic_entry_and_evidence_readback(self):
         pending = db.get_pending_signal_outcomes()
         self.assertEqual(len(pending), 1)

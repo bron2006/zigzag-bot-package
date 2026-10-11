@@ -5,6 +5,26 @@ from unittest.mock import Mock, patch
 import telegram_ui
 
 
+class CurrentTestWinrateCommandTest(unittest.TestCase):
+    def test_command_reads_only_current_test(self):
+        update = Mock()
+        stats = dict(ok=True, win_rate=None, by_pair=[], measurement_audit=dict(
+            total=1, counts=dict(pending=1), scenario=dict(measured_balance=1000,
+            complete=False, balance_lower=990, balance_upper=1008)))
+        with patch.object(telegram_ui, '_lang', return_value='uk'), \
+             patch.object(telegram_ui, '_get_user_id', return_value=1), \
+             patch.object(telegram_ui.db, 'is_admin_user', return_value=True), \
+             patch.object(telegram_ui.db, 'get_signal_outcome_stats', return_value=stats) as read, \
+             patch.object(telegram_ui, 'get_reply_keyboard', return_value=None):
+            telegram_ui.winrate_command(update, Mock())
+        read.assert_called_once_with(current_test=True)
+        text = update.message.reply_text.call_args.args[0]
+        self.assertIn('10.10.2026', text)
+        self.assertIn('Очікує: 1', text)
+        self.assertNotIn('Тиждень (7д)', text)
+        self.assertNotIn('Місяць (30д)', text)
+
+
 def _fake_update(user_id=1064175237, query_data="vwapexec_on"):
     query = Mock()
     query.data = query_data

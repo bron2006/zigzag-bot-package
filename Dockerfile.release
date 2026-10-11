@@ -7,7 +7,7 @@ WORKDIR /app
 # Old base images may contain a copied local browser session. Never restore
 # that file or local-only executors during a code-only emergency release.
 RUN rm -f /app/storage_state.json /app/.env /app/binomo_executor.py /app/vwap_executor.py
-COPY app.py api.py db.py scanner.py signal_tracking.py state.py endpoint_sampler.py signal_accounting.py measurement_health.py ./
+COPY app.py api.py db.py scanner.py signal_tracking.py state.py endpoint_sampler.py signal_accounting.py measurement_health.py telegram_ui.py ./
 COPY webapp/script.js ./webapp/script.js
 RUN python -m py_compile app.py db.py scanner.py signal_tracking.py state.py endpoint_sampler.py signal_accounting.py measurement_health.py
 CMD ["python", "app.py"]

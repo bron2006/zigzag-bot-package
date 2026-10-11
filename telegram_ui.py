@@ -501,28 +501,34 @@ def winrate_command(update, context):
         update.message.reply_text(t("unauthorized", lang))
         return
 
-    # Binomo-oriented by default (db.get_signal_outcome_stats(binomo_style=
-    # True)) - no flat/push, since Binomo settles any price difference as a
-    # win or loss. The old forex-oriented view (with the noise-threshold
-    # 'flat' outcome) is still available, just not on this command - see
-    # /api/stats/signals?style=forex.
-    week = db.get_signal_outcome_stats(7)
-    month = db.get_signal_outcome_stats(30)
-
-    lines = ["📊 <b>Win-rate сигналів (як для Binomo, без флету)</b>", ""]
-    lines.extend(_format_winrate_period("Тиждень (7д)", week))
-    lines.extend(_format_winrate_period("Місяць (30д)", month))
+    stats = db.get_signal_outcome_stats(current_test=True)
+    if not stats.get("ok"):
+        update.message.reply_text("Не вдалося отримати статистику з бази. Це не означає, що сигналів нуль.")
+        return
+    audit = stats["measurement_audit"]
+    c = audit["counts"]
+    paper = audit["scenario"]
+    lines = ["📊 <b>Поточний тест від 10.10.2026 (Київ)</b>",
+             f"Записів: {audit['total']}",
+             f"Плюс: {c.get('win', 0)} · мінус: {c.get('loss', 0)} · повернення: {c.get('refund', 0)}",
+             f"Очікує: {c.get('pending', 0)} · немає даних: {c.get('unknown', 0)} · не опубліковано: {c.get('cancelled', 0)}",
+             f"Точність напрямку: {stats['win_rate']}%" if stats['win_rate'] is not None else "Ще немає перемог або програшів для підрахунку точності.",
+             f"Умовний баланс: ${paper['measured_balance']} (початок $1000, ставка $10, виплата 80% — припущення).",
+             "Це не реальні угоди й не повноцінний рахунок з обмеженням капіталу.",
+             "Старі результати не включені. Історія доступна окремо у вебі.", ""]
+    if not paper['complete']:
+        lines.append(f"Результат неповний: з відкритими й невідомими межі ${paper['balance_lower']}–${paper['balance_upper']}.")
 
     top_pairs = sorted(
-        (p for p in month.get("by_pair", []) if p.get("resolved")),
-        key=lambda p: -(p.get("resolved") or 0),
-    )[:5]
+        stats.get("by_pair", []),
+        key=lambda p: -(p.get("total") or 0),
+    )[:10]
     if top_pairs:
-        lines.append("<b>Топ пар за 30д:</b>")
+        lines.append("<b>Пари поточного тесту (до 10, усі — у вебі):</b>")
         for item in top_pairs:
             wr = item.get("win_rate")
             wr_str = f"{wr}%" if wr is not None else "n/a"
-            lines.append(f"• {_safe_html(item.get('pair', '?'))}: {item.get('resolved', 0)} угод, {wr_str}")
+            lines.append(f"• {_safe_html(item.get('pair', '?'))}: {item.get('total', 0)} сигналів, {wr_str}")
 
     update.message.reply_text(
         "\n".join(lines),
