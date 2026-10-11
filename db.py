@@ -901,13 +901,10 @@ def get_watchlist(user_id: int) -> list[str]:
                 .all()
             )
             pairs = [row.pair for row in rows]
-            fallback_pairs = _fallback_get_watchlist(user_id)
-            if fallback_pairs:
-                pairs = sorted(set(pairs) | set(fallback_pairs))
             return pairs
     except SQLAlchemyError:
         logger.exception("Error loading watchlist")
-        return _fallback_get_watchlist(user_id)
+        return []
 
 
 def is_in_watchlist(user_id: int, pair: str) -> bool:
@@ -1548,43 +1545,45 @@ def remove_from_watchlist(user_id: int, pair: str) -> bool:
         return False
 
 
+def update_watchlist(user_id: int, pairs: list[str], enabled: bool | None) -> list[str] | None:
+    """Return the durable list AFTER commit; never acknowledge memory-only writes.
+
+    enabled=None is retained only for the legacy single-pair toggle API.
+    Serialize changes on the stable user row, including concurrent additions.
+    """
+    if not user_id or not pairs or (enabled is None and len(pairs) != 1):
+        return None
+    try:
+        with session_scope() as session:
+            if session is None:
+                return None
+            owner = session.query(User).filter(User.user_id == int(user_id)).with_for_update().first()
+            if owner is None:
+                return None
+            for pair in sorted(set(pairs)):
+                existing = session.query(UserWatchlist).filter_by(user_id=int(user_id), pair=pair).first()
+                wanted = enabled if enabled is not None else existing is None
+                if wanted and existing is None:
+                    session.add(UserWatchlist(user_id=int(user_id), pair=pair))
+                elif not wanted and existing is not None:
+                    session.delete(existing)
+            session.flush()
+            confirmed = [r.pair for r in session.query(UserWatchlist).filter_by(user_id=int(user_id)).order_by(UserWatchlist.pair).all()]
+        with _fallback_lock:
+            _fallback_watchlists.pop(int(user_id), None)
+        return confirmed
+    except SQLAlchemyError:
+        logger.exception("Durable watchlist update failed")
+        return None
+
+
 def toggle_watchlist(user_id: int, pair: str) -> bool:
     if not user_id or not pair:
         return False
 
     pair = pair.strip().upper()
 
-    try:
-        with session_scope() as db:
-            if db is None:
-                return False
-
-            existing = (
-                db.query(UserWatchlist)
-                .filter(
-                    UserWatchlist.user_id == int(user_id),
-                    UserWatchlist.pair == pair,
-                )
-                .first()
-            )
-
-            fallback_has_pair = pair in _fallback_get_watchlist(user_id)
-
-            if existing or fallback_has_pair:
-                if existing:
-                    db.delete(existing)
-                _fallback_remove_watchlist(user_id, pair)
-            else:
-                db.add(UserWatchlist(user_id=int(user_id), pair=pair))
-                _fallback_add_watchlist(user_id, pair)
-
-            return True
-    except OperationalError:
-        logger.exception("OperationalError while toggling watchlist")
-        return _fallback_toggle_watchlist(user_id, pair)
-    except SQLAlchemyError:
-        logger.exception("Error toggling watchlist")
-        return False
+    return update_watchlist(user_id, [pair], None) is not None
 
 
 # ----------------------------------------------------------------------

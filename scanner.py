@@ -472,7 +472,9 @@ def scan_markets_once() -> None:
         except Exception:
             logger.exception("Не вдалося запустити перевірку потоку цін")
 
-    logger.info("SCANNER: запускаю скан для %s активів...", len(assets))
+    crypto_keys = {_pair_key(pair) for pair in CRYPTO_PAIRS}
+    logger.info("SCANNER: assets=%s crypto=%s batch=%s", len(assets),
+                sum(pair in crypto_keys for pair in assets), ",".join(batch))
     logger.info(
         "SCANNER: реальний батч %s/%s активів (batch_size=%s)",
         len(batch),

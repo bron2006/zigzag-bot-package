@@ -785,6 +785,24 @@ def register_routes(app):
             reactor.callLater(0.5, ctrader.start_price_subscriptions)
         return jsonify(app_state.get_scanner_state_snapshot())
 
+    @app.route("/api/watchlist", methods=["POST"])
+    @_protected_route
+    def set_watchlist():
+        uid = _current_user_id()
+        raw_pairs = request.form.getlist("pair")
+        enabled = request.form.get("enabled")
+        configured = set(_collect_ui_pairs([]))
+        if not uid or not raw_pairs or len(raw_pairs) > len(configured) or enabled not in {"true", "false"}:
+            return jsonify({"success": False, "error": "Invalid watchlist request"}), 400
+        pairs = [_pair_key(p) for p in raw_pairs]
+        if any(p not in configured for p in pairs):
+            return jsonify({"success": False, "error": "Unknown instrument"}), 400
+        confirmed = db.update_watchlist(uid, pairs, enabled == "true")
+        if confirmed is None:
+            return jsonify({"success": False, "error": "Watchlist was not saved on the server"}), 503
+        reactor.callFromThread(ctrader.start_price_subscriptions)
+        return jsonify({"success": True, "watchlist": confirmed})
+
     @app.route("/api/toggle_watchlist", methods=["GET", "POST"])
     @_protected_route
     def toggle_watchlist():
@@ -801,16 +819,18 @@ def register_routes(app):
         if _pair_key(pair) not in set(_collect_ui_pairs([])):
             return jsonify({"success": False, "error": t("pair_not_actual", lang)}), 400
 
-        ok = db.toggle_watchlist(uid, pair.replace("/", "").upper())
-        watchlist = db.get_watchlist(uid) if ok else []
+        watchlist = db.update_watchlist(uid, [_pair_key(pair)], None)
+        ok = watchlist is not None
+        if ok:
+            reactor.callFromThread(ctrader.start_price_subscriptions)
 
         return jsonify(
             {
                 "success": bool(ok),
-                "watchlist": watchlist,
+                "watchlist": watchlist if ok else [],
                 "pair": pair.replace("/", "").upper(),
             }
-        )
+        ), (200 if ok else 503)
 
     @app.route("/api/signal")
     @_protected_route

@@ -1469,3 +1469,48 @@ private restore data лишилися у task-specific Temp dir, нічого н
 GitHub push/main merge НЕ робили. Старі registry images можуть містити
 Binomo session у lower layer — owner має відкликати старі сесії вручну;
 видалення файла на VM/clean new image цього не замінює.
+
+### 2026-10-11 — watchlist durability and crypto restoration, verified live
+
+Owner reported all crypto in Favorites, but no crypto signals. Initial diagnosis
+"crypto=false therefore no crypto scanning" was WRONG: main watchlist scanning
+includes crypto regardless of the dedicated crypto toggle. Rechecked DB/runtime:
+only 23 forex favorites persisted; main scanner processed25 =23forex+metals.
+Frontend merged unscoped browser cache with server list and even acknowledged
+failed favorite writes locally. Backend also accepted memory-only fallback writes.
+
+Implemented authenticated POST /api/watchlist desired-state batch additions/removals,
+stable user row lock, commit-before-ack, 503 on failure, canonical list in response.
+Legacy toggle uses same durable helper. get_watchlist no longer merges memory-only
+favorites. Frontend changes selection ONLY after server acknowledgment, bounds
+requests to10seconds, serializes UI writes, uses user-scoped cache, and never
+silently shows a failed write as saved. One-time owner-admin recovery adds valid
+legacy local favorites; original unscoped cache is preserved and a failed recovery
+remains retryable. Ordinary accounts do NOT auto-import unscoped legacy caches.
+No DB schema/RLS/permissions changes. Model/strategy/thresholds unchanged.
+
+Cloud v1491, image deployment-01M4NJQSMFHN7BFDPJVFCAC4A2, digest
+56417d5bea1e30f90c51e2cd244a9209c1b520614b58ea15ffd1be39df095d6d.
+Dockerfile.release now also copies api.py (previous overlay omitted it).
+Authenticated REAL running HTTP API restore script verified CHAT_ID==DEV_USER_ID
+without printing either identifier; added38configuredcrypto to owner's list,
+preserving23previousfavorites. OwnerChrome reload actually recovered6legacy
+local favorites, yielding67persistedfavorites,38crypto; main scanner68assets
+(67favorites plus silver; gold already favorite). Repeating restore via desired
+state API left67unchanged, no toggle/removal. All38crypto visible in Favorites.
+Existing category toggles preserved: forex=false,crypto=false,commodities=true,
+watchlist=true. Separate crypto switch need NOT be enabled for Favorites.
+
+Live scanner13:36:27UTC: assets68,crypto38,batch containsAAVE/ADA/ALGO/APT/ARB/ATOM.
+Real analyses AAVE/ADA/ALGO/APT logged NEUTRAL,trade_allowed=false,signal=false.
+This proves actual analysis of first crypto batch, NOT a completed full38rotation,
+NOT a naturally published/resolved live_mid_v1 result or profit evidence.
+Full rotation uses main batch8/60sec; do not confuse inclusion with all38 already
+analyzed. Natural evidence count still0 at last SQLcheck. Some quotes absent after
+restart; no claim all38 have continuous fresh quotes. AUTOTRADE and Binomoexecutor
+config false confirmed; no orders, no executor or VWAP revival.
+
+Final150 targetedPython tests passed (includes10newwatchlisttests), frontend
+watchlist/measurement tests passed, including failed-removal and migration retry.
+Supabase security advisor WARN/ERROR0;14INFO RLS-no-policy expectedbackenddenyall.
+No GitHubpush/mainmerge. Source fixes and verification scripts retained locally.

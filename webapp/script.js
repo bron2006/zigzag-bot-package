@@ -62,6 +62,8 @@ const debouncedFetchSignal = debounce(fetchSignal, 300);
 // Not fixed here - flagging as a follow-up rather than leaving it silent.
 const MAX_ENTRY_DRIFT_PERCENT_CLIENT = 0.005;
 const WATCHLIST_STORAGE_KEY = "zigzag_watchlist";
+let watchlistStorageKey = null;
+let watchlistWritePending = false;
 const LANG_STORAGE_KEY = "zigzag_language";
 const TIMEZONE_STORAGE_KEY = "zigzag_timezone";
 let userTimezone = normalizeTimezone(
@@ -499,7 +501,7 @@ function applyPairMetadata(staticData) {
 
 function loadLocalWatchlist() {
     try {
-        const raw = localStorage.getItem(WATCHLIST_STORAGE_KEY);
+        const raw = watchlistStorageKey ? localStorage.getItem(watchlistStorageKey) : null;
         const parsed = JSON.parse(raw || "[]");
         return Array.isArray(parsed) ? parsed.map(normalizePair).filter(Boolean) : [];
     } catch (err) {
@@ -511,19 +513,41 @@ function loadLocalWatchlist() {
 function saveLocalWatchlist(items) {
     try {
         const unique = Array.from(new Set((items || []).map(normalizePair).filter(Boolean)));
-        localStorage.setItem(WATCHLIST_STORAGE_KEY, JSON.stringify(unique));
+        if (watchlistStorageKey) localStorage.setItem(watchlistStorageKey, JSON.stringify(unique));
     } catch (err) {
         console.warn("Local watchlist save failed:", err);
     }
 }
 
-function mergeWatchlists(remoteItems) {
-    return Array.from(
-        new Set([
-            ...((remoteItems || []).map(normalizePair)),
-            ...loadLocalWatchlist(),
-        ].filter(Boolean))
-    );
+async function persistWatchlist(pairs, enabled) {
+    const body = new URLSearchParams(buildQuery().slice(1));
+    pairs.forEach(pair => body.append("pair", normalizePair(pair)));
+    body.set("enabled", enabled ? "true" : "false");
+    const response = await fetch(`${API_BASE_URL}/api/watchlist`, {
+        method: "POST", body, signal: AbortSignal.timeout(10000),
+    });
+    const result = await response.json();
+    if (!response.ok || !result.success || !Array.isArray(result.watchlist)) {
+        throw new Error("Обране не підтверджене сервером. Спробуй ще раз.");
+    }
+    return result.watchlist;
+}
+
+async function recoverLegacyWatchlist(staticData) {
+    const user = staticData && staticData.user;
+    watchlistStorageKey = user && user.user_id ? `${WATCHLIST_STORAGE_KEY}:${user.user_id}` : null;
+    // The old cache was unscoped. Recover it only for the owner's admin account;
+    // never merge another user's browser cache into an ordinary account.
+    const marker = watchlistStorageKey && `${watchlistStorageKey}:legacy_recovered`;
+    if (!user || !user.is_admin || !marker || localStorage.getItem(marker)) return staticData.watchlist || [];
+    const legacy = JSON.parse(localStorage.getItem(WATCHLIST_STORAGE_KEY) || "[]");
+    const configured = configuredPairSet(staticData);
+    const extras = Array.isArray(legacy) ? Array.from(new Set(legacy.map(normalizePair)))
+        .filter(pair => configured.has(pair) && !(staticData.watchlist || []).includes(pair)) : [];
+    const confirmed = extras.length ? await persistWatchlist(extras, true) : (staticData.watchlist || []);
+    // Only mark complete after durable confirmation. Keep the original cache intact.
+    localStorage.setItem(marker, "true");
+    return confirmed;
 }
 
 function configuredPairSet(data = allData) {
@@ -556,7 +580,12 @@ async function loadInitialData() {
             setUserTimezone(staticData.timezone);
         }
         allData = staticData || {};
-        setCurrentWatchlist(mergeWatchlists((staticData && staticData.watchlist) || []));
+        setCurrentWatchlist((staticData && staticData.watchlist) || []);
+        try {
+            setCurrentWatchlist(await recoverLegacyWatchlist(allData));
+        } catch (error) {
+            console.warn("Old favorites could not be recovered; showing server-confirmed list", error);
+        }
         applyPairMetadata(staticData);
         updateAdminControls(staticData && staticData.user);
 
@@ -1397,6 +1426,8 @@ function updateOpenSignalPrice(pairNorm, priceData) {
 
 async function toggleFavorite(event, button, pair) {
     event.stopPropagation();
+    if (watchlistWritePending) return;
+    watchlistWritePending = true;
 
     const pairNorm = normalizePair(pair);
     const previousText = button ? button.textContent : "";
@@ -1407,51 +1438,17 @@ async function toggleFavorite(event, button, pair) {
     }
 
     try {
-        const url = `${API_BASE_URL}/api/toggle_watchlist${buildQuery({ pair })}`;
-        const response = await fetch(url, { method: "GET" });
-        const res = await response.json().catch(() => ({}));
-
-        if (!response.ok) {
-            throw new Error(res.error || `HTTP ${response.status}`);
-        }
-
-        if (res.success) {
-            if (currentWatchlist.includes(pairNorm)) {
-                currentWatchlist = currentWatchlist.filter((p) => p !== pairNorm);
-            } else {
-                currentWatchlist.push(pairNorm);
-            }
-            setCurrentWatchlist(currentWatchlist);
-
-            try {
-                const refreshed = await apiGet("/api/get_pairs");
-                allData = refreshed || allData;
-                setCurrentWatchlist(mergeWatchlists((refreshed && refreshed.watchlist) || []));
-                applyPairMetadata(refreshed);
-            } catch (refreshErr) {
-                console.warn("Watchlist refresh failed, using local state:", refreshErr);
-            }
-
-            const searchInput = document.getElementById("searchInput");
-            populateLists(allData, searchInput ? searchInput.value : "");
-        } else {
-            throw new Error(res.error || tr("favoriteNotUpdated"));
-        }
-    } catch (err) {
-        console.error("Toggle favorite error:", err);
-        const locallyEnabled = !currentWatchlist.includes(pairNorm);
-        const nextWatchlist = locallyEnabled
-            ? [...currentWatchlist, pairNorm]
-            : currentWatchlist.filter((p) => p !== pairNorm);
-        setCurrentWatchlist(nextWatchlist);
-
+        const confirmed = await persistWatchlist([pairNorm], !currentWatchlist.includes(pairNorm));
+        setCurrentWatchlist(confirmed);
         const searchInput = document.getElementById("searchInput");
         populateLists(allData, searchInput ? searchInput.value : "");
-
+    } catch (err) {
+        console.error("Toggle favorite error:", err);
         if (window.Telegram && tg && typeof tg.showAlert === "function") {
-            tg.showAlert(tr("favoriteSavedLocal"));
-        }
+            tg.showAlert("Не вдалося підтвердити обране на сервері. Онови сторінку й спробуй ще раз.");
+        } else window.alert("Не вдалося підтвердити обране на сервері. Онови сторінку й спробуй ще раз.");
     } finally {
+        watchlistWritePending = false;
         if (button && button.textContent === "…") {
             button.disabled = false;
             button.textContent = previousText || "⭐";
