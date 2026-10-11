@@ -1632,3 +1632,61 @@ arrival-grace behavior, not prevention of every future missing quote.
 Historical tick recovery is a possible read-only follow-up supported by cTrader
 ProtoOAGetTickDataReq, but NOT implemented or used to rewrite existing outcomes.
 No GitHub push, no real trades, VWAP remains off; UI unchanged.
+
+### 2026-10-11 — bounded historical endpoint recovery and complete gap audit
+
+Owner requested autonomous fixes and verification, not more user-run commands.
+Implemented historical_endpoints.py: exact symbol/current authenticated transport,
+BID then ASK historical tick requests through analysis's shared semaphore/pacing;
+5s response timeout,6s queued-call timeout,14s whole request. Single reactor gate,
+transport/account checks, reject hasMore/truncation/invalid timestamps/prices.
+Wire timestamps AND prices are signed cumulative deltas after first absolute
+tick (official Spotware support example; do not decode price deltas as absolutes).
+The endpoint policy remains first full fresh-side quote deadline..deadline+5s.
+History lookback5s supplies fresh prior sides, not a later price or candle.
+
+Protected admin-only POST /api/admin/endpoint-audit uses resident reactor/client;
+no second broker connection, no orders. Confirmed live historical endpoints for
+BCH3532,AAVE3531,LINK3528 match saved broker time,bid,ask,mid exactly.
+Read-only historical audit of ALL27 current unknowns: NONE have an eligible
+endpoint under existing strict policy. Empty sides/price-change gaps appear in
+broker history too. This does NOT establish that DNS/reconnect caused all gaps,
+and does NOT prove history has no usable earlier price for a DIFFERENT policy.
+Critical remaining research: distinguish price-change events from expiry-price
+snapshots. As-of expiry valuation would be a DIFFERENT methodology; do not merge
+or rewrite current-cohort results silently to make unknown disappear. No claim
+that all missing measurements, profitability or every bot issue is fixed.
+
+Worker cycle now runs normal pending resolution then at most2 historical
+recovery attempts, isolated failures, retries transient failure in1minute.
+Successful-but-no-endpoint checks persisted in evidence.history_check; excluded
+from further historical requests, including across restart. No synthetic refund.
+db.recover_signal_endpoint locks unknown current-cohort row and evidence only
+AFTER network IO; validates strict price/time/side replay/provenance; known and
+pending outcomes cannot be overwritten. Original reason/checktime retained on
+successful recovery. db.record_signal_history_check preserves unknown status.
+Supabase and Postgres skills informed short lock scopes and conditional writes;
+no schema/RLS changes. Advisors only existing INFO RLS-enabled/no-policy notices
+on backend-only tables, no security ERROR/WARN returned; do not open them publicly.
+
+212 targeted Python tests passed before final rollout; added worker budget/failure
+isolation test subsequently (15 historical tests pass). Existing measurement and
+watchlist JS tests pass. Actual final source hashes match deployed files.
+Final full targeted rerun213passed. Durable database recheck ALL27unknowns now
+have history_check,0recovered (honest absence under this policy). Readonly audit
+of106timed results:0invalid endpoint time/bid-ask/mid-vs-exit,0invented unknown
+exit prices. These checks do not establish executable profit or validate a
+different expiry valuation policy.
+Read-only probe-only image01M4NZ3BJ4Y37X5S9TE6ZX6VFS was deployed for live comparison;
+image01M4NZGQYRHETWMNVGPBBYD6KT was BUILD-ONLY, never deployed.
+Final image deployment-01M4NZQFA6FB2ST0Y6N709E1BN,
+digest710fb30b1b2e214a98e62f66edca59ba4669d2df0aaddd5dcc095e73cb0b69d5.
+Both updates protected open endpoints by pausing new scans and checking safe
+pending state. Restored original watchlist/commodities=true,forex/crypto=false.
+17:24:38UTC publichealth ok/READY83live0stale/TelegramACTIVE; actual main scanner
+subsequently logs68assets/38crypto and completed cycles. Automatic historical
+worker witnessed checking3514/3515 while scanning continues; no price invented.
+Deployed stats probe HTTP200,current133,win60/loss46/unknown27,ordersfalse.
+Conditional measured$1020 is INCOMPLETE; unknown range$750..$1236; not executable
+bankroll or proven live profit. Current-test beginsOct10Kyiv; history separate.
+No GitHub push, no real trades, VWAP off, compact UI unchanged.

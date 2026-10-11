@@ -13,6 +13,34 @@ def _make_client():
     return app.test_client()
 
 
+class EndpointAuditTest(unittest.TestCase):
+    def setUp(self):
+        self.client = _make_client()
+
+    def test_unauthenticated_probe_is_rejected(self):
+        with patch('api.db.get_signal_endpoint_audit') as read:
+            self.assertEqual(self.client.post('/api/admin/endpoint-audit', data={'id': 1}).status_code, 401)
+            read.assert_not_called()
+
+    def test_admin_probe_reads_only_one_row_and_uses_reactor(self):
+        row = dict(id=1, pair='BTCUSD', deadline=1000, outcome='unknown', evidence={})
+        with patch('api.is_valid_admin_token', return_value=True), \
+             patch('api.db.get_signal_endpoint_audit', return_value=row) as read, \
+             patch('api.blockingCallFromThread', return_value={'endpoint': None}) as bridge:
+            resp = self.client.post('/api/admin/endpoint-audit', data={'id': 1, 'admin_token': 'mock'})
+        self.assertEqual(resp.status_code, 200)
+        read.assert_called_once_with(1)
+        self.assertEqual(bridge.call_args.args[2:], ('BTCUSD', 1000))
+
+    def test_broker_failure_is_bounded_error_not_fake_result(self):
+        row = dict(id=1, pair='BTCUSD', deadline=1000, outcome='unknown', evidence={})
+        with patch('api.is_valid_admin_token', return_value=True), \
+             patch('api.db.get_signal_endpoint_audit', return_value=row), \
+             patch('api.blockingCallFromThread', side_effect=TimeoutError):
+            resp = self.client.post('/api/admin/endpoint-audit', data={'id': 1})
+        self.assertEqual(resp.status_code, 503)
+
+
 class CtraderOauthStartAuthTest(unittest.TestCase):
     """SECURITY FIX (2026-08-15, audit finding): /api/ctrader/oauth/start had
     no auth at all - anyone could start the flow with their OWN cTrader

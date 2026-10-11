@@ -1669,6 +1669,107 @@ def get_pending_signal_outcomes(limit: int = 500) -> list[dict]:
         return []
 
 
+def get_signal_endpoint_audit(outcome_id: int) -> dict | None:
+    """Single bounded read; no broker call or transaction held during network IO."""
+    with get_db() as session:
+        if session is None:
+            return None
+        row = session.query(SignalOutcome).filter_by(id=outcome_id).first()
+        audit = session.query(SignalEvidence).filter_by(signal_id=outcome_id).first()
+        if row is None or audit is None:
+            return None
+        evidence = json.loads(audit.payload)
+        if evidence.get("version") != "live_mid_v1" or not row.horizon_seconds:
+            return None
+        entry = row.entry_ts.replace(tzinfo=timezone.utc) if row.entry_ts.tzinfo is None else row.entry_ts
+        return dict(id=row.id, pair=row.pair, deadline=entry.timestamp() + row.horizon_seconds,
+                    outcome=row.outcome, evidence=evidence)
+
+
+def get_recoverable_signal_ids(limit: int = 500) -> list[int]:
+    with get_db() as session:
+        if session is None:
+            return []
+        rows = session.query(SignalOutcome.id).join(SignalEvidence, SignalEvidence.signal_id == SignalOutcome.id).filter(
+            SignalOutcome.outcome == "unknown", SignalOutcome.entry_ts >= datetime(2026, 10, 9, 21),
+            ~SignalEvidence.payload.contains('"history_check"'),
+            SignalOutcome.horizon_seconds.isnot(None)).order_by(SignalOutcome.id.asc()).limit(min(limit, 500)).all()
+        return [row.id for row in rows]
+
+
+def recover_signal_endpoint(outcome_id: int, history: dict) -> bool:
+    """Only missing current-cohort endpoints; never overwrite a known result."""
+    from historical_endpoints import validate_recovery
+    from signal_tracking import _classify_move
+    try:
+        with session_scope() as session:
+            if session is None:
+                return False
+            row = session.query(SignalOutcome).filter_by(id=outcome_id).with_for_update().first()
+            if row is None or row.outcome != "unknown" or not row.horizon_seconds or row.horizon_seconds <= 0:
+                return False
+            if row.entry_ts < datetime(2026, 10, 9, 21) or not math.isfinite(row.entry_price) or row.entry_price <= 0:
+                return False
+            audit = session.query(SignalEvidence).filter_by(signal_id=outcome_id).with_for_update().first()
+            if audit is None:
+                return False
+            saved = json.loads(audit.payload)
+            if saved.get("version") != "live_mid_v1" or saved.get("endpoint") or saved.get("reason") not in {
+                    "no_valid_quote_in_5s_window", "last_complete_quote_before_deadline", "first_complete_quote_after_window"}:
+                return False
+            entry = row.entry_ts.replace(tzinfo=timezone.utc) if row.entry_ts.tzinfo is None else row.entry_ts
+            deadline = entry.timestamp() + row.horizon_seconds
+            if not validate_recovery(history, deadline):
+                return False
+            saved["recovery"] = dict(history=history, original_reason=saved.pop("reason"),
+                                     original_checked_at=saved.get("checked_at"), recovered_at=_utcnow().isoformat())
+            saved["endpoint"] = history["endpoint"]
+            row.exit_price = history["endpoint"]["mid"]
+            row.outcome = _classify_move(row.entry_price, row.exit_price) + "_timed"
+            row.resolved_at = _utcnow()
+            audit.payload = json.dumps(saved, allow_nan=False)
+            return True
+    except (SQLAlchemyError, ValueError, TypeError):
+        logger.exception("Historical endpoint recovery failed id=%s", outcome_id)
+        return False
+
+
+def record_signal_history_check(outcome_id: int, history: dict) -> bool:
+    """Durable unsuccessful historical check, NOT a made-up settlement."""
+    if history.get('source') != 'cTrader_historical_ticks_v1' or history.get('complete') is not True or history.get('endpoint'):
+        return False
+    counts = history.get('counts')
+    if not isinstance(counts, list) or len(counts) != 2 or not all(type(n) is int and 0 <= n <= 10000 for n in counts):
+        return False
+    try:
+        with session_scope() as session:
+            if session is None:
+                return False
+            row = session.query(SignalOutcome).filter_by(id=outcome_id).with_for_update().first()
+            if row is None or row.outcome != 'unknown' or not row.horizon_seconds or row.entry_ts < datetime(2026, 10, 9, 21):
+                return False
+            entry = row.entry_ts.replace(tzinfo=timezone.utc) if row.entry_ts.tzinfo is None else row.entry_ts
+            deadline = entry.timestamp() + row.horizon_seconds
+            if history.get('from_ms') != math.floor((deadline - 5) * 1000) or history.get('to_ms') != math.floor((deadline + 5) * 1000):
+                return False
+            audit = session.query(SignalEvidence).filter_by(signal_id=outcome_id).with_for_update().first()
+            if audit is None:
+                return False
+            saved = json.loads(audit.payload)
+            if saved.get('version') != 'live_mid_v1' or saved.get('endpoint') or saved.get('history_check'):
+                return False
+            if saved.get('reason') not in {'no_valid_quote_in_5s_window', 'last_complete_quote_before_deadline', 'first_complete_quote_after_window'}:
+                return False
+            saved['history_check'] = dict(source=history['source'], counts=counts, ranges=history.get('ranges'),
+                                         from_ms=history['from_ms'], to_ms=history['to_ms'],
+                                         checked_at=_utcnow().isoformat(), result='no_valid_historical_endpoint')
+            audit.payload = json.dumps(saved, allow_nan=False)
+            return True
+    except SQLAlchemyError:
+        logger.exception('Historical endpoint audit persistence failed id=%s', outcome_id)
+        return False
+
+
 def resolve_signal_outcome(outcome_id: int, *, outcome: str, exit_price: float | None, evidence: dict | None = None) -> bool:
     try:
         with session_scope() as session:

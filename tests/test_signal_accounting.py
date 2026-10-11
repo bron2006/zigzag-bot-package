@@ -220,7 +220,7 @@ class ResolverSchedulingTest(unittest.TestCase):
         dispatcher = Mock(return_value=deferred)
         resolver = Mock()
         namespace = dict(deferToThreadPool=dispatcher, reactor=Mock(), app_state=Mock(),
-                         signal_tracking=SimpleNamespace(resolve_pending_signals=resolver), logger=Mock())
+                         signal_tracking=SimpleNamespace(resolve_signal_cycle=resolver), logger=Mock())
         exec(compile(ast.Module(body=[node], type_ignores=[]), "app.py", "exec"), namespace)
         return namespace["_resolve_outcomes_async"], dispatcher, resolver
 

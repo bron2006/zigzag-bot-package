@@ -77,7 +77,7 @@ def _resolve_outcomes_async():
     # LoopingCall waits for this Deferred: no overlapping resolver cycles,
     # and database timeouts cannot freeze cTrader's reactor callbacks.
     d = deferToThreadPool(reactor, app_state.blocking_pool or reactor.getThreadPool(),
-                         signal_tracking.resolve_pending_signals)
+                         signal_tracking.resolve_signal_cycle)
 
     def failed(failure):
         logger.error("Signal resolver failed; next cycle will retry: %s", failure.getErrorMessage())

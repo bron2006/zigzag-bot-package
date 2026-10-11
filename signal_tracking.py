@@ -202,6 +202,12 @@ def _classify_move(entry_price: float, exit_price: float) -> str:
     return "up" if exit_price > entry_price else "down"
 
 
+def resolve_signal_cycle() -> None:
+    resolve_pending_signals()
+    import historical_endpoints
+    historical_endpoints.recover_missing_endpoints()
+
+
 def resolve_pending_signals() -> None:
     pending = db.get_pending_signal_outcomes()
     if not pending:

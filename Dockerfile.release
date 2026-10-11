@@ -9,5 +9,6 @@ WORKDIR /app
 RUN rm -f /app/storage_state.json /app/.env /app/binomo_executor.py /app/vwap_executor.py
 COPY app.py api.py db.py scanner.py signal_tracking.py state.py endpoint_sampler.py signal_accounting.py measurement_health.py telegram_ui.py ctrader.py spotware_connect.py ./
 COPY webapp/script.js ./webapp/script.js
+COPY historical_endpoints.py ./
 RUN python -m py_compile app.py api.py db.py scanner.py signal_tracking.py state.py endpoint_sampler.py signal_accounting.py measurement_health.py ctrader.py spotware_connect.py
 CMD ["python", "app.py"]

@@ -548,6 +548,25 @@ def register_routes(app):
                 item["label"] = localize_reason(item["label"], lang)
         return jsonify(payload)
 
+    @app.route("/api/admin/endpoint-audit", methods=["POST"])
+    @_protected_route
+    def endpoint_audit():
+        if not _is_admin_request():
+            return jsonify(error="forbidden"), 403
+        try:
+            outcome_id = int(request.form.get("id", "0"))
+            row = db.get_signal_endpoint_audit(outcome_id)
+            if not row:
+                return jsonify(error="not_found"), 404
+            import historical_endpoints
+            result = blockingCallFromThread(reactor, historical_endpoints.fetch_on_reactor,
+                                           row["pair"], row["deadline"])
+            return jsonify(id=row["id"], pair=row["pair"], outcome=row["outcome"],
+                           saved=row["evidence"].get("endpoint"), history=result)
+        except Exception as exc:
+            logger.warning("Endpoint history audit failed: %s", type(exc).__name__)
+            return jsonify(error="history_unavailable"), 503
+
     @app.route("/api/live_price")
     @_protected_route
     def live_price():
