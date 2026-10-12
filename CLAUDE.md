@@ -2026,3 +2026,45 @@ offlinepaperengineimplemented/tested, not liveworker or autonomousbrokerexecutio
 no15minexpiry, riskrounding/minvolume/currencyfailclosed, sequentialfiniteaccount
 andcancelledpendinglock. Finalfull566Python tests pass. No DBwrites/clouddeploy,
 oldstatsrewrite/permissionchanges/GitHubpush; all userfiles preserved.
+
+### 2026-10-12 — owner reports ~$100 left; live audit and structural-stop hypothesis
+
+Read-only residentHTTP verifier confirmed current_test606rows:278win/313loss/
+4refund/8unknown/3pending, scenarioUSD94(-906), range[-16,182], startOct10.
+This STILL oldhypotheticalbinary80%direction report, bankroll_limits_simulatedfalse,
+executablefalse. NOT realUSDloss or CFDstopaccount. Publication457confirmed/
+149legacyunconfirmed. REAL AUTOTRADE/BINOMOflagsfalse confirmed byliveconfigasserts.
+Explicitly toldowner localCFDresearch has NOT moved livebot/web toCFDpaperledger;
+do not imply old94reset or projectfullytransitioned. Health13:21:36UTC
+ok/READY/TelegramACTIVE,83live/2stale. No restart/deploy/flagschanged.
+
+Reviewed scanner->entry/publication->fixedhorizon->asof60->scenario/UI and existing
+autotrader SLTP/riskpath, priorresearch protocols/results, newlocalCFDengine.
+NOT a claim everyline/module/externalincident exhaustivelyverified. Additional
+disabledexecutor risks found byinspection: raw_units=risk_amount/sl_distance has
+NOquote->accountconversion, balancefetch failure returns indefinitelyoldcached
+balance, positioncountthencreation not atomicreservation, entry from modelprice
+not guaranteedactualfill. These need verification/repairs BEFORE anyrealorders.
+They do NOT cause current94 because executoroff. No runtimefixes implemented
+in this review/search turn; do not present these as solved.
+
+NewCONCRETE structural hypothesis implementation session_reclaim.py: previousFULL
+RTHhigh/low failedbreak, closebackinside+directionalcandle, nextopenentry, stop
+signalextreme+.1ATRbuffer, targetpriorrangemidpoint; netreward/risk>=1.5 after
+assumedcost orcancel. Onefirstintent/day, nofuture-outcome retries. Relatedto
+earlierfailedORB/priorrange families, NOT156th new independentstrategy or author
+paperreplication. Closedknownlevels/ATR; USD1000independentresearch ledger NOT
+reset ofold94; plannedrisk.5%, roundedcurrentUSTECterms, 5xillustrativenotional,
+stopfirst/gapconservative, sessionflat. Existing2024-Oct7.2026cache retrospective.
+Frozen RECLAIM_PROTOCOL SHA1a1d4a1cb91b8c31593132808c539dc6cfe4ca83127d3ab018c553d465a21928
+BEFORE outcomes. Current/priorfullsessioncoverage required; skipsaccounted.
+
+Base2pointcost202trades, balance975.49 net-24.51 DD10.85%; yearnet2024-20.44,
+2025-6.87,2026+2.80(47trades). Stress5point164trades balance860.48 net-139.52,
+DD17.01%; yearly-60.87/-40.52/-38.13(32trades2026). Bothfailed.1unknownfirst
+sessionmissingpriorcache,6priorhalfday exclusions,277no_setup; RR/sizefailures
+retained. No cherry-picking2026base+2.80 as strategy. No post-result optimization.
+IndependentDecimal running/finalledger, sequentialnooverlap, plannedriskchecks
+alltrades pass.4newsetup/entrygeometry tests; full570Python tests pass. No cloud
+strategyactivation, realorders, oldresultsrewrite, mainledgerreset or GitHubpush.
+NewpaperCFDliveintegration remainsNOT implemented; do not pretend it is running.
