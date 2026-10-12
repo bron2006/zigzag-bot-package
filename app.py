@@ -30,6 +30,7 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger("app")
+_paper_pool = None
 
 app = Flask(__name__)
 app.config["JSON_AS_ASCII"] = False
@@ -89,7 +90,17 @@ def _resolve_outcomes_async():
     return d
 
 
+def _paper_cycle_async():
+    import paper_stop_runtime
+    try:
+        paper_stop_runtime.refresh_metadata(app_state,reactor)
+    except Exception:
+        logger.exception('Paper metadata request failed; next cycle will retry')
+    return deferToThreadPool(reactor,_paper_pool,paper_stop_runtime.cycle,app_state)
+
+
 def _start_background_services() -> None:
+    global _paper_pool
     try:
         app_state.restore_scanner_state()
     except Exception:
@@ -120,6 +131,9 @@ def _start_background_services() -> None:
     _start_loop(120.0, db.refresh_cached_user_statuses, now=False, name="user_status_cache")
     _start_loop(0.2, api.drain_sse_events, now=False, name="sse_drain")
     _start_loop(20.0, _publish_sse_ping, now=False, name="sse_ping")
+    if os.getenv('PAPER_STOP_JOURNAL_PATH'):
+        _paper_pool=_create_thread_pool('paper-stop-pool',1,1)
+        _start_loop(1.0,_paper_cycle_async,now=True,name='paper_stop_control')
     _start_loop(
         max(30.0, config.SIGNAL_OUTCOME_CHECK_INTERVAL_MINUTES * 60.0),
         _resolve_outcomes_async,
@@ -158,6 +172,7 @@ def _shutdown() -> None:
         app_state.updater = None
 
     for pool_name, pool in (
+        ('paper_stop_pool',_paper_pool),
         ("wsgi_pool", app_state.wsgi_pool),
         ("blocking_pool", app_state.blocking_pool),
     ):

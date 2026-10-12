@@ -350,6 +350,8 @@ def _publish_recorded_signal(pair_norm, result, score):
                 logger.error('SCANNER: publication receipt NOT saved id=%s', result['signal_outcome_id'])
             elif web == 'queued' or telegram == 'accepted':
                 measurement_health.count('published')
+                import paper_stop_runtime
+                paper_stop_runtime.submit(result)
             return result if web == 'queued' or telegram == 'accepted' else None
         def failed(failure):
             measurement_health.count('publication_receipt_write_failed')

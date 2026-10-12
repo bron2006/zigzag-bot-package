@@ -2161,3 +2161,87 @@ oldbalance-22, noauth401, newHTMLcachebuster20261012-paper-stops, newJSrenderer,
 freshEURUSDbid/askquote1, fiveAPI/state/view/UIhashes EXACTmatchlocal.
 Health15:05:59UTC ok/READY/TelegramACTIVE83live0stale(initialsnapshotonly).
 No secondFlask/DB/modelprocess imported in512MBVM. NoGitHubpush/fileattachments.
+
+### 2026-10-12 — owner authorized launch: PAPER stop control now running
+
+Owner "ну так запускай" explicitly authorized PAPER launch, NOT real orders.
+Started separate USD1000 SQLite account, using EXISTING published model signals
+as a CONTROL experiment, NOT a newly validated profitable strategy. ATR stop,
+1.5ATR target, max30min holding PRICE exit (not binary payout), 0.5% cash risk,
+one GLOBAL open position, 2% daily realized-loss entry block, 5x notional cap
+(illustrative, NOT broker margin model). USD-only control universe EURUSD,
+GBPUSD,AUDUSD,NZDUSD,BTCUSD,ETHUSD; deterministic currency-safety scope, NOT
+selection by observed profits. Others preserved in old scanning/report; skips
+in new journal counted with reasons. No VWAP/funding exchange/real executor.
+
+paper_stop_runtime.py dedicated1-thread pool +1s nonoverlapping LoopingCall;
+SQLite never runs on SDK reactor. SDK callback enqueues EVERY received side
+update before old fullquote/1s endpoint dedup; bounded50000ticks,512intents.
+Only confirmed SAVED publication receipts submit intents, unique signal IDs,
+max10s signal age, strict fresh BOTHsides<=5s atentry, spread<=ATR/3. No stale
+model candle as executableprice. BUY ASK / SELL BID entries; longexit BID /
+shortexit ASK freshness only (unchanged old opposite side does not hide stop).
+Ignore delayed side ticks older than ACTUAL paper execution timestamp, not
+just previous bid timestamp. Timeexit requires side timestamp AT/AFTER30min,
+never an earlier quote merely because wallclockpasseddeadline. Entry provenance
+stores signalID/time,broker sides/times, executiontime,ATR,experiment,costpolicy.
+
+Specs read ONLY via ProtoOAAssetListReq + ProtoOASymbolByIdReq through existing
+shared client,10s timeouts, generation guards, refresh5min; USD quoteAssetId
+verified against USD asset entity, fullmin/max/step divided100 intounits.
+No defaults invented for missing broker specs, non-enabled trading modes
+excluded. Real AUTOTRADE_ENABLED and BINOMO_EXECUTOR_ENABLED verifiedFALSE.
+Zero actual order-request code in paper module. Fee policy intentionally
+CONDITIONAL: live spread plus assumed USD7/100000 FX units roundtrip; crypto
+0.10% of entrynotional roundtrip. Not verified actual brokerfees, margin/swap/
+fills. Entryblock20:00-22:30UTC reduces rolloverexposure, not fullswapmodel.
+
+Disconnect/restart with open position, queueoverflow, stalequeuedexit tick or
+>30s observed relevant-side path gap => persistent path_gap suspension. No
+optimistic target credit or fabricated stop closure from incomplete path;
+cash unchanged, equityNULL, entriesblocked while unresolved positionexists.
+Conservative limitation: quiet no-tick intervals can suspend too; actualtick
+history recovery and automatic reconciliation NOT implemented. Do not claim
+paperstopguarantee, robust unattended uptime or profitable strategy. Sampled
+received stream cannot guarantee all broker ticks/fills; gap can exceed5USD.
+
+Persistence: reused EXISTING ams volume vol_vz51j7gojmk6p2zv signals_data1GB,
+mounted /data, newunique /data/paper_stops_v1.sqlite3; no oldvolume/file wiped,
+no new volume purchased. Worker REFUSES unmounted/ephemeral paths. Fly replaced
+old48e1239a7d3708 by8251e6c7073e48 onvolumehost. Config/env mounts explicit in
+fly.toml. Scheduledvolume snapshots existing5days; NOT replicatedredundancy.
+Consistent SQLite backup via connection.backup downloaded and quick_checkOK:
+data/paper_stops_consistent_backup_20261012.sqlite3, startcash1000,0trades/events.
+Earlier rawcopy data/paper_stops_launch_backup_20261012.sqlite3 was a diagnostic
+copy; prefer consistent backup. Both ignored, not committed or sent toowner.
+
+UI starts with actual1000cash/equity, workerstatus, open/closed stop/target/PnL,
+pairtotals; compact collapsedconditions/skipcounts. Refreshpaper-only every5s
+whilemodalopen, nooverlaps, canceledonclose; oldDBreports fetchedoninitial/manual
+load, not everypoll. Olddirectionbalance/report NOT reset; latest beforefinal
+resume -34USD conditionalarithmetic (282W329L4refund8unknown), NOT realCFDloss.
+RuntimeAPI503 on missingjournal, staleheartbeatvisible, nofakezero/nofakeentry.
+
+Verification: ALL608 Python testsPASS with DATABASE_URL=sqlite:///:memory:,
+AUTOTRADE_ENABLED=false,BINOMO_EXECUTOR_ENABLED=false in test-processENV only.
+First incorrectly nonisolated test invocation17failures from liveDSN/flags
+guards, then rerun isolatedPASS; no production-DDL change requested/performed.
+33 journal/runtime/view tests incl delayedpreentrytick/deadlinecausality,
+read-only actualSDK specs/USD guards, restart/gap, risk/cost, trueprice timeexit.
+JS measurement/dashboard/pollcleanup +watchlist testsPASS. BrowserpixelQA NOT
+performed; residentHTTP API/UIservedsource/hash verification actual. Do not
+claim naturalpaper entry/exit observed: atfinalrelease verification0positions,
+0events; restoredscanner working68assets including38cryptofromwatchlist,
+firstnaturalbatch had no confirmed eligiblepublishedsignal. No forcedtrades.
+
+Safe rollout: paused watchlist/commodities, waited ALLoldnativepending0 before
+volumeattach. Firstimage01M4RBZ0JN1PSRJXNDATMMC9T6 started15:37UTC; emptyaccount
+persisted after controlledmachine restart~15:39 and verifiedeligible6/freshquote.
+Final causalitypatch built/deployed01M4RCJ11BW3E1GDVENJ6C8FF9 digest
+23078ab168b347060e76dae7e38cc3c6c03d11cad7c3ad322776cbbc255f44d9, nativepending0,
+noopenpaperpositionsbeforeupdate. API200, runtimeheartbeatfresh/statusrunning,
+eligible6, cash/equity1000,real_ordersfalse; deployedhashes matchlocal.
+RestoredEXACT oldflags watchlist/commoditiestrue,forex/cryptofalse. RealflagsOFF.
+NoGitHubpush or userfilelinks. Supabase skill inspected but not used for DBwork.
+Operational follow-up: Flyproxy errorlogs include URL admin_token on interrupted
+SSE requests; do not print fullproxylogs or paste credentials in summaries.

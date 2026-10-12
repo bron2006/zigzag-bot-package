@@ -1,6 +1,13 @@
 app = "zigzag-bot-package"
 primary_region = "ams"
 
+[env]
+  PAPER_STOP_JOURNAL_PATH = "/data/paper_stops_v1.sqlite3"
+
+[[mounts]]
+  source = "signals_data"
+  destination = "/data"
+
 [http_service]
   internal_port = 8080
   force_https = true

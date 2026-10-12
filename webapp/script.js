@@ -1102,19 +1102,41 @@ function bindWinrateModal() {
     });
 }
 
+let paperRefreshTimer=null;
+let paperRefreshBusy=false;
+let paperArchiveCurrent=null;
+let paperArchiveHistory=null;
+let paperHistoryBefore=null;
+
 function openWinrateModal() {
     if (!winrateModal) return;
     winrateModal.classList.remove("hidden");
     loadWinrateStats();
+    if (paperRefreshTimer) clearInterval(paperRefreshTimer);
+    paperRefreshTimer=setInterval(async()=>{
+        if (paperRefreshBusy || winrateModal.classList.contains('hidden')) return;
+        paperRefreshBusy=true;
+        try {
+            const paper=await apiGet('/api/stats/paper_stops',paperHistoryBefore ? {before:paperHistoryBefore} : {});
+            if (!winrateModal.classList.contains('hidden')) renderTradingDashboard(paper,paperArchiveCurrent,paperArchiveHistory);
+        } catch (_) {
+            if (!winrateModal.classList.contains('hidden')) renderTradingDashboard({ok:false},paperArchiveCurrent,paperArchiveHistory);
+        } finally { paperRefreshBusy=false; }
+    },5000);
 }
 
 function closeWinrateModal() {
     if (!winrateModal) return;
     winrateModal.classList.add("hidden");
+    if (paperRefreshTimer) clearInterval(paperRefreshTimer);
+    paperRefreshTimer=null;
 }
 
 async function loadWinrateStats(before=null) {
     if (!winrateModalBody) return;
+    if (paperRefreshBusy) return;
+    paperRefreshBusy=true;
+    paperHistoryBefore=before;
 
     winrateModalBody.innerHTML = `<div class="winrate-loading">${escapeHtml(tr("winrateLoading"))}</div>`;
 
@@ -1124,11 +1146,13 @@ async function loadWinrateStats(before=null) {
             apiGet("/api/stats/signals", { scope: "current_test", valuation: "asof60" }).catch(() => null),
             apiGet("/api/stats/signals", { days: 30, scope: "history" }).catch(() => null)
         ]);
+        paperArchiveCurrent=current;
+        paperArchiveHistory=history;
         renderTradingDashboard(paper,current,history);
     } catch (err) {
         console.error("Winrate stats load error:", err);
         winrateModalBody.innerHTML = `<div class="winrate-error">${escapeHtml(tr("winrateError"))}</div>`;
-    }
+    } finally { paperRefreshBusy=false; }
 }
 
 function winrateRateClass(winRate) {
@@ -1150,10 +1174,15 @@ function renderTradingDashboard(paper,current,history) {
         content=`<div class="winrate-section"><div class="winrate-section-title">Паперовий рахунок зі стопом</div><div>Баланс</div><div style="font-size:30px;font-weight:700">${money(paper.balance)}</div><div>Поточна вартість ${money(paper.equity)} · відкритий результат ${money(paper.unrealized)}</div><small>${paper.marks_fresh ? 'За останніми котировками' : 'Немає свіжої ціни для відкритої позиції'} · не реальні гроші</small></div>`;
     }
     const positions=(items,empty)=>items?.length ? items.map(p=>`<div class="winrate-row"><span><strong>${escapeHtml(p.pair)} · ${p.side===1?'BUY':'SELL'}</strong><br><small>Вхід ${price(p.entry)} · стоп ${price(p.stop)} · ціль ${price(p.target)}<br>Обсяг ${price(p.units)} · ${p.state==='open'?'поточна ціна':'вихід'} ${price(p.state==='open'?p.current:p.exit)}${p.reason ? ' · '+escapeHtml({stop:'стоп',target:'ціль',session_end:'кінець сесії'}[p.reason] || p.reason) : ''}<br>${stamp(p.entry_ts)}${p.exit_ts ? ' → '+stamp(p.exit_ts) : ''} · додаткові витрати ${money(p.fee_usd)}</small></span><strong>${money(p.pnl)}</strong></div>`).join('') : `<div class="winrate-empty">${empty}</div>`;
+    if (paper?.runtime) {
+        const r=paper.runtime;
+        const status={running:'Тест працює',not_ready:'Працівник не готовий — нових входів немає',suspended_path_gap:'Пауза: втрачена частина котировок відкритої угоди'}[r.status] || 'Стан потребує перевірки';
+        content+=`<div class="winrate-section">${escapeHtml(status)} · ризик 0,5% · одна угода<details><summary>Умови тесту та пропуски</summary><small>Контрольний тест поточних сигналів, не підтверджена прибуткова стратегія. Стоп 1 ATR, ціль 1,5 ATR; вихід також через 30 хвилин за доступною ціною. Пари з перевіреним USD-обсягом: ${escapeHtml((r.eligible_pairs || []).join(', ')) || 'очікуємо дані брокера'}. Витрати: спред + умовний резерв (FX $7 на 100 000 одиниць; крипта 0,10% від обсягу входу). Це не перевірений тариф брокера; маржа, своп і реальне виконання не змодельовані.</small>${(paper.skipped || []).map(s=>`<div>${escapeHtml({non_USD_or_not_in_control_universe:'Поза парами цього тесту',expired_signal_no_late_entry:'Сигнал застарів',broker_specs_unavailable:'Немає параметрів обсягу',one_open_position:'Уже є відкрита угода',path_gap_review_required:'Прогалина котировок',daily_loss_limit:'Денний ліміт втрати 2%',no_fresh_entry_quote:'Немає свіжої ціни',invalid_ATR_or_side:'Немає коректного ATR/напрямку',spread_too_large_for_stop:'Спред завеликий',rollover_entry_block:'Період перенесення позицій',insufficient_capital_or_minimum_size:'Недостатньо для мінімального обсягу'}[s.reason] || s.reason)}: ${Number(s.total)}</div>`).join('')}</details></div>`;
+    }
     content+=`<div class="winrate-section"><div class="winrate-section-title">Відкриті угоди</div>${positions(paper?.open_positions,paper?.ok ? 'Відкритих угод немає.' : 'Дані угод недоступні.')}</div>`;
     content+=`<div class="winrate-section"><div class="winrate-section-title">Закриті угоди</div>${positions(paper?.closed_positions,paper?.ok ? 'Закритих угод ще немає.' : 'Дані угод недоступні.')}</div>`;
     if (paper?.next_before) content+=`<button class="tf-button" onclick="loadWinrateStats(${Number(paper.next_before)})">Старіші угоди</button> `;
-    if (paper?.status==='account_available') content+='<button class="tf-button" onclick="loadWinrateStats()">Найновіші угоди</button>';
+    if (paper?.status==='account_available') content+='<button class="tf-button" onclick="loadWinrateStats()">Оновити рахунок</button>';
     if (paper?.by_pair?.length) content+=`<div class="winrate-section"><div class="winrate-section-title">Пари</div>${paper.by_pair.map(p=>`<div class="winrate-row"><span>${escapeHtml(p.pair)} · відкрито ${p.opened} · закрито ${p.closed}</span><strong>${money(p.pnl)}</strong></div>`).join('')}</div>`;
     if (current?.ok && current.measurement_audit) {
         renderWinrateStats(current,history);

@@ -89,3 +89,26 @@ context.renderTradingDashboard({ok:false},null,null);
 assert(context.winrateModalBody.innerHTML.includes('Це не нульовий баланс'));
 assert(!context.winrateModalBody.innerHTML.includes('Відкритих угод немає'));
 console.log('Paper dashboard: levels, cash/equity, history, no-start and unavailable states passed');
+
+(async()=>{
+    let hidden=true, poll, cleared=false;
+    const calls=[];
+    const pollingContext={winrateModalBody:{innerHTML:''},
+        winrateModal:{classList:{remove:()=>hidden=false,add:()=>hidden=true,contains:()=>hidden}},
+        setInterval:(callback)=>{poll=callback;return 1;},clearInterval:()=>cleared=true,
+        apiGet:async(path)=>{calls.push(path);return {ok:true};},
+        renderTradingDashboard:()=>{},escapeHtml:context.escapeHtml,tr:context.tr,console};
+    vm.createContext(pollingContext);
+    vm.runInContext(source.slice(source.indexOf('let paperRefreshTimer'),source.indexOf('function winrateRateClass')),pollingContext);
+    pollingContext.openWinrateModal();
+    await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(calls.length,3);
+    await poll();
+    assert.equal(calls.length,4);
+    assert.equal(calls.at(-1),'/api/stats/paper_stops','auto-refresh must not repeatedly query the old DB reports');
+    pollingContext.closeWinrateModal();
+    assert(cleared);
+    await poll();
+    assert.equal(calls.length,4,'closed dashboard must not keep polling');
+    console.log('Paper dashboard: bounded live refresh and close cleanup passed');
+})().catch(error=>{console.error(error);process.exitCode=1;});

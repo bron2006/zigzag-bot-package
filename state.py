@@ -274,6 +274,8 @@ class AppState:
             # Never combine a new connection's partial tick with an old side.
             # Retain complete endpoint history for already-open signals.
             self._outcome_quote_sides.clear()
+        import paper_stop_runtime
+        paper_stop_runtime.connection_gap()
 
     def update_live_price(self, symbol: str, payload: Dict[str, Any]) -> None:
         with self._state_lock:
@@ -290,6 +292,10 @@ class AppState:
                     return
                 if side not in sides or ts >= sides[side][1]:
                     sides[side] = (value, ts)
+            if all(side in sides for side in ('bid','ask')):
+                import paper_stop_runtime
+                paper_stop_runtime.receive(symbol,dict(bid=sides['bid'][0],ask=sides['ask'][0],
+                    bid_ts=sides['bid'][1],ask_ts=sides['ask'][1],ts=max(sides['bid'][1],sides['ask'][1])))
             if not all(side in sides and 0 <= ts - sides[side][1] <= 5 for side in ("bid", "ask")):
                 return
             bid, ask = sides["bid"][0], sides["ask"][0]
