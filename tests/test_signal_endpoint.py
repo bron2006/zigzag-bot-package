@@ -31,6 +31,21 @@ class QuoteHistoryTest(unittest.TestCase):
         with patch('state.time.time', return_value=max(ts, 2000)):
             self.state.update_live_price('TEST', dict(ts=ts, quote_ts=ts, bid=bid, ask=ask))
 
+    def test_paper_quote_preserves_each_side_timestamp(self):
+        self.quote(1000,100,None)
+        self.quote(1001,None,102)
+        quote=self.state.get_paper_quote('TEST',1002)
+        self.assertEqual((quote['bid_ts'],quote['ask_ts'],quote['ts']),(1000,1001,1001))
+        self.assertTrue(quote['sampled'])
+        self.assertIsNone(self.state.get_paper_quote('TEST',1006))
+        self.assertIsNone(self.state.get_paper_quote('TEST',999))
+
+    def test_paper_quote_cannot_mix_connection_generations(self):
+        self.quote(1000)
+        self.state.clear_live_prices()
+        self.quote(1001,101,None)
+        self.assertIsNone(self.state.get_paper_quote('TEST',1002))
+
     def test_first_full_quote_after_deadline_not_before_or_latest(self):
         self.quote(999)
         self.quote(1001, 104, 106)

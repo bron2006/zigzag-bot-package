@@ -588,6 +588,18 @@ def register_routes(app):
         if not pairs:
             return jsonify({"success": False, "error": t("pair_required", _request_lang())}), 400
 
+        format_ = request.args.get('format','mid')
+        if format_ not in {'mid','paper'} or (format_=='paper' and len(pairs)>16):
+            return jsonify(success=False,error='Invalid quote format or too many paper pairs'),400
+        if format_=='paper':
+            now=time.time()
+            quotes={}
+            for pair in pairs:
+                quote=app_state.get_paper_quote(pair,now)
+                if quote is not None:
+                    quotes[pair]=quote
+            return jsonify(success=True,quotes=quotes,sampled=True)
+
         snapshot = app_state.get_live_prices_snapshot()
         prices = {}
         for pair in pairs:

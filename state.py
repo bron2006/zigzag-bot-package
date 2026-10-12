@@ -331,6 +331,21 @@ class AppState:
                 return {"ts": ts, "mid": mid, "bid": bid, "ask": ask}
         return None
 
+    def get_paper_quote(self, symbol: str, now: float):
+        """Fresh independent broker sides for paper execution, not midpoint fills."""
+        if not isinstance(now,(int,float)) or not math.isfinite(now):
+            return None
+        with self._state_lock:
+            sides=self._outcome_quote_sides.get(symbol,{})
+            if not all(k in sides for k in ('bid','ask')):
+                return None
+            bid,bt=sides['bid']
+            ask,at=sides['ask']
+            if not 0<bid<=ask or not all(0<=now-t<=5 for t in (bt,at)):
+                return None
+            return dict(bid=bid,ask=ask,bid_ts=bt,ask_ts=at,ts=max(bt,at),
+                        source='cTrader',sampled=True)
+
     def signal_measurement_gap_reason(self, symbol: str, deadline: float):
         """Report what evidence is missing; do not guess DNS/restart root causes."""
         with self._state_lock:

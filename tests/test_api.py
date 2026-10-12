@@ -17,6 +17,26 @@ class EndpointAuditTest(unittest.TestCase):
     def setUp(self):
         self.client = _make_client()
 
+    def test_paper_quotes_are_protected_bounded_and_keep_legacy_mid_format(self):
+        self.assertEqual(self.client.get('/api/live_price?pairs=EURUSD&format=paper').status_code,401)
+        quote=dict(bid=100,ask=101,bid_ts=1000,ask_ts=1001,ts=1001,source='cTrader',sampled=True)
+        with patch('api.is_valid_admin_token',return_value=True), \
+             patch.object(app_state,'get_paper_quote',return_value=quote), \
+             patch.object(app_state,'get_live_prices_snapshot',return_value={'EURUSD':dict(mid=100.5,ts=1001)}):
+            paper=self.client.get('/api/live_price?pairs=EURUSD&format=paper')
+            self.assertEqual(paper.json['quotes']['EURUSD'],quote)
+            legacy=self.client.get('/api/live_price?pairs=EURUSD')
+            self.assertEqual(legacy.json['prices']['EURUSD'],dict(mid=100.5,ts=1001))
+            self.assertNotIn('quotes',legacy.json)
+            self.assertEqual(self.client.get('/api/live_price?pairs=EURUSD&format=bad').status_code,400)
+            self.assertEqual(self.client.get('/api/live_price',query_string=dict(pairs=','.join(['EURUSD']*17),format='paper')).status_code,400)
+
+    def test_missing_paper_quote_is_not_midpoint_fallback(self):
+        with patch('api.is_valid_admin_token',return_value=True), \
+             patch.object(app_state,'get_paper_quote',return_value=None):
+            response=self.client.get('/api/live_price?pairs=EURUSD&format=paper')
+            self.assertEqual(response.json['quotes'],{})
+
     def test_primary_valuation_is_explicit_and_invalid_policy_is_rejected(self):
         with patch('api.is_valid_admin_token',return_value=True), \
              patch('api.db.is_admin_user',return_value=True), \

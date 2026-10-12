@@ -2067,4 +2067,45 @@ retained. No cherry-picking2026base+2.80 as strategy. No post-result optimizatio
 IndependentDecimal running/finalledger, sequentialnooverlap, plannedriskchecks
 alltrades pass.4newsetup/entrygeometry tests; full570Python tests pass. No cloud
 strategyactivation, realorders, oldresultsrewrite, mainledgerreset or GitHubpush.
+
+### 2026-10-12 — next concrete step: persistent PAPER stop journal + quote contract
+
+Owner asked "оце все? і що далі?". Continued actualimplementation instead of
+anotherindicatorbatch. Added LOCAL paper_stop_journal.py, no brokerSDK/ordercode,
+SQLiteWAL5sbusytimeout. AtomicBEGINIMMEDIATEopen/close/reservation, uniqueintent
+idempotence, oneglobalopenposition, initialUSD1000researchcontract immutable on
+restart (differentinitial/version rejected, never resetsold94). No workspace
+paperaccount actually started; tests create disposabletempjournals ONLY.
+
+PaperBUYentryASK/exitBID, SELLentryBID/exitASK, brokerindependentsidetimestamps
+fresh<=5s required, crossed/future/missingquotes rejected. No15minexpiry.
+ObservedSLgap exits at observedadverseprice (canexceed.5%budget); TP conservative
+at target, no favorablebonus. Closedcashcentrounded via paper_cfd; fee_per_unit
+explicit callerinput, no guessedfees. USDquote/accountONLY, currentmin/step/max
+callerprovided, .5%risk/5xillustrativeNOTmarginverifiednotionalcap. No executor
+enable, transactions/metadata conversion certification implied.
+
+Persistedentry/lastquotes, entry/SL/TP/units/fees/exit/reason/PNL; restartpreserves
+openposition+cash, duplicateclose cannotcredittwice, equaltschangedprice accepted,
+oldertimestampsignored. Balance/positionstatus read in ONEsnapshot. Equitymark
+includesbid/askspread+fee ONLYwhenfresh, stale/unprovidednow=>equityunknown, not
+fakedlivebalance. OneSQLiteconnection perworker; not arbitrarythreadsharing.
+Sampledquotes NOT guaranteedbrokerfills: unseenintrabarstop touches, costs/margin/
+funding/sessionend handling remain integration responsibilities, noprofitclaim.
+
+Identifiedexisting /api/live_price onlymid/receiptTS insufficient forSLpaper.
+AddedLOCAL optional format=paper (max16pairs, existingprotectedroute): fresh
+bid/ask, originalbid_ts/ask_ts/maxbrokerTS, sourcecTrader/sampledtrue. New
+state.get_paper_quote readsindependentsides; clears onconnectionreset preventmix.
+Empty/stalequotes NOmidfallback. DefaultlegacyAPIpayloadunchanged. No DBaccess
+or network call added to this quotehandler. API/statechanges NOT deployedyet.
+
+First584fullPython testsPASS including10journaltests+4API/statecases; additional
+atomicread-snapshot journaltestPASS after thatfullrun. Core checks quote freshness,
+USDfailclosed, ASK/BIDshort/long, noexpiry, adversegap, restart, duplicatecash,
+parallelopenatomicreservation, cash/equitystaleness andlegacyAPI/auth compatibility.
+NOT live integration/endtoend validated: no HTTPworker, newpaperstrategy chosen,
+clouddeployment, signals-to-paper wiring, UInewaccount or prospective runexists.
+These are implemented/testedLOCAL foundations, not claim bot is already running
+with stops. Mainoldreport unchanged; usergets results without filelinks.
 NewpaperCFDliveintegration remainsNOT implemented; do not pretend it is running.
