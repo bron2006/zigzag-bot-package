@@ -41,3 +41,6 @@ research*/**/*.csv
 research*/**/*.json
 research*/**/*.gz
 .hypothesis/
+
+# Local paper account backups and SQLite sidecars, never source artifacts.
+data/paper_stops_*backup_*.sqlite3*
