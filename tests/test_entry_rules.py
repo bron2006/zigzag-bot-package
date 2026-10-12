@@ -61,3 +61,9 @@ class EntryRuleTest(unittest.TestCase):
     def test_bad_parameters(self):
         for atr in (0,-1,float('nan')):
             with self.assertRaises(ValueError): choose_entry(bars([100]),0,1,atr,'immediate')
+
+    def test_cancellation_time_is_preserved_for_sequential_account(self):
+        timeout=choose_entry(bars([100,99.9,99.9,99.9]),0,1,1,'pullback_confirm')
+        self.assertEqual(timeout['decision_ts'],1200)
+        invalid=choose_entry(bars([100,99.2]),0,1,1,'pullback_confirm')
+        self.assertEqual(invalid['decision_ts'],600)

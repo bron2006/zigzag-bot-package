@@ -32,8 +32,8 @@ def choose_entry(bars, signal_index, direction, atr, policy):
         if policy == 'pullback_confirm':
             move = direction*(price-anchor)/atr
             if move <= -.75 or move >= .5:
-                return dict(status='skipped', reason='gap_outside_entry_zone')
-        return dict(status='entered', index=index, price=price, ts=int(bars[index]['ts']))
+                return dict(status='skipped', reason='gap_outside_entry_zone',decision_ts=int(bars[index]['ts']))
+        return dict(status='entered', index=index, price=price, ts=int(bars[index]['ts']),decision_ts=int(bars[index]['ts']))
 
     if policy == 'immediate':
         return next_open(signal_index+1)
@@ -58,15 +58,15 @@ def choose_entry(bars, signal_index, direction, atr, policy):
             raise ValueError('invalid_bar')
         move = direction*(close-anchor)/atr
         if move <= -.75:
-            return dict(status='skipped', reason='idea_invalidated')
+            return dict(status='skipped', reason='idea_invalidated',decision_ts=int(bar['ts'])+PERIOD)
         if move >= .5:
-            return dict(status='skipped', reason='price_ran_away')
+            return dict(status='skipped', reason='price_ran_away',decision_ts=int(bar['ts'])+PERIOD)
         if touched and direction*(close-open_) > 0 and direction*(close-previous) > 0 and move <= 0:
             return next_open(index+1)
         if move <= -.25:
             touched = True
         previous = close
-    return dict(status='skipped', reason='confirmation_timeout')
+    return dict(status='skipped', reason='confirmation_timeout',decision_ts=int(bars[signal_index+3]['ts'])+PERIOD)
 
 
 def settle(bars, entry, direction):

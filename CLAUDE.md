@@ -1982,3 +1982,47 @@ currency ledger/counts and yearlysessioncoverage/costidentity checks pass.
 Multi-day implementation schedule replaced by immediate cheap screening; future
 prospective verification STILL requires actual new observations and is NOT yet
 running. Main virtualbalance/primarysignals unchanged. Do not send user files.
+
+### 2026-10-12 — owner clarified intended product: normal CFD WITH STOP
+
+IMPORTANT owner answer "зі стопом": desired bot is normal cTrader-style position
+with protective stop, NOT fixed-time binarydirection bets. Earlier hypothetical
+80%win/-100%loss reports are direction diagnostics ONLY, not intended CFDaccount.
+Keep historical evidence intact; do NOT relabel old balances as CFDprofit. Real
+order authorization NOT granted by this clarification; all real flags unchanged.
+
+Implemented pure paper_cfd.py sizing/path/money functions with NO broker/DB/config
+imports: initialUSD1000, plannedrisk.5%, stop1ATR14/target1.5ATR14 consistent with
+existing autotraderdefaults, ONEOPENposition, endsessionflat not15minuteexpiry.
+SizingreservesconditionalALLINcost, roundsunitsDOWN to currentspec min/step,
+checks maxvolume+5xillustrativenotionalcap. USDquoted/accountUSD ONLY; otherquote
+currency requires verifiedconversion and currently FAILSCLOSED, no inventedUSD.
+Riskisplannednotguaranteed: adversegaps can exceedstop/risk. Stopfirst ifbothhit,
+adversestopgapatopen, nofavorableTPgapbonus; OHLCnotproofASKfills/slippage/margin.
+
+USTECcache currentspec minVolume10/step10/max25000 APIhundredths =>.1/.1/250units.
+Assume1unit=$1/indexpoint underUSDquote/account; currenttermsNOT historicalterms.
+Riskbudget .5%currentbalance includes2/5pointconditionalRTcost. No year resets,
+deposits, martingale or compounding independentofbalance.12arms=3transparentrules
+x2entriesx2costs, same2024..Oct7.2026already-studied history, notunseenholdout.
+FIRST provisional replay revealed pending-intent time lock missing: cancellation
+could allow earlier overlappingwaitingintent. Added decision_ts toentry_rules
+and first-intentpriority lock through cancellation/entry; correctedall12replay.
+This was causalimplementation repair AFTERfirstoutput, NOT postresultparameter
+tuning; CFD_PROTOCOL explicitlyamended accordingly. Finalprotocolhash
+627bcfa3d280d48ff00f24dc44429bfeeb99f70d09ad78d9c5ed59f58e234565.
+
+Correctedconditionalclosingbalances base/stress respectively:breakoutimmediate
+581.21/447.16,pullback875.39/820.10;trendimmediate646.05/495.24,pullback848.93/
+848.23;bandimmediate749.58/573.28,pullback988.62/927.93. All12netnegative;
+cannotpromote "best" loss variant as strategy. No absoluteCFDprofitabilityclaim.
+RealizedbalanceDD ONLY, not tickequityDD/liquidation. Belowminskips genuineaccount
+constraints. Centroundedtradejournals preserveentry/stop/target/units/exit/reason
+andbalance. IndependentDecimalchecks alljournals: sums, nooverlap, plannedrisk
+budget(beforegaps), finalbalances. No cloud/UI/persistentliveCFDaccount installed;
+offlinepaperengineimplemented/tested, not liveworker or autonomousbrokerexecution.
+
+10newCFDtests +1entrycancellationtime regression:stopfirst, adversegap, TPgap,
+no15minexpiry, riskrounding/minvolume/currencyfailclosed, sequentialfiniteaccount
+andcancelledpendinglock. Finalfull566Python tests pass. No DBwrites/clouddeploy,
+oldstatsrewrite/permissionchanges/GitHubpush; all userfiles preserved.
