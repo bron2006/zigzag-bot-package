@@ -652,7 +652,15 @@ def register_routes(app):
             return jsonify(ok=False,error='Invalid history cursor'),400
         try:
             from paper_stop_view import snapshot
-            return jsonify(snapshot(os.getenv('PAPER_STOP_JOURNAL_PATH'),time.time(),before=before))
+            payload=snapshot(os.getenv('PAPER_STOP_JOURNAL_PATH'),time.time(),before=before)
+            if os.getenv('FORWARD_STRUCTURE_RESEARCH_PATH'):
+                try:
+                    import forward_structure_research
+                    payload['forward_research']=forward_structure_research.snapshot(os.environ['FORWARD_STRUCTURE_RESEARCH_PATH'],time.time())
+                except Exception:
+                    logger.exception('Forward research view unavailable')
+                    payload['forward_research']=dict(enabled=True,status='unavailable')
+            return jsonify(payload)
         except Exception:
             logger.exception('Paper stop account view unavailable')
             return jsonify(ok=False,status='unavailable',error='paper_account_unavailable'),503

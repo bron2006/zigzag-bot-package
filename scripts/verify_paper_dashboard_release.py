@@ -31,7 +31,7 @@ current=get('/api/stats/signals',dict(auth,scope='current_test',valuation='asof6
 assert current['ok'] and current['measurement_audit']['valuation']=='asof60'
 html=get('/',{}).text
 js=get('/script.js',{}).text
-assert 'script.js?v=20261012-legacy-off' in html
+assert 'script.js?v=20261012-forward-research' in html
 assert 'renderTradingDashboard' in js and 'Попередній тест напрямку' in js
 assert requests.get(base+'/api/stats/paper_stops',timeout=(5,20)).status_code==401
 quotes=get('/api/live_price',dict(auth,pairs='EURUSD',format='paper')).json()

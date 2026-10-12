@@ -2329,3 +2329,64 @@ cloud writes, realorders, paperbalance reset or GitHubpush. Usergets plainresult
 no files/tables/changed-file lists. Papercloud stillpaused_no_strategy, not running
 these new offline candidates. Need further DIFFERENT research before honest
 newstrategylaunch; do not promise continued backgroundwork when none scheduled.
+
+### 2026-10-12 — continuous forward data study ACTUALLY deployed and verified
+
+Owner asks why nothing continuously tests. Implemented independent AUTOMATIC
+data-observation process, NOT real/demo orders or resumed oldmodel. New artifact
+forward_structure_research.py runs resident SDK READONLY M5 requests for fixed
+EURUSD,GBPUSD,BTCUSD,ETHUSD every60s via nonoverlapping Deferred LoopingCall and
+dedicated1threadpool. No secondapp/DB/modelprobe in512MBVM. Four bounded10s SDK
+requests sequential throughshared authorizedclient; generation guard, per-source
+errorstate and retries nextcycle. Cloud env FORWARD_STRUCTURE_RESEARCH_PATH=
+/data/forward_structure_v1.sqlite3 onexistingvolume, refuses ephemeralpath.
+
+IMPORTANT this is prospective frozen OHLC OBSERVATION STUDY, NOT actual pre-entry
+execution, fundedpaperaccount or profitable strategy. OldFX3rule historical gates
+allfailed: FX are NEGATIVE CONTROLS, not promoted failedstrategies. BTC/ETH new
+unvalidated extension. Full frozen rules/limitations in FORWARD_PROTOCOL.md.
+generate gains optionalstart/endhour; FXDEFAULT unchanged09..15UTC/flat16UTC,
+crypto01..23UTC/flatnext00UTC. 3rules eachpair independentlyonefirstintent/day,
+not pooled offlinefirstpair account. No changes to old999.37balance orposition.
+
+Activationtime persisted once, preregistered fixeddefinitions; receivedhistorical
+closedbars WARMUPONLY, setupbeforeactivation excluded, no backfilledforwardwins.
+InitialSDK response actually2000barsperpair despite6day fromTimestamp, stored
+rawall but generate useslast6daywindow, bounded computationalwork. All closed
+bars30scompletiongrace, onlycomplete12M5H1candles. FutureOHLCpath requiresreceived
+closedbars; no premature sessionend fromlastcurrentlyavailablebar. Missingpath/
+entry/end=>UNKNOWN, neverfake0profit; terminal results not rewritten. Sealedbar
+revision rejectswholepacket andvisibleerror; repeatedpoll/restart idempotent,
+oldpendingolderthancollectorwindow markedunknown. Missing-entry/end1hgrace.
+
+CostsconditionalFX2/4pipsRT, crypto.10%/.20%notionalRT; stop-firstambiguous,
+adversegapatopen,targetcreditedatlimit. netR and5USD*riskunit illustration ONLY,
+not units/lots/margin/slippage/actualbrokerfees orbalance. Mode explicitly
+prospective_OHLC_observations_not_trade_execution, real_ordersfalse,
+changes_account_balancefalse, historical_FX_gate_passedfalse,
+crypto_extension_validatedfalse. Processing laterretrievedbars may modelanentry
+earlierthanwhenresearchworkerreadit: NOT proofsignalwasloggedbeforeopeningtick.
+
+ExistingadminpaperstatsAPI includesoptional forward_research; sourcefailure
+visible without hiding savedcash. Read-onlySQLite snapshot, all-timecounts,
+latest60scenario rows (notfullhistorybrowserpagination), fullSQLitehistorykept.
+UI balancefirst (savedinactiveaccount), new "Живий дослідницький тест" cardbelow,
+4source lastclosedcandletimes, three rulecounts, details forconditionalresults.
+No noisyTelegramBUY/SELL oldpipeline; generalTelegram bot remainsactive.
+Paperentries andLEGACY_SIGNAL_TEST_ENABLED stayFALSE, allscannersFALSE and
+UI reenable409. No realorders/VWAP/funding/newcash reset/GitHubpush/filelinks.
+
+ALL630isolatedPython testsPASS +UIrenderer/pollcleanup/watchlisttests; covers
+warmupnotforward, partialpathpending, missingunknown, revisionfailclosed,
+repetition/restartactivation, fourSDKREADrequests, APIfailurepreservescash.
+LivePIXELbrowserQA notperformed; liveHTTP+servedsource+exactruntimehashestested.
+Finaldeployedimage01M4RHER5YCSE6PZP2S7YSYQ8Z digest
+97af5c48c4c99a7e25241490d04e9867becd068e72f72828083ae8c452b3aa29.
+Activate2026-10-12T17:10:54UTC=20:10:54Kyiv. First actual4pairdata checks
+17:11:54..57UTC, second17:12:54..57UTC; BOTHcyclesnoerrors, lastclosedbar17:10UTC,
+statuscollecting,candles_freshtrue, sources4,initialwarmup8000rows, counts/recent0.
+Do NOT say8000forwardtrades/signals. No new postactivationruletrigger observed
+yet, no forcedtesttrades. Savedcash999.37/oneclosedGBPUSD/zeroopen unchanged.
+Health17:14:52UTC ok/READY/TelegramACTIVE83live0stale,SSE1each. Workercontinues
+independently afterassistantturn; do not say no process exists anymore. Need
+future actualmarket observations before outcomes, no claim validatednewedge.

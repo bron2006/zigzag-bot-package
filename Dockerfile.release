@@ -12,6 +12,7 @@ COPY webapp/script.js ./webapp/script.js
 COPY webapp/index.html ./webapp/index.html
 COPY paper_stop_view.py paper_stop_journal.py paper_cfd.py paper_stop_runtime.py ./
 COPY strategy_mode.py ./
+COPY forward_structure_research.py price_structure_candidates.py ./
 COPY historical_endpoints.py ./
 COPY notifier.py ./
 COPY publication_tracking.py ./

@@ -4,7 +4,7 @@ import math
 RULES=('channel24','failed24','compression')
 
 
-def generate(hours,rule):
+def generate(hours,rule,*,start_hour=9,end_hour=15):
     if rule not in RULES: raise ValueError('unknown_rule')
     history=[];trs=[];previous=None;compression=None;used=set();out=[]
     for b in hours:
@@ -22,7 +22,7 @@ def generate(hours,rule):
         if hour==7 and atr and h-l<=.75*atr:
             compression=dict(day=day,high=h,low=l)
         decision=ts+3600
-        if len(history)==24 and atr and atr>0 and 9<=hour+1<=15 and day not in used:
+        if len(history)==24 and atr and atr>0 and start_hour<=hour+1<=end_hour and day not in used:
             high=max(x['High'] for x in history);low=min(x['Low'] for x in history)
             side=0;stop=None;target=None
             if rule=='channel24':side=1 if c>high else -1 if c<low else 0

@@ -32,6 +32,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("app")
 _paper_pool = None
+_research_pool = None
 
 app = Flask(__name__)
 app.config["JSON_AS_ASCII"] = False
@@ -100,8 +101,18 @@ def _paper_cycle_async():
     return deferToThreadPool(reactor,_paper_pool,paper_stop_runtime.cycle,app_state)
 
 
+def _research_cycle_async():
+    import forward_structure_research
+    try:
+        return forward_structure_research.collect(app_state,reactor,_research_pool)
+    except Exception:
+        logger.exception('Forward research cycle failed; next cycle will retry')
+        return None
+
+
 def _start_background_services() -> None:
     global _paper_pool
+    global _research_pool
     try:
         app_state.restore_scanner_state()
     except Exception:
@@ -136,6 +147,9 @@ def _start_background_services() -> None:
     if os.getenv('PAPER_STOP_JOURNAL_PATH'):
         _paper_pool=_create_thread_pool('paper-stop-pool',1,1)
         _start_loop(1.0,_paper_cycle_async,now=True,name='paper_stop_control')
+    if os.getenv('FORWARD_STRUCTURE_RESEARCH_PATH'):
+        _research_pool=_create_thread_pool('forward-research-pool',1,1)
+        _start_loop(60.0,_research_cycle_async,now=True,name='forward_structure_research')
     if legacy_enabled():
         _start_loop(max(30.0, config.SIGNAL_OUTCOME_CHECK_INTERVAL_MINUTES * 60.0),
                     _resolve_outcomes_async,now=True,name="signal_outcome_resolver")
@@ -164,6 +178,7 @@ def _shutdown() -> None:
 
     for pool_name, pool in (
         ('paper_stop_pool',_paper_pool),
+        ('forward_research_pool',_research_pool),
         ("wsgi_pool", app_state.wsgi_pool),
         ("blocking_pool", app_state.blocking_pool),
     ):

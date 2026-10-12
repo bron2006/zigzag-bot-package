@@ -5,6 +5,7 @@ primary_region = "ams"
   PAPER_STOP_JOURNAL_PATH = "/data/paper_stops_v1.sqlite3"
   LEGACY_SIGNAL_TEST_ENABLED = "false"
   PAPER_STOP_ACCEPT_ENTRIES = "false"
+  FORWARD_STRUCTURE_RESEARCH_PATH = "/data/forward_structure_v1.sqlite3"
 
 [[mounts]]
   source = "signals_data"

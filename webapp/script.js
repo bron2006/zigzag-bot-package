@@ -1166,13 +1166,26 @@ function renderTradingDashboard(paper,current,history) {
     const price=value=>typeof value==='number' && Number.isFinite(value) ? String(value) : '—';
     const stamp=value=>typeof value==='number' && Number.isFinite(value) ? new Date(value*1000).toLocaleString('uk-UA') : '—';
     let content='';
-    if (!paper?.ok) {
-        content='<div class="winrate-section">Рахунок зі стопом: дані тимчасово недоступні. Це не нульовий баланс.</div>';
-    } else if (paper.status==='not_started') {
-        content=`<div class="winrate-section"><div class="winrate-section-title">Паперовий рахунок зі стопом</div><div style="font-size:30px;font-weight:700">—</div><div>Ще не запущено · запланований старт ${money(paper.planned_initial)}</div><small>Угод зі стопом ще немає. Реальні ордери вимкнені.</small></div>`;
-    } else {
-        content=`<div class="winrate-section"><div class="winrate-section-title">Паперовий рахунок зі стопом</div><div>Баланс</div><div style="font-size:30px;font-weight:700">${money(paper.balance)}</div><div>Поточна вартість ${money(paper.equity)} · відкритий результат ${money(paper.unrealized)}</div><small>${paper.marks_fresh ? 'За останніми котировками' : 'Немає свіжої ціни для відкритої позиції'} · не реальні гроші</small></div>`;
+    const forward=paper?.forward_research;
+    if (forward?.enabled) {
+        const labels={channel24:'Пробій діапазону',failed24:'Хибний пробій',compression:'Вузький діапазон'};
+        const status={collecting:'Автоматичний збір працює',waiting_data:'Очікуємо дані брокера',starting:'Тест запускається',unavailable:'Дані тесту тимчасово недоступні'}[forward.status] || 'Перевіряємо стан';
+        content+=`<div class="winrate-section"><div class="winrate-section-title">Живий дослідницький тест</div><div>${escapeHtml(status)} · перевірка щохвилини</div><small>Окремі спостереження трьох правил — не торгівля і не підтверджена прибуткова стратегія. Збережений баланс не змінюють.</small>${(forward.sources || []).map(s=>`<div>${escapeHtml(s.pair)} · остання закрита свічка ${stamp(s.last_bar===null ? null : s.last_bar+300)}${s.error ? ' · помилка даних' : ''}</div>`).join('')}${(forward.rules || []).map(rule=>{
+            const counts=(forward.counts || []).filter(c=>c.rule===rule && c.scenario==='stress');
+            const count=status=>counts.filter(c=>c.status===status).reduce((a,c)=>a+Number(c.total),0);
+            return `<div>${escapeHtml(labels[rule] || rule)} · очікують ${count('pending')} · завершено ${count('closed')} · без даних ${count('unknown')} · пропущено ${count('skipped')}</div>`;
+        }).join('')}<details><summary>Результати спостережень</summary><small>Свічки cTrader, не реальні виконання. EURUSD/GBPUSD — контрольні правила, які не пройшли історичний відбір; BTCUSD/ETHUSD — нове неперевірене дослідження. Валюти: входи 09–15 UTC, крипта 01–23 UTC; вихід також наприкінці дня. Витрати умовні: FX 2/4 піпси, крипта 0,10%/0,20% обсягу. Суми нижче — ілюстрація при ризику $5, не баланс рахунку.</small>${(forward.recent || []).filter(r=>r.scenario==='stress').map(r=>`<div>${escapeHtml(r.pair)} · ${escapeHtml(labels[r.intent.rule] || r.intent.rule)} · ${stamp(r.intent.ts)} · ${escapeHtml({closed:'завершено',pending:'очікуємо результат',unknown:'даних недостатньо',skipped:'вхід пропущено'}[r.status] || r.status)}${r.status==='closed' ? ' · умовний результат '+money(r.hypothetical_risk5_usd) : ''}</div>`).join('') || '<div>Нових спрацьовувань після запуску ще немає.</div>'}</details></div>`;
     }
+    const researchContent=content;
+    content='';
+    if (!paper?.ok) {
+        content+='<div class="winrate-section">Рахунок зі стопом: дані тимчасово недоступні. Це не нульовий баланс.</div>';
+    } else if (paper.status==='not_started') {
+        content+=`<div class="winrate-section"><div class="winrate-section-title">Паперовий рахунок зі стопом</div><div style="font-size:30px;font-weight:700">—</div><div>Ще не запущено · запланований старт ${money(paper.planned_initial)}</div><small>Угод зі стопом ще немає. Реальні ордери вимкнені.</small></div>`;
+    } else {
+        content+=`<div class="winrate-section"><div class="winrate-section-title">${paper.runtime?.status==='paused_no_strategy' ? 'Збережений рахунок — нові входи вимкнені' : 'Паперовий рахунок зі стопом'}</div><div>Баланс</div><div style="font-size:30px;font-weight:700">${money(paper.balance)}</div><div>Поточна вартість ${money(paper.equity)} · відкритий результат ${money(paper.unrealized)}</div><small>${paper.marks_fresh ? 'За останніми котировками' : 'Немає свіжої ціни для відкритої позиції'} · не реальні гроші</small></div>`;
+    }
+    content+=researchContent;
     const positions=(items,empty)=>items?.length ? items.map(p=>`<div class="winrate-row"><span><strong>${escapeHtml(p.pair)} · ${p.side===1?'BUY':'SELL'}</strong><br><small>Вхід ${price(p.entry)} · стоп ${price(p.stop)} · ціль ${price(p.target)}<br>Обсяг ${price(p.units)} · ${p.state==='open'?'поточна ціна':'вихід'} ${price(p.state==='open'?p.current:p.exit)}${p.reason ? ' · '+escapeHtml({stop:'стоп',target:'ціль',session_end:'кінець сесії'}[p.reason] || p.reason) : ''}<br>${stamp(p.entry_ts)}${p.exit_ts ? ' → '+stamp(p.exit_ts) : ''} · додаткові витрати ${money(p.fee_usd)}</small></span><strong>${money(p.pnl)}</strong></div>`).join('') : `<div class="winrate-empty">${empty}</div>`;
     if (paper?.runtime) {
         const r=paper.runtime;

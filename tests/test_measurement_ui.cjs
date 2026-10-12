@@ -90,6 +90,20 @@ assert(context.winrateModalBody.innerHTML.includes('Це не нульовий �
 assert(!context.winrateModalBody.innerHTML.includes('Відкритих угод немає'));
 console.log('Paper dashboard: levels, cash/equity, history, no-start and unavailable states passed');
 
+context.renderTradingDashboard({ok:true,status:'account_available',balance:999.37,equity:999.37,unrealized:0,marks_fresh:true,
+    runtime:{status:'paused_no_strategy',eligible_pairs:[]},open_positions:[],closed_positions:[],
+    forward_research:{enabled:true,status:'collecting',rules:['channel24','failed24','compression'],
+        sources:[{pair:'EURUSD',last_bar:1000,error:null},{pair:'<script>',last_bar:null,error:null}],
+        counts:[{rule:'channel24',scenario:'stress',status:'pending',total:2}],recent:[]}},null,null);
+dashboard=context.winrateModalBody.innerHTML;
+assert(dashboard.includes('Автоматичний збір працює'));
+assert(dashboard.includes('$999.37'));
+assert(dashboard.indexOf('Баланс')<dashboard.indexOf('Живий дослідницький тест'));
+assert(dashboard.includes('Пробій діапазону · очікують 2'));
+assert(dashboard.includes('Збережений баланс не змінюють'));
+assert(!dashboard.includes('<script>'));
+console.log('Forward study: visible activity separate from saved cash and safe escaping passed');
+
 (async()=>{
     let hidden=true, poll, cleared=false;
     const calls=[];
