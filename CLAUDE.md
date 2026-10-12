@@ -2245,3 +2245,42 @@ RestoredEXACT oldflags watchlist/commoditiestrue,forex/cryptofalse. RealflagsOFF
 NoGitHubpush or userfilelinks. Supabase skill inspected but not used for DBwork.
 Operational follow-up: Flyproxy errorlogs include URL admin_token on interrupted
 SSE requests; do not print fullproxylogs or paste credentials in summaries.
+
+### 2026-10-12 — OWNER RETIRED OLD STRATEGY; DO NOT RESUME IT
+
+Owner objected to old Telegram signals/continued old strategy. Important truth:
+the paper stop control reused the SAME old model signals, not a new strategy.
+Acknowledged this explicitly. Disabled BOTH old automatic signal generation/
+expiry measurement AND new paper entries from that model. No new strategy
+selected; do NOT conceal old signals under new notification/account format.
+Earlier "restore exact scanner flags" instructions above are NOW SUPERSEDED.
+
+Actual automatic scanners allFALSE persistently (watchlist/commodities/forex/
+crypto). fly.toml LEGACY_SIGNAL_TEST_ENABLED=false,PAPER_STOP_ACCEPT_ENTRIES=false.
+strategy_mode.py gates main/crypto scan, in-flight analysis callback and final
+publication path (no old SSE or Telegram), also manual maybe_record_signal
+(no new expiry ledger row). App does NOT schedule scanners, old outcome resolver,
+threshold advisor/milestone loops while retired. Scanner re-enable API returns
+409 while legacy retired; cannot restart old strategy via UI category toggle.
+General Telegram bot, quotes, manual read-only analysis and archive retained.
+Paper worker rejects new/previously queued intents; retains existing SL/TP
+management if a position already existed. Here openpositions0 at rollout.
+Web worker state paused_no_strategy: entries OFF, new strategy NOT selected.
+NOT an active new trading strategy, and no paper trade notifications implemented
+or claimed: currently no new trades to notify. No realorders, funds orhistoryreset.
+
+Natural paper control result before retirement: GBPUSD SELL entered19:00:15 Kyiv,
+ASK stop exit19:00:30 Kyiv, net-0.63USD incl0.21assumedfee, units3000; balance999.37.
+One CLOSED position and zero OPEN preserved during deployment; native oldpending0
+confirmed before rollout. Old unknown/archive rows kept, no deletion/remapping.
+
+ALL614 Python testsPASS isolated SQLite +realflagsfalse; six retirement tests:
+disabled scans/no callbacks publication/no manual ledger writes/no legacyloops/
+queuedentry rejection/retain existingstop. JS UI testsPASS. Deployed image
+01M4RFDBP49HZ2FASR2J0645G5 digest
+e1fb925379c7a242ce7828d65598314b61efbb52ff7127ffecd63f4d325ac1f1.
+ResidentHTTP verification actual: allscannersfalse, bothenvgatesfalse, paperstate
+paused_no_strategy accepting_entriesfalse, balance999.37,1closed0open, fresh
+heartbeat, enablewatchlist409, newcachebuster20261012-legacy-off; runtimeSHA256
+matcheslocal. NEVER call pause_for_stats_release.py --resume unless owner later
+explicitly requests this retired strategy. NoGitHubpush or filelinks toowner.

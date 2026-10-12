@@ -125,6 +125,9 @@ def maybe_record_signal(result: dict) -> int | None:
     """Record a pending SignalOutcome for a result the bot actually surfaced
     as a signal (is_trade_allowed=True, directional verdict). Safe to call
     on every such result — recording failures are logged, never raised."""
+    from strategy_mode import legacy_enabled
+    if not legacy_enabled():
+        return None
     if not isinstance(result, dict) or not result.get("is_trade_allowed"):
         return None
 

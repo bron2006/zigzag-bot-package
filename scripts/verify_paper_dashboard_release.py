@@ -21,7 +21,7 @@ if paper['status']=='not_started':
     assert not paper['open_positions'] and not paper['closed_positions']
 else:
     assert paper['status']=='account_available' and paper['initial']==1000
-    assert paper['runtime']['status'] in ('running','suspended_path_gap')
+    assert paper['runtime']['status'] in ('running','suspended_path_gap','paused_no_strategy')
     assert time.time()-paper['runtime']['heartbeat']<10
     assert os.path.ismount('/data')
     assert os.getenv('PAPER_STOP_JOURNAL_PATH')=='/data/paper_stops_v1.sqlite3'
@@ -31,7 +31,7 @@ current=get('/api/stats/signals',dict(auth,scope='current_test',valuation='asof6
 assert current['ok'] and current['measurement_audit']['valuation']=='asof60'
 html=get('/',{}).text
 js=get('/script.js',{}).text
-assert 'script.js?v=20261012-paper-stops' in html
+assert 'script.js?v=20261012-legacy-off' in html
 assert 'renderTradingDashboard' in js and 'Попередній тест напрямку' in js
 assert requests.get(base+'/api/stats/paper_stops',timeout=(5,20)).status_code==401
 quotes=get('/api/live_price',dict(auth,pairs='EURUSD',format='paper')).json()

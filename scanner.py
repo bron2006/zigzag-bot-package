@@ -12,6 +12,7 @@ import analysis as analysis_module
 import autotrader
 import db
 import signal_tracking
+from strategy_mode import legacy_enabled
 import telegram_ui
 from config import (
     ANALYSIS_CACHE_TTL_SECONDS,
@@ -214,6 +215,8 @@ def _attach_live_price(pair_norm: str, result: dict) -> dict:
 
 
 def _handle_analysis_result(pair_norm: str, result: dict):
+    if not legacy_enabled():
+        return succeed(None)
     if not result:
         return succeed(None)
 
@@ -331,6 +334,8 @@ def _handle_analysis_result(pair_norm: str, result: dict):
 
 
 def _publish_recorded_signal(pair_norm, result, score):
+    if not legacy_enabled():
+        return succeed(None)
     try:
         web = 'queued' if app_state.publish_signal_sse(result) is True else 'failed'
     except Exception:
@@ -468,6 +473,8 @@ def _process_one_asset(pair_norm: str):
 
 @safe_call("scanner_loop", threshold=5, default=None)
 def scan_markets_once() -> None:
+    if not legacy_enabled():
+        return
     global _scan_active
 
     now = time.time()
@@ -538,6 +545,8 @@ def scan_markets_once() -> None:
 
 @safe_call("scanner_crypto_loop", threshold=5, default=None)
 def scan_crypto_once() -> None:
+    if not legacy_enabled():
+        return
     """Dedicated, faster-cadence crypto rotation - see config.SCANNER_
     CRYPTO_INTERVAL_SECONDS's comment for why. Structurally mirrors
     scan_markets_once, but with its own cursor/"already running" guard;

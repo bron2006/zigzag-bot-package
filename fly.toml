@@ -3,6 +3,8 @@ primary_region = "ams"
 
 [env]
   PAPER_STOP_JOURNAL_PATH = "/data/paper_stops_v1.sqlite3"
+  LEGACY_SIGNAL_TEST_ENABLED = "false"
+  PAPER_STOP_ACCEPT_ENTRIES = "false"
 
 [[mounts]]
   source = "signals_data"

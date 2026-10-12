@@ -13,6 +13,7 @@ from threading import Lock
 import time
 
 from paper_stop_journal import PaperStopJournal
+from strategy_mode import paper_entries_enabled
 
 logger = logging.getLogger(__name__)
 PAIRS = ('EURUSD','GBPUSD','AUDUSD','NZDUSD','BTCUSD','ETHUSD')
@@ -56,7 +57,7 @@ def connection_gap():
 
 def submit(result):
     """Called ONLY after a confirmed persisted publication receipt."""
-    if not enabled():
+    if not enabled() or not paper_entries_enabled():
         return
     try:
         _intents.put_nowait(dict(result))
@@ -138,7 +139,8 @@ def refresh_metadata(state, reactor):
 
 def health():
     return dict(enabled=enabled(),heartbeat=_last_cycle,error=_last_error,
-                status='running' if _last_cycle and time.time()-_last_cycle<10 and not _last_error else 'not_ready',
+                status=('running' if paper_entries_enabled() else 'paused_no_strategy') if _last_cycle and time.time()-_last_cycle<10 and not _last_error else 'not_ready',
+                accepting_entries=paper_entries_enabled(),
                 eligible_pairs=sorted(_terms),strategy='existing_signals_control_atr_stop_v1',
                 risk_fraction=.005,max_positions=1,target_R=1.5,max_holding_minutes=30,
                 costs='spread_plus_assumed_reserve_not_verified_broker_fees',
@@ -214,7 +216,8 @@ def cycle(state, now=None, *, require_mount=True):
             pnl=sum(float(row[0]) for row in book.connection.execute(
                 "SELECT pnl FROM positions WHERE state='closed' AND json_extract(last_quote,'$.ts')>=?",(today,)))
             cash=float(book.connection.execute('SELECT balance FROM account WHERE id=1').fetchone()[0])
-            if pair not in PAIRS: reason='non_USD_or_not_in_control_universe'
+            if not paper_entries_enabled(): reason='strategy_entries_disabled'
+            elif pair not in PAIRS: reason='non_USD_or_not_in_control_universe'
             elif not 0<=now-ts<=10: reason='expired_signal_no_late_entry'
             elif not terms: reason='broker_specs_unavailable'
             elif active: reason='one_open_position' if active['reason']!='path_gap' else 'path_gap_review_required'

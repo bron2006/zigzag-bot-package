@@ -37,7 +37,8 @@ class PaperRuntimeTest(unittest.TestCase):
         self.folder.cleanup()
 
     def run_cycle(self,now=1000):
-        runtime.cycle(self.state,now,require_mount=False)
+        with patch.object(runtime.time,'time',return_value=now):
+            runtime.cycle(self.state,now,require_mount=False)
         return snapshot(self.path,now)
 
     def enter(self,**overrides):
@@ -170,6 +171,25 @@ class PaperRuntimeTest(unittest.TestCase):
         view=self.enter()
         self.assertEqual(view['open_positions'],[])
         self.assertEqual(view['skipped'][0]['reason'],'broker_specs_unavailable')
+
+    def test_retirement_rejects_new_and_already_queued_entries(self):
+        runtime.submit(dict(signal_outcome_id=1,pair='EURUSD',ts=1000,verdict_text='BUY',atr=.001))
+        with patch.dict(os.environ,PAPER_STOP_ACCEPT_ENTRIES='false'):
+            runtime.submit(dict(signal_outcome_id=2,pair='EURUSD',ts=1000,verdict_text='BUY',atr=.001))
+            self.assertEqual(runtime._intents.qsize(),1)
+            view=self.run_cycle()
+            self.assertEqual(view['open_positions'],[])
+            self.assertEqual(view['balance'],1000)
+            self.assertEqual(view['skipped'][0]['reason'],'strategy_entries_disabled')
+            self.assertFalse(view['runtime']['accepting_entries'])
+
+    def test_disabled_entries_do_not_abandon_an_existing_stop(self):
+        self.enter()
+        with patch.dict(os.environ,PAPER_STOP_ACCEPT_ENTRIES='false'):
+            runtime.receive('EURUSD',q(1001,1.099,1.0992))
+            view=self.run_cycle(1001)
+            self.assertEqual(view['closed_positions'][0]['reason'],'stop')
+            self.assertEqual(view['runtime']['status'],'paused_no_strategy')
 
     def test_metadata_uses_only_read_requests_and_verified_USD_quote_asset(self):
         from twisted.internet.defer import succeed

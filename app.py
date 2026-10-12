@@ -24,6 +24,7 @@ import threshold_advisor
 from errors import ConfigError
 from notifier import notify_bot_failed
 from state import app_state
+from strategy_mode import legacy_enabled
 
 logging.basicConfig(
     level=logging.INFO,
@@ -123,10 +124,11 @@ def _start_background_services() -> None:
     except Exception:
         logger.exception("Не вдалося запустити cTrader client")
 
-    _start_loop(60.0, scanner.scan_markets_once, now=False, name="scanner")
-    _start_loop(
-        config.SCANNER_CRYPTO_INTERVAL_SECONDS, scanner.scan_crypto_once, now=False, name="scanner_crypto"
-    )
+    if legacy_enabled():
+        _start_loop(60.0, scanner.scan_markets_once, now=False, name="scanner")
+        _start_loop(config.SCANNER_CRYPTO_INTERVAL_SECONDS, scanner.scan_crypto_once, now=False, name="scanner_crypto")
+    else:
+        logger.info('Legacy signal strategy retired: no scanner/publication/expiry test loops')
     _start_loop(30.0, ctrader.monitor_price_stream_health, now=False, name="price_watchdog")
     _start_loop(120.0, db.refresh_cached_user_statuses, now=False, name="user_status_cache")
     _start_loop(0.2, api.drain_sse_events, now=False, name="sse_drain")
@@ -134,24 +136,13 @@ def _start_background_services() -> None:
     if os.getenv('PAPER_STOP_JOURNAL_PATH'):
         _paper_pool=_create_thread_pool('paper-stop-pool',1,1)
         _start_loop(1.0,_paper_cycle_async,now=True,name='paper_stop_control')
-    _start_loop(
-        max(30.0, config.SIGNAL_OUTCOME_CHECK_INTERVAL_MINUTES * 60.0),
-        _resolve_outcomes_async,
-        now=True,
-        name="signal_outcome_resolver",
-    )
-    _start_loop(
-        max(3600.0, config.THRESHOLD_RECOMMENDATION_INTERVAL_HOURS * 3600.0),
-        threshold_advisor.send_daily_recommendation,
-        now=False,
-        name="threshold_advisor",
-    )
-    _start_loop(
-        max(3600.0, config.THRESHOLD_RECOMMENDATION_INTERVAL_HOURS * 3600.0),
-        threshold_advisor.check_trade_count_milestones,
-        now=False,
-        name="threshold_milestone_check",
-    )
+    if legacy_enabled():
+        _start_loop(max(30.0, config.SIGNAL_OUTCOME_CHECK_INTERVAL_MINUTES * 60.0),
+                    _resolve_outcomes_async,now=True,name="signal_outcome_resolver")
+        _start_loop(max(3600.0, config.THRESHOLD_RECOMMENDATION_INTERVAL_HOURS * 3600.0),
+                    threshold_advisor.send_daily_recommendation,now=False,name="threshold_advisor")
+        _start_loop(max(3600.0, config.THRESHOLD_RECOMMENDATION_INTERVAL_HOURS * 3600.0),
+                    threshold_advisor.check_trade_count_milestones,now=False,name="threshold_milestone_check")
 
 
 def _shutdown() -> None:

@@ -849,6 +849,9 @@ def register_routes(app):
     def scanner_toggle():
         cat = request.values.get("category")
         if cat in app_state.SCANNER_STATE:
+            from strategy_mode import legacy_enabled
+            if not legacy_enabled() and not app_state.get_scanner_state(cat):
+                return jsonify(ok=False,error='Стару стратегію вимкнено. Її запуск заблокований.'),409
             app_state.set_scanner_state(cat, not app_state.get_scanner_state(cat))
             reactor.callFromThread(ctrader.start_price_subscriptions)
         return jsonify(app_state.get_scanner_state_snapshot())
