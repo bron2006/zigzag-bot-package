@@ -1897,3 +1897,45 @@ date near midnight; tests now freeze db clock at noon. Production PNL functions
 unchanged. Initial full run538pass/2date-fixture failures, then540/540PASS; disclose
 actual sequence rather than asserting first full run passed. No orders/DB writes,
 cloud deployment, scanner/strategy flag mutation, GitHub push or old-data deletion.
+
+### 2026-10-12 — continued autonomous transparent-direction screen (no model)
+
+Owner objected to stopping after intermediate entry comparison. Continued with
+actual local code/tests/screens, not another permission question. Added pure
+transparent_signal.py: completed M5 bars, EMA50slope5, prior20rangebreakout and
+body>=.25ATR14. No learned model/class inversion; fixed70bar gap-reset warmup,
+BUY/SELL reflection and price-scale invariant; no current-bar range leakage.
+Original52arm screen (26cachedFXpairs x2entrymethods) failed0/52 gates.
+Frozen TRANSPARENT_PROTOCOL SHAeed24efc4d27107fa4697a7a17f17230a3da6f2e1448c9caf273075bf568fe8e.
+
+Before further results froze EXTENDED_PROTOCOL SHA
+8a021ae678ed4ba891ed6b25a183e0e0677fa0602daf8c189be33e67f50beaa9:
+two additional rules trend_pullback (EMA20crossback in slopingEMA50trend) and
+band_reentry (prior20close2SD band re-entry), symmetric directionalbody>=.25ATR.
+All26symbols, both immediate/pullback_confirm, all3rules=156arm combinations.
+No parameter/pair changes after results. Original52 arithmetic/intents preserved
+exactly; expanded multiplicity correction156changes ONLY bootstrap bound.
+Retrospective Aug25-Oct7data previously studied, not fresh out-of-sample evidence,
+not156independent strategies. These families also appeared in earlier96screen
+with other exits; cumulative selection disclosed, no claim fresh discovery.
+
+156/156 completed;0pass cheap gate (>=200decided, unknown<=5%, positive70%stress
+EVERYobservedmonth, positive family-adjusted5000daycluster bootstrap pessimistic
+lower percommonintent). Insufficient per-pair pullback samples are common (~20-40).
+Base80positive arms31/156, pessimistic70positive12/156; none warrants promotion.
+Best retrospective base observation GBPNZD trend_pullback+confirmation:21W/8L,
+29decided, hypothetical1088from1000, adjustedstresslower-.04015; NOT validated.
+Aggregate descriptive ONLY (not combined executable bankroll), pullback accuracy:
+breakout457W/476L=48.98%;trend398W/381L=51.09%;band283W/275L=50.72%.
+All pooled conditional80PNLnegative;80%binarybreak-even55.56% before any extra
+friction. No proof entry delay alone is current production loss root cause.
+
+Independent decimal arithmetic/count checks all156arms pass, original52 unchanged.
+ALL546Python tests pass,6transparent-rule tests including NONEMPTY setups for
+bothnewrules, scale/reflection, prefixfuturepoisoning, gapreset, invalidOHLC/order.
+Local strategy modules/research implemented; NOT integrated/activated in cloud,
+NOT collecting prospective data automatically, originalbalance/primarysignals
+unchanged. Realorders/VWAP untouched, no DB/networkcalls in these screens, noGitHub
+push. Next substantive research must address target/exit contract and acquire
+unseen prospective data, not silently promote selected small-sample winners or
+claim bot profitable. ResultJSONs local/gitignored, protocols/code documented.
