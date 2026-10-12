@@ -2109,3 +2109,55 @@ clouddeployment, signals-to-paper wiring, UInewaccount or prospective runexists.
 These are implemented/testedLOCAL foundations, not claim bot is already running
 with stops. Mainoldreport unchanged; usergets results without filelinks.
 NewpaperCFDliveintegration remainsNOT implemented; do not pretend it is running.
+
+### 2026-10-12 — paper-account visibility UI actually deployed, not fake trades
+
+Owner explicitlyasked "зроби,щоб я бачив все". Added compactaccountdashboard
+inexistingmodal, Ukrainianbutton/title Рахунок/Паперовийрахунок, balanceabove
+equity/floatingPNL; open/closedrows showentry/stop/target/units/currentorexit,
+entry/exittime, additionalfeeUSD, reason andnetUSD. Pairtotals, older/newer
+historypagination (100closed/page, ALLopenretained andallpairtotals) protect
+fullhistoryaccess. Currentprice/unrealizedunknown whenstale, notfakedzero.
+
+Olddirectionreportcollapses under summaryWITHoldbalancevisible; oldprices/outcomes/
+mathpreserved. ParallelHTTPfetch preventsoptionaloldreportfailure hidingpaper.
+API/datafailure distinct from noaccount/noopenpositions, nofakezero or seeded
+1000balance. plannedInitial1000 explicitly labeledPLANNED, actualbalanceNULL
+because livepaperCFDworker/account STILLNOTstarted. NewUI visibility isdelivered,
+but notliveCFDtrading/testactivation or profitable strategy. No falseopenedtrades.
+
+paper_stop_view.py READONLYSQLiteURI mode=ro/query_only, oneconsistenttransaction,
+existinglocaljournalonly; doesNOTcreateaccount/file/resetold94. Unsetpath=>not_started;
+configuredmissingpath/wrongversion/corruptfile=>503unavailable, NEVERnewemptyaccount.
+GET /api/stats/paper_stops existingauth+adminonly; boundedvalidatedhistorycursor,
+defaultlegacyAPIunchanged. FixedclosedexitTSusesstoredclosingquote evenifnewlive
+quoteavailable; fees andstaleequity explicit. No SupabaseDDL/permissions/account
+state mutations; authorizationusesexistingadminread. FlyhasNOnewpersistentpaper
+volume/worker configured. Do not initializeSQLiteephemeralFlyroot as liveaccount.
+Fullfreshside5s contract remainsconservative; properrelevant-side stop handling,
+source continuity/actualcosts/sessionflat/worker persistence still required before
+livepaperactivation. No guarantee sampledquotes catch everybrokerstop touch.
+
+ALL590Python testsPASS +measurement/dashboard/watchlistJS tests. Covers auth,
+missing/corruptjournal nozero, preservedcash/equity/levels, 101closed+1open pagination,
+fee/timestamps, protectedfreshquoteAPI, injectionescaping andcompactcollapsedold
+report. BrowserpixelinspectionNOTperformed; liveHTTP+servedUIsource tested, do
+notclaimvisualinspection of user'sTelegramscreen. Computer-use skillinspected
+only, NOTusedforautomation/materialchanges.
+
+Safe rollout: pausednewscanning~14:54UTC, waitedUSDJPY4021deadline14:56:41+grace,
+confirmedoriginalpending0/mainpending0 beforedeploy. Oldconditionalbalance had
+alreadyfallen94->-22 (281W/327L/4refund/8unknown) BEFOREdeployment; notlossfrom
+newCFDaccount/update. Neveroverwrite/freeze oldnumber at94. Negativeoldledger is
+unboundedhypotheticalbinary arithmetic, NOTbankrollsimulation or realmoney.
+Restored EXACTflags watchlist/commoditiestrue,forex/cryptofalse afterrollout;
+crypto throughwatchlistcontinues. RealAUTOTRADE/BINOMOflagsFALSE, VWAPuntouched.
+
+Finalimage deployment-01M4RA65F8NJVGNQX4865CXDQR digest
+35e6292e5e5660f0302691a9a442df1ef660a33730538c009da610a7e0296104 deployed15:04UTC.
+Earlierbuilt01M4R9MVQ1PAR02YXBRA1F9RH5 and01M4R9ZXEDKT02A9W87V33JQTB NOTdeployed.
+LiveLIGHTverifier200checks paperstatusnot_started/nullbalances/nofakepositions,
+oldbalance-22, noauth401, newHTMLcachebuster20261012-paper-stops, newJSrenderer,
+freshEURUSDbid/askquote1, fiveAPI/state/view/UIhashes EXACTmatchlocal.
+Health15:05:59UTC ok/READY/TelegramACTIVE83live0stale(initialsnapshotonly).
+No secondFlask/DB/modelprocess imported in512MBVM. NoGitHubpush/fileattachments.

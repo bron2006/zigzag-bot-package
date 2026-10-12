@@ -66,3 +66,26 @@ assert(selected.includes('Попередній спосіб: нова котир
 assert(!selected.includes('<details open'));
 assert(selected.includes('$998.00'));
 console.log('UI: current experiment, collapsed history, escaping and missing data passed');
+
+context.renderTradingDashboard({ok:true,status:'not_started',planned_initial:1000,open_positions:[],closed_positions:[]},
+    {ok:true,scope:'current_test',measurement_audit:audit},null);
+let dashboard=context.winrateModalBody.innerHTML;
+assert(dashboard.includes('Ще не запущено'));
+assert(dashboard.includes('запланований старт $1000.00'));
+assert(dashboard.includes('Попередній тест напрямку · $998.00'));
+assert(!dashboard.includes('<details open'));
+context.renderTradingDashboard({ok:true,status:'account_available',balance:1000,equity:995,unrealized:-5,marks_fresh:true,
+    open_positions:[{pair:'<script>',side:1,state:'open',entry:100,stop:98,target:103,units:2,current:99,pnl:-5}],
+    closed_positions:[{pair:'CLOSED',side:-1,state:'closed',entry:100,stop:102,target:97,units:2,exit:97,pnl:6,reason:'target'}]},null,null);
+dashboard=context.winrateModalBody.innerHTML;
+assert(dashboard.indexOf('Баланс')<dashboard.indexOf('Відкриті угоди'));
+assert(dashboard.includes('Поточна вартість $995.00'));
+assert(dashboard.includes('Вхід 100 · стоп 98 · ціль 103'));
+assert(dashboard.includes('Обсяг 2'));
+assert(dashboard.includes('&lt;script&gt;'));
+assert(!dashboard.includes('<script>'));
+assert(dashboard.includes('CLOSED'));
+context.renderTradingDashboard({ok:false},null,null);
+assert(context.winrateModalBody.innerHTML.includes('Це не нульовий баланс'));
+assert(!context.winrateModalBody.innerHTML.includes('Відкритих угод немає'));
+console.log('Paper dashboard: levels, cash/equity, history, no-start and unavailable states passed');

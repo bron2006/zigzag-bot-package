@@ -639,6 +639,24 @@ def register_routes(app):
                                            current_test=scope == "current_test", historical_only=scope == "history", **extra)
         return jsonify({"success": True, **stats})
 
+    @app.route('/api/stats/paper_stops')
+    @_protected_route
+    def paper_stop_stats():
+        if not db.is_admin_user(_current_user_id()):
+            return jsonify(ok=False,error='Unauthorized'),403
+        try:
+            before=int(request.args['before']) if 'before' in request.args else None
+            if before is not None and not 0<before<2**63:
+                raise ValueError()
+        except (ValueError,TypeError):
+            return jsonify(ok=False,error='Invalid history cursor'),400
+        try:
+            from paper_stop_view import snapshot
+            return jsonify(snapshot(os.getenv('PAPER_STOP_JOURNAL_PATH'),time.time(),before=before))
+        except Exception:
+            logger.exception('Paper stop account view unavailable')
+            return jsonify(ok=False,status='unavailable',error='paper_account_unavailable'),503
+
     @app.route("/api/get_pairs")
     @_protected_route
     def get_pairs():

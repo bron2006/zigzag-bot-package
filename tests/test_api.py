@@ -17,6 +17,23 @@ class EndpointAuditTest(unittest.TestCase):
     def setUp(self):
         self.client = _make_client()
 
+    def test_paper_account_requires_admin_and_failure_is_not_zero_balance(self):
+        self.assertEqual(self.client.get('/api/stats/paper_stops').status_code,401)
+        with patch('api.is_valid_admin_token',return_value=True),patch('api.db.is_admin_user',return_value=False):
+            self.assertEqual(self.client.get('/api/stats/paper_stops').status_code,403)
+        with patch('api.is_valid_admin_token',return_value=True),patch('api.db.is_admin_user',return_value=True), \
+             patch('paper_stop_view.snapshot',return_value={'ok':True,'status':'not_started','balance':None}) as read:
+            response=self.client.get('/api/stats/paper_stops')
+            self.assertEqual(response.status_code,200)
+            self.assertIsNone(response.json['balance'])
+            response=self.client.get('/api/stats/paper_stops?before=25')
+            self.assertEqual(read.call_args.kwargs['before'],25)
+            self.assertEqual(self.client.get('/api/stats/paper_stops?before=-1').status_code,400)
+            read.side_effect=ValueError('bad journal')
+            response=self.client.get('/api/stats/paper_stops')
+            self.assertEqual(response.status_code,503)
+            self.assertNotIn('balance',response.json)
+
     def test_paper_quotes_are_protected_bounded_and_keep_legacy_mid_format(self):
         self.assertEqual(self.client.get('/api/live_price?pairs=EURUSD&format=paper').status_code,401)
         quote=dict(bid=100,ask=101,bid_ts=1000,ask_ts=1001,ts=1001,source='cTrader',sampled=True)

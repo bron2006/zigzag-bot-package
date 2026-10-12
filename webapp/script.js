@@ -171,8 +171,8 @@ const APP_I18N = {
         favoriteSavedLocal: "Обране збережено на цьому пристрої. Сервер тимчасово не відповів.",
         subscribe: "💳 Оформити підписку",
         paymentError: "Не вдалося створити інвойс. Спробуйте ще раз трохи пізніше.",
-        winrateButton: "📊 Win-rate",
-        winrateModalTitle: "📊 Win-rate сигналів (як для Binomo, без флету)",
+        winrateButton: "📊 Рахунок",
+        winrateModalTitle: "📊 Паперовий рахунок",
         winrateWeek: "Тиждень (7д)",
         winrateMonth: "Місяць (30д)",
         winrateTotal: "Сигналів",
@@ -1113,16 +1113,18 @@ function closeWinrateModal() {
     winrateModal.classList.add("hidden");
 }
 
-async function loadWinrateStats() {
+async function loadWinrateStats(before=null) {
     if (!winrateModalBody) return;
 
     winrateModalBody.innerHTML = `<div class="winrate-loading">${escapeHtml(tr("winrateLoading"))}</div>`;
 
     try {
-        const current = await apiGet("/api/stats/signals", { scope: "current_test", valuation: "asof60" });
-        // A failure of the optional history must not hide the current test.
-        const history = await apiGet("/api/stats/signals", { days: 30, scope: "history" }).catch(() => null);
-        renderWinrateStats(current, history);
+        const [paper,current,history] = await Promise.all([
+            apiGet('/api/stats/paper_stops',before ? {before} : {}).catch(() => ({ok:false,status:'unavailable'})),
+            apiGet("/api/stats/signals", { scope: "current_test", valuation: "asof60" }).catch(() => null),
+            apiGet("/api/stats/signals", { days: 30, scope: "history" }).catch(() => null)
+        ]);
+        renderTradingDashboard(paper,current,history);
     } catch (err) {
         console.error("Winrate stats load error:", err);
         winrateModalBody.innerHTML = `<div class="winrate-error">${escapeHtml(tr("winrateError"))}</div>`;
@@ -1132,6 +1134,35 @@ async function loadWinrateStats() {
 function winrateRateClass(winRate) {
     // Direction accuracy is not profitability; no green 50% profit badge.
     return "neutral";
+}
+
+function renderTradingDashboard(paper,current,history) {
+    if (!winrateModalBody) return;
+    const money=value=>typeof value==='number' && Number.isFinite(value) ? `$${value.toFixed(2)}` : '—';
+    const price=value=>typeof value==='number' && Number.isFinite(value) ? String(value) : '—';
+    const stamp=value=>typeof value==='number' && Number.isFinite(value) ? new Date(value*1000).toLocaleString('uk-UA') : '—';
+    let content='';
+    if (!paper?.ok) {
+        content='<div class="winrate-section">Рахунок зі стопом: дані тимчасово недоступні. Це не нульовий баланс.</div>';
+    } else if (paper.status==='not_started') {
+        content=`<div class="winrate-section"><div class="winrate-section-title">Паперовий рахунок зі стопом</div><div style="font-size:30px;font-weight:700">—</div><div>Ще не запущено · запланований старт ${money(paper.planned_initial)}</div><small>Угод зі стопом ще немає. Реальні ордери вимкнені.</small></div>`;
+    } else {
+        content=`<div class="winrate-section"><div class="winrate-section-title">Паперовий рахунок зі стопом</div><div>Баланс</div><div style="font-size:30px;font-weight:700">${money(paper.balance)}</div><div>Поточна вартість ${money(paper.equity)} · відкритий результат ${money(paper.unrealized)}</div><small>${paper.marks_fresh ? 'За останніми котировками' : 'Немає свіжої ціни для відкритої позиції'} · не реальні гроші</small></div>`;
+    }
+    const positions=(items,empty)=>items?.length ? items.map(p=>`<div class="winrate-row"><span><strong>${escapeHtml(p.pair)} · ${p.side===1?'BUY':'SELL'}</strong><br><small>Вхід ${price(p.entry)} · стоп ${price(p.stop)} · ціль ${price(p.target)}<br>Обсяг ${price(p.units)} · ${p.state==='open'?'поточна ціна':'вихід'} ${price(p.state==='open'?p.current:p.exit)}${p.reason ? ' · '+escapeHtml({stop:'стоп',target:'ціль',session_end:'кінець сесії'}[p.reason] || p.reason) : ''}<br>${stamp(p.entry_ts)}${p.exit_ts ? ' → '+stamp(p.exit_ts) : ''} · додаткові витрати ${money(p.fee_usd)}</small></span><strong>${money(p.pnl)}</strong></div>`).join('') : `<div class="winrate-empty">${empty}</div>`;
+    content+=`<div class="winrate-section"><div class="winrate-section-title">Відкриті угоди</div>${positions(paper?.open_positions,paper?.ok ? 'Відкритих угод немає.' : 'Дані угод недоступні.')}</div>`;
+    content+=`<div class="winrate-section"><div class="winrate-section-title">Закриті угоди</div>${positions(paper?.closed_positions,paper?.ok ? 'Закритих угод ще немає.' : 'Дані угод недоступні.')}</div>`;
+    if (paper?.next_before) content+=`<button class="tf-button" onclick="loadWinrateStats(${Number(paper.next_before)})">Старіші угоди</button> `;
+    if (paper?.status==='account_available') content+='<button class="tf-button" onclick="loadWinrateStats()">Найновіші угоди</button>';
+    if (paper?.by_pair?.length) content+=`<div class="winrate-section"><div class="winrate-section-title">Пари</div>${paper.by_pair.map(p=>`<div class="winrate-row"><span>${escapeHtml(p.pair)} · відкрито ${p.opened} · закрито ${p.closed}</span><strong>${money(p.pnl)}</strong></div>`).join('')}</div>`;
+    if (current?.ok && current.measurement_audit) {
+        renderWinrateStats(current,history);
+        const legacy=winrateModalBody.innerHTML;
+        content+=`<details class="winrate-section"><summary>Попередній тест напрямку · ${money(current.measurement_audit.scenario.measured_balance)}</summary><small>Без стопа; умовні +80%/−100%. Не результат нового рахунку.</small>${legacy}</details>`;
+    } else {
+        content+='<details class="winrate-section"><summary>Попередній тест напрямку</summary>Архів тимчасово недоступний — результати не видалені.</details>';
+    }
+    winrateModalBody.innerHTML=content;
 }
 
 function formatWinrate(winRate) {
