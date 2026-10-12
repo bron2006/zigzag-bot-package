@@ -1939,3 +1939,46 @@ unchanged. Realorders/VWAP untouched, no DB/networkcalls in these screens, noGit
 push. Next substantive research must address target/exit contract and acquire
 unseen prospective data, not silently promote selected small-sample winners or
 claim bot profitable. ResultJSONs local/gitignored, protocols/code documented.
+
+### 2026-10-12 — accelerated two distinct source-inspired strategy screens
+
+Owner rejected multi-day timetable, requested acceleration. Immediately implemented
+and completed TWO additional mechanisms using already cached data, no new calendar
+wait. This is historical screening, not live prospective test or profit promise.
+
+Currency strength: currency_strength.py fits logpairreturns=strengthBASE-strengthQUOTE
+jointly, sumstrengths0, connected graph mandatory. All26synchronized M5 caches;
+require15contiguous aligned bars for allpairs, one-hour12bar return, strongest2
+vsweakest2, ONEavailable pair maximizing strengthgap perglobal30minintent.
+Fixed protocol SHA33862be7e150a22b733c16dc9a3b9eafffb64eab02c894e58aedef66b7e5acbc
+before results.9024uniontimestamps/8679synchronizedready (26pairs).
+1446commonintents: immediate702W/721L/18refund/5unknown=49.33%;pullback64W/71L/
+2refund/1304skips/5unknown=47.41%. AlwaysBUY711W/712L andSELL712W/711L controls
+same selectedpairs/times.0passes. Allmonthlystressnegative. Do NOT infer all
+currency momentum horizons fail: this is fixed1hstrength->15minuteprice-target
+diagnostic, NOT BIS monthlyforwardstrategy replication. Conditionalflat10balance
+can go negative; explicitly NOT bankroll-limited or executableaccount.
+
+Session momentum: session_momentum.py implements first30min FROM PRIORRTHclose
+predicting final30min, USTEC cash proxy, NOT originalSPY ETF. Entry15:30NY, exit
+16:00NY, DST/holidays/earlyclose previousRTHclose respected; direction known10:00,
+never filter opportunities on future currentday availability. Missingpath unknown.
+Frozen SESSION_PROTOCOL SHA2007513fc3b6a3bd464240f82590e0b54b33cbf0b4cc6b7c5047fc094026cdcf.
+688scheduled2024-Oct7.2026sessions,687measured/1unknown(firstday lackspriorclose).
+Predicted345W/342L=50.22% vsalwaysBUY356W/331L=51.82%. Hypotheticalbinary80%
+negative everyyear. ConditionalCFD5pointRTstress netpoints:2024-1089.76,
+2025-1809.79,2026+289.50; total-2610.05. These are INDEXPOINTS, NOT dollars;
+historicalASK/slippage/fees/margin not verified.2026positive NOT stable edge:
+adjusted5session-block bootstrap lower stress/excessoverBUY/excessoverSELL all
+negative(-14.2924,-18.7378,-8.6811).0passes. No promotion/after-result filtering.
+
+Bothprobes purelyoffline, no databasewrites/credentials/networkbrokerrequests,
+no model retraining, clouddeploy, realorders, schedulerchanges or GitHubpush.
+Saved sourcehashes+frozenrules+ALLmonthly/yearlycontrols locally. Conservative
+accumulated169/172arm corrections explicitly NOT complete multiple-research
+guarantee; caches already studied, no unseenholdout claim. Independentdecimal
+currency ledger/counts and yearlysessioncoverage/costidentity checks pass.
+5currencygraph tests+4sessioncausality/missingdata tests added; full555tests pass.
+Multi-day implementation schedule replaced by immediate cheap screening; future
+prospective verification STILL requires actual new observations and is NOT yet
+running. Main virtualbalance/primarysignals unchanged. Do not send user files.
