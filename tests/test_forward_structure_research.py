@@ -83,6 +83,42 @@ class ForwardResearchTest(unittest.TestCase):
     def test_no_configured_path_is_not_running(self):
         self.assertEqual(snapshot(None,1000)['status'],'not_started')
 
+    def test_new_rule_activation_is_independent_and_persists_after_restart(self):
+        from ny_h4_reclaim import RULE
+        db=_connect(self.path,100,False)
+        db.execute('DELETE FROM rule_activation WHERE rule=?',(RULE,));db.close()
+        self.init(500)
+        first=snapshot(self.path,500)
+        self.assertEqual(first['activated'],100)
+        self.assertEqual(first['rule_activations'][RULE],500)
+        self.assertEqual(first['rule_activations']['channel24'],100)
+        self.init(900)
+        self.assertEqual(snapshot(self.path,900)['rule_activations'],first['rule_activations'])
+
+    def test_NY_pre_activation_setup_is_visible_but_never_counted_as_new_trade(self):
+        from test_ny_h4_reclaim import fixture,bar
+        from ny_h4_reclaim import RULE
+        rows,end=fixture()
+        rows += [bar(end),bar(end+300,o=94,h=97,l=94,c=96),bar(end+600,o=96,h=97,l=95,c=96)]
+        self.init(end+1000)
+        store_packet(self.path,'EURUSD',rows,end+1200+31,require_mount=False)
+        view=snapshot(self.path,end+1200+32)
+        self.assertFalse(any(r['intent']['rule']==RULE for r in view['recent']))
+        self.assertEqual(view['ny_h4_states'][0]['status'],'setup_before_activation')
+
+    def test_NY_post_activation_setup_is_stored_without_changing_balance(self):
+        from test_ny_h4_reclaim import fixture,bar
+        from ny_h4_reclaim import RULE
+        rows,end=fixture()
+        rows += [bar(end),bar(end+300,o=94,h=97,l=94,c=96),bar(end+600,o=96,h=97,l=95,c=96)]
+        self.init(end)
+        store_packet(self.path,'EURUSD',rows,end+1200+31,require_mount=False)
+        view=snapshot(self.path,end+1200+32)
+        new=[r for r in view['recent'] if r['intent']['rule']==RULE]
+        self.assertEqual(len(new),2)
+        self.assertEqual({r['status'] for r in new},{'pending'})
+        self.assertFalse(view['changes_account_balance'])
+
     def test_resident_collector_sends_only_four_bounded_read_requests(self):
         from types import SimpleNamespace
         from unittest.mock import patch

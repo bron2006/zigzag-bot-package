@@ -1,6 +1,6 @@
 """Prospective OHLC observations, NOT an executor or funded paper account.
 
-All three frozen structure rules are diagnostic hypotheses. No proven edge.
+The three structure controls and owner-defined NY reclaim have no proven edge.
 FX failures remain negative controls; crypto is a new unvalidated extension.
 """
 from collections import defaultdict
@@ -14,12 +14,14 @@ import sqlite3
 import time
 from urllib.parse import quote as uri_quote
 
-from price_structure_candidates import RULES,generate
+from price_structure_candidates import RULES as STRUCTURE_RULES,generate
+from ny_h4_reclaim import RULE as NY_RULE,detect as detect_ny
 from paper_cfd import simulate_stop_trade
 
 logger=logging.getLogger(__name__)
 PAIRS=('EURUSD','GBPUSD','BTCUSD','ETHUSD')
 VERSION='prospective_structure_observation_v1'
+RULES=STRUCTURE_RULES+(NY_RULE,)
 
 
 def path():return os.getenv('FORWARD_STRUCTURE_RESEARCH_PATH')
@@ -38,6 +40,11 @@ def _connect(filename,now,require_mount=True):
     db.execute('CREATE TABLE IF NOT EXISTS bars (pair TEXT NOT NULL,ts INTEGER NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(pair,ts))')
     db.execute('CREATE TABLE IF NOT EXISTS sources (pair TEXT PRIMARY KEY,checked REAL NOT NULL,last_bar INTEGER,error TEXT)')
     db.execute('CREATE TABLE IF NOT EXISTS observations (pair TEXT NOT NULL,rule TEXT NOT NULL,day INTEGER NOT NULL,scenario TEXT NOT NULL,status TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(pair,rule,day,scenario))')
+    db.execute('CREATE TABLE IF NOT EXISTS rule_activation (rule TEXT PRIMARY KEY,activated REAL NOT NULL)')
+    original=db.execute('SELECT activated FROM metadata').fetchone()[0]
+    for rule in RULES:
+        db.execute('INSERT OR IGNORE INTO rule_activation VALUES (?,?)',(rule,now if rule==NY_RULE else original))
+    db.execute('CREATE TABLE IF NOT EXISTS pattern_states (pair TEXT PRIMARY KEY,payload TEXT NOT NULL)')
     return db
 
 
@@ -60,20 +67,28 @@ def hourly(bars):
 
 
 def outcome(intent,bars,now,scenario,*,crypto=False):
-    end=intent['day']*86400+(86400 if crypto else 16*3600)
+    ny_rule=intent.get('rule')==NY_RULE
+    end=float('inf') if ny_rule else intent['day']*86400+(86400 if crypto else 16*3600)
     available=[b for b in bars if intent['ts']<=b['ts']<end]
     if not available or available[0]['ts']!=intent['ts']:
         return dict(status='unknown' if now-intent['ts']>3600 else 'pending',reason='missing_entry_bar')
     entry=available[0]['Open'];side=intent['side']
     cost=entry*(.001 if scenario=='base' else .002) if crypto else (.0002 if scenario=='base' else .0004)
-    distance=2*intent['atr'];multiple=1.5
-    if intent['stop'] is not None:
+    if ny_rule:
+        distance=side*(entry-intent['stop']);multiple=2.
+        if distance<=0 or entry+side*multiple*distance<=0:
+            return dict(status='skipped',reason='entry_gap_invalid_stop_geometry')
+    else:
+        distance=2*intent['atr'];multiple=1.5
+    if not ny_rule and intent['stop'] is not None:
         distance=side*(entry-intent['stop']);reward=side*(intent['target']-entry)
         if distance<=0 or reward<=0 or (reward-cost)/(distance+cost)<1.5:
             return dict(status='skipped',reason='invalid_entry_or_net_RR')
         multiple=reward/distance
     trade=simulate_stop_trade(available,0,side,distance,multiple)
     if trade['status']=='unknown':return trade
+    if ny_rule and trade['reason']=='session_end':
+        return dict(status='pending',reason='waiting_stop_or_target',entry=trade['entry'],stop=trade['stop'],target=trade['target'])
     if trade['reason']=='session_end' and available[-1]['ts']+300<end:
         return dict(status='unknown' if now>end+3600 else 'pending',reason='waiting_for_closed_bars')
     points=Decimal(side)*(Decimal(str(trade['exit']))-Decimal(str(entry)))
@@ -81,6 +96,7 @@ def outcome(intent,bars,now,scenario,*,crypto=False):
     # USD5 risk-unit illustration, NOT money credited to any account.
     return dict(status='closed',**{k:v for k,v in trade.items() if k!='status'},
                 cost_assumed_points=cost,net_R=net_R,hypothetical_risk5_usd=round(5*net_R,2),
+                cost_complete=False,
                 executable=False,venue='cTrader_midpoint_OHLC_conditional')
 
 
@@ -98,7 +114,7 @@ def store_packet(filename,pair,bars,now,*,require_mount=True):
     db=_connect(filename,now,require_mount)
     try:
         db.execute('BEGIN IMMEDIATE')
-        activation=db.execute('SELECT activated FROM metadata').fetchone()[0]
+        activations=dict(db.execute('SELECT rule,activated FROM rule_activation').fetchall())
         for b in bars:
             encoded=json.dumps(b,sort_keys=True)
             old=db.execute('SELECT payload FROM bars WHERE pair=? AND ts=?',(pair,b['ts'])).fetchone()
@@ -116,9 +132,16 @@ def store_packet(filename,pair,bars,now,*,require_mount=True):
                 ('unknown',json.dumps(payload,sort_keys=True),old['pair'],old['rule'],old['day'],old['scenario']))
         retained=[json.loads(r[0]) for r in db.execute('SELECT payload FROM bars WHERE pair=? AND ts>=? ORDER BY ts',(pair,first))]
         hours=hourly(retained);crypto=pair in ('BTCUSD','ETHUSD')
+        ny=detect_ny(retained)
+        if ny['states']:
+            current=dict(ny['states'][-1],pair=pair)
+            if current.get('entry_ts',float('inf'))<activations[NY_RULE]:
+                current['status']='setup_before_activation'
+            db.execute('INSERT OR REPLACE INTO pattern_states VALUES (?,?)',(pair,json.dumps(current,sort_keys=True)))
         for rule in RULES:
-            for intent in generate(hours,rule,end_hour=23 if crypto else 15,start_hour=1 if crypto else 9):
-                if intent['ts']<activation:continue
+            intents=ny['intents'] if rule==NY_RULE else generate(hours,rule,end_hour=23 if crypto else 15,start_hour=1 if crypto else 9)
+            for intent in intents:
+                if intent['ts']<activations[rule]:continue
                 for scenario in ('base','stress'):
                     key=(pair,rule,intent['day'],scenario)
                     prior=db.execute('SELECT status FROM observations WHERE pair=? AND rule=? AND day=? AND scenario=?',key).fetchone()
@@ -196,11 +219,15 @@ def snapshot(filename,now):
         counts=[dict(r) for r in db.execute('SELECT rule,scenario,status,count(*) total FROM observations GROUP BY rule,scenario,status ORDER BY rule,scenario,status')]
         recent=[json.loads(r[0]) for r in db.execute('SELECT payload FROM observations ORDER BY day DESC,pair,rule,scenario LIMIT 60')]
         bar_counts=[dict(r) for r in db.execute('SELECT pair,count(*) total FROM bars GROUP BY pair')]
+        tables={r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        activations=dict(db.execute('SELECT rule,activated FROM rule_activation').fetchall()) if 'rule_activation' in tables else {}
+        pattern_states=[json.loads(r[0]) for r in db.execute('SELECT payload FROM pattern_states ORDER BY pair')] if 'pattern_states' in tables else []
         db.execute('COMMIT')
     finally:db.close()
     collecting=len(sources)==len(PAIRS) and all(not s['error'] and 0<=now-s['checked']<180 for s in sources)
     return dict(enabled=True,status='collecting' if collecting else 'waiting_data',activated=meta['activated'],
         pairs=list(PAIRS),rules=list(RULES),sources=sources,counts=counts,recent=recent,bars=bar_counts,
+        rule_activations=activations,ny_h4_states=pattern_states,
         interval_seconds=60,real_orders=False,changes_account_balance=False,
         candles_fresh=collecting and all(s['last_bar'] is not None and now-(s['last_bar']+300)<900 for s in sources),
         mode='prospective_OHLC_observations_not_trade_execution',

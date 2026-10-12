@@ -2390,3 +2390,53 @@ yet, no forcedtesttrades. Savedcash999.37/oneclosedGBPUSD/zeroopen unchanged.
 Health17:14:52UTC ok/READY/TelegramACTIVE83live0stale,SSE1each. Workercontinues
 independently afterassistantturn; do not say no process exists anymore. Need
 future actualmarket observations before outcomes, no claim validatednewedge.
+
+## 2026-10-12 — Owner-confirmed NY H4 M5 close/reclaim observation
+
+Latest user confirmed: NY literal00:00–04:00 (not09:30), all candlesM5;
+lower CLOSE breakout then later CLOSE back ABOVE lowerline =>LONG;
+upper CLOSE breakout then later CLOSE back BELOW upperline =>SHORT.
+Wicks/equality neverconfirm; range/stop extrema do includewicks. Stop covers
+wholebreakoutmovement includingreturnbar; target2priceR frommodelednextM5open,
+not2Rnetaftercosts. NoATRpadding, oppositeedgefilter or unrequestedtimeexit.
+Onefirstcompletedsetup/pair/NYdate, missinganchor/pathfailsclosed, invalidgap
+entrythroughstopskipped. LiteralwallclockDST spring36/fall60M5bars tested.
+
+Added pure ny_h4_reclaim.py + integration into EXISTING residentread-only
+forwardcollector (notnewexecutor). Newrule ny_h4_close_reclaim_v1 has its own
+persistentSQLiteactivation1791829330.5220356=2026-10-12T18:22:10UTC,
+21:22:10Kyiv. Originalthreecontrolactivations/historypreserved. Historical
+todaysetups showsetup_before_activation and do NOT becomefakelivetrades.
+PerpairNYrange/state inprotectedexistingstatsAPI andcompactwebsection, saved
+cashstillabove. Cacheversion20261012-ny-h4-reclaim. Prior3rulesunchanged,
+stillresearchnegativecontrols, notenabledoldBUY/SELLscanner.
+
+Frozenprotocol andofflinecachedscreen inresearch_ny_h4_20261012. CachedcTrader
+2024-01-01..2026-10-07: EUR206736M5/652setups,GBP206653M5/648setups.
+This exactrule FAILED initialretrospectiveFXscreen: 2026base2pipcostEUR167
+closed/53positive/PF0.560/mean-0.298R,12unknown;GBP173closed/41positive/
+PF0.398/mean-0.459R,10unknown. Earlier2024–25also negative. 4pipstressworse.
+Closed-only10observation-dayblockbootstrap95%intervalsbelowzero forallarms;
+notfreshholdout, missingoutcomesexcluded, swapsnotmodeled, observationscan
+overlap, NOTfundedportfolio. CryptoNOTscreened. Livepattern diagnosticONLY,
+do NOT call it profitable orenablefundedpaper/realtimeexecution basedonthis.
+6daypathsboundedlikeresidentcoverage; unresolved=>unknown, notforcedPnLclose.
+
+646isolatedPython testsPASS; UIrenderer/pollcleanuptestsPASS includingnew
+NYlabel, visiblelevels/status, escapedpairnames. New16Pythoncasesinclude
+confirmationcausality,wick/equality,DST,gaps,nextopen2R,noforcedexpiry,
+separateactivation/restartpersist, warmupnotnewtrade. No livepixelQA performed.
+Deploymentimage01M4RNFWMBF8ZZS5Y37RZZBHBB digest
+b0772da7797849ff21dc1e62f0d3a988ac6d7f5f7dd3339915a3f43907c4f086,
+machine8251e6c7073e48 v1507. Firstcycle18:23:10..13UTC: fourfreshsources,
+noerrors; EURwaiting_return(range1.11979..1.12115); GBP/BTC/ETHsetupbefore
+activation. ZEROnewprospectiveobservations. DoNOTretrocounttodaypastsetups.
+18:23:54UTCresidentHTTPverificationPASS,all7deployedsourcehashesmatchlocal.
+Savedcash999.37/1closed/0open preserved, legacyscannersALLFALSE,
+paperentriesFALSE, realAUTOTRADE/BINOMOFALSE, protectedAPI401withoutauth.
+Initialverifierbeforefirstnewcyclefailedstatescount0 (oldsourcechecksbriefly
+freshafterrestart); afteractualfirstcycle4statesverified. No forcedtesttrade.
+No GitHubpush, no funds/accessrequests, no attachments/changedfileliststoowner.
+Secondcycle18:24:10..13UTC confirmedfresh4sources/noerrors, sameNYactivation,
+unchanged999.37cash/zeroobservations. Publichealth18:24:30UTCok/READY,
+TelegramACTIVE83live0stale. Collectorcontinuesautomaticallyeach60sec.

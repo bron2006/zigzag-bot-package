@@ -92,7 +92,8 @@ console.log('Paper dashboard: levels, cash/equity, history, no-start and unavail
 
 context.renderTradingDashboard({ok:true,status:'account_available',balance:999.37,equity:999.37,unrealized:0,marks_fresh:true,
     runtime:{status:'paused_no_strategy',eligible_pairs:[]},open_positions:[],closed_positions:[],
-    forward_research:{enabled:true,status:'collecting',rules:['channel24','failed24','compression'],
+    forward_research:{enabled:true,status:'collecting',rules:['channel24','failed24','compression','ny_h4_close_reclaim_v1'],
+        ny_h4_states:[{pair:'EURUSD',status:'waiting_return',low:1.1,high:1.2},{pair:'<script>',status:'incomplete_range',low:null,high:null}],
         sources:[{pair:'EURUSD',last_bar:1000,error:null},{pair:'<script>',last_bar:null,error:null}],
         counts:[{rule:'channel24',scenario:'stress',status:'pending',total:2}],recent:[]}},null,null);
 dashboard=context.winrateModalBody.innerHTML;
@@ -101,6 +102,10 @@ assert(dashboard.includes('$999.37'));
 assert(dashboard.indexOf('Баланс')<dashboard.indexOf('Живий дослідницький тест'));
 assert(dashboard.includes('Пробій діапазону · очікують 2'));
 assert(dashboard.includes('Збережений баланс не змінюють'));
+assert(dashboard.includes('NY H4: пробій і повернення'));
+assert(dashboard.includes('чекаємо закриття повернення'));
+assert(dashboard.includes('1.1 — 1.2'));
+assert(dashboard.includes('00–04 Нью-Йорк'));
 assert(!dashboard.includes('<script>'));
 console.log('Forward study: visible activity separate from saved cash and safe escaping passed');
 
