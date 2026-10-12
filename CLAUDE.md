@@ -1858,3 +1858,42 @@ primary asof60 cohort and preserved strict report. Subsequent2probe tests passed
 Original152-row snapshot through3553 remains76da96c4b0d9bb74b4ff84ffd4679d28
 after final deployment. No schema/access changes, no archive deletion, no GitHub
 push. User gets plain verified results, no file links/changed-file lists.
+
+### 2026-10-12 — entry-rule change implemented locally; comparison rejects blind promotion
+
+Owner explicitly requested strategy changes after immediate-entry losses. Added
+pure entry_rules.py (no broker/config/DB imports): signal->wait for .25ATR
+countermove->SUBSEQUENT closed directional candle beyond previous close->NEXT
+bar open. Max3 M5 waiting bars; invalidate at -.75ATR, reject chase at +.5ATR,
+recheck next-open gap. BUY/SELL symmetric, no intrabar touch-order assumption.
+15-minute settlement starts FROM ACTUAL ENTRY, not original signal. Explicit
+skipped/unknown/unresolved states; no invented entries/results on missing bars.
+Control immediate next-open and delay-one-bar isolate price-rule vs delay effect.
+
+Fixed protocol research_entry_20261012/PROTOCOL.md SHA
+3a561d32cc535b3334cf23c8f40dba7dd3448f0935b4c14040e9d93fc303883e
+written BEFORE comparison. Cached broker EURUSD/GBPCHF/AUDJPY M5 data Aug25-Oct7,
+already studied previously: RETROSPECTIVE, not fresh holdout. Exact production
+feature function trailing300 uninterrupted COMPLETED bars; unchanged model,
+single M5 leg ONLY score>75 SELL/<25 BUY and common30min intent cooldown.
+NOT exact live two-timeframe/news/drift strategy. No pair/parameter optimization,
+no model direction flip or retraining. 1084 common intents per policy,9arms.
+
+Independent $1000/$10/80% arithmetic check matches every arm/count total:
+EURUSD immediate864, delay822, pullback972 (14W/14L,2unknown);
+GBPCHF immediate824, delay912, pullback946 (2W/7L/1refund);
+AUDJPY immediate64, delay480, pullback1012 (34W/26L/1refund,6unknown).
+AUDJPY+12 is NOT reliable edge: unresolved range952..1060, September negative,
+only60decided; smaller losses elsewhere mostly reflect85-91% skipped intents.
+No full live strategy profitability or executable bankroll claimed. Research
+rule remains LOCAL, NOT activated in cloud, original Win-rate/balance unchanged.
+Do not claim waiting alone fixes current model or deploy selected AUDJPY winner.
+Prior model-contract result already showed weak predictive advantage and feature
+scale transfer issues; class label meaning lacks training-source verification.
+
+8 new causal/symmetry/gap/timeout/future-poisoning tests pass. All540 Python tests
+pass after fixing TWO test-only midnight flakes: earlier_today=now-2h crosses UTC
+date near midnight; tests now freeze db clock at noon. Production PNL functions
+unchanged. Initial full run538pass/2date-fixture failures, then540/540PASS; disclose
+actual sequence rather than asserting first full run passed. No orders/DB writes,
+cloud deployment, scanner/strategy flag mutation, GitHub push or old-data deletion.

@@ -220,7 +220,11 @@ class GetDailyAutoTradePnlTest(unittest.TestCase):
         return trade_id
 
     def test_since_excludes_trades_closed_before_it(self):
-        now = db._utcnow()
+        # Fixed midday clock: subtracting two hours near midnight crosses days.
+        now = db._utcnow().replace(hour=12, minute=0, second=0, microsecond=0)
+        clock = patch.object(db, '_utcnow', return_value=now)
+        clock.start()
+        self.addCleanup(clock.stop)
         earlier_today = now - timedelta(hours=2)
         cutoff = now - timedelta(hours=1)
 

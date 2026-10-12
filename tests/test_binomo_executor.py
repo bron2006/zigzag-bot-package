@@ -590,7 +590,10 @@ class GetDailyBinomoPnlTest(unittest.TestCase):
         # earlier TODAY (must stay within the day_start window this
         # function already applies) and confirms it's excluded once
         # `since` is set to a point after it but still before "now".
-        now = binomo_executor.db._utcnow()
+        now = binomo_executor.db._utcnow().replace(hour=12, minute=0, second=0, microsecond=0)
+        clock = patch.object(binomo_executor.db, '_utcnow', return_value=now)
+        clock.start()
+        self.addCleanup(clock.stop)
         earlier_today = now - timedelta(hours=2)
         cutoff = now - timedelta(hours=1)
 
