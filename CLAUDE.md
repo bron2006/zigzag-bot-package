@@ -2284,3 +2284,48 @@ paused_no_strategy accepting_entriesfalse, balance999.37,1closed0open, fresh
 heartbeat, enablewatchlist409, newcachebuster20261012-legacy-off; runtimeSHA256
 matcheslocal. NEVER call pause_for_stats_release.py --resume unless owner later
 explicitly requests this retired strategy. NoGitHubpush or filelinks toowner.
+
+### 2026-10-12 — owner demanded actual new work; offline H1 CFD structure screen
+
+Old strategy and paper entries remainOFF. Implemented price_structure_candidates
+pure causal module, independent of oldML: previous24H1 channel breakout,
+failed24H1 breakout/reclaim with structuralstop/priorrangemidpoint target,
+07UTC compression range breakout. These overlap broad previously investigated
+families, NOT three independent novel discoveries or an AQR futures replication.
+New target contract: USDquoted FX H1 setup, M5 stop/target/sessionflat path,
+not fixed-horizon binary direction. No production integration/activation.
+
+Frozen research_cfd_structure_20261012/PROTOCOL.md before outcomes. Existing
+EURUSD206736 +GBPUSD206653 M5 bars2024..Oct7.2026, H1 only12completeM5 bars,
+resetaftermissinghour,24H1warmup, completed09..15UTC signals nextM5Open entry.
+Onefirstintent/pair/day, earliestacrosspairs alphabeticaltie, fixedreservation
+to16UTC regardlessofexit (no outcome-dependent retry/overlap). Channel/compression
+stop2ATR target3ATR; failedbreakstop signalextreme+.1ATR, midpointtarget,
+netRR>=1.5. Costsconditional2/4pipsroundtrip, 1000USDperdiagnosticphase,
+.5%risk/minstep1000units/5xnotionalcap; not actual broker fees/margin/fills.
+Early2024-25 and later2026 alreadyseenhistory, NOT unseen/prospectiveOOS.
+
+12arms=3rules*2phases*2costs; matchedalwaysBUY/SELL scheduled controls reported.
+10observeddayblocks4000bootstrap98.333% CIs for3familybatch ONLY. Controls can
+lose matched days through independent min-size balances; CI returnsNULL rather
+than cherry-picking matchedprofitable subset. Earlychannel/failedhaveoneunknown
+path each; conditional balances NOT completeexecutableprofit. GatesallFALSE.
+
+Later2026 base/stress closingbalances: channel980.53/948.24(93/92trades);
+failed984.91/961.57(26/18trades); compression1001.14/999.25(4trades). Early
+base/stress channel895.64/849.82,failed942.37/905.16,compression1006.41/1004.25.
+Compression only10executedacrossALLyears percost, cannotpromote sparse+profit;
+stress2026negative. NONEa candidate forprospectivepaper fromthisgate.
+Do not infer alltradingstrategiesfail; only thesefixed variants rejected.
+
+IndependentDecimal audit initiallyfound3one-cent float-subtraction ties.
+Preserved result_float_v1.json, correctedoffline monetaryarithmeticONLY to
+Decimal endpoints and reran samehypotheses/data/costs. Final944journalrecords
+acrossarms(not944distinctnewmarkettrades) exactmoney/cashidentities,risk/notional
+checks,minstep,one/day,nooverlap PASS. Rule/prefixcausality/nonemptyall3setups/
+reflection/gapreset testsPASS; ALL619Python testsPASS isolatedSQLite realflagsOFF.
+Source/protocolhashes and allarms storedlocally/gitignored; no brokerDB access,
+cloud writes, realorders, paperbalance reset or GitHubpush. Usergets plainresults,
+no files/tables/changed-file lists. Papercloud stillpaused_no_strategy, not running
+these new offline candidates. Need further DIFFERENT research before honest
+newstrategylaunch; do not promise continued backgroundwork when none scheduled.
