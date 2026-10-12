@@ -1141,14 +1141,8 @@ async function loadWinrateStats(before=null) {
     winrateModalBody.innerHTML = `<div class="winrate-loading">${escapeHtml(tr("winrateLoading"))}</div>`;
 
     try {
-        const [paper,current,history] = await Promise.all([
-            apiGet('/api/stats/paper_stops',before ? {before} : {}).catch(() => ({ok:false,status:'unavailable'})),
-            apiGet("/api/stats/signals", { scope: "current_test", valuation: "asof60" }).catch(() => null),
-            apiGet("/api/stats/signals", { days: 30, scope: "history" }).catch(() => null)
-        ]);
-        paperArchiveCurrent=current;
-        paperArchiveHistory=history;
-        renderTradingDashboard(paper,current,history);
+        const paper=await apiGet('/api/stats/paper_stops').catch(() => ({ok:false,status:'unavailable'}));
+        renderTradingDashboard(paper,null,null);
     } catch (err) {
         console.error("Winrate stats load error:", err);
         winrateModalBody.innerHTML = `<div class="winrate-error">${escapeHtml(tr("winrateError"))}</div>`;
@@ -1162,49 +1156,49 @@ function winrateRateClass(winRate) {
 
 function renderTradingDashboard(paper,current,history) {
     if (!winrateModalBody) return;
-    const money=value=>typeof value==='number' && Number.isFinite(value) ? `$${value.toFixed(2)}` : '—';
-    const price=value=>typeof value==='number' && Number.isFinite(value) ? String(value) : '—';
-    const stamp=value=>typeof value==='number' && Number.isFinite(value) ? new Date(value*1000).toLocaleString('uk-UA') : '—';
-    let content='';
+    const money=value=>typeof value==='number' && Number.isFinite(value) ? '$'+value.toFixed(2) : '—';
+    const price=value=>typeof value==='number' && Number.isFinite(value) ? String(Number(value.toFixed(value>100 ? 2 : 5))) : '—';
     const forward=paper?.forward_research;
+    const paused=paper?.runtime?.status==='paused_no_strategy';
+    let content='<div class="winrate-section"><div class="winrate-section-title">Баланс</div>';
+    if (!paper?.ok) content+='<div>Дані рахунку недоступні — це не нульовий баланс.</div>';
+    else if (paper.status==='not_started') content+='<div>Ще не запущено</div>';
+    else content+='<div style="font-size:30px;font-weight:700">'+money(paper.balance)+'</div><small>Віртуальний'+(paused ? ' · збережений, нові списання вимкнені' : '')+'</small>';
+    content+='</div>';
+    const states=new Map((forward?.ny_h4_states || []).map(s=>[s.pair,s]));
+    const sources=new Map((forward?.sources || []).map(s=>[s.pair,s]));
+    const ledger=new Map((paper?.by_pair || []).map(s=>[s.pair,s]));
+    const open=paper?.open_positions || [];
+    const closed=paper?.closed_positions || [];
+    const pairs=[...new Set([...(forward?.pairs || []),...states.keys(),...sources.keys(),...ledger.keys(),...open.map(p=>p.pair),...closed.map(p=>p.pair)])];
+    const statuses={forming_range:'Формується діапазон',incomplete_range:'Неповні дані діапазону',invalid_flat_range:'Нульовий діапазон',waiting_breakout:'Чекаємо пробою',waiting_return:'Чекаємо повернення',post_range_data_gap:'Пропуск свічок — входу немає',setup_before_activation:'Сетап був до запуску',setup_complete:'Повернення підтверджено'};
     if (forward?.enabled) {
-        const labels={channel24:'Пробій діапазону',failed24:'Хибний пробій',compression:'Вузький діапазон',ny_h4_close_reclaim_v1:'NY H4: пробій і повернення'};
-        const status={collecting:'Автоматичний збір працює',waiting_data:'Очікуємо дані брокера',starting:'Тест запускається',unavailable:'Дані тесту тимчасово недоступні'}[forward.status] || 'Перевіряємо стан';
-        const nyStatuses={forming_range:'формується діапазон',incomplete_range:'неповні дані діапазону',invalid_flat_range:'нульовий діапазон',waiting_breakout:'чекаємо закриття за межею',waiting_return:'чекаємо закриття повернення',post_range_data_gap:'пропуск свічок — вхід заборонено',setup_before_activation:'сьогоднішній сетап був до запуску',setup_complete:'повернення підтверджено'};
-        const nyStates=(forward.ny_h4_states || []).map(s=>`<div>${escapeHtml(s.pair)} · ${escapeHtml(nyStatuses[s.status] || s.status)}${s.low!=null && s.high!=null ? ' · '+escapeHtml(String(s.low))+' — '+escapeHtml(String(s.high)) : ''}</div>`).join('');
-        content+=`<div class="winrate-section"><div class="winrate-section-title">Живий дослідницький тест</div><div>${escapeHtml(status)} · перевірка щохвилини</div><small>Окремі спостереження — не реальна торгівля. Збережений баланс не змінюють.</small>${nyStates ? '<details open><summary>Твій патерн NY H4 · діапазон 00–04 Нью-Йорк</summary>'+nyStates+'</details>' : ''}${(forward.sources || []).map(s=>`<div>${escapeHtml(s.pair)} · остання закрита свічка ${stamp(s.last_bar===null ? null : s.last_bar+300)}${s.error ? ' · помилка даних' : ''}</div>`).join('')}${(forward.rules || []).map(rule=>{
-            const counts=(forward.counts || []).filter(c=>c.rule===rule && c.scenario==='stress');
-            const count=status=>counts.filter(c=>c.status===status).reduce((a,c)=>a+Number(c.total),0);
-            return `<div>${escapeHtml(labels[rule] || rule)} · очікують ${count('pending')} · завершено ${count('closed')} · без даних ${count('unknown')} · пропущено ${count('skipped')}</div>`;
-        }).join('')}<details><summary>Результати спостережень</summary><small>NY H4: закриття M5 за межею → закриття назад через неї; нижня межа — LONG, верхня — SHORT. Стоп за рухом, ціль 2 стопи до витрат, без примусового виходу за часом. Інші три правила — дослідницький контроль, не підтверджена стратегія. Свічки cTrader, не реальні виконання. Витрати умовні: FX 2/4 піпси, крипта 0,10%/0,20% обсягу; свопи не враховані. Суми нижче — ілюстрація при ризику $5, не баланс рахунку.</small>${(forward.recent || []).filter(r=>r.scenario==='stress').map(r=>`<div>${escapeHtml(r.pair)} · ${escapeHtml(labels[r.intent.rule] || r.intent.rule)} · ${stamp(r.intent.ts)} · ${escapeHtml({closed:'завершено',pending:'очікуємо результат',unknown:'даних недостатньо',skipped:'вхід пропущено'}[r.status] || r.status)}${r.status==='closed' ? ' · умовний результат '+money(r.hypothetical_risk5_usd) : ''}</div>`).join('') || '<div>Нових спрацьовувань після запуску ще немає.</div>'}</details></div>`;
+        const status=forward.status==='collecting' && forward.candles_fresh ? 'Працює' : 'Очікує свіжі дані';
+        content+='<div class="winrate-section"><div class="winrate-section-title">NY H4 · '+status+'</div><small>00–04 Нью-Йорк · M5 · стоп / тейк 1:2 · спостереження без списань</small></div>';
     }
-    const researchContent=content;
-    content='';
-    if (!paper?.ok) {
-        content+='<div class="winrate-section">Рахунок зі стопом: дані тимчасово недоступні. Це не нульовий баланс.</div>';
-    } else if (paper.status==='not_started') {
-        content+=`<div class="winrate-section"><div class="winrate-section-title">Паперовий рахунок зі стопом</div><div style="font-size:30px;font-weight:700">—</div><div>Ще не запущено · запланований старт ${money(paper.planned_initial)}</div><small>Угод зі стопом ще немає. Реальні ордери вимкнені.</small></div>`;
-    } else {
-        content+=`<div class="winrate-section"><div class="winrate-section-title">${paper.runtime?.status==='paused_no_strategy' ? 'Збережений рахунок — нові входи вимкнені' : 'Паперовий рахунок зі стопом'}</div><div>Баланс</div><div style="font-size:30px;font-weight:700">${money(paper.balance)}</div><div>Поточна вартість ${money(paper.equity)} · відкритий результат ${money(paper.unrealized)}</div><small>${paper.marks_fresh ? 'За останніми котировками' : 'Немає свіжої ціни для відкритої позиції'} · не реальні гроші</small></div>`;
-    }
-    content+=researchContent;
-    const positions=(items,empty)=>items?.length ? items.map(p=>`<div class="winrate-row"><span><strong>${escapeHtml(p.pair)} · ${p.side===1?'BUY':'SELL'}</strong><br><small>Вхід ${price(p.entry)} · стоп ${price(p.stop)} · ціль ${price(p.target)}<br>Обсяг ${price(p.units)} · ${p.state==='open'?'поточна ціна':'вихід'} ${price(p.state==='open'?p.current:p.exit)}${p.reason ? ' · '+escapeHtml({stop:'стоп',target:'ціль',session_end:'кінець сесії'}[p.reason] || p.reason) : ''}<br>${stamp(p.entry_ts)}${p.exit_ts ? ' → '+stamp(p.exit_ts) : ''} · додаткові витрати ${money(p.fee_usd)}</small></span><strong>${money(p.pnl)}</strong></div>`).join('') : `<div class="winrate-empty">${empty}</div>`;
-    if (paper?.runtime) {
-        const r=paper.runtime;
-        const status={running:'Тест працює',paused_no_strategy:'Входи вимкнені. Стару стратегію зупинено; нову ще не обрано.',not_ready:'Працівник не готовий — нових входів немає',suspended_path_gap:'Пауза: втрачена частина котировок відкритої угоди'}[r.status] || 'Стан потребує перевірки';
-        content+=`<div class="winrate-section">${escapeHtml(status)} · ризик 0,5% · одна угода<details><summary>Умови тесту та пропуски</summary><small>Контрольний тест поточних сигналів, не підтверджена прибуткова стратегія. Стоп 1 ATR, ціль 1,5 ATR; вихід також через 30 хвилин за доступною ціною. Пари з перевіреним USD-обсягом: ${escapeHtml((r.eligible_pairs || []).join(', ')) || 'очікуємо дані брокера'}. Витрати: спред + умовний резерв (FX $7 на 100 000 одиниць; крипта 0,10% від обсягу входу). Це не перевірений тариф брокера; маржа, своп і реальне виконання не змодельовані.</small>${(paper.skipped || []).map(s=>`<div>${escapeHtml({non_USD_or_not_in_control_universe:'Поза парами цього тесту',expired_signal_no_late_entry:'Сигнал застарів',broker_specs_unavailable:'Немає параметрів обсягу',one_open_position:'Уже є відкрита угода',path_gap_review_required:'Прогалина котировок',daily_loss_limit:'Денний ліміт втрати 2%',no_fresh_entry_quote:'Немає свіжої ціни',invalid_ATR_or_side:'Немає коректного ATR/напрямку',spread_too_large_for_stop:'Спред завеликий',rollover_entry_block:'Період перенесення позицій',insufficient_capital_or_minimum_size:'Недостатньо для мінімального обсягу'}[s.reason] || s.reason)}: ${Number(s.total)}</div>`).join('')}</details></div>`;
-    }
-    content+=`<div class="winrate-section"><div class="winrate-section-title">Відкриті угоди</div>${positions(paper?.open_positions,paper?.ok ? 'Відкритих угод немає.' : 'Дані угод недоступні.')}</div>`;
-    content+=`<div class="winrate-section"><div class="winrate-section-title">Закриті угоди</div>${positions(paper?.closed_positions,paper?.ok ? 'Закритих угод ще немає.' : 'Дані угод недоступні.')}</div>`;
-    if (paper?.next_before) content+=`<button class="tf-button" onclick="loadWinrateStats(${Number(paper.next_before)})">Старіші угоди</button> `;
-    if (paper?.status==='account_available') content+='<button class="tf-button" onclick="loadWinrateStats()">Оновити рахунок</button>';
-    if (paper?.by_pair?.length) content+=`<div class="winrate-section"><div class="winrate-section-title">Пари</div>${paper.by_pair.map(p=>`<div class="winrate-row"><span>${escapeHtml(p.pair)} · відкрито ${p.opened} · закрито ${p.closed}</span><strong>${money(p.pnl)}</strong></div>`).join('')}</div>`;
-    if (current?.ok && current.measurement_audit) {
-        renderWinrateStats(current,history);
-        const legacy=winrateModalBody.innerHTML;
-        content+=`<details class="winrate-section"><summary>Попередній тест напрямку · ${money(current.measurement_audit.scenario.measured_balance)}</summary><small>Без стопа; умовні +80%/−100%. Не результат нового рахунку.</small>${legacy}</details>`;
-    } else {
-        content+='<details class="winrate-section"><summary>Попередній тест напрямку</summary>Архів тимчасово недоступний — результати не видалені.</details>';
+    if (pairs.length) {
+        content+='<div class="winrate-section"><div class="winrate-section-title">Пари</div>';
+        for (const pair of pairs) {
+            const state=states.get(pair),source=sources.get(pair),saved=ledger.get(pair);
+            const position=open.find(p=>p.pair===pair);
+            const last=closed.find(p=>p.pair===pair);
+            const observation=(forward?.recent || []).find(r=>r.pair===pair && r.scenario==='stress' && r.intent?.rule==='ny_h4_close_reclaim_v1');
+            let lines=[];
+            if (forward?.enabled) {
+                lines.push(source?.error ? 'Помилка даних' : state ? (statuses[state.status] || 'Очікуємо дані') : 'Очікуємо діапазон');
+                if (state?.low!=null && state?.high!=null) lines.push(price(state.low)+' — '+price(state.high));
+                if (observation) {
+                    if (observation.status==='closed') lines.push('Останнє спостереження: '+(typeof observation.net_R==='number' ? observation.net_R.toFixed(2)+'R' : '—'));
+                    else if (observation.status==='pending') lines.push('Чекаємо стоп або тейк');
+                    else lines.push(observation.status==='skipped' ? 'Вхід пропущено' : 'Недостатньо даних результату');
+                }
+            }
+            if (position) lines.push((position.side===1?'BUY':'SELL')+' · вхід '+price(position.entry)+' · стоп '+price(position.stop)+' · тейк '+price(position.target));
+            else if (!forward?.enabled && last) lines.push('Закрито '+(last.side===1?'BUY':'SELL')+' · '+({stop:'стоп',target:'тейк',session_end:'кінець сесії'}[last.reason] || 'завершено'));
+            const pnl=saved?.pnl ?? position?.pnl ?? last?.pnl;
+            content+='<div class="winrate-row"><span><strong>'+escapeHtml(pair)+'</strong><br><small>'+lines.map(escapeHtml).join('<br>')+'</small></span>'+(typeof pnl==='number' ? '<strong>'+money(pnl)+'</strong>' : '')+'</div>';
+        }
+        content+='</div>';
     }
     winrateModalBody.innerHTML=content;
 }

@@ -68,46 +68,45 @@ assert(selected.includes('$998.00'));
 console.log('UI: current experiment, collapsed history, escaping and missing data passed');
 
 context.renderTradingDashboard({ok:true,status:'not_started',planned_initial:1000,open_positions:[],closed_positions:[]},
-    {ok:true,scope:'current_test',measurement_audit:audit},null);
+    {ok:true,measurement_audit:audit},null);
+assert(context.winrateModalBody.innerHTML.includes('Ще не запущено'));
+assert(!context.winrateModalBody.innerHTML.includes('Попередній тест'));
+context.renderTradingDashboard({ok:true,status:'account_available',balance:1000,equity:995,unrealized:-5,
+    open_positions:[{pair:'<script>',side:1,entry:100,stop:98,target:103,units:2,current:99,pnl:-5}],
+    closed_positions:[{pair:'CLOSED',side:-1,exit:97,pnl:6,reason:'target'}]},null,null);
 let dashboard=context.winrateModalBody.innerHTML;
-assert(dashboard.includes('Ще не запущено'));
-assert(dashboard.includes('запланований старт $1000.00'));
-assert(dashboard.includes('Попередній тест напрямку · $998.00'));
-assert(!dashboard.includes('<details open'));
-context.renderTradingDashboard({ok:true,status:'account_available',balance:1000,equity:995,unrealized:-5,marks_fresh:true,
-    open_positions:[{pair:'<script>',side:1,state:'open',entry:100,stop:98,target:103,units:2,current:99,pnl:-5}],
-    closed_positions:[{pair:'CLOSED',side:-1,state:'closed',entry:100,stop:102,target:97,units:2,exit:97,pnl:6,reason:'target'}]},null,null);
-dashboard=context.winrateModalBody.innerHTML;
-assert(dashboard.indexOf('Баланс')<dashboard.indexOf('Відкриті угоди'));
-assert(dashboard.includes('Поточна вартість $995.00'));
-assert(dashboard.includes('Вхід 100 · стоп 98 · ціль 103'));
-assert(dashboard.includes('Обсяг 2'));
+assert(dashboard.indexOf('Баланс')<dashboard.indexOf('Пари'));
+assert(dashboard.includes('вхід 100 · стоп 98 · тейк 103'));
 assert(dashboard.includes('&lt;script&gt;'));
 assert(!dashboard.includes('<script>'));
 assert(dashboard.includes('CLOSED'));
+assert(!dashboard.includes('Закриті угоди'));
+assert(!dashboard.includes('Відкриті угоди'));
 context.renderTradingDashboard({ok:false},null,null);
-assert(context.winrateModalBody.innerHTML.includes('Це не нульовий баланс'));
-assert(!context.winrateModalBody.innerHTML.includes('Відкритих угод немає'));
-console.log('Paper dashboard: levels, cash/equity, history, no-start and unavailable states passed');
-
-context.renderTradingDashboard({ok:true,status:'account_available',balance:999.37,equity:999.37,unrealized:0,marks_fresh:true,
-    runtime:{status:'paused_no_strategy',eligible_pairs:[]},open_positions:[],closed_positions:[],
-    forward_research:{enabled:true,status:'collecting',rules:['channel24','failed24','compression','ny_h4_close_reclaim_v1'],
-        ny_h4_states:[{pair:'EURUSD',status:'waiting_return',low:1.1,high:1.2},{pair:'<script>',status:'incomplete_range',low:null,high:null}],
-        sources:[{pair:'EURUSD',last_bar:1000,error:null},{pair:'<script>',last_bar:null,error:null}],
-        counts:[{rule:'channel24',scenario:'stress',status:'pending',total:2}],recent:[]}},null,null);
+assert(context.winrateModalBody.innerHTML.includes('це не нульовий баланс'));
+const forward={enabled:true,status:'collecting',candles_fresh:true,pairs:['EURUSD','GBPUSD'],
+    rules:['channel24','failed24','compression','ny_h4_close_reclaim_v1'],
+    ny_h4_states:[{pair:'EURUSD',status:'waiting_return',low:1.1,high:1.2},{pair:'GBPUSD',status:'setup_before_activation',low:1.3,high:1.4}],
+    sources:[{pair:'EURUSD',last_bar:1000,error:null},{pair:'GBPUSD',last_bar:1000,error:null}],counts:[],recent:[]};
+context.renderTradingDashboard({ok:true,status:'account_available',balance:999.37,
+    runtime:{status:'paused_no_strategy'},open_positions:[],closed_positions:[{pair:'GBPUSD',side:-1,pnl:-.63,reason:'stop'}],
+    by_pair:[{pair:'GBPUSD',opened:0,closed:1,pnl:-.63}],forward_research:forward},
+    {ok:true,measurement_audit:audit},null);
 dashboard=context.winrateModalBody.innerHTML;
-assert(dashboard.includes('Автоматичний збір працює'));
 assert(dashboard.includes('$999.37'));
-assert(dashboard.indexOf('Баланс')<dashboard.indexOf('Живий дослідницький тест'));
-assert(dashboard.includes('Пробій діапазону · очікують 2'));
-assert(dashboard.includes('Збережений баланс не змінюють'));
-assert(dashboard.includes('NY H4: пробій і повернення'));
-assert(dashboard.includes('чекаємо закриття повернення'));
+assert(dashboard.indexOf('Баланс')<dashboard.indexOf('Пари'));
+assert.equal((dashboard.match(/GBPUSD/g)||[]).length,1,'each pair occurs only once, without duplicate trade sections');
+assert(dashboard.includes('$-0.63'));
+assert(dashboard.includes('Чекаємо повернення'));
 assert(dashboard.includes('1.1 — 1.2'));
 assert(dashboard.includes('00–04 Нью-Йорк'));
-assert(!dashboard.includes('<script>'));
-console.log('Forward study: visible activity separate from saved cash and safe escaping passed');
+assert(!dashboard.includes('<details'));
+assert(!dashboard.includes('Попередній тест'));
+assert(!dashboard.includes('Витрати'));
+assert(!dashboard.includes('Пробій діапазону'));
+assert(!dashboard.includes('Умови тесту'));
+assert(!dashboard.includes('Оновити рахунок'));
+console.log('Compact dashboard: one balance, one row per pair, NY status, no old archive or duplicate trade sections passed');
 
 (async()=>{
     let hidden=true, poll, cleared=false;
@@ -121,13 +120,13 @@ console.log('Forward study: visible activity separate from saved cash and safe e
     vm.runInContext(source.slice(source.indexOf('let paperRefreshTimer'),source.indexOf('function winrateRateClass')),pollingContext);
     pollingContext.openWinrateModal();
     await new Promise(resolve=>setImmediate(resolve));
-    assert.equal(calls.length,3);
+    assert.equal(calls.length,1);
     await poll();
-    assert.equal(calls.length,4);
+    assert.equal(calls.length,2);
     assert.equal(calls.at(-1),'/api/stats/paper_stops','auto-refresh must not repeatedly query the old DB reports');
     pollingContext.closeWinrateModal();
     assert(cleared);
     await poll();
-    assert.equal(calls.length,4,'closed dashboard must not keep polling');
+    assert.equal(calls.length,2,'closed dashboard must not keep polling');
     console.log('Paper dashboard: bounded live refresh and close cleanup passed');
 })().catch(error=>{console.error(error);process.exitCode=1;});

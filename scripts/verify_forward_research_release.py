@@ -24,7 +24,7 @@ assert 'ny_h4_close_reclaim_v1' in research['rules'] and len(research['rules'])=
 assert research['rule_activations']['ny_h4_close_reclaim_v1']>=research['activated']
 assert len(research['ny_h4_states'])==4
 assert all(r['intent']['ts']>=research['rule_activations'][r['intent']['rule']] for r in research['recent'])
-assert 'script.js?v=20261012-ny-h4-reclaim' in requests.get(base+'/',timeout=(5,20)).text
+assert 'script.js?v=20261012-compact-dashboard' in requests.get(base+'/',timeout=(5,20)).text
 flags=requests.post(base+'/api/scanner/toggle',data=params,timeout=(5,20))
 flags.raise_for_status();assert not any(flags.json().values())
 assert requests.get(base+'/api/stats/paper_stops',timeout=(5,20)).status_code==401

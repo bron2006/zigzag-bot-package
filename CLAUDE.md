@@ -2440,3 +2440,27 @@ No GitHubpush, no funds/accessrequests, no attachments/changedfileliststoowner.
 Secondcycle18:24:10..13UTC confirmedfresh4sources/noerrors, sameNYactivation,
 unchanged999.37cash/zeroobservations. Publichealth18:24:30UTCok/READY,
 TelegramACTIVE83live0stale. Collectorcontinuesautomaticallyeach60sec.
+
+## 2026-10-12 — Compact win-rate window after owner's screenshot
+
+Owner explicitly rejected duplicate pair/trade lists, expanded old inactive
+test and long explanatory text. UI-only change: balance first, single compact
+NY status line, ONE row per pair with range/waiting state and saved account
+PnL if present. No separate open/closed trade sections, retired direction-test
+dropdown, conditions essays, control-rule counters or duplicate source lists.
+Open funded paper positions (if any) retain entry/stop/target in their pair row.
+NY observation results are R, not money credited to saved cash. Old results
+remain on disk/API: NOT deleted or reset. Existing three research controls
+continue unchanged in backend; hidden from compact window, not reactivated
+as old trading scanners. NY research continues automatically, real orders off.
+
+Opening modal now requests only /api/stats/paper_stops, not two retired signal
+reports. Existing5secrefresh/closecleanup preserved. New browser cache marker
+20261012-compact-dashboard. 646isolatedPython tests and JSrenderer/cleanup
+tests PASS, includes exactly one GBPUSD occurrence with oldtrade+pairaggregate,
+no details/archive/essays, balanceabovepairs, escapednames. LivepixelQA not
+performed. Releaseimage01M4RPCR8DJEK64QA9RM4SXFAR digest
+7b0d1a71e2cbb4680f22acd28574f343849f9ba8dd82980b0ea8782814ed0937.
+Afterdeployment residentHTTP/cachemarker/auth/flagsverificationPASS; all7
+runtimehashesmatchlocal. Cash999.37, sameNYactivation1791829330.5220356,
+fourresearchsources/statuscollecting. No historydeletion/GitHubpush.
