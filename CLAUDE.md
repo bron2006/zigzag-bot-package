@@ -2597,3 +2597,35 @@ thresholdtinkering orclouddeploy/newgoldexecution/cashreset/UIchanges.
 11newcausality/fill/stop/mirror/pending/gap/H1timingtestsPASS; full676isolated
 Python testsPASS. Userattachmentsremainlocaluntracked; taskmedia/cacheignored,
 neverGitadded. Source/protocol/findings/testslocalcommit, noGitHubpush.
+
+## 2026-10-13 — Uploaded MA10/20+volume crypto video, full bounded screen
+
+User uploaded@io.usdt37.71sclip. Frames0–35s/all5stepsactuallyviewed. MA10/20
+closedcrossup, highvolume, closeaboveMA, SLlocalbase,RR>=2; authorallowsM5/
+M15/H1/D1 butdoesnotstateSMA/EMA, volumequantifier, stoplookback/expiry.
+Explicitinterpretation research_ma1020_20261013 PROTOCOLfrozenbeforeoutcomes:
+long-onlyBinanceSPOTBTCUSDT/ETHUSDT, mainSMA10/20, EMAsensitivity,
+volume>=1.5mean20PRIORbars, stopmin10lows-.01,nextopen,2priceR,noforcedexit.
+Withoutvolumecontrolnotreplacementauthorrule. NoFXtickvolumeorCFDvolume
+substituted. NewlyfetchedpublicM15Jan1..Oct7:26880barseach,existingpublicH1
+cachefilteredcommon2026period6720each. No keys/accountlogin/orders.
+PublicAPIofficialmarketdocsread. FetchfirstReadTimeout, second180sharddeadline,
+thirdresumecompletedimmutablecheckpointpages, bounded2timeouts/request,
+210schild/180sworker. No fourthretry/fallbackvenue/bypass.
+
+Completepathused(noengineering6daycutoff), amendmentBEFOREfirstoutcomerun.
+Onepositionperasset/arm, overlapskippeduntilactualexit;unknownhaltsarm,end
+pendingnotfakezero,stopfirst/adversegaps. Conditional0.20/0.30%RTcostnotactual
+accountfee. NormalizedRnotfundedcash/slippage/margin/fillproof.64cells,
+6000bootstrap10setupdayblocks/familywise64correction, finiteMCtailuncertainty.
+
+All16gatesFAIL. DO NOTsayallarms/periodsnegative: initialcombinedH1positive
+BTC/SMA+2.881R(n15)andETH/EMA+.727R(n28), butlatepartsnegative-1.172R(n4)
+and-.625R(n11), respectively. BTC/EMAH1whole-3.234R,ETH/SMA-1.344R.
+AllM15volumeonwhole negative: stressBTC/SMA-22.821R(n86),BTC/EMA-13.113(n95),
+ETH/SMA-12.888(n102),ETH/EMA-16.794(n112). BTCM15latepositive/earlynegative,
+notstableedge. Early/latecontrolsretained,noparamstweakedafterH1outputs.
+ExistingNYobserver/cash/UI/offflagsuntouched, nogreenbacktestpromoted,
+no clouddeploy/GitHubpush/filelinkstosowner.683isolatedPython testsPASS incl
+7closedcross/volumeprior/SMAEMApoisoning/gap/stopfilltests. Datasetgenerated
+cache/resultignored, source/protocol/findings/testscommittedlocally.
