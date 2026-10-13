@@ -2493,3 +2493,29 @@ including6newrepeat/alternativetests. Initialnon-overlapfixturefailedbecause
 firsttradereallyhitstopbeforenextentry; correctedfixturetoholdfirstposition,
 notenginechangedtoforceexpectedresult. ResultsJSONlocalignoredgenerated
 artifacts, reproduciblescripts/protocol/findingscommitted; noGitHubpush.
+
+## 2026-10-13 — Video Fibonacci levels interpretation, cached-only screen
+
+User sharedTikTok@rassl_trade/video/7629745824410520840, confirmed0/.5/.618/1,
+askedtoact. Video's trend/swings/confirmationunderspecified: do NOTclaimwe
+reproducedauthor'sexactstrategy. Explicitassumptionsannouncedbeforetest:
+causalH1strict2left+2rightconfirmedpivots, HH+HLlong/LL+LHshort, M5zone
+touchthenbullishcloseabovepreviousHigh/bearishbelowpreviousLow, nextopenentry.
+AnchorknownbeforeM5open; gapreset; stop1pipbeyonddeepedge, invalidatedif
+pretouched;targetoriginallevel0, notfixed2R. Oneentry/anchornotperday.
+Pureoffline research_fibonacci_20261013; no livecode/deploy/accountchanges.
+Frozenzone.5..618 +equalwidthshallow.382..5/deep.618..736controls,3cachedpairs
+EUR/GBP/JPY, 2024..2026-10-07reusedNOTfreshholdout. 2/4pipconditionalcosts,
+JPY.02/.04quoteunits. Confirmedpivotsknowntime>=pivotstart+3H; nofutureleak.
+Targetfrommodelednextopen, stop-firstambiguousOHLC, adversegaps;6daypathlimit,
+missing/unfinishedunknownnotzero. Independentobservationsmayoverlap, no
+fundedportfolio/USDaccountclaim, swaps/fills/marginnotsimulated.
+
+All9pair/zonegatesFAIL. 2026mainzonebase:EUR92closed29positive,GBP93/36,
+JPY93/31=>278closed96positive182negative,14unknownexcludedfromreturns.
+PF0.621/0.690/0.619,meanR-0.260/-0.190/-0.254. 4pipstressPF0.426/0.498/
+0.441;earliermainzonealsonegative. No90%winrateclaim, no universalFibonaccifail
+claim: THISspecificinterpretationdoesnotpass. DoNOToptimizeunclearvideo
+parametersafterseeinglossesoractivatefundedpaperasprovenedge. 661isolated
+Python testsPASS incl9newpivottiming/poisoning/gap/wick/mirror/entrytests.
+GeneratedresultJSONlocalignored; sources/protocol/findingscommittedlocally.
