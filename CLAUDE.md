@@ -2519,3 +2519,41 @@ claim: THISspecificinterpretationdoesnotpass. DoNOToptimizeunclearvideo
 parametersafterseeinglossesoractivatefundedpaperasprovenedge. 661isolated
 Python testsPASS incl9newpivottiming/poisoning/gap/wick/mirror/entrytests.
 GeneratedresultJSONlocalignored; sources/protocol/findingscommittedlocally.
+
+## 2026-10-13 — Gold breaker video: actual M1 acquired, chart definition blocked
+
+User sentTikTok@_crypto_hustler_/video/7597429143780871432 (94s), thenaskedact.
+SubtitlesdescribeXAUUSD/H1largebody+smallwicks, firstboundarybreachonM1,
+oppositebreakerfourpivots (upperbreach=>H-L-HH-LL=>short), retestblocklimit,
+stopbeyondblock,target2R. Need exactblockcandle/edge plusquantitativeanchor
+criteria beforeclaimingauthorstrategy. Do NOT silentlyinventandreportfailed
+authorbacktest as previousFibonacciinterpretation. No strategybacktestyet.
+
+research_gold_breaker_20261013/fetch.py isolatedallowlistedcTraderDEMOreads,
+180sworker/210schildbound, immutablegzip+hashmanifest, noorders/tokenrefresh.
+Oldlocal.envaccessINVALID(CH_ACCESS_TOKEN_INVALID); --persisted flagreuses
+existingboundedread-onlySupabaseselectviaexistingprobehelper. Supabaseskill
+readfully; docs/changelogread (webmarkdownfailed, rawHTTPsuccess); noschema,
+key/tokenrotation orDBwrites, no secretsprinted/exported. Historiesdon'treuse
+residentappclient, no secondapp/modelremoteprocess, no realaccountfallback.
+
+46pages /276000received; 282outsidewindowexcluded =>275718actualM1bars,
+2026-01-01T23:02UTC..2026-10-12T23:59UTC. RequestedJan1..Oct13exclusive.
+Hashverified,duplicates0, fixedprotocolOHLC1e5scale (notdigits2), nofilledgaps.
+4205completeH1,404partialH1excluded;204non60secintervalsmostlybrokerclosures,
+plus2isolated120secgaps. audit.jsonisdataevidence, NOTprofitresult/activegoldtest.
+Manifesthashccc646d25fb6e9b84896fd449ebf2ceff086ba79d697c93dc16b32c6be8eb40b.
+
+Publicvideodownload403; secondSession/downloadAddr/playAddrattemptunavailable.
+video.py sanitizesexceptionsnow (initial403printedpublicsignedCDNURL,noaccount
+token). Reputableimageio-ffmpeg installedonlyintemporarytarget
+C:/Users/Work/AppData/Local/Temp/zigzag-video-tools-20261013; nobrokersoftware
+changes. No sourceclipobtained, noframesinspected, neverclaimvideo watched.
+Computer-useSKILL+guidance+confirmationsfullyread; documentedCUAhiddenIAB
+tabopenedexactsourceURL. AX+screenshotevidencedONLYPleasewait, nochart.
+No CAPTCHA/login/privacyactions/bypass. Tabtemporary, nocontinuedbrowserwork.
+Need ownerattachclipor screenshotabout1:20–1:30ofblockdiagram. Safehistoryaudit
+completed; liveNYobserver/cash/UI/flagsnotmodified, nodeployment/GitHubpush.
+4newintegritytestspass (60realminutesH1, missing/duplicateexclude,1e5decode).
+FullisolatedPython suite665PASS. Acquisitionscripts/protocol/auditsource/tests
+committedlocally; cache/auditgeneratedJSONnotforcedintoGit.
