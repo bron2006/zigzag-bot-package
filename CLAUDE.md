@@ -2464,3 +2464,32 @@ performed. Releaseimage01M4RPCR8DJEK64QA9RM4SXFAR digest
 Afterdeployment residentHTTP/cachemarker/auth/flagsverificationPASS; all7
 runtimehashesmatchlocal. Cash999.37, sameNYactivation1791829330.5220356,
 fourresearchsources/statuscollecting. No historydeletion/GitHubpush.
+
+## 2026-10-13 — Bounded repeat/alternative investigation, NOT live changes
+
+User wants results, not merely more trades. Offlineonly research_ny_h4_20261013:
+6fixeddefinitions x3cachedFXpairsEURUSD/GBPUSD/USDJPY, 2024..2026-10-07.
+Batch1protocolfixedbeforeoutcomes:firstreclaim,repeatedindependent,repeated
+non-overlap. RepeatneedsNEWclosedbreakandlaterreturn, samebarneverreused,
+stopresetpermovement; originalfirstsetupidenticaltoexistingNYdetector verified.
+Batch2separatelyfrozenafterrepeatfailure: firstclosebreakcontinuationstopM5
+oppositeextreme, H1EMA20/50alignedcontinuation, H1alignedfirstreclaim.
+OnlycompletepastH1,50consecutivewarmuphours, resetongaps; stale/futureH1notused.
+CostFX2/4pips:JPY0.02/0.04QUOTEpoints, EUR/GBP0.0002/0.0004; normalizedR,
+NOTUSDaccountreturns. 6daypathlimit, missing/unfinishedunknownnotzeroPnL;
+non-overlapquarantinespairthroughunknown6daycoverage, notaknownclose.
+Swaps/fills/marginoverlapsnotmodeled, reusedhistoryNOTfreshholdout.
+
+All18pair/definitiongatesFAIL; all72pair/arm/phase/costclosed-onlymeanRnegative.
+RepeatcountsEUR3531vs652,GBP3577vs648,JPY3280vs623. 2026stressindependent
+repeatPF0.297/0.323/0.444; non-overlapPF0.375/0.359/0.474 (unknown24/25/23).
+2026stresscontinuationPF0.238/0.446/0.283; alignedvariantsalsonegativeandfew.
+Bootstrap10setup-dayblocks includesno-closedsetupdays,6000replicates,
+36cellsfamilywise95%perseparatelyfrozenbatchonly, NOTglobalpostselectionproof.
+No profitablecandidate identified; do not call increasedfrequencyanimprovement
+or activateanyofthese forfundedpaper/live. ExistingliveNYobserver/rulespairs
+unchanged, cashnotreset, no deploymentneeded. 652isolatedPython testsPASS,
+including6newrepeat/alternativetests. Initialnon-overlapfixturefailedbecause
+firsttradereallyhitstopbeforenextentry; correctedfixturetoholdfirstposition,
+notenginechangedtoforceexpectedresult. ResultsJSONlocalignoredgenerated
+artifacts, reproduciblescripts/protocol/findingscommitted; noGitHubpush.
