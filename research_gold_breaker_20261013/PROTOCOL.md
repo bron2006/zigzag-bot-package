@@ -16,6 +16,11 @@ is the breaker zone and WHICH edge gets limit-entry, stop padding, expiry.
 Do NOT silently pick these values and call test the author's actual strategy.
 Need source chart frames, ideally attached video around72–90seconds.
 
+Update: correct uploadedvideo inspected2026-10-13. Visual blocker resolved;
+numericselection/pivot/expiry conditions still absent. See TEST_PROTOCOL.md
+for preregistered explicit interpretation and FINDINGS.md for boundedresults.
+Originalnotesabove retained as acquisitionhistory, notcurrentvisualstatus.
+
 Acquired actual demo cTrader XAUUSD M1, 2026-01-01..2026-10-12 (end13exclusive).
 Allowlisted READ messages only; strict verifieddemo, no broker orders, refresh,
 fallback symbol or shared live-app client. Isolated180sworker/210schild cap,

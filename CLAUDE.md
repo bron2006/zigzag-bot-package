@@ -2557,3 +2557,43 @@ completed; liveNYobserver/cash/UI/flagsnotmodified, nodeployment/GitHubpush.
 4newintegritytestspass (60realminutesH1, missing/duplicateexclude,1e5decode).
 FullisolatedPython suite665PASS. Acquisitionscripts/protocol/auditsource/tests
 committedlocally; cache/auditgeneratedJSONnotforcedintoGit.
+
+## 2026-10-13 — Uploaded correct gold video inspected and screened
+
+Firstattachmentssstik.io_1791894613159.mp4wronginterview, nottrading; inspected
+framesonly andaskedcorrectfile, noalgorithmchange. Correctattachment
+ssstik.io_@_crypto_hustler__1791894789325.mp4 subsequentlyprovided. Localffmpeg
+generatedgold_*.pngframes, main diagrams35–60s andactualexample85–90s VIEWED.
+DoNOTkeeppreviousblockerclaim. NumericH1/pivot/expiry conditionsstillunderspecified.
+DiagramsbearishzoneinitialH→L beforeHHsweep→LL; entryloweredge(initialL),
+stopbeyondfinalHH, LONGmirrorentryinitialH/stopbeyondLL. Not immediatebreach
+entry or tightstopatinitialzoneupperedge. Examplehasno usableaxes/timestamps
+to reproduce exactshowcasedhistoricaltrade, don'tclaimwefoundthattrade.
+
+TEST_PROTOCOL.md frozenbeforeoutcomes: main H1body>=80%range andrange>=1.5
+prior14H1ATR; sensitivity70%/>=1ATR, latesteligibleclosedH1replacesanchor,
+noH1gapwarmupcarry. M1strict1left1rightconfirmedalternatingswings; firstH/L
+canprecedefinalbreach (retainpostanchorprebreachpivots). Firstwickboundary
+sweep=>oppositeside, bothboundariessamebarambiguouscancel. H-L-HHthenM1
+CLOSE<oldL SHORT, L-H-LLthenCLOSE>oldH LONG. LimitactiveONLYnextM1,entry
+oldstructuraledge, stopHH+.01/LL-.01,2Rbeforecost. Oneorderperanchor.
+Pendinglimitexpiresonnewanchor/data gap, notonalreadyfilledposition. Fill
+conditionalmidpointpenetration>=.01, conservativecreditlimitonfavorableopen,
+openpaststopcancel; entrybarTPwithoutstop=>unknownsequence, ambiguousstopfirst,
+adversegapafterfillactualopen. MissingM1pathunknownnotfakezero;6daycoverage.
+BothnumericsetsareOURoperationalinterpretations, NOT exactcertifiedauthorrules.
+
+ActualXAUUSD Jan1–Oct12M1screen: main43ordercandidates36closed12targets24stops,
+5cancelled2unknown. Mainstress$1/ozconditionalcost early20closedmean-0.325R;
+late16closedmean+0.048R/PF1.085 but CI[-.403,+.606], whole-5.73Rsum.
+Base$.5costwholealsonegative. Sensitivity140candidates122closed40targets82
+stops,11cancelled7unknown; stresswhole-23.46R,late43closedmean-.438R.
+BothgatesFAIL; doNOTsay everyperiodnegative (mainlatepositivebuttinyuncertain).
+DoNOTcallauthorstrategyuniversallydisprovenorlabel43filledtrades. 8cells,
+conservative36-cellsharedCIcorrectionexplicit. Independentobservationscan
+overlap, notfundedportfolio/USDcashsimulation; assumedcostnotbrokertariff,
+swaps/bidask/marginnotsimulated, notindependentlivevalidation. No postoutcome
+thresholdtinkering orclouddeploy/newgoldexecution/cashreset/UIchanges.
+11newcausality/fill/stop/mirror/pending/gap/H1timingtestsPASS; full676isolated
+Python testsPASS. Userattachmentsremainlocaluntracked; taskmedia/cacheignored,
+neverGitadded. Source/protocol/findings/testslocalcommit, noGitHubpush.
