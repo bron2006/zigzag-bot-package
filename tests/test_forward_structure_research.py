@@ -124,11 +124,17 @@ class ForwardResearchTest(unittest.TestCase):
         from unittest.mock import patch
         from twisted.internet.defer import succeed
         from twisted.internet.task import Clock
-        from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOAGetTrendbarsRes
+        from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOAGetTrendbarsRes,ProtoOASymbolByIdReq,ProtoOASymbolByIdRes
         import forward_structure_research as research
         calls=[];epoch=1704067200;now=epoch+40*3600+31
         def send(request):
             calls.append(request)
+            if isinstance(request,ProtoOASymbolByIdReq):
+                res=ProtoOASymbolByIdRes(ctidTraderAccountId=99)
+                for sid in request.symbolId:
+                    s=res.symbol.add(symbolId=sid,digits=5,pipPosition=4,scheduleTimeZone='UTC')
+                    s.schedule.add(startSecond=0,endSecond=604800)
+                return succeed(SimpleNamespace(payload=res.SerializeToString()))
             res=ProtoOAGetTrendbarsRes(ctidTraderAccountId=99,period=5,timestamp=int(now*1000))
             for bar in bars():
                 res.trendbar.add(volume=1,low=9950000,deltaOpen=50000,deltaHigh=int((bar['High']-99.5)*100000),
@@ -139,11 +145,12 @@ class ForwardResearchTest(unittest.TestCase):
         original=research._connect
         with patch.object(research,'path',return_value=self.path),patch.object(research.time,'time',return_value=now), \
              patch.object(research,'_connect',side_effect=lambda filename,t,require_mount=True:original(filename,t,False)), \
-             patch('twisted.internet.threads.deferToThreadPool',side_effect=lambda reactor,pool,f,*args:succeed(f(*args))):
+             patch('twisted.internet.threads.deferToThreadPool',side_effect=lambda reactor,pool,f,*args,**kwargs:succeed(f(*args,**kwargs))):
             research.collect(state,Clock(),None)
-        self.assertEqual(len(calls),4)
-        self.assertEqual({type(r).__name__ for r in calls},{'ProtoOAGetTrendbarsReq'})
-        self.assertTrue(all(r.count==2000 and r.period==5 and r.toTimestamp<now*1000 for r in calls))
+        self.assertEqual(len(calls),5)
+        self.assertEqual({type(r).__name__ for r in calls},{'ProtoOAGetTrendbarsReq','ProtoOASymbolByIdReq'})
+        histories=[r for r in calls if type(r).__name__=='ProtoOAGetTrendbarsReq']
+        self.assertTrue(all(r.count==2000 and r.period==5 and r.toTimestamp<now*1000 for r in histories))
         view=snapshot(self.path,now)
         self.assertEqual(view['status'],'collecting')
         self.assertEqual(len(view['sources']),4)

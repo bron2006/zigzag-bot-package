@@ -2629,3 +2629,48 @@ ExistingNYobserver/cash/UI/offflagsuntouched, nogreenbacktestpromoted,
 no clouddeploy/GitHubpush/filelinkstosowner.683isolatedPython testsPASS incl
 7closedcross/volumeprior/SMAEMApoisoning/gap/stopfilltests. Datasetgenerated
 cache/resultignored, source/protocol/findings/testscommittedlocally.
+
+## 2026-10-14 — Verified broker closure-path repair, live deployed
+
+Useraskedcheckandfixafterstatus. Readcurrentdemo4pairmetadata15:13:52UTC
+usingallowlistedprobe/persistedtoken (Supabaseskilldocsread,currentchangelog,
+boundedREADONLY,noDBwrites/refresh). All4schedule/timezoneexactOct7snapshot.
+ConfirmedETH13gap20:55→21:05UTCmissing21:00M5fullybrokerclosedweeklyNY17–17:05.
+broker_closure.py puresecond-by-secondweeklyproof, Sundaylocalstart,
+startinclusive/endexclusive,ZoneInfoDST,LRU8192. Rejectpartialopen/invalid/
+empty/unknownschedule. Noholiday-onlyinference. No inventedpricecandles.
+
+paper_cfd.simulate_stop_trade optionalgap_is_closeddefaultstrictunchanged,
+properadverseopenstopgapsstillcount. OnlyNYoutcomesoptin; old3controlsand
+offlinepastscreensnot silentlyrerun/repriced. NYentrycandidateformationstill
+strictpostrangecontiguity; no newhistoricalpostpauseentries, no strategychange.
+ResidentcollectaddsboundedREADsymbolmetadata once300s before4M5reads,
+cacheclearreconnect/error,cacheexpires600s; allSQLiteoffreactor. Metadata
+fail=>strictunknown, notpretendclosed. Storefreshschedule_snapshots.
+Onlyexistingunknown/path_gapNYmayre-evaluate, originalpayload+replacement
+savedtransactionallyinobservation_revisions. Closed/skippedimmutable.
+
+FullpersistentbackupBEFORErelease:
+/data/audit-forward-20261014-before-closure.sqlite3;keeprecoverable.
+research_schedule_audit_20261014/collect.pydata-onlyresidentSQLRO export,
+localsnapshot/replayallNYintentspricesverified, cost/filllimitationsannotated.
+ETH13long2505.66stop2483.23target2550.52 resolvedSTOPOct14T10:05UTC,1known
+closuregap. Base/stress2unknown→closedrevisions,-1R. ALL16oldclosedscenario
+rowsinbackup(inclcontrols)EXACTpayloadstringspreserved. No cash/historyreset.
+Now7NYclosed0unknown,stresssum-0.385326R (notfundedbalance), cash999.37/
+1closed/0openunchanged. Legacy/paperentries/autotrade/BinomoOFF, allscannersOFF.
+9runtimehashesmatchlocal, protectedAPI401,4freshsources/errornull;
+twocyclesconfirmed15:22:58..15:23:01,15:24:57..15:25:00UTC. Metadatafresh4.
+Health15:25:32UTCok/READY,TelegramACTIVE83live0stale.
+
+688isolatedPython testsPASS+JScompactUI/pollcleanupPASS. New5testsclosed
+summer/winter/partialopen/invalidmetadata/defaultunknown/adversegap/audited
+reclassification/immutableclosed. Existingcollectorrequesttestnow5READcalls,
+metadata+4bars; mockkwargsupdated (notrealproductionfailure).
+Image01M4XFYXE6B0VYA2BCWAWVNEJE digest
+94a5cf4545028cd12a5463a9134258c6ca541b3806fc49c7d5613c9cb42f607e.
+Costauditcurrentspecsandbidaskonly,NOThistoricalfillcostverification; crypto
+overnightlongswapsmaymatter. EUR13raw3pipTPvs4pipassumedRTcostnetnegative
+expectedmath, notaccountingbug. DoNOTclaimcost_complete or profitableedge.
+Futurefees/historicalquote-side validationstillneeded, no currentfees substituted
+retroactively. NoUIessays, downloadlinks, realorders orGitHubpush.

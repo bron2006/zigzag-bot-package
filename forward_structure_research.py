@@ -17,11 +17,15 @@ from urllib.parse import quote as uri_quote
 from price_structure_candidates import RULES as STRUCTURE_RULES,generate
 from ny_h4_reclaim import RULE as NY_RULE,detect as detect_ny
 from paper_cfd import simulate_stop_trade
+from broker_closure import closure_predicate
 
 logger=logging.getLogger(__name__)
 PAIRS=('EURUSD','GBPUSD','BTCUSD','ETHUSD')
 VERSION='prospective_structure_observation_v1'
 RULES=STRUCTURE_RULES+(NY_RULE,)
+_schedule_client=None
+_schedule_next=0
+_schedules={}
 
 
 def path():return os.getenv('FORWARD_STRUCTURE_RESEARCH_PATH')
@@ -45,6 +49,8 @@ def _connect(filename,now,require_mount=True):
     for rule in RULES:
         db.execute('INSERT OR IGNORE INTO rule_activation VALUES (?,?)',(rule,now if rule==NY_RULE else original))
     db.execute('CREATE TABLE IF NOT EXISTS pattern_states (pair TEXT PRIMARY KEY,payload TEXT NOT NULL)')
+    db.execute('CREATE TABLE IF NOT EXISTS schedule_snapshots (pair TEXT PRIMARY KEY,fetched REAL NOT NULL,payload TEXT NOT NULL)')
+    db.execute('CREATE TABLE IF NOT EXISTS observation_revisions (id INTEGER PRIMARY KEY,pair TEXT,rule TEXT,day INTEGER,scenario TEXT,revised REAL,prior TEXT,replacement TEXT)')
     return db
 
 
@@ -66,7 +72,7 @@ def hourly(bars):
     return out
 
 
-def outcome(intent,bars,now,scenario,*,crypto=False):
+def outcome(intent,bars,now,scenario,*,crypto=False,schedule=None):
     ny_rule=intent.get('rule')==NY_RULE
     end=float('inf') if ny_rule else intent['day']*86400+(86400 if crypto else 16*3600)
     available=[b for b in bars if intent['ts']<=b['ts']<end]
@@ -85,7 +91,8 @@ def outcome(intent,bars,now,scenario,*,crypto=False):
         if distance<=0 or reward<=0 or (reward-cost)/(distance+cost)<1.5:
             return dict(status='skipped',reason='invalid_entry_or_net_RR')
         multiple=reward/distance
-    trade=simulate_stop_trade(available,0,side,distance,multiple)
+    proof=closure_predicate(schedule) if ny_rule else None
+    trade=simulate_stop_trade(available,0,side,distance,multiple,gap_is_closed=proof)
     if trade['status']=='unknown':return trade
     if ny_rule and trade['reason']=='session_end':
         return dict(status='pending',reason='waiting_stop_or_target',entry=trade['entry'],stop=trade['stop'],target=trade['target'])
@@ -100,7 +107,7 @@ def outcome(intent,bars,now,scenario,*,crypto=False):
                 executable=False,venue='cTrader_midpoint_OHLC_conditional')
 
 
-def store_packet(filename,pair,bars,now,*,require_mount=True):
+def store_packet(filename,pair,bars,now,*,require_mount=True,schedule=None):
     if pair not in PAIRS:raise ValueError('unsupported_pair')
     if not bars:raise ValueError('empty_broker_history')
     previous=-1
@@ -115,6 +122,8 @@ def store_packet(filename,pair,bars,now,*,require_mount=True):
     try:
         db.execute('BEGIN IMMEDIATE')
         activations=dict(db.execute('SELECT rule,activated FROM rule_activation').fetchall())
+        if schedule is not None and closure_predicate(schedule) is not None:
+            db.execute('INSERT OR REPLACE INTO schedule_snapshots VALUES (?,?,?)',(pair,schedule.get('_fetched',now),json.dumps(schedule,sort_keys=True)))
         for b in bars:
             encoded=json.dumps(b,sort_keys=True)
             old=db.execute('SELECT payload FROM bars WHERE pair=? AND ts=?',(pair,b['ts'])).fetchone()
@@ -144,10 +153,15 @@ def store_packet(filename,pair,bars,now,*,require_mount=True):
                 if intent['ts']<activations[rule]:continue
                 for scenario in ('base','stress'):
                     key=(pair,rule,intent['day'],scenario)
-                    prior=db.execute('SELECT status FROM observations WHERE pair=? AND rule=? AND day=? AND scenario=?',key).fetchone()
-                    if prior and prior[0]!='pending':continue
-                    result=outcome(intent,retained,now,scenario,crypto=crypto)
+                    prior=db.execute('SELECT status,payload FROM observations WHERE pair=? AND rule=? AND day=? AND scenario=?',key).fetchone()
+                    repair=bool(prior and rule==NY_RULE and prior[0]=='unknown' and json.loads(prior[1]).get('reason')=='path_gap' and schedule is not None)
+                    if prior and prior[0]!='pending' and not repair:continue
+                    result=outcome(intent,retained,now,scenario,crypto=crypto,schedule=schedule)
                     payload=dict(intent=intent,pair=pair,scenario=scenario,**result)
+                    if repair:
+                        if result['status']=='unknown':continue
+                        payload['revision_reason']='verified_weekly_closure_policy_v1'
+                        db.execute('INSERT INTO observation_revisions (pair,rule,day,scenario,revised,prior,replacement) VALUES (?,?,?,?,?,?,?)',key+(now,prior[1],json.dumps(payload,sort_keys=True)))
                     db.execute('INSERT OR REPLACE INTO observations VALUES (?,?,?,?,?,?)',key+(result['status'],json.dumps(payload,sort_keys=True)))
         db.execute('COMMIT')
     except Exception:
@@ -172,9 +186,32 @@ def collect(state,reactor,pool):
     account=getattr(getattr(client,'_client',None),'account_id',None)
     if not client or not account or not getattr(client,'is_authorized',False) or not state.SYMBOLS_LOADED:
         return deferToThreadPool(reactor,pool,initialize)
-    from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOAGetTrendbarsReq,ProtoOAGetTrendbarsRes
+    from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOAGetTrendbarsReq,ProtoOAGetTrendbarsRes,ProtoOASymbolByIdReq,ProtoOASymbolByIdRes
     from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOATrendbarPeriod
     d=deferToThreadPool(reactor,pool,initialize)
+    def refresh(_):
+        global _schedule_client,_schedule_next,_schedules
+        if client is not _schedule_client:_schedule_client=client;_schedule_next=0;_schedules={}
+        if time.time()<_schedule_next:return None
+        _schedule_next=time.time()+300
+        lights={p:state.get_symbol_details(p) for p in PAIRS}
+        ids=[s.symbolId for s in lights.values() if s is not None]
+        if not ids:return None
+        child=client.send(ProtoOASymbolByIdReq(ctidTraderAccountId=account,symbolId=ids));child.addTimeout(10,reactor)
+        def received(message):
+            global _schedules
+            if client is not state.client:return None
+            from google.protobuf.json_format import MessageToDict
+            res=ProtoOASymbolByIdRes();res.ParseFromString(message.payload)
+            specs={s.symbolId:MessageToDict(s,preserving_proto_field_name=True) for s in res.symbol}
+            now=time.time()
+            _schedules={p:(now,dict(specs[s.symbolId],_fetched=now)) for p,s in lights.items() if s is not None and s.symbolId in specs and closure_predicate(specs[s.symbolId]) is not None}
+        def failed(failure):
+            global _schedules,_schedule_next
+            _schedules={};_schedule_next=time.time()+60
+            logger.warning('FORWARD schedule refresh failed: %s',failure.type.__name__);return None
+        child.addCallback(received);child.addErrback(failed);return child
+    d.addCallback(refresh)
     for pair in PAIRS:
         def request(_,pair=pair):
             if client is not state.client:return None
@@ -193,7 +230,9 @@ def collect(state,reactor,pool):
                     rows.append(dict(ts=b.utcTimestampInMinutes*60,Open=(low+b.deltaOpen)/100000,
                         High=(low+b.deltaHigh)/100000,Low=low/100000,Close=(low+b.deltaClose)/100000))
                 rows.sort(key=lambda b:b['ts'])
-                return deferToThreadPool(reactor,pool,store_packet,path(),pair,rows,time.time())
+                stamp=time.time();entry=_schedules.get(pair)
+                schedule=entry[1] if entry and 0<=stamp-entry[0]<600 else None
+                return deferToThreadPool(reactor,pool,store_packet,path(),pair,rows,stamp,schedule=schedule)
             def failed(failure):
                 logger.warning('FORWARD research source failed for %s: %s',pair,failure.type.__name__)
                 return deferToThreadPool(reactor,pool,source_error,pair,failure.type.__name__)
@@ -222,12 +261,15 @@ def snapshot(filename,now):
         tables={r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         activations=dict(db.execute('SELECT rule,activated FROM rule_activation').fetchall()) if 'rule_activation' in tables else {}
         pattern_states=[json.loads(r[0]) for r in db.execute('SELECT payload FROM pattern_states ORDER BY pair')] if 'pattern_states' in tables else []
+        schedule_states=[dict(r) for r in db.execute('SELECT pair,fetched FROM schedule_snapshots ORDER BY pair')] if 'schedule_snapshots' in tables else []
+        revisions=db.execute('SELECT count(*) FROM observation_revisions').fetchone()[0] if 'observation_revisions' in tables else 0
         db.execute('COMMIT')
     finally:db.close()
     collecting=len(sources)==len(PAIRS) and all(not s['error'] and 0<=now-s['checked']<180 for s in sources)
     return dict(enabled=True,status='collecting' if collecting else 'waiting_data',activated=meta['activated'],
         pairs=list(PAIRS),rules=list(RULES),sources=sources,counts=counts,recent=recent,bars=bar_counts,
         rule_activations=activations,ny_h4_states=pattern_states,
+        schedules=schedule_states,revision_count=revisions,
         interval_seconds=60,real_orders=False,changes_account_balance=False,
         candles_fresh=collecting and all(s['last_bar'] is not None and now-(s['last_bar']+300)<900 for s in sources),
         mode='prospective_OHLC_observations_not_trade_execution',

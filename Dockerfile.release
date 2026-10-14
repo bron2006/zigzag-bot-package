@@ -14,6 +14,7 @@ COPY paper_stop_view.py paper_stop_journal.py paper_cfd.py paper_stop_runtime.py
 COPY strategy_mode.py ./
 COPY forward_structure_research.py price_structure_candidates.py ./
 COPY ny_h4_reclaim.py ./
+COPY broker_closure.py ./
 COPY historical_endpoints.py ./
 COPY notifier.py ./
 COPY publication_tracking.py ./

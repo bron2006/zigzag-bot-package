@@ -22,7 +22,7 @@ def size_position(balance, entry, stop_distance, cost, *, minimum, step, maximum
     return float(units) if units>=d(minimum) else 0.
 
 
-def simulate_stop_trade(bars,index,direction,stop_distance,target_multiple=1.5):
+def simulate_stop_trade(bars,index,direction,stop_distance,target_multiple=1.5,*,gap_is_closed=None):
     """Caller passes only session remainder; flat at session end, NOT15min expiry.
 
     OHLC conditional replay: stop-first if both touched, adverse stop gaps at
@@ -34,12 +34,13 @@ def simulate_stop_trade(bars,index,direction,stop_distance,target_multiple=1.5):
     entry=float(bars[index]['Open'])
     stop,target=entry-direction*stop_distance,entry+direction*target_multiple*stop_distance
     if min(entry,stop,target)<=0: raise ValueError('invalid_price_geometry')
-    previous_ts=None
+    previous_ts=None;closures=0
     for i in range(index,len(bars)):
         b=bars[i]
         ts=b['ts']
         if previous_ts is not None and ts-previous_ts!=300:
-            return dict(status='unknown',reason='path_gap',entry=entry,stop=stop,target=target)
+            if ts>previous_ts+300 and gap_is_closed is not None and gap_is_closed(previous_ts+300,ts):closures+=1
+            else:return dict(status='unknown',reason='path_gap',entry=entry,stop=stop,target=target)
         o,h,l,c=(float(b[k]) for k in ('Open','High','Low','Close'))
         if not all(math.isfinite(p) and p>0 for p in (o,h,l,c)) or not l<=min(o,c)<=max(o,c)<=h:
             raise ValueError('invalid_ohlc')
@@ -51,12 +52,14 @@ def simulate_stop_trade(bars,index,direction,stop_distance,target_multiple=1.5):
             reason='stop_gap' if gap else 'stop' if stopped else 'target'
             return dict(status='closed',reason=reason,entry=entry,stop=stop,target=target,
                         exit=exit_,direction=direction,gross_points=direction*(exit_-entry),
-                        exit_ts=ts+300,entry_ts=bars[index]['ts'],ambiguous=stopped and targeted)
+                        exit_ts=ts+300,entry_ts=bars[index]['ts'],ambiguous=stopped and targeted,
+                        scheduled_closure_gaps=closures)
         previous_ts=ts
     exit_=float(bars[-1]['Close'])
     return dict(status='closed',reason='session_end',entry=entry,stop=stop,target=target,
                 exit=exit_,direction=direction,gross_points=direction*(exit_-entry),
-                entry_ts=bars[index]['ts'],exit_ts=bars[-1]['ts']+300,ambiguous=False)
+                entry_ts=bars[index]['ts'],exit_ts=bars[-1]['ts']+300,ambiguous=False,
+                scheduled_closure_gaps=closures)
 
 
 def net_usd(units,gross_points,cost):
