@@ -3228,3 +3228,9 @@ Languagefixtureтепермаєmockget_chat_id=123456789,cleanupіявнийшт
 тазбереженняреальногоdiscovery,безcontinue-on-error/видаленнястарихтестів.
 Початкові4targetedtestsPASS;даліпотрібніclean-checkoutverificationтаGitHubCI.
 Runtime/productionconfig/брокер/БД/торгівля/баланс/хмаранезмінні.
+
+Clean-checkout перевірка завершена: git archive bea3609 розпаковано в окремий
+тимчасовий каталог без локальних кешів/ключів; дочірній Python отримав лише
+системне середовище й явні безпечні CI-параметри. Повний unittest discovery:
+820 tests, OK (11.254s, Windows/Python3.12). Це локальний ізольований результат;
+GitHub Ubuntu/Python3.11 ще потрібно перевірити після push. Тести не вимикали.
