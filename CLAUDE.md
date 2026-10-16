@@ -54,6 +54,156 @@
     значення за замовчуванням; нічого не торгує, доки користувач сам не
     ввімкне.
 
+## Зведений реєстр стратегій і перевірок — 16.10.2026
+
+**Починати огляд досліджень із цього розділу.** Це єдиний зведений покажчик;
+датовані записи нижче — збережена хронологія, а не актуальні вказівки запуску.
+Старі написи «ЧИТАТИ ЦЕ ПЕРШИМ» стосуються відповідної історичної сесії.
+Реєстр перевірений за журналом, протоколами, результатами й звітами репозиторію.
+Не містить вигаданих тестів із зовнішніх чатів або ідей без артефактів.
+
+### Як читати результат
+
+- **Відхилено** — саме записаний варіант не пройшов власні критерії; це не доказ,
+  що всі реалізації відповідного сімейства неможливі.
+- **Плюс, не доведено** — є позитивна історична цифра, але немає достатньої
+  переваги над контролем, стійкості, виконуваності або незалежної перевірки.
+- **Неповно / лише джерело** — даних чи визначення правил бракує; не рахувати
+  як завершений збитковий або прибутковий бектест.
+- **Діагностика / керування ризиком** — перевірка моделі, обліку чи ставок,
+  не нова незалежна торгова стратегія.
+
+45 ID нижче — **записи реєстру, не 45 незалежних відкриттів**. Партії 96/156/18
+містять споріднені налаштування, інструменти, входи й контрольні варіанти.
+Жодний із перелічених результатів не дає підтвердження готового прибуткового
+бота для реальних коштів. Проте неправильно казати «всі тести збиткові»:
+частина дала історичний плюс, але не пройшла подальші перевірки.
+
+### 1. Початкові сигнали, VWAP, повільні тренди й carry
+
+Шляхи в останньому стовпці відносні до кореня репозиторію; це покажчики
+доказів, а не файли для надсилання користувачеві.
+
+| ID | Що перевіряли | Результат і межа висновку | Де правила та докази |
+|---|---|---|---|
+| R01 | Початкова directional ML: ATR M1/M15, TP/SL проти виходу через 5/10/15/20 хв | Стара висока оцінка time-exit залежала від помилкового EURUSD entry=1.10000; після виправлення — близько до шуму. Перенесення ATR погіршило TP/SL. Старий Triple-Barrier план не прирівнювати до виконаного тесту. | Цей журнал: «TP/SL-методологія» у «Контекст проєкту». |
+| R02 | VWAP mean-reversion: hindsight Low, причинний LIMIT, стоп/ціль і відбір намірів | Діагностика: на спільних 156 подіях PF 1.424 проти 0.630 за іншого причинного виконання. Не точна репліка старого звіту й не ефект лише одного параметра. | `research_new_methods_20261007/VWAP_ATTRIBUTION_REPORT.md` |
+| R03 | Фактичні logged VWAP LIMIT/SL та окремий LONG/SHORT контроль | Відхилено: 378 намірів, 325 умовних виконань; base PF≈0.526, stress≈0.506. Інверсія теж не підтверджена. VWAP виведено з експлуатації власником; не запускати знову. | `research_new_methods_20261007/VWAP_FINAL_REPORT.md`, `research_new_methods_20261007/VWAP_DIRECTION_REPORT.md` |
+| R04 | Перші альтернативи VWAP: hour momentum, opening breakout, failed breakout на 25 FX-парах | Усі три відхилено; пізні PF≈0.903/0.702/0.935. Це окремий короткий M5 screen, не довга партія R17/R19. | `research_new_methods_20261007/PROTOCOL.md`, `research_new_methods_20261007/REPORT.md` |
+| R05 | BTC/ETH D1 SMA200 long/cash; matched-exposure та концентрація прибутку | Плюс, не доведено: 2024–09.2026 base +48.7%/+59.7%, DD≈35.5%/44.3%. Перевага над matched hold не підтверджена; без трьох найкращих угод обидва мінусові. | `research_new_methods_20261007/DAILY_TREND_PROTOCOL.md`, `research_new_methods_20261007/EXPOSURE_REPORT.md`, `research_new_methods_20261007/TREND_CONCENTRATION_REPORT.md` |
+| R06 | BTC/ETH D1 Donchian55/20 | Плюс, не доведено: пізній stress +26.1%/+130.9%, але gate провалений; BTC stress-DD≈29.8% перевищує межу25%, парний контроль не підтверджує перевагу. Локальний diagnostic-paper прототип колись запускався; його нинішній процес не перевірено цим реєстром. | `local_trend_bot/PROTOCOL.md`, `local_trend_bot/research_result_v1.json`, `local_trend_bot/README.md` |
+| R07 | BTC/ETH D1 Momentum365 | Плюс, не доведено: пізній stress +99.5%/+15.0%, gate не пройдено. Не змішувати незалежні модельні рахунки локального прототипу з реальним депозитом. | `local_trend_bot/PROTOCOL.md`, `local_trend_bot/research_result_v1.json` |
+| R08 | Багаторинковий повільний тренд: EURUSD/US500/XAUUSD/XTIUSD, 1/3/12 міс. | Відхилено цей 4-CFD пілот: gross +5.37% проти matched LONG +21.15%; stress −9.07%. Не репліка повного AQR futures-портфеля. Bonds у перевіреному demo-universe не дозволяли нові угоди. | `research_new_methods_20261007/MULTIMARKET_PROTOCOL.md`, `research_new_methods_20261007/MULTIMARKET_REPORT.md`, `research_new_methods_20261007/BROKER_FEASIBILITY_REPORT.md` |
+| R09 | Cash-and-carry: spot ASK + строковий futures BID, глибина й поточна премія | Лише зріз можливості, не завершений історичний бот: умовний дохід малий; для $1000 порядок $8 до погашення в наведеному прикладі, не щомісячний прибуток. Маржа/доступ/settlement не доведені. | `research_new_methods_20261007/CARRY_SCREEN_REPORT.md` |
+| R10 | USD-M funding carry зі щомісячним відновленням хеджу | Відхилено: 01.2025–09.2026 base BTC −$14.69 / ETH −$17.61 на окремі умовні $1000; stress гірший. Не доказ проти всіх funding-політик. | `research_funding_20261008/PROTOCOL.md`, `research_funding_20261008/REPORT.md` |
+| R11 | COIN-M inverse hedge: негайна конверсія та batched funding із minNotional | Позитивно лише умовно у 2024/2025; batched BTC +$110.21/42.30, ETH +$117.05/40.08. 2026 НЕВІДОМО: бракує funding-запису 30.06 08UTC. ADL/маржа/виконання не доведені; не CFD і не дозволена міграція рахунка. | `research_new_methods_20261007/INVERSE_HEDGE_PROTOCOL.md`, `research_new_methods_20261007/BATCHED_FUNDING_PROTOCOL.md`, `research_new_methods_20261007/SEARCH_AND_FUNDING_REPORT.md` |
+| R12 | Relative12-month BTC/ETH: long сильнішого / short слабшого | Відхилено: 01.2025–09.2026 base −13.37%, stress −17.00%, close-DD≈43%. Зворотне ranking — контроль, теж мінусовий. | `research_funding_20261008/RELATIVE_PROTOCOL.md`, `research_funding_20261008/REPORT.md` |
+| R13 | Зовнішній Industry Timing: 48 industry-індексів; tutorial і paper-profile | Reference історично позитивний, але contemporary CAGR≈3.2% проти market 18.75%. Не точна репліка заявлених цифр автора, не торгові cTrader-угоди/ETF, без підтверджених витрат виконання. | `research_new_methods_20261007/EXTERNAL_REFERENCE_PROTOCOL.md`, `research_new_methods_20261007/EXTERNAL_REFERENCE_REPORT.md`, `research_new_methods_20261007/SEARCH_AND_FUNDING_REPORT.md` |
+
+### 2. ML, очікування входу, прозорі правила й структура ціни
+
+| ID | Що перевіряли | Результат і межа висновку | Де правила та докази |
+|---|---|---|---|
+| R14 | Frozen pkl/scaler: EURUSD M15/M5, GBPCHF/AUDJPY; природний та інвертований напрям | Перевага над простими напрямковими контролями не підтверджена. GBPCHF 57.94% нижче always-UP 58.73%. Це не повний live replay двох TF/news/cooldown. | `research_new_methods_20261007/MODEL_CONTRACT_REPORT.md` |
+| R15 | Окремо навчена нормалізована 8-feature logistic M5 | Відхилено: final 47/81=58.02%, лише 10 дат; hypothetical payout80% mean>0, але CI через нуль; при70% мінус. Не заміна старого pkl. | `research_new_methods_20261007/NORMALIZED_SIGNAL_REPORT.md` |
+| R16 | Продовження першого 5m імпульсу CPI/NFP, офіційні BLS дати, історичні ASK/BID | Відхилено: late 34 known, 35.29% direction; stress≈−5.856 pip/подію. Не перевертати пізній шматок після результату. | `research_new_methods_20261007/NEWS_CONTINUATION_PROTOCOL.md`, `research_new_methods_20261007/NEWS_CONTINUATION_REPORT.md` |
+| R17 | Довга M5 партія: EMA10/50 trend, prior20 breakout, non-VWAP reversion; EUR/GBP/JPY | По 594 final спостереження на правило; усі forex/binary gates провалені. Умовні payout-показники не є CFD-балансом. | `research_new_methods_20261007/COMPARATIVE_PROTOCOL.md`, `research_new_methods_20261007/COMPARATIVE_REPORT.md` |
+| R18 | Nasdaq ±0.5D1ATR expansion → M5 pullback, стоп на session Open | 237 угод; stress index-points позитивні кожного року, але CI через нуль і лише 57 угод у2026. За перевіреного min-contract і $10 risk-budget усі 237 недоступні. Не просто «збитковий сигнал». | `research_nasdaq_pullback_20261010/PROTOCOL.md`, `research_nasdaq_pullback_20261010/REPORT.md` |
+| R19 | Широка партія 24 правил × USTEC/EURUSD/GBPUSD/USDJPY | 96 варіантів, 53068 candidate trades; 0/96 gates. Є позитивні підсценарії, але жоден stress-positive кожного року. Спільні stop1.5M5ATR/2R/EOD/витрати обмежують висновок. | `research_batch_20261010/PROTOCOL.md`, `research_batch_20261010/REPORT.md` |
+| R20 | Стара ML: immediate, delay, .25ATR pullback → subsequent close-confirm | 1084 common intents, 9 arms; кращий результат очікування значною мірою через 85–91% пропусків. Перевагу не підтверджено; 15min payout-діагностика, не CFD. | `research_entry_20261012/PROTOCOL.md`, `research_entry_20261012/result.json` |
+| R21 | Без ML: breakout, EMA-trend pullback, band re-entry ×26FX ×2 входи | 156 arms, жодного gate PASS. Це binary direction-діагностика зі спорідненими правилами, не 156 незалежних стратегій. | `research_entry_20261012/TRANSPARENT_PROTOCOL.md`, `research_entry_20261012/EXTENDED_PROTOCOL.md`, `research_entry_20261012/extended_result.json` |
+| R22 | Відносна сила валют: least-squares граф26пар, strongest2/weakest2, 1h→15min | Відхилено: 1446 intents; immediate49.33%, pullback47.41%, stress мінусовий усі місяці. Не репліка місячного BIS forward momentum. | `research_entry_20261012/CURRENCY_PROTOCOL.md`, `research_entry_20261012/currency_result.json` |
+| R23 | USTEC: перші30 хв від prior RTH-close прогнозують останні30 хв | 687 known/1unknown; direction50.22% проти BUY51.82%; total stress−2610 index-points. 2026 позитивний, але CI не підтверджує edge. Не доларовий депозит. | `research_entry_20261012/SESSION_PROTOCOL.md`, `research_entry_20261012/session_result.json` |
+| R24 | Три прозорі правила вже як CFD зі стопом: immediate/pullback, USTEC | Усі12 умовних балансів нижче $1000; найкращий stress band-pullback≈$927.93. Виправлений причинний pending-intent lock; це не ввімкнений worker. | `research_entry_20261012/CFD_PROTOCOL.md`, `research_entry_20261012/cfd_result.json` |
+| R25 | USTEC prior-RTH high/low failed-break reclaim, структурний стоп, ціль midpoint | Відхилено: base$975.49 / stress$860.48. Позитивний base2026 +$2.80 не доводить стійкість. | `research_entry_20261012/RECLAIM_PROTOCOL.md`, `research_entry_20261012/reclaim_result.json` |
+| R26 | FX H1: prior24h channel breakout, failed-break/reclaim, 07UTC compression | Жодний gate не пройдено; пізні stress-баланси≈$948.24/$961.57/$999.25, частина early paths unknown. Forward-збір — окремий доказ збору даних, не прибутковості. | `research_cfd_structure_20261012/PROTOCOL.md`, `research_cfd_structure_20261012/FORWARD_PROTOCOL.md`, `research_cfd_structure_20261012/result.json` |
+
+Повний список 24 конфігурацій R19: ORB5/15/30, failed-ORB15, retest-ORB15,
+gap-follow/fade, prior-range, NR7, EMA-cross/pullback, Donchian20, BB-reentry,
+RSI2, MACD, stochastic, inside-break, compression, morning-follow/fade,
+afternoon-follow, Dual-Thrust, session-open-reclaim, three-impulse.
+
+### 3. Правило користувача, відео та інші ринки
+
+| ID | Що перевіряли | Результат і межа висновку | Де правила та докази |
+|---|---|---|---|
+| R27 | NY00–04 high/low → M5 close-break → наступний close-reclaim; потім repeated/continuation/H1-aligned варіанти | Початковий2026 PF EUR≈0.560/GBP≈0.398, є unknown. Усі18 пізніших варіантів теж відхилено. Історично активований NY observer — діагностика, не валідована торгівля; нинішній live-стан тут не перевірявся. | `research_ny_h4_20261012/PROTOCOL.md`, `research_ny_h4_20261012/FINDINGS.md`, `research_ny_h4_20261013/FINDINGS.md` |
+| R28 | Fibonacci0/.5/.618/1: причинні H1 pivots, торкання зони + підтверджений закриттям пробій попереднього M5 High/Low; shallow/deep controls | Відхилено всі9 pair/zone gates; main2026 278 closed,96positive,14unknown. Це наше явне тлумачення неповного відеоправила, не точна авторська репліка. | `research_fibonacci_20261013/PROTOCOL.md`, `research_fibonacci_20261013/FINDINGS.md` |
+| R29 | XAU breaker: H1 body-filter, підтверджені M1 swings, limit-retest; main+sensitivity | Main43 order-candidates/36closed,12TP/24SL; whole stress−5.73R. Late16 угод позитивні, CI через нуль. Відео згодом отримали й переглянули: старий blocker superseded; exact showcased trade не відтворено. | `research_gold_breaker_20261013/PROTOCOL.md`, `research_gold_breaker_20261013/TEST_PROTOCOL.md`, `research_gold_breaker_20261013/FINDINGS.md` |
+| R30 | BTC/ETH MA10/20 + exchange volume: M15/H1, SMA/EMA, volume on/off | Усі16 gates провалені; окремі позитивні H1 whole-підсценарії не стійкі у late-частині. Автор не визначив усі параметри; це операційне тлумачення. | `research_ma1020_20261013/PROTOCOL.md`, `research_ma1020_20261013/FINDINGS.md` |
+| R31 | BTC/ETH ratio reversion: попередні168H, z≥2, парні long/short ціни | 316closed/1pending; stress мінусовий у всіх4 фазах. Spot-проксі не доводить виконуваний CFD hedge/short чи beta-neutrality. | `research_crossasset_20261015/PROTOCOL.md`, `research_crossasset_20261015/FINDINGS.md` |
+| R32 | BTC1H leader → ETH6H lag | Лише73closed; late2026H2 позитивні3 події не дають висновку. Gate не пройдено, усі фази збережено. | `research_crossasset_20261015/PROTOCOL.md`, `research_crossasset_20261015/FINDINGS.md` |
+| R33 | USTEC02–03NY із захисним стопом | 688closed; stress2026 +0.410 point/подію, але попередні роки мінусові й CI через нуль. Не точна S&P futures-репліка дослідження Fed. | `research_crossasset_20261015/INDEX_PROTOCOL.md`, `research_crossasset_20261015/FINDINGS.md` |
+| R34 | Executed taker-flow: completed volume-shock/imbalance → затриманий вхід | BTC743/ETH497closed; late gross і stress мінусові. Не order-book/footprint або мілісекундна стратегія. | `research_crossasset_20261015/FLOW_PROTOCOL.md`, `research_crossasset_20261015/FINDINGS.md` |
+
+### 4. Walk-forward, нове правило входу, ставки й календар
+
+| ID | Що перевіряли | Результат і межа висновку | Де правила та докази |
+|---|---|---|---|
+| R35 | 22 monthly past-only ML refits: 5features, ADX20, нормалізація, EURUSD M15 | Відхилено:2026 raw94 known/stress−15.520R; ADX29/−4.335R; normalized2/−.995R. Нові refits, не незмінний production pkl і не всі прогнози. | `research_walkforward_20261015/PROTOCOL.md`, `research_walkforward_20261015/NORMALIZED_PROTOCOL.md`, `research_walkforward_20261015/FINDINGS.md` |
+| R36 | Інформація в УСІХ прогнозах, включно з відкинутими порогом | Діагностика:22719 forecasts/model;2026 AUC raw.50497 / normalized.49492, CI включають.5; Brier гірше past-prior. Не доказ проти будь-якої майбутньої моделі. | `research_walkforward_20261015/ALL_FORECASTS_PROTOCOL.md`, `research_walkforward_20261015/ALL_FORECASTS_FINDINGS.md`, `research_walkforward_20261015/AUC_AUDIT.md` |
+| R37 | Cost-aware payoff ML: окремі BUY/SELL netR regressors замість direction accuracy | Відхилено: максимальний прогноз netR<0, відібрано0 угод. Відсутність ставок — не прибуткова стратегія. | `research_walkforward_20261015/PAYOFF_PROTOCOL.md`, `research_walkforward_20261015/payoff_result.json` |
+| R38 | True H1/H4 payoff ML і причинний розмір рахунку | H4 base$1015.32 / stress$962.77; H1$987.72/$963.25. Обидва gates fail;2025 H4 base теж нижче старту. Це не чистий однофакторний ефект таймфрейму. | `research_walkforward_20261015/HIGHER_PROTOCOL.md`, `research_walkforward_20261015/HIGHER_LEDGER_PROTOCOL.md`, `research_walkforward_20261015/HIGHER_FINDINGS.md` |
+| R39 | H4 attainable-size filtering та NETUSD навчальні labels | Відхилено: base$998.25 / stress$946.48. Краще узгодження з мінімальним обсягом не створило переваги. | `research_walkforward_20261015/FEASIBLE_PROTOCOL.md`, `research_walkforward_20261015/FEASIBLE_FINDINGS.md` |
+| R40 | Без ML: H4 EMA50/200+ADX, H1 EMA20 pullback, close-confirm, структурний стоп | EUR base$990.41/stress$976.43; GBP$1002.66/$992.94. Замалі21/14 і21/22 угоди2025/26; обидва gates fail. GBP перевірено за окремою amendment після EUR-діагностики. | `research_trend_pullback_20261015/PROTOCOL.md`, `research_trend_pullback_20261015/GBP_PROTOCOL.md`, `research_trend_pullback_20261015/FINDINGS.md` |
+| R41 | Розміри позицій: .5%, спільний cap, зниження при DD2%, постійні .25% | Керування ризиком, не новий сигнал. Спільні$1000 EUR/GBP stress:965.03/965.02/979.98/994.59. Conservative пропустив56/78 входів через minsize; edge не підтверджений. | `research_trend_pullback_20261015/SIZING_PROTOCOL.md`, `research_trend_pullback_20261015/SIZING_FINDINGS.md` |
+| R42 | Те саме правило на M30/H2, H2/H8, H8/D1 | Усі6 pair/scale gates fail. Stress EUR$988.58/$976.93/$998.88; GBP$979.30/$989.19/$1000(0угод). H8 sparse через strict D1/слоти/широкий стоп; не доказ проти swing загалом. | `research_trend_pullback_20261015/CHART_PROTOCOL.md`, `research_trend_pullback_20261015/CHART_FINDINGS.md` |
+| R43 | London16fixfade: strong priorhour, first-M5 closed reversal, delayed entry, 1h hold | EUR$914.98/$875.708; GBP$939.537/$886.790 base/stress. Відхилено; gross теж мінусовий, minsize skips0. Числове порівняння торкань виправлено й actual/controls перераховано. | `research_fix_20261016/PROTOCOL.md`, `research_fix_20261016/NUMERICAL_REPAIR.md`, `research_fix_20261016/FINDINGS.md` |
+| R44 | Weekday-sign: напрямки навчені лише2024, незмінні2025/26, London morning | Відхилено. Відомий stress-prefix EUR$710.617 / GBP$726.756 — ЛИШЕ до12.06.2026;15.06unknown і halt. Не баланс до жовтня. | `research_alternative_20261016/PROTOCOL.md`, `research_alternative_20261016/CENSORING_NOTE.md`, `research_alternative_20261016/FINDINGS.md` |
+| R45 | Crypto weekend LONG: Fri20→Sun20UTC, 2ATR stop; weekday/SHORT controls | 52/52/40 подій на актив у2024/25/26. BTC gross мінусовий; ETH gross позитивний, але CI через0, base+carry мінусові. Обидва gates fail; bp ціни, НЕ$1000-рахунок. Брокерські breaks/реальні swaps не змодельовані. | `research_weekend_20261016/PROTOCOL.md`, `research_weekend_20261016/FINDINGS.md`, `research_dispatch_20261016/WEEKEND_FINDINGS.md` |
+
+### Окремо: вивчені джерела й незавершені репліки — НЕ готові бектести
+
+- Повний AQR47/67 futures universe: немає перевіреного набору інструментів,
+  rollover і витрат; R08 лише4CFD. Докази: `research_new_methods_20261007/NEXT_STRATEGY.md`,
+  `research_new_methods_20261007/BROKER_FEASIBILITY_REPORT.md`.
+- Stocks-in-play ORB / оригінальний SPY intraday: немає відповідного
+  point-in-time equity-universe/ETF minute-dividend dataset. Наші FX/USTEC
+  адаптації не авторська репліка; `research_new_methods_20261007/EXTERNAL_REFERENCE_REPORT.md`.
+- BIS currency monthly-forward momentum: broad forward/swap histories не
+  отримані; R22 інший горизонт/контракт. Whole-universe crypto trend також
+  потребує survivorship-free історії; BTC/ETH недостатньо для репліки.
+- BTC cost-aware ML paper: питання provenance заявленої ранньої futures-історії
+  не узгоджене, точного відтворення немає. Останні три обмеження:
+  `research_new_methods_20261007/SEARCH_AND_FUNDING_REPORT.md`.
+- Мартингейл не тестувати й не додавати як «вихід»; заборона вище незмінна.
+  Хедж сам по собі не сигнал; конкретні carry/relative-моделі — R09–R12.
+
+### Технічні перевірки, які не рахувати новими стратегіями
+
+- Облік win-rate, publication receipts, початок/кінець сигналу, unknown,
+  historical recovery: `research_winrate_audit_20261010/` і журнал10–12.10.
+- Broker schedule/closure-path repair: `research_schedule_audit_20261014/FINDINGS.md`.
+  Реальні серверні зміни мають окремі записи; реєстр не підтверджує live-health.
+- Чисельна стабільність stop-touch/control paths: `research_dispatch_20261016/FINDINGS.md`.
+  Виправлені нові R43/R44, старі float-артефакти не переписували; перед повторним
+  використанням старих контролів потрібен boundary-audit.
+- Календар новин: `research_calendar_provider_20261016/FINDINGS.md`.
+  16.10≈14:06UTC підтверджено порожній довший/непорожній коротший діапазон;
+  ≈14:23UTC4GET уже повернули4/4/4/1 валідних подій без суперечностей;
+  повторний livecanary пройшов. Тимчасовий збій джерела, причина не доведена.
+  Діагностика з жорстким36s child-timeout; parser/runtime/fail-closed не змінені.
+  Це не постійний fallback і не гарантія наступного запиту.
+
+### Межі порівняння та правило оновлення
+
+1. Відсотки за весь період, CAGR, R, index-points, bp, hypothetical binary payout
+   й cash не взаємозамінні. Порівнювати лише однаковий контракт/період/капітал.
+   Не складати незалежні$1000-рахунки чи R спостережень як єдиний депозит.
+2. Значна частина кешів уже багаторазово досліджена. Нове правило/поділ на них
+   не стає blind/prospective OOS; поправки bootstrap у звітах не покривають
+   автоматично весь багатомісячний пошук. Невідомі результати не є нулями.
+3. Витрати, поточні min/step, margin/quotes/rollover у багатьох тестах умовні.
+   Позитивний gross не дорівнює виконуваному net, а один дешевий нинішній
+   snapshot не дозволяє переписати всю історію дешевше.
+4. Історичний запуск diagnostic observer/локального процесу — не доказ, що він
+   працює зараз або торгує. Реальні ордери/деплой цим реєстром не дозволені.
+5. Після кожного завершеного тесту оновлювати відповідний ID (чи додавати новий
+   для іншого механізму): точне правило, період, результат, статус, протокол/
+   джерело доказів та обмеження. Окремо залишати датований запис нижче.
+   Нові налаштування й контрольні варіанти не видавати за незалежні відкриття;
+   невиконаний план не позначати виконаним. Історичні невдалі спроби не видаляти.
+
 ## Контекст проєкту
 
 - Сигнали (cTrader Open API) — хмара, Fly.io, `app.py`/`analysis.py`/
@@ -2674,3 +2824,380 @@ overnightlongswapsmaymatter. EUR13raw3pipTPvs4pipassumedRTcostnetnegative
 expectedmath, notaccountingbug. DoNOTclaimcost_complete or profitableedge.
 Futurefees/historicalquote-side validationstillneeded, no currentfees substituted
 retroactively. NoUIessays, downloadlinks, realorders orGitHubpush.
+
+## 2026-10-15 — Different-mechanism offline search, no false winner
+
+Useraskedactivelyseekoptions, not moreoldindicatorparameters. Reviewedoldresearch
+andprimarypapers. research_crossasset_20261015 contains4mechanisms,5mainarms:
+BTC/ETH168Hratiofade24H, BTC1Hleader/ETHlag6H, USTEC02-03NYLONGwith2priorM5ATR
+protectivestop, executedtakerflowBTC/ETHM15shock+imbalance1H. Eachprotocolfrozen
+beforeitsoutcomes; thresholdsNOTchangedafterfailures. All5gatesFAIL. 2317closed
+mainobservations+1pairpending, controlsadditionalnotnewstrategies. 2024..Oct7
+crossasset/index,2026flow, allreusedretrospectiveNOTfreshOOS. No newmarkets/data
+networkacquisition, accounts, DB, credentials, orders, deploymentorGitHubpush.
+
+Pair316closed1pending:30bpRTplusweighted20%annual longcarrymeansbp -39.7622024,
+-46.1482025,-28.7312026H1,-38.0632026H2. BTCleadETH73closed:stress+7.2842024,
+-60.5732025,-56.1562026H1,+54.0442026H2 butlatteronly3events. Pair/lag/floware
+CHEAPfixedhorizonpredictivestudies, NOTwithstopsexecutionengines; no executable
+spotshorts/accountPnL/brokerfills/betaneutralityclaim. Binancepriceproxiesonly.
+
+USTECmain688closed,100%scheduledwindowcoverage, causalstop2prior14M5TR,
+entrybarstop/adversegapOpen,03NYexit. Atassumed5pointRTmean2024-5.524,2025-2.622,
+2026+.410(n192),adjustedCI[-9.379,+11.288]. At2pointRT2026+3.410. Notallnegative,
+notstableedge. FedoriginalS&PfuturessampleNOTNasdaqCFD; currentJuly2026authors'
+updateTheDisappearingOvernightDrift saysoriginal02-03effectfadedafter2021.
+DoNOTrelysolelyon2021paperorselected2026profit. Short/laterhourcontrolsnopromotion.
+
+TakerflowactualBinancekline[9]buyerbase/[5]totalvolume,notbook/footprint:
+v>=2prior20mean,abs(2buy/v-1)>=.30,sidefollow,full1bardelay,nextOpen,4barhorizon.
+BTC743closedETH497;30bpstressmeansBTCearly/late-29.558/-34.848bp,
+ETH-28.144/-32.747;latebeforecostalsonegative. ALLcontrols/resultsretained.
+Hypothetical20/30bpRTplus20%annuallongcarry, nothistoricalverifiedCFDcharges.
+
+15newcausality/stop/cost/flowtestsPASS; full703isolatedPython testsPASS.
+SQLiteforeign-keyALTERwarningandmockednetworkfailureswerecapturedsuiteoutput,
+notnewproductionincidents. Firsttestzerovariancefixturefixed, noalgorithmretuning.
+IndependentDecimal389crossassetgrossreturnsmaxerror1.67e-16. GeneratedJSONignored.
+LivehealthNOTcheckedthisturn; runtime/flags/cash/history/UIuntouched. No attachments
+orchanged-fileliststosowner. DoNOTpretendnewprofitablealgorithmidentified.
+
+## 2026-10-15 — Expert-plan walk-forward actually executed, no deployment
+
+OwnerforwardedrevisedexpertReactreport callingforEURUSDM15walkforwardNOW.
+research_walkforward_20261015:22monthlyexpandingLightGBMrefitsJan2025..Oct7
+2026,2024initialtraining,100trees31leaveslearningrate.1minchild20seed42n_jobs2.
+TargetsSTRICTLYbeforetestboundary, train-onlyscaler, class1UPexplicit,nolegacy
+inversion. FiveATR14/ADX14/RSI14/EMA50/EMA200sources, sourcepkl/scaleruntouched.
+THISISNEWRESEARCHREFITTING, NOTsameoldpkloridenticaloriginaltrainingpipeline.
+206736cachedM5=>68890completeM15=>36582feature rows. IndicatorresetatEACHgap,
+200barwarmup excludesearlyweekhours; NOTproductionrolling300reseededEMA or
+fullall-sessioncoverage. NofutureOHLCfill, unknownnotzero. ReusedhistoryNOTblind.
+
+DecisionclosedM15,fullM5wait,entryOpen+300sec,15minpath; directiontraininglabel
+endpointnotTP/SLlabel. IntegerP(UP)score>75BUY/<25SELLfixed, no thresholdsearch.
+PrimaryCFDstop1.5ATR,target2rawR,15mdeadline,entrybarstopfirst/adversegapOpen,
+2/4pipassumedRTcost netR/(distance+cost),notactualfees/fills/USDcash. .8binary
+proxyseparateNOTBinomoexecution. Nonoverlappingonepair, controlsBUY/SELL/momentum
+sameevents. DSTsessionswithoverlapbucket, allmonthly/sessionoutputsretained.
+
+Raw2025 337selected336known1unknown,172/329directioncorrect(7flat):base-46.784R,
+stress-79.675R.2026 94known46/91correct(3flat),base-6.141R/stress-15.520R.
+2026signalsJanuary92February1April1,May-Oct0. ADX>=20raw2025 217known1unknown,
+base-27.030R/stress-47.154R;2026 29knownbase-1.711R/stress-4.335R. Common-day
+ADXminusall2026stressCI[-.007777,+.228030]R/dayincludeszero, nofilteredge.
+
+FollowupNORMALIZED_PROTOCOLfrozenAFTERrawresultsbeforeownfit:ATR/Close,
+(Close-EMA50)/ATR,(Close-EMA200)/ATR,ADX,RSI; sameeverythingelse. Postdiagnostic
+searchNOTfreshconfirmation.2025 70known30/69correct;base-12.993R/stress-20.368R;
+2026only2knownonecorrect;base-.764R/stress-.995R. ADX2025 49knownbase-10.861R/
+stress-15.143R,2026same2. ALL4representation/policygatesFAIL. Lessnegativesum
+andfewersignalsNOTimprovementproof. DoNOTlowerthresholdoractivateoldbotjust
+toforceactivity. Theseresultsdon'tdisproveALLprobabilities/horizons/MLfamilies.
+
+9newcausal/purge/scale/stop/sessiontestsPASS; full712isolatedPython testsPASS.
+audit.pyDecimalnetRreplay+22foldpurges+originalhashes checks. NoDB/network/auth,
+cloud/flags/UI/schedulers/orders/deploy/GitHubpush/cashreset. GeneratedJSONignored.
+Nextdiagnosticifpursued: ALLforecastprobabilities/reliabilityvspast-onlyclass
+prevalence, notnewchosenconfidencethresholdonthissamehistory. Keepexecutionoff.
+
+## 2026-10-15 — ALL forecasts audited; cost-aware learning implemented, rejected
+
+Owner«ну так що робити» afterseveralreportiterations. Actuallycompleted next
+diagnostic and onefrozenpayoff-awarecandidate, no productionactivation.
+ALL_FORECASTS_PROTOCOL and all_forecasts.py refitraw/normalized22monthlyfolds,
+saveEVERYforecast22719each.2025 13742forecasts13477nonflat163flat102unknown;
+2026 8977/8786/118/73. ThesearepredictionsNOTtakenbets; reusegapwarmupcohort.
+Past-onlytrainingUPfrequencybaseline, nottestprevalence. Tiesexcludedlikefit,
+unknownretainednotzero. NaturalUPclassexplicit,nodirectionflip/thresholdsearch.
+Selectedold431raw/72normalizedtimestamps+probabilitiesmatchto1e-12,oldJSON
+unchanged. Originalpkl/scalerhashesunchangedafterallruns.
+
+Raw2025accuracy50.575%(prior-majority50.560%),AUC.509690;2026accuracy50.228%,
+prior-majority49.192%,DOWN50.808%,AUC.504968. Normalized2025accuracy50.382%,
+AUC.501150;2026accuracy49.590%,AUC.494923. Neitherflagpasses. Pairedaccuracy
+CIsincludezero. AllfourBrierimprovementCIsnegative,probabilitiesworsethanpast-
+frequencybaseline. BrierNOTpurecalibrationorproofnoinformation. AddedAUC_AUDIT
+supplementAFTERpointresults beforeuncertaintycomputation;no modeltuning:
+10calendardayblockbootstrap10000,64cellCIs raw2025[.495079,.524464],2026
+[.487842,.520495];normalized[.486655,.515905]/[.477794,.513387],allinclude.5.
+No universalnoMLclaim; ALLthresholdsnotoptimized,rarebucketsnopromotion.
+
+PAYOFF_PROTOCOLfrozenbeforeitsoutcomes: separatecandidate2regressors predict
+BUY/SELLnetR with4pipassumedRT,1.5ATRstop,2rawRtarget,15mdeadlineandfullM5
+entrydelay.15fixedfeatures,22monthlyrefits,targetsstrictlybeforeboundary,
+knownflatendpointpathsINtraining,past-onlyscale.100trees7leavesdepth3lr.05
+minchild200seed42,choosemaxexpectednet>0elseFLAT. Labelsareactualconditional
+stopoutcomesnotUPendpoint, notguaranteedPnL. 36582eligiblefeatures/22719test
+decisions,0entries;bestpredictedR-.067073. GateFAIL(notrades),NOTworkingbot,
+notuniversalproofnevertrade. DoNOTlowergate/widenstopposthocoractivateoldML.
+
+13newtestsPASS(allforecasts8,weightedAUC1,payoff4). IndependentDecimal Brier,
+pastfrequencybaseline/accuracy/bin-count auditPASS;22foldpurgeschecked. Full
+isolated725Python tests verificationperformed. CapturedSQLiteALTER/mockerror
+suiteoutputnotnewprodincident. NoDB/broker/auth/scanner/cloud/UI/cashchanges,
+orders/deployment/GitHubpush. GeneratedJSONignored,nofiles/changedlisttoowner.
+Furtherdifferenthorizon/data candidate mustbeseparatelyfrozen, no successclaim.
+
+## 2026-10-15 — Actual H1/H4 run and 1000USD illustration completed
+
+Ownerexplicitly«зробипрогін». HIGHER_PROTOCOLfrozenBEFOREoutcomes,actualH1/H4
+UTCcandles12/48contiguousM5,EURUSDcachedJan2024..Oct7 2026.2024training,
+22monthlyexpandingfoldsJan2025..Oct2026partialperarm. IndicatorEMA200uses
+200OBSERVEDcandlesacrossweekends,resetgap>7days(notoldM15reset-everygap,
+whichwouldgiveNOH1EMA200weekly);explicitresearchvariantnotexactprod/not
+causalestimateofonlytimeframechange. No syntheticpricebars. Same15normalized
+features/twopayoffregressors100trees7leavesdepth3lr.05minchild50seed42,
+past-onlyscaler,targetendpurge. min300train,gate50knownperyearlowerfrequency
+explicitlyfixedbeforeoutcomes,notrelaxedafter. Choosemaxpredictednet>0elseFLAT.
+Labels4pipRT,SL1.5TFATR/TP2priceR,hold1/4hoursafterfullM5delay. WeekdayUTC
+decision>=01,planneddeadline<=20UTC,nooverlap/overnightroll. Stopfirst,
+adversegapOpen,favorableTPgaplimit; missingBEFOREexitunknown,AFTERknownexit
+doesn'teraseoutcome. No futures/newaccounts/realorders, stillCFDpriceproxies.
+
+H117201completebars/8241forecasts/105selectedknown(102in2025,3in2026),0unknown.
+Base2pipnetR2025-5.590/2026-1.063;stress4pip-10.517/-1.187. H44135completebars/
+1372forecasts/381selectedknown(244/137),0unknown. Base+3.784/+6.854R,
+PF1.082/1.330;stress-5.556/-.0669R,PF.887/.997. BOTHgatesFAIL;H4basepositive
+NOTrobustprofit. 2026H4baseadjusteddailyRCI[-.039915,+.094430],stress
+[-.065311,+.066963],pairedcontrolsincludezero. MostH4deadlineexits225/244,
+131/137,not381TP/SLhits. No horizon/threshold/SL/sessiontuningafterresults.
+
+HIGHER_LEDGER_PROTOCOLaddedAFTERRresults, presentationnotnewgate: independent
+1000USDcontinuousJan2025..Oct7 2026perarm/cost,noannualreset,risk.5%balance
+inclcost,currentOct14EURUSDmin/step1000units(APIvolume/100),5xnotionalcap
+NOTverifiedmargin,roundDOWNskipminimum. Notflat5USDperR,notactualaccountfills.
+H1base987.7244end(84taken21skips),stress963.2544(78/27). H4base1015.3203
+(211taken170skips),stress962.7664(179/202). H4base2025ended991.6280 so doNOT
+claimroundedcashpositiveeachyear. Hypothetical2/4pipRTnotactualhistoricalfees;
+closedbalanceDDonly,nobrokerliquidation/intrabarDDclaim. Savedprojectcashuntouched.
+
+11newtestsPASS;full736isolatedPython testsPASS. higher_audit.py independently
+Decimalreplayed972scenarioexits/reasons/netR,maxerror6.41e-14;all44foldpurges,
+rawhashesandoriginalpkl/scalerhashesverifiedunchanged. NoDB/auth/brokercloud/
+UI/scanner/order/deploy/GitHubpush/cashchanges, no attachmentsorfilelists.
+Bothcandidatesrejectedforactivation;don'tclaimallH1/H4strategiesimpossible.
+
+## 2026-10-15 — H4 economic attribution, attainable-size USD candidate tested
+
+Owneraskswhattochange. AttributionoldH4deadline356/381gross+38.522R;
+stop20=-20R,target5=+10R,totalgross28.522R. DeadlineNOTshownlossdriver.
+Oldbase1000ledger211taken170skips,gross58.7203USD-cost43.4000=15.3203;
+sameFROZENunitbreakeven2.706pips(2025 1.253/2026 4.256),notforwardcostestimate.
+
+FEASIBLE_PROTOCOLfrozenBEFOREnewcandidateoutcomes(postattribution/reuseddata).
+H4unchanged22folds/1.5ATRstop/2RTP/4Hmax/clockslots. Filterattainabilityusing
+knownClose/ATR/minvolume/.5%risk1000USD/5xillustrativecap BEFOREprediction;
+two17featureLGBMregressorsNETUSDlabelsatfixed1000profileafter4pipcost,
+scalefitpastonly,labelsstrictlybeforetestboundary,knownzero-sizeentry0label,
+unknownnotzero. min200trainpredefinedfirstfold604. 2046eligible→1526feasible
+wholehistory. Actual-entrysizeanddynamiccashstillrechecked,no forcedminimum.
+2025 147known:base-4.733R/stress-11.526R;2026 113known:base+3.555R/stress-2.721R.
+Base1000→998.2540(260taken0skips,2025end982.5664),stress→946.4835(254/6,
+2025end958.1447). GateFAIL. Sizecompatibilitybetter,butprofitworseoldH4,
+DO NOTpromote/activateorrelabelthisastheprofitablefix. Oldresultspreserved.
+
+ReadonlyFlysameimage01M4XFYXE6B0VYA2BCWAWVNEJEstarted;Oct15~17:37UTCpublic
+healthokREADYTelegramACTIVE83prices2stale. OneinitialstrictEURUSDquoteempty
+NOTfeeddown:subsequent8freshsamplespositive. current_cost_probe.pybounded
+8x2secsnapshotread,HTTP6s,parent60s,noorders/remoteDB/appmodel/Supabaseinit.
+CurrenttariffsnapshotOct14(notnewlyverifiedaccountfee)precise3e9/1e8=>30USD
+permillionUSD,RTassumes2legs,mincommission0. Freshquotes<=5sec/sideskew<=1sec.
+Repeataccepted3/rejected5,RTspread+commissionproxy.672864..672888pips(no
+slippage/futureexitspread). cost_complete=false,historical=false. Don'treprice
+pastorclaimprofitbasedon3ticks;2/4pipassumptionsremainconditional. Official
+precisionverifiedhelp.ctrader.com/open-api/model-messages/. Nobackgroundwatch.
+
+7newtestsPASS;full743isolatedPython testsPASS. IndependentDecimal520scenario
+R/cashrowsmatchmax7.89e-14;22purges/originalpklhashesunchanged. No production
+strategy/flags/UI/cash/scanner/deployment/orderchanges,norestart/GitHubpush,
+noattachments/filelists. Researchcandidatefailed;measurementtoolread-only.
+
+## 2026-10-15 — Deterministic H4/H1 pullback entry implemented and screened
+
+Ownerasksconcretechanges. Addedisolatedresearch_trend_pullback_20261015:
+completedH4EMA50/200+ADX20bias,H1EMA20pullback,nextH1CLOSEbeyondpullback
+extreme,entryactualM5openafter5min,structuralstop+.1ATR,2RTP,4hmax.
+Weekdays08..15UTC;oneposition;stresscostaffordabilityatdecisionANDentry.
+NoML,nopricewickconfirmation,nofutureH4,noovernightintent,noforcedminimum.
+ProtocolfrozenbeforeEURoutcomes;GBPtransferamendmentfrozenAFTEReurdiagnosis
+BEFOREGBPoutcomes. ReusedstudiedcacheJan2024..Oct7 2026,NOTfreshholdout.
+
+SeparateUSD1000illustrationsJan2025..Oct7 2026,noyearreset:
+EURbase990.41296/stress976.43093,21trades2025/14in2026;
+GBPbase1002.66042/stress992.93935,21/22. BothgateFAIL.
+EUR2026positivebut2025negative;GBPbasecashslightlypositiveNOTrobustedge.
+Both2026dailyandexcess-controlCIinclude0,smallcounts<50/year.
+2/4pipRTassumptionsnotactualhistoricalfees;Oct14brokertermsconditional.
+Noassetscombinedportfolio;oldpaperbalanceuntouched;noactivation/deploy.
+
+IndependentDecimal240scenarioexit/reason/Rreplaysandcashmatch,error<9.2e-14,
+input/originalpklhashesunchanged. 10targetedtestsPASS;753fullisolatedtestsPASS.
+NoDB/auth/cloud/UI/scanner/Telegram/orderchanges,noGitHubpush,nofilelinks.
+DoNOTdeployfailedcandidateorretunefilterstojustifyactivity.
+
+## 2026-10-15 — Shared-account sizing overlays tested, not activated
+
+Userasksoperateposition sizes;implementedisolatedsizing.py/frozenSIZING_PROTOCOL.
+SamefrozenselectedEUR/GBPentries2025..Oct7 2026,oneSHARED1000USDaccount,
+notpreviousseparate1000accounts. ReusedhistoryNOTfreshholdout;nooptimizedscore.
+Settlesclosedexitbeforeequal-timeentry;unrealizedfuturePnlNOTavailabletosizing.
+Reserveopenstop+fee,aggregate5xnotionalceiling,rounddownactualstep,minskip.
+Baseline.5%pertrade;shared.5%totalrisk;drawdown>=2%halvepertraderisk.25%;
+constant.25%withsharedcap. Nosignalchanges,martingale,forcedminimumorreset.
+
+Base2pip/stress4pipendUSD:
+baseline991.3273/965.0342(78/78taken);
+shared987.7379/965.0248(72/72);
+drawdown991.6738/979.9839(69/46);
+conservative1004.3286/994.5855(30/22).
+StressclosedDD4.4864/4.4246/2.8269/1.0887percent respectively.
+Conservativestressskips56of78dueminimumsize:protectionpartlyabstention,
+NOTevidencethatlargerwinningstakeswereidentified. All2026netCIinclude0;
+nopositivelowerexcessvsbaselineCI. Conditional10dayblock10000/16interval
+correctiondoesNOTresimulateadaptivepolicy;noindependentOOSclaim.
+
+IndependentDecimal467fundedtradescash/steps/reservedcap/notionalverified.
+Original240scenarioexitsandinput/modelhashreverified. 8newtargetedtestsPASS;
+full761isolatedprojecttestsPASS;gitdiffcheckclean.
+NoDB/cloud/Telegram/UI/model/savedbalance/order/deploy/GitHubchanges.
+Researchriskoverlayonly;failedentrystrategystillNOTapprovedforactivation.
+
+## 2026-10-15 — Other chart scales screened after owner request
+
+Userasksnewcharts,interpretedtimeframes. FrozenCHART_PROTOCOL beforeoutcomes.
+SameentryfamilyM30/H2,H2/H8,H8/D1onEURUSD+GBPUSD. Fixed4hholdand2Rtarget,
+08..15UTCcloseddecisions,5mindelay,allcost/volume/riskfiltersunchanged.
+Generalizedresearchaggregate/detectonly;oldH1/H4intentsEXACTLYmatchsavedboth.
+Independent1000USDperasset/arm2025..Oct7 2026,nocombinedportfolioorholdoutclaim.
+Base/stressendEUR:M30 1007.0030/988.5804,H2 977.8250/976.9331,
+H8 999.08/998.88. GBP:M30 992.6565/979.3033,H2 989.9807/989.1911,
+H8 1000/1000(zero trades). GatesALLFAIL,not enough trades(<50/year).
+Known2025/26countsEUR25/2,14/5,1/0;GBP23/19,11/5,0/0.
+DoNOTsayM30morefrequentfundedentriesorH8provenbad:strictD1completebucket
+reject319EUR/371GBPpartialdays;only348/155dailyindicatorbarsremain.
+UTCsessionmaintenance/sourcegapsnotdistinguished;wideH8stopsfailminsize.
+Noimputation,noretuning,noactivation. 5newtargetedtestsPASS;independent
+Decimal300scenarioexit/reason/R+cashchecksPASS,maxerror1.12e-13;
+input/modelhashverifiedunchanged. NoDB/cloud/model/cash/order/Telegramchanges.
+
+## 2026-10-16 — Explicit agent delegation, two new hypotheses completed
+
+Ownerexplicitlyasksagents. Spawned3realcollaborationagents:readonlyinventory,
+London16fixfade,calendarweekdaydrift. Turn-scoped,NOTpersistent24/7/scheduled.
+Nobackgroundautomationcreated. Maincheckedresultsindependentlyandaddedbounded
+research_dispatch_20261016/batch.py:defaultverifyonly,--runexact2allowlisted
+offlinejobseach180shardtimeout;nofailureasfakezero/noloop/autodeploy.
+
+Frozenbeforeoutcomesfixrule:15..16Londonhourstrongmove,closedpostfixM5reverse,
+decision16:05/entry16:10,structuralstop/2RTP/max1h,DSTaware. Separate1000USD
+Jan2025..Oct7 2026EURbase914.98/stress875.708,GBP939.537/886.79.
+EURknown50/45(2025/26),GBP61/48,nounknown/minsizeskips;grossfundednegative.
+Gatesfail,notactivated;LSEGanchorofficialnotprooffadeedge.
+
+Calendarweekdaydirectionslearn2024ONLY,frozen2025/26,noEMA/range/momentum.
+London08:00decision/08:05entry,1.5pastH1ATRstop/2RTP/max4h.
+2025stressEUR252closed−61.716R,GBP255closed−78.642R. 2026known116each,
+firstunknownJun15 07:05UTC;HALTpreserved,NOTfullOctbalance. CIcutoffbefore
+unknownUTCday,noposthaltzerodays. KnowncashJan2025..lastknownJun12:
+EURbase786.145357/stress710.617143;GBP762.289643/726.756071. Gatesfail.
+SameoldcacheNOTnewblindOOS,cost2/4pip/currentOct14termsconditional.
+
+IMPORTANTnumericalfinding: rootauditCONTROLpathEURbase1788189000derivedrisk
+.00041000000000002146 producedfloat-touchdisagreement. Initialagentactual-only
+auditsmissedcontrols. Addedisolateddispatch/price_replay.py Decimal12places,
+notbrokertick/fillmodel;bothnewcandidatesANDcontrolsrerun;strategyprotocols
+unchanged,afteroutcomeNUMERICAL_REPAIRnotesexplicit. Oldsharedfloathelper/
+olderartifactsNOTmodified;boundaryauditneededbeforetheirpromotion/reuse.
+Bothnewgatesstillfail,fundedbalancesmateriallyunchanged.
+
+Rootindependentverifiedfix632actual+1896controls+408cash;
+calendar1478actual+4430knowncontrols+1461cash,4censoredcontrolscenarios
+explicitNone. NetRerror0underdeclared12dp;inputs/models/protocolhashmatch.
+11fix+8calendar+6dispatch+5numericaltargetedtestsPASS;full796isolatedtestsPASS;
+gitdiffcheckclean. WorkingsoftwaretestsNOTevidenceoftradingprofitability.
+NoDB/cloud/Telegram/UI/scanner/config/cash/order/deploy/GitHubchanges.
+
+## 2026-10-16 — Crypto weekend mechanism completed; external calendar warning
+
+Owner'dаліщо?'continuedresearchagent. Frozenresearch_weekend_20261016,
+BTC/ETHspotH1proxy LONGFri20UTC→Sun20Open,decisionFri19past14TRATR,
+protectivestop2ATR,noTP,fullH1delay. Tue20→Thu20sameweekLONGandweekendSHORT
+controls,notposthoccandidates. Notfunding/newaccount/CFDfills or1000USDreturn.
+Already-studiedcacheNOTfreshOOS;288actualweekendobservations(52/52/40perasset).
+GrossmeanbpBTC2024/25/26−12.3361/−.3705/−5.4079;ETH+22.9525/+26.6361/+7.9223.
+Base20bp+prorated20%annualcarryETH−5.9999/−1.7850/−21.3357;
+stress30bpBTC−51.2841/−38.4843/−44.6545,ETH−15.9999/−11.7850/−31.3357.
+2026ETHgrossCI[−97.1180,+92.0636]bp includes0;pairedweekday/shortCIinclude0.
+BothgatesFAIL;evenETHgrosspositiveNOTestablishededge. DoNOTdeployorswitchshort.
+
+RootindependentnativeJSONaudit24264H1bars/assetvalidatedUTCopen+closeTime,
+positiveOHLC/contiguousaxis/hashes;legacyacquisitionintegrityNOTproven.
+RootindependentDecimal866closed(allweekend+weekday+short)and4pendingcalendar
+eventsverifiedATR/stop/gap/deadline/chargedhour/gross/caseyearmeans,error0.
+Weekendunknown/controlcensor0. FutureFriOct9pendingRELATIVEcacheOct7notactual
+openedtrade. 8strategy+3nativeauditnewtestsPASS.
+CurrentOct14brokercryptoNYmaintenancebreaks/Friday3xswapNOTmodeled;carry20%
+proportionalSENSITIVITYnotactualswap. Spotstopsduringbrokerbreakunknownfills.
+
+IMPORTANTfullsuite807=>806PASS/1FAIL externalLiveCalendarParserSmokeTest.
+StandalonecanaryFAILtoo:Oct16~14:06UTCtool.forexfromOct15toOct18HTTP200empty
+events,total0(noallTotal),samefromtoOct17returns4valid/allTotal1457.
+ThisisBEFOREparser,notproofparserbroken. READONLYagent3boundedGETconfirmed
+range-specificupstreamempty,cachedHIT/Age135/publicmax-age300;no-cacheheader
+didnotbypass. Rootcauseoriginrangebug/stalecache/providerpolicyUNPROVEN.
+DoNOThidethisfailure/disablecanaryorclaimall807PASS. Runtime/calendarcode/tests
+NOTchanged,nocloudhealth/currentprodblockingclaim. Fullsavednotesdispatch/
+WEEKEND_FINDINGS.md. Separateoffline/localtestsubsetverificationexplicit.
+Separaterun806localtestsPASS;the1externallivecanarywasexplicitlyexcluded
+onlyfromthatsubset,NOTremovedorskippedinthefullsuite/source.
+NoDB/cloud/Telegram/UI/model/realorders/cash/deploy/GitHubchanges.
+
+## 2026-10-16 — Єдиний реєстр досліджень і паралельна перевірка календаря
+
+На прямий запит власника зібрано розділ «Зведений реєстр стратегій і перевірок»
+одразу після Compact Instructions:45 унікальних послідовних ID,R01–R45.
+У кожного — фактичний механізм, результат/обмеження і джерело доказів.
+Усі108посилань на наявні документи/артефакти звірені; усі документовані кореневі
+research-папки представлені. 45ID НЕ дорівнює45незалежнимстратегіям. Позитивні,
+але недоведені результати й неповні/непочаті репліки відділені від відхилених.
+Хронологію й попередні невдалі результати не видаляли. Додано правило
+підтримувати індекс після кожного тесту та3регресійні перевірки реєстру.
+
+Паралельно агент завершив research_calendar_provider_20261016:4обмеженіGET,
+8s/request,36sжорсткий child-deadline. Наявний parser витягнутоASTбезімпортів
+runtime; sourcehashd043f9144d43fe65d43f9edf57957f5677eedeb5681d1732e4e0b9e0d50f27a1.
+16.10о14:23:39UTCобидва раніше суперечливі діапазони і2контрольні повернули
+4/4/4/1подію,raw=parsed,HTTP200/MISS/Age0,суперечностей0. Повторний штатний
+livecanary пройшов. Це поточне відновлення джерела, НЕ наш runtimefix; причина
+попередніх порожніх HIT-відповідей усе ще невстановлена. Попередній failedrun
+залишено в історії. Silentfallback/rangeshopping/послабленняfailclosedне додані.
+
+Після цих змін11нових тестів (3registry+8providerdiagnostic)PASS;
+повний ізольований suite818PASS включно з не вимкненим livecanary на момент
+цього запуску. Це не гарантія наступного API-запиту й не live-health хмари.
+gitdiffcheckclean. Runtime/news_filter/чинніcanaryтести/брокер/БД/баланс/UI/
+ордери/деплой/GitHub не змінені. Ніякого постійного фонового агента не запускали.
+
+## 2026-10-16 — На прямий запит власника: синхронізація GitHub
+
+Власник явно попросив опублікувати поточні напрацювання. Після gitfetchorigin
+робоча гілка codex/verified-recovery-cleanup-20261009 мала31локальний коміт
+понад origin і нові незакомічені дослідження/реєстр. Готуються до commit/push
+код, протоколи, підсумки й тести, включно з єдиним реєстром R01–R45.
+Сирі кеші, учасницькі відео, логи, .env, сесії, моделі й приватні дані не
+включати. Curatedlocal_trend_bot/research_result_v1.json — лише дослідницькі
+метрики/хеші, не рахунок/токен. Публікується робоча гілка, НЕ merge уmain
+і НЕ deploy; наявний workflow запускаєCI, неFly. Факт завершеного push
+підтверджувати збігом localHEAD і gitls-remote відповідної origin-гілки,
+а не лише наявністю локального коміту. Скан вихідних blobs не виявив
+приватних типів артефактів/великих blobs; єдина credential-pattern знахідка
+в новому коді — навмисний ізольований DATABASE_URL=sqlite:///:memory:.
+
+Перед push точний CI-виклик python -m unittest discover -v локально знайшов
+0тестів: папкаtestsне мала__init__.py. Додано мінімальний package-marker,
+щоб наявнийworkflowдійсно знаходивтести іtests.*імпорти були однозначними.
+Жодної зміни trading/runtime або послаблення перевірок.
+У3місцяхдопоміжніNYfixture-імпорти приведені доtests.test_ny_h4_reclaim.
+Післявиправленняточнийroot-discoveryзнайшовівиконав818тестів,PASS;
+перевіркасекретнихформатіву266вихіднихісторичнихblobsзнахідокнемає.

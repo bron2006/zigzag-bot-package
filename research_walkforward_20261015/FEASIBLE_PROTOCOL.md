@@ -1,0 +1,41 @@
+# H4 attainable-size payoff candidate, frozen after attribution, before outcomes
+
+Useraskswhattochange. Read-onlyattribution: H4oldbase381trades gross28.522
+equal-riskR;356deadlineexits gross+38.522R. TimeritselfNOTprovenlossdriver.
+At1000USDroundedbase211taken,170skipped;gross58.720USDminus43.400USDassumed
+cost=>15.320USD. SameFIXEDunitsbreakevencost2.706pips (notfuturecostestimate).
+2025thoseunitsbreakeven1.253pips,2026 4.256pips: unstable, notonlycostproblem.
+Don'textenddeadlineorwidenTPjustbecausefewtargethits. Changeoneeconomicgoal:
+fitonlyknown-at-decisionattainablepositioncohort andpredictNETUSD atfixed1000.
+
+Offlineonly. SameEURUSDH4bars/features/22folds/clockslots/fullM5delay/4Hhold/
+1.5ATRstop/2rawRTP, no thresholdorstopsearch, oldresultsunchanged. Current
+Oct14metadata min/step/maxvolume/100,historicaltermsunverified. Fixed1000USD
+modelprofile,.5%riskbudget,5xnotionalcapillustrativeNOTconfirmedmargin.
+Decisionfeasibilityuses ONLYlastclosedH4Close, knownATR and4pipstresscost;
+q=roundDOWNmin(5/(1.5ATR+.0004),5000/Close,brokermax),skipif<minimum.
+NEVERfilter cohort usingfutureentryprice/outcome. Rechecksizeatmodeledentry.
+
+TargetsnetUSDusingfixed1000profileentryquantityandactualconditionalmodeledexit,
+4pipRT,notunitR. Ifactualentrysizebelowmin=>zeroUSDlabel(notrade), notmissing.
+Unknownentry/path=>unknownlabels,excludedfromfit(notfakezero). BothBUY/SELL
+knownneeded. Includeknownflatendpoints. Plannedtargetendstrictlybeforemonth.
+17causalfeatures:previous15plus minimumriskfraction/minimumnotionalfraction,
+computedfromdecisionClose,ATR,minimumsizeand1000profile,notfutureentry.
+TwoLGBMRegressor100trees7leavesdepth3lr.05minchild50seed42n_jobs2 deterministic,
+past-onlyscaler,min200trainingexamplesexplicitbeforefit(smallerfeasiblecohort).
+PredictmaxnetUSD>0BUY/SELL(equalpositiveBUY),elseFLAT;notcalibratedprobability.
+
+EvaluateALLmonths/base2pip/stress4pip, no futurebest-sessionselection. Scenario
+cashprojectionusesactualcurrentSIMULATEDclosedbalance,.5%risk andminsize/cap,
+soactualquantitiesmaydifferfromfixed1000trainingprofile. Reportallskips/counts,
+closedbalanceDDnotintrabar/margin/liquidation. No actualprojectbalancechanges.
+KeepoldH4baselineforexecutabilitycomparison, butdifferentcohort/target means
+notisolatedcausalproof. Reusedhistory, postdiagnosticresearchNOTindependent.
+
+Gatebeforeoutcomes:>=50knownselectedbothyears,no selectedunknown/controlcensor,
+positiveunitRbothstressyears,2026adjusted10dayblockdailyRlower>0andpaired
+advantagevsBUY/SELL/momentumlower>0;PLUSroundedstresscashend2025>1000and
+end2026>end2025.64cellCIsforthisbatchnotentiresearchhistory. Passingonlynext
+independentquotes/fees/prospectivecheck, NEVERautomaticpaper/liveactivation.
+CostassumptionsNOTactualhistoricalbidask/accountfees. No sizeforcedabovebudget.

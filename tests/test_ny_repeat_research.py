@@ -1,7 +1,7 @@
 import importlib.util
 from pathlib import Path
 import unittest
-from test_ny_h4_reclaim import fixture,bar
+from tests.test_ny_h4_reclaim import fixture,bar
 
 spec=importlib.util.spec_from_file_location('ny_repeat_compare',Path(__file__).resolve().parents[1]/'research_ny_h4_20261013'/'compare.py')
 compare=importlib.util.module_from_spec(spec);spec.loader.exec_module(compare)

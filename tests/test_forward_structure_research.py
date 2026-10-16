@@ -96,7 +96,7 @@ class ForwardResearchTest(unittest.TestCase):
         self.assertEqual(snapshot(self.path,900)['rule_activations'],first['rule_activations'])
 
     def test_NY_pre_activation_setup_is_visible_but_never_counted_as_new_trade(self):
-        from test_ny_h4_reclaim import fixture,bar
+        from tests.test_ny_h4_reclaim import fixture,bar
         from ny_h4_reclaim import RULE
         rows,end=fixture()
         rows += [bar(end),bar(end+300,o=94,h=97,l=94,c=96),bar(end+600,o=96,h=97,l=95,c=96)]
@@ -107,7 +107,7 @@ class ForwardResearchTest(unittest.TestCase):
         self.assertEqual(view['ny_h4_states'][0]['status'],'setup_before_activation')
 
     def test_NY_post_activation_setup_is_stored_without_changing_balance(self):
-        from test_ny_h4_reclaim import fixture,bar
+        from tests.test_ny_h4_reclaim import fixture,bar
         from ny_h4_reclaim import RULE
         rows,end=fixture()
         rows += [bar(end),bar(end+300,o=94,h=97,l=94,c=96),bar(end+600,o=96,h=97,l=95,c=96)]

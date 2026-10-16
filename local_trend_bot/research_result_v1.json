@@ -1,0 +1,290 @@
+{
+  "version": "local-trend-v1",
+  "retrospective": true,
+  "proven_edge": false,
+  "rules": {
+    "donchian55_20": {
+      "assets": [
+        {
+          "symbol": "BTCUSDT",
+          "source_sha256": "c43d4fce7472eec145e840165553bba7467101aacba6513051439ba059998281",
+          "blocks": {
+            "early": {
+              "base": {
+                "total_return": 2.8936220737659712,
+                "max_drawdown": -0.4169042388013644,
+                "changes": 22,
+                "exposure": 0.487337440109514,
+                "buy_hold": {
+                  "total_return": 4.864857200535354,
+                  "max_drawdown": -0.7662925431645935
+                },
+                "matched_hold": {
+                  "total_return": 2.3708270546072363,
+                  "max_drawdown": -0.6889850664741946
+                }
+              },
+              "stress": {
+                "total_return": 2.725688465312914,
+                "max_drawdown": -0.43075932447039356,
+                "changes": 22,
+                "exposure": 0.487337440109514,
+                "buy_hold": {
+                  "total_return": 4.84139779523963,
+                  "max_drawdown": -0.7662925431645935
+                },
+                "matched_hold": {
+                  "total_return": 2.3593944080839266,
+                  "max_drawdown": -0.6888456597691701
+                }
+              }
+            },
+            "late": {
+              "base": {
+                "total_return": 0.31291658276736967,
+                "max_drawdown": -0.2842917581655734,
+                "changes": 20,
+                "exposure": 0.3834661354581673,
+                "buy_hold": {
+                  "total_return": 0.9737315625498126,
+                  "max_drawdown": -0.5297176591351062
+                },
+                "matched_hold": {
+                  "total_return": 0.3733930792646194,
+                  "max_drawdown": -0.34265942581208275
+                }
+              },
+              "stress": {
+                "total_return": 0.26133525719913653,
+                "max_drawdown": -0.29849185270674516,
+                "changes": 20,
+                "exposure": 0.3834661354581673,
+                "buy_hold": {
+                  "total_return": 0.9658366442103532,
+                  "max_drawdown": -0.5297176591351062
+                },
+                "matched_hold": {
+                  "total_return": 0.370365645439229,
+                  "max_drawdown": -0.3424168640381958
+                },
+                "adjusted_lower_mean_daily_log_excess": -0.0009694516705252024
+              }
+            }
+          },
+          "gate_pass": false
+        },
+        {
+          "symbol": "ETHUSDT",
+          "source_sha256": "309ba185ff6b4d1d13749709f5b9fa04f14be5a19969bd58096136a02ba5177e",
+          "blocks": {
+            "early": {
+              "base": {
+                "total_return": 7.839591018039295,
+                "max_drawdown": -0.5796718449198622,
+                "changes": 22,
+                "exposure": 0.46132785763175904,
+                "buy_hold": {
+                  "total_return": 16.631685830520283,
+                  "max_drawdown": -0.7930253453633335
+                },
+                "matched_hold": {
+                  "total_return": 7.6726599929984065,
+                  "max_drawdown": -0.7688832408169624
+                }
+              },
+              "stress": {
+                "total_return": 7.458335624273561,
+                "max_drawdown": -0.5929355247122607,
+                "changes": 22,
+                "exposure": 0.46132785763175904,
+                "buy_hold": {
+                  "total_return": 16.56115915786621,
+                  "max_drawdown": -0.7930253453633335
+                },
+                "matched_hold": {
+                  "total_return": 7.640124074197006,
+                  "max_drawdown": -0.7688362885279887
+                }
+              }
+            },
+            "late": {
+              "base": {
+                "total_return": 1.375021311763473,
+                "max_drawdown": -0.22292855737059647,
+                "changes": 14,
+                "exposure": 0.3296812749003984,
+                "buy_hold": {
+                  "total_return": 0.17475608426860423,
+                  "max_drawdown": -0.6755345017766713
+                },
+                "matched_hold": {
+                  "total_return": 0.05761380865827492,
+                  "max_drawdown": -0.3444629826596812
+                }
+              },
+              "stress": {
+                "total_return": 1.3093134884267896,
+                "max_drawdown": -0.22563866843629787,
+                "changes": 14,
+                "exposure": 0.3296812749003984,
+                "buy_hold": {
+                  "total_return": 0.1700570646399664,
+                  "max_drawdown": -0.6755345017766713
+                },
+                "matched_hold": {
+                  "total_return": 0.05606462987632366,
+                  "max_drawdown": -0.34412466479931714
+                },
+                "adjusted_lower_mean_daily_log_excess": -0.00020626369181650752
+              }
+            }
+          },
+          "gate_pass": false
+        }
+      ],
+      "gate_pass": false
+    },
+    "momentum365": {
+      "assets": [
+        {
+          "symbol": "BTCUSDT",
+          "source_sha256": "c43d4fce7472eec145e840165553bba7467101aacba6513051439ba059998281",
+          "blocks": {
+            "early": {
+              "base": {
+                "total_return": 7.64753668306971,
+                "max_drawdown": -0.5359790262519866,
+                "changes": 20,
+                "exposure": 0.6283367556468172,
+                "buy_hold": {
+                  "total_return": 4.864857200535354,
+                  "max_drawdown": -0.7662925431645935
+                },
+                "matched_hold": {
+                  "total_return": 3.056768590069442,
+                  "max_drawdown": -0.7208156072989476
+                }
+              },
+              "stress": {
+                "total_return": 7.30779582605923,
+                "max_drawdown": -0.5359790262519866,
+                "changes": 20,
+                "exposure": 0.6283367556468172,
+                "buy_hold": {
+                  "total_return": 4.84139779523963,
+                  "max_drawdown": -0.7662925431645935
+                },
+                "matched_hold": {
+                  "total_return": 3.042028183456523,
+                  "max_drawdown": -0.7207298040140455
+                }
+              }
+            },
+            "late": {
+              "base": {
+                "total_return": 1.0112862644132457,
+                "max_drawdown": -0.3170984260091926,
+                "changes": 4,
+                "exposure": 0.6892430278884463,
+                "buy_hold": {
+                  "total_return": 0.9737315625498126,
+                  "max_drawdown": -0.5297176591351062
+                },
+                "matched_hold": {
+                  "total_return": 0.6711376905223809,
+                  "max_drawdown": -0.45939167107586876
+                }
+              },
+              "stress": {
+                "total_return": 0.9952281709362003,
+                "max_drawdown": -0.3211917312105841,
+                "changes": 4,
+                "exposure": 0.6892430278884463,
+                "buy_hold": {
+                  "total_return": 0.9658366442103532,
+                  "max_drawdown": -0.5297176591351062
+                },
+                "matched_hold": {
+                  "total_return": 0.6656961731011599,
+                  "max_drawdown": -0.45926935777145894
+                },
+                "adjusted_lower_mean_daily_log_excess": -0.0006111996733349812
+              }
+            }
+          },
+          "gate_pass": false
+        },
+        {
+          "symbol": "ETHUSDT",
+          "source_sha256": "309ba185ff6b4d1d13749709f5b9fa04f14be5a19969bd58096136a02ba5177e",
+          "blocks": {
+            "early": {
+              "base": {
+                "total_return": 15.183092391753174,
+                "max_drawdown": -0.6218832193582325,
+                "changes": 30,
+                "exposure": 0.649555099247091,
+                "buy_hold": {
+                  "total_return": 16.631685830520283,
+                  "max_drawdown": -0.7930253453633335
+                },
+                "matched_hold": {
+                  "total_return": 10.803196340290038,
+                  "max_drawdown": -0.7816847647068075
+                }
+              },
+              "stress": {
+                "total_return": 14.238829717241888,
+                "max_drawdown": -0.6218832193582324,
+                "changes": 30,
+                "exposure": 0.649555099247091,
+                "buy_hold": {
+                  "total_return": 16.56115915786621,
+                  "max_drawdown": -0.7930253453633335
+                },
+                "matched_hold": {
+                  "total_return": 10.757385380434656,
+                  "max_drawdown": -0.781662341266209
+                }
+              }
+            },
+            "late": {
+              "base": {
+                "total_return": 0.17807828350914456,
+                "max_drawdown": -0.45256101161188744,
+                "changes": 12,
+                "exposure": 0.5906374501992032,
+                "buy_hold": {
+                  "total_return": 0.17475608426860423,
+                  "max_drawdown": -0.6755345017766713
+                },
+                "matched_hold": {
+                  "total_return": 0.10321748801920538,
+                  "max_drawdown": -0.5088286402789481
+                }
+              },
+              "stress": {
+                "total_return": 0.15008566783776822,
+                "max_drawdown": -0.4547430796362397,
+                "changes": 12,
+                "exposure": 0.5906374501992032,
+                "buy_hold": {
+                  "total_return": 0.1700570646399664,
+                  "max_drawdown": -0.6755345017766713
+                },
+                "matched_hold": {
+                  "total_return": 0.10044207104731084,
+                  "max_drawdown": -0.5085768756109934
+                },
+                "adjusted_lower_mean_daily_log_excess": -0.0011844701654417217
+              }
+            }
+          },
+          "gate_pass": false
+        }
+      ],
+      "gate_pass": false
+    }
+  },
+  "protocol_sha256": "5a7b9eb83135c1f88bcb3347401197c64abb4ba046c0936f95e74fbc2af27b49"
+}

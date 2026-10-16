@@ -1,0 +1,13 @@
+# GBPUSD transfer check, frozen AFTER EURUSD results, before GBPUSD outcomes
+
+EURUSD exactrule produced35known2025/26trades,negativeoverall,gateFAIL.
+Check SAMEfixedrule onalreadycachedGBPUSD, theotherUSD-quotedFXinstrument
+inthecurrentobserveruniverse. No otherassets/EMA/ADX/sessions/stop changes.
+Thispostdiagnostic universeextensionNOTblindholdout/newindependentdiscovery.
+AllGBPresultsretainedincludingloss/zero/sparse. EURresultJSONNOToverwritten.
+UseGBPcurrentOct14volumeconstraints,2/4pipRTconditionalcostssameassumptions,
+same1000USDindependentillustrationNOTextraactualaccountorcombined2000capital.
+USDJPYexcludedbecausequoteconversionnotimplementedhere, no improvisedFXmath.
+Candidateapprovalrequires BOTHpairs pass existingunchangedgates; EURfails
+already, so goodGBPsubsetcannotjustifyautomaticselection/deployment.
+Purposechecktransferabilityandsamplefrequency, notposthocpromote bestpair.

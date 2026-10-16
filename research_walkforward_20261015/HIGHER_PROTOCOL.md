@@ -1,0 +1,52 @@
+# H1/H4 payoff walk-forward, frozen before returns, 2026-10-15
+
+Ownerexplicitlyasked RUNhigherhorizonexperiment. Twoarms TRUEH1 andTRUEH4
+formedfrom12/48actualcontiguousUTC-alignedM5bars. NotjustrenameM15holdtime.
+CachedcTraderEURUSD Jan2024..Oct7 2026, no DB/network/orders/cashchanges.
+No newbroker/futures/exchangeaccount, stillCFDprice/costscenarios. All old
+researchoutputs/models immutable. Report inputhashes/currentoriginalpklhashes.
+
+H1/H4periods UTC-anchored, NOT changeofownerNY00-04pattern. Partialbarsexcluded,
+gapsnotfilled. Indicators on latestOBSERVEDcompletecandles acrossweekends and
+shortgaps, resetonlygap>7days,first200observedbarwarmup. Thisexplicitlydiffers
+fromoldM15gapreset: weeklyH1has<200candles so resettingeveryweekwouldproduce
+no EMA200. HistoricalpricegapsincludedinTR; indicatorbarcountsNOTwallclock.
+Unexpectedmissingbarsstillunknownintradepaths, neverpretendclosed/zero.
+
+TwofixedLGBMRegressorBUY/SELLconditionalnetR. Same15fixedcausalfeatures as
+payoffcandidate withreturns/ATR/EMA onACTUALH1/H4:5normalizedindicators,
+logreturn1/4,body/range,range/Close,ATR/prior48median,sin/cosdecisionUTChour,
+London/NYDSTflags,stresscost/stop. No volume/orderbookclaims.100trees7leaves
+depth3lr.05minchild50(seed42,n_jobs2,deterministic), samehyperparametersboth
+arms, no search. min300traininglabels neededforH4lowerfrequency. Scalerfits
+trainingonly. Monthlyexpanding2024train→Jan2025,throughpartialOct2026,22folds.
+
+Decisionclosedbar;waitonefullM5,entryOpen=decision+300. Stop1.5signalTFATR,
+TP2rawpriceR,deadline1hourforH1/4hoursforH4FROMentry. Entrybarstopchecked,
+stopfirstifambiguous, adversegapactualOpen, favorableTPcreditatlimit. Process
+sequentially: missingbeforeknownexit=>unknown; missingAFTERknownstop/TPdoesnot
+eraseknownoutcome. Nooverlap: scheduleddecisionsspacedatleastmaxholdtime.
+No reentryafterearlyexituntilnextscheduleddecision, no trailing/martingale.
+
+Avoidscheduledovernightroll: only weekdayUTCdecisions>=01:00, planneddeadline
+entry+horizon<=20:00UTCSAMEDAY, knownclockruleindependentoffutureprices. No
+holdpast20UTC, notclaimedactualhistoricalswapexemption; feesremainconditional.
+Unknownholidayclosurescensored. Allentryslotsincludingno-tradecounted. Labels
+netRafterassumed4pipALL-INRT, bothBUYandSELLknownrequiredforfit, includeflats.
+TrainingplannedtargetendSTRICTLYbeforetestboundary. Score=expectednetreturn,
+notprobability. HigherpredictednetR>0chooseBUY/SELL(equalpositiveBUY),elseFLAT.
+Neverlowergateafteroutcomes. No stakeincrease/probabilitycalibrationclaimed.
+
+Evaluate2/4pipRTcosts, netPnL/(stopDistance+cost), NOTUSDcash/accountmargin/
+actualexecutionfees. SameeventalwaysBUY/SELL/lastclosedcandlemomentumcontrols.
+Allmonths/years includingzeroentries,unknowns,lossesreported, nostrategywinner
+selectionbyyear/session. End-windowinsufficientpathunknownnotforcedprofit.
+2025/2026retrospectivealreadyresearchedNOTfreshOOS. No H1/H4winnerdeclaredas
+productionreadywithoutprospectivequotes/fullfees/slippagevalidation.
+
+FreezepracticalgateaccountingforlowerH4frequency: >=50known2025and>=50known2026,
+stresspositiveBOTHyears,zerounknownselected,2026dailyRlowerCI>0andpairedexcess
+vsALL3controls lower>0.10calendar-daybootstrap10000seed20261015,64celladjusted
+95%CI for thisbatchonly, notentireprojectresearchhistoryorfinite-sampleproof.
+SmallersamplethresholdNOTsamegateasearlierM15(200), explicitBEFOREresults;
+passingdoesnotguaranteeadequatepower/profitability. Gatesretainedforbotharms.
