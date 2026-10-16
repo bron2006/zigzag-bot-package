@@ -3209,3 +3209,22 @@ gitls-remoteпідтвердивточнийзбігзlocalHEAD. Опублік�
 818тестівPASS — локальнийточнийCI-виклик; результатGitHubActionsще не перевірено.
 ПозаGitзалишилисятількикористувацьківкладеннятаgeneratedrun.log;неприватні
 дослідницькіджерелаіпротоколиопубліковані,сирікешізалишаютьсялокальними.
+
+## 2026-10-16 — Виправлення GitHub CI після failed-email
+
+Власник явно попросив виправити CI. Run38918043762 для9c1609e виконав818тестів
+і завершився31failures/24errors. Логпідтвердив DATABASE_URLisnotset/engineNone;
+workflowне задававізольованоїБД,хочалокальнізапускивикористовувалиSQLite.
+Другапідтвердженазалежність: language-formattingтестиscannerвимагалиCHAT_ID
+ізнеопублікованого.env. ЦеCI/testfixtureпроблеми,непричинавключатиреальнуБД
+абоповертатистарустратегію. GmailпошуклистівбувнедоступнийRATE_LIMIT_EXCEEDED;
+змістпомилкиперевіренобезпосередньоGitHubAPI/логом,власникпідтвердивлист.
+
+Workflowотримав jobenvDATABASE_URL=sqlite:///:memory:,AUTOTRADE_ENABLED=false,
+BINOMO_EXECUTOR_ENABLED=false,обидваaccountmodesdemo;timeout10min,
+permissionscontents:read. Secretів/реальнихрахунківдоCIнепередаємо.
+Languagefixtureтепермаєmockget_chat_id=123456789,cleanupіявнийштучнийодержувач,
+а не залежністьвідлокальноїпошти/Telegram. Додано2regressiontestsнаCI-safety
+тазбереженняреальногоdiscovery,безcontinue-on-error/видаленнястарихтестів.
+Початкові4targetedtestsPASS;даліпотрібніclean-checkoutverificationтаGitHubCI.
+Runtime/productionconfig/брокер/БД/торгівля/баланс/хмаранезмінні.

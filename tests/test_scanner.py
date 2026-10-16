@@ -21,6 +21,11 @@ class HandleAnalysisResultLanguageTest(unittest.TestCase):
     def setUp(self):
         self._saved_threshold = app_state.IDEAL_ENTRY_THRESHOLD
         app_state.IDEAL_ENTRY_THRESHOLD = 78
+        # Formatting is exercised for a synthetic recipient, not a developer's
+        # CHAT_ID loaded from an untracked local .env (absent on GitHub).
+        recipient_patch = patch.object(scanner, "get_chat_id", return_value=123456789)
+        recipient_patch.start()
+        self.addCleanup(recipient_patch.stop)
         quote_patch = patch.object(app_state, "get_signal_entry_quote", side_effect=lambda pair, now: dict(ts=now, mid=1.1581, bid=1.1580, ask=1.1582))
         quote_patch.start()
         self.addCleanup(quote_patch.stop)

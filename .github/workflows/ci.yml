@@ -4,9 +4,20 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # Tests must never depend on a developer's .env or a real database.
+      DATABASE_URL: 'sqlite:///:memory:'
+      AUTOTRADE_ENABLED: 'false'
+      AUTOTRADE_ACCOUNT_MODE: 'demo'
+      BINOMO_EXECUTOR_ENABLED: 'false'
+      BINOMO_ACCOUNT_MODE: 'demo'
 
     steps:
       - name: Check out repository
