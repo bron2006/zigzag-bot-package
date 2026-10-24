@@ -30,3 +30,27 @@ Untitled*.ipynb
 # твого акаунту) і локальні логи/скріншоти/correlation-check CSV.
 storage_state.json
 logs/
+
+# Claude Code: особисті локальні дозволи (не для коміту, специфічні для
+# цього ноутбука/сесії).
+.claude/settings.local.json
+
+# Local generated research data; tracked training fixtures remain tracked.
+data/*.csv
+research*/**/*.csv
+research*/**/*.json
+research*/**/*.gz
+.hypothesis/
+
+# Local paper account backups and SQLite sidecars, never source artifacts.
+data/paper_stops_*backup_*.sqlite3*
+
+# Generated OS/editor/test files and private conversation attachments.
+desktop.ini
+Thumbs.db
+.DS_Store
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.codex-remote-attachments/
+research*/**/*.log
